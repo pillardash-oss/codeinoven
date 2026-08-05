@@ -68,7 +68,7 @@ You deploy the website and a server; leaks there are worse than code leaks.
 Public repos attract spam, malware-in-PR attempts, and supply-chain noise. Make the attack surface small.
 
 - [x] **Require all contributions via PR with passing CI** (Phase 2) — nothing merges silently.
-- [ ] **No arbitrary code execution paths** in reviewed merges: the app shells out to harness CLIs (`opencode`, `codex`, etc.) — enforce a review policy that any new exec/PTY/`child_process` path is explicitly flagged and reviewed (tie into the CONTRIBUTING "no regressions / no hidden behavior" rules).
+- [x] **No arbitrary code execution paths** in reviewed merges: the app shells out to harness CLIs (`opencode`, `codex`, etc.) — enforce a review policy that any new exec/PTY/`child_process` path is explicitly flagged and reviewed (documented in `CONTRIBUTING.md` → "Security-sensitive changes").
 - [x] **Pin and audit dependencies**: `bun.lock` is committed; add a CI step that runs `bun audit`/dependency audit on `main` and fails on high/critical vulns.
 - [x] **Limit `trustedDependencies`/postinstall surface** — only `electron` is trusted today; reject PRs that expand install-time script execution without strong justification.
 - [x] **Block spam via issue forms**: use GitHub issue forms (templates with required fields) so drive-by spam is obvious and auto-closed.

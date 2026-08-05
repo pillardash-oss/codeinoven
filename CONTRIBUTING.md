@@ -110,6 +110,24 @@ Respect the layer boundaries — this is what keeps the app deterministic and au
 - **Config directory only.** CodeInOven persists its own state under its config directory (`~/.config/pillardash/codeinoven`). App code never writes uninvited into a user's repository.
 - **Shared code stays framework-free.** Never import SvelteKit-only modules (`$app/*`) into shared utilities, domain modules, or anything bundled outside the SvelteKit app runtime. Use platform-safe checks (`typeof window !== 'undefined'`) or inject values from entrypoints.
 
+## Security-sensitive changes
+
+CodeInOven shells out to harness CLIs and manages provider credentials, so
+some changes get extra review scrutiny:
+
+- **Any change that spawns processes** (new `child_process`, PTY, `exec`,
+  `spawn`, or a new shelling-out path in a driver) must be flagged explicitly
+  in the PR description and justified. Reviewers will not merge silent new
+  execution paths.
+- **Credential handling** goes through `SecretVault` (`safeStorage`) in the
+  main process only — plaintext must never cross IPC. Do not log auth tokens,
+  API keys, or full request headers.
+- **New dependencies** that run install-time scripts expand the
+  supply-chain surface. Only `electron` is in `trustedDependencies`; justify
+  any addition in the PR.
+- **Secrets scanning** runs on every push (Gitleaks) and `bun audit` runs in
+  CI. Do not commit `.env` files or tokens.
+
 ---
 
 ## Git and pull requests
