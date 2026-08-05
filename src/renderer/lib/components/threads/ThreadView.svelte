@@ -4926,6 +4926,8 @@
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
+              {@const harnessId = messageHarnessId(msg)}
+              {@const harnessName = messageHarnessName(msg)}
               {@const isLatest = msgIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
@@ -4954,6 +4956,11 @@
                         busy={busy && isLatestTurn}
                         latest={isLatestTurn}
                         startTime={getTurnStartTime(msgIndex)}
+                        {modelLabel}
+                        providerName={provider?.name}
+                        {harnessId}
+                        {harnessName}
+                        isFast={fastVariant !== null}
                         initialOpen={isLatestTurn &&
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
                         initialUserOpened={isLatestTurn &&

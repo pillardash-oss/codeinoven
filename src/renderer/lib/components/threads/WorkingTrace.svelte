@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { Archive, Bot, Cog, FileText, Loader2 } from '@lucide/svelte'
+  import { Archive, Bot, Cog, FileText, Loader2, Zap } from '@lucide/svelte'
   import { onDestroy } from 'svelte'
   import ToolCard from './ToolCard.svelte'
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AgentPart } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -18,6 +20,12 @@
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
+    /** Attribution for the model currently working on this trace. */
+    modelLabel?: string | null
+    providerName?: string | null
+    harnessId?: string | null
+    harnessName?: string | null
+    isFast?: boolean
     projectId?: string
     threadId?: string
     checkpointId?: string | null
@@ -35,6 +43,11 @@
     initialOpen = false,
     initialUserOpened = false,
     startTime,
+    modelLabel = null,
+    providerName,
+    harnessId,
+    harnessName,
+    isFast = false,
     projectId,
     threadId,
     checkpointId = null,
@@ -285,6 +298,30 @@
         {#if startTime}
           <span class="tabular-nums text-[10px] text-info/80">
             · {formatDuration(elapsed)}
+          </span>
+        {/if}
+        {#if modelLabel}
+          <span class="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed">
+            {#if harnessId}
+              <span class="flex shrink-0 items-center gap-1">
+                <AgentIcon agentId={harnessId} size={14} />
+                {#if harnessName}<span class="truncate">{harnessName}</span>{/if}
+              </span>
+              <span>·</span>
+            {/if}
+            <span class="flex shrink-0 items-center gap-1">
+              <VendorIcon name={providerName ?? modelLabel} size={11} />
+              <span class="truncate">{modelLabel}</span>
+            </span>
+            {#if isFast}
+              <Zap
+                size={10}
+                class="shrink-0 text-accent"
+                fill="currentColor"
+                aria-label="Fast inference"
+                title="Fast inference"
+              />
+            {/if}
           </span>
         {/if}
       </div>
