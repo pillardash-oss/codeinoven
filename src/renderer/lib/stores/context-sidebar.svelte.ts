@@ -1,0 +1,830 @@
+import { invoke } from '$lib/ipc.svelte'
+import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
+
+const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
+const AUDIT_SESSION_INACTIVITY_MS = 24 * 60 * 60 * 1000
+const CONTEXT_SIDEBAR_MIN_WIDTH = 340
+const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
+const TERMINAL_DOCK_MIN_HEIGHT = 180
+const TERMINAL_DOCK_MAX_HEIGHT = 560
+
+export type TerminalPlacement = 'right' | 'bottom'
+
+export interface TerminalContextTab {
+  id: string
+  kind: 'terminal'
+  title: string
+  terminalId: string
+  projectId: string
+  threadId: string
+}
+
+export interface FilesContextTab {
+  id: string
+  kind: 'files'
+  title: string
+  projectId: string
+  threadId: string
+  fileTabId: string | null
+  path: string | null
+  preview: boolean
+}
+
+export interface DiffContextTab {
+  id: string
+  kind: 'diff'
+  title: string
+  projectId: string
+  threadId: string
+  checkpointId: string | null
+}
+
+export interface SubagentContextTab {
+  id: string
+  kind: 'subagent'
+  title: string
+  projectId: string
+  threadId: string
+  sourcePartId: string
+  activity: AgentSubagentActivity
+}
+
+export interface DebuggerContextTab {
+  id: string
+  kind: 'debugger'
+  title: string
+  projectId: string
+  threadId: string
+}
+
+export interface SourcesContextTab {
+  id: string
+  kind: 'sources'
+  title: string
+  projectId: string
+  threadId: string
+}
+
+export interface NotificationContextTab {
+  id: string
+  kind: 'notifications'
+  title: string
+}
+
+export type MemorySection = 'active' | 'proposed'
+
+export interface MemoryContextTab {
+  id: string
+  kind: 'memory'
+  title: string
+  projectId: string
+  threadId: string
+  memorySection: MemorySection
+}
+
+export type TemporaryChatMode = 'audit' | 'elaborate' | 'quick'
+
+export interface TemporaryChatContextTab {
+  id: string
+  kind: 'temporary-chat'
+  title: string
+  projectId: string
+  threadId: string
+  temporaryChatId: string
+  sessionId: string | null
+  mode: TemporaryChatMode
+  selection: string
+  initialContext: string
+  settings: ThreadSettings
+  messages: AgentMessage[]
+  busy: boolean
+  error: string
+  draft: string
+  selectionAttached: boolean
+  selectionMessageId: string | null
+  autoPromptSent: boolean
+  sessionStarted: boolean
+  expired: boolean
+  expiresAt: number
+}
+
+export type ContextSidebarTab =
+  | FilesContextTab
+  | DiffContextTab
+  | TerminalContextTab
+  | SubagentContextTab
+  | DebuggerContextTab
+  | SourcesContextTab
+  | TemporaryChatContextTab
+  | NotificationContextTab
+  | MemoryContextTab
+
+interface ThreadSidebarContext {
+  projectId: string
+  threadId: string
+  tabs: ContextSidebarTab[]
+  activeTabId: string | null
+  visible: boolean
+  terminalSequence: number
+}
+
+const EMPTY_TABS: ContextSidebarTab[] = []
+
+function contextKey(projectId: string, threadId: string): string {
+  return `${projectId}:${threadId}`
+}
+
+function sameSubagentActivity(
+  current: AgentSubagentActivity,
+  next: AgentSubagentActivity
+): boolean {
+  return (
+    current.status === next.status &&
+    current.agent === next.agent &&
+    current.description === next.description &&
+    current.prompt === next.prompt &&
+    current.childSessionId === next.childSessionId &&
+    current.providerTaskId === next.providerTaskId &&
+    current.providerId === next.providerId &&
+    current.modelId === next.modelId &&
+    current.background === next.background &&
+    current.output === next.output &&
+    current.error === next.error &&
+    current.time?.start === next.time?.start &&
+    current.time?.end === next.time?.end
+  )
+}
+
+class ContextSidebarState {
+  private contexts: Record<string, ThreadSidebarContext> = $state({})
+  private activeKey: string | null = $state(null)
+  private temporaryChatExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  width = $state(480)
+  terminalHeight = $state(320)
+  terminalPlacement = $state<TerminalPlacement>('right')
+
+  get tabs(): ContextSidebarTab[] {
+    return this.activeContext?.tabs ?? EMPTY_TABS
+  }
+
+  get activeTabId(): string | null {
+    return this.activeContext?.activeTabId ?? null
+  }
+
+  get visible(): boolean {
+    return this.activeContext?.visible ?? false
+  }
+
+  get activeTab(): ContextSidebarTab | null {
+    return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
+  }
+
+  threadIdForProject(projectId: string): string | null {
+    const context = this.activeContext
+    return context?.projectId === projectId ? context.threadId : null
+  }
+
+  activateThread(projectId: string, threadId: string): void {
+    this.activeKey = contextKey(projectId, threadId)
+  }
+
+  deactivateThread(): void {
+    this.activeKey = null
+  }
+
+  toggle(): void {
+    const context = this.ensureActiveContext()
+    if (!context) return
+    context.visible = !context.visible
+  }
+
+  show(): void {
+    const context = this.ensureActiveContext()
+    if (context) context.visible = true
+  }
+
+  hide(): void {
+    const context = this.activeContext
+    if (context) context.visible = false
+  }
+
+  openFiles(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `files:${projectId}:${threadId}:browser`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'files',
+      title: 'Open file',
+      projectId,
+      threadId,
+      fileTabId: null,
+      path: null,
+      preview: false
+    })
+  }
+
+  openProjectFile(
+    projectId: string,
+    threadId: string,
+    fileTabId: string,
+    path: string,
+    preview = false
+  ): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `files:${projectId}:${threadId}:${fileTabId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'files') existing.preview = preview
+      this.focusInContext(context, id)
+      return
+    }
+    const browserIndex = context.tabs.findIndex(
+      (tab) => tab.kind === 'files' && tab.fileTabId === null
+    )
+    if (browserIndex >= 0 && context.activeTabId === context.tabs[browserIndex]?.id) {
+      context.tabs[browserIndex] = {
+        id,
+        kind: 'files',
+        title: path.split('/').at(-1) ?? path,
+        projectId,
+        threadId,
+        fileTabId,
+        path,
+        preview
+      }
+      context.activeTabId = id
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'files',
+      title: path.split('/').at(-1) ?? path,
+      projectId,
+      threadId,
+      fileTabId,
+      path,
+      preview
+    })
+  }
+
+  updateProjectFileMapping(
+    projectId: string,
+    previousFileTabId: string,
+    nextFileTabId: string,
+    nextPath: string
+  ): void {
+    for (const context of Object.values(this.contexts)) {
+      const tab = context.tabs.find(
+        (t) => t.kind === 'files' && t.projectId === projectId && t.fileTabId === previousFileTabId
+      )
+      if (!tab || tab.kind !== 'files') continue
+      tab.fileTabId = nextFileTabId
+      tab.title = nextPath.split('/').at(-1) ?? nextPath
+      tab.path = nextPath
+    }
+  }
+
+  remapProjectFile(
+    projectId: string,
+    previousFileTabId: string,
+    nextFileTabId: string,
+    nextPath: string
+  ): void {
+    for (const context of Object.values(this.contexts)) {
+      const index = context.tabs.findIndex(
+        (tab) =>
+          tab.kind === 'files' && tab.projectId === projectId && tab.fileTabId === previousFileTabId
+      )
+      if (index < 0) continue
+      const previous = context.tabs[index]
+      if (previous.kind !== 'files') continue
+      const nextId = `files:${projectId}:${previous.threadId}:${nextFileTabId}`
+      context.tabs[index] = {
+        ...previous,
+        id: nextId,
+        title: nextPath.split('/').at(-1) ?? nextPath,
+        fileTabId: nextFileTabId,
+        path: nextPath
+      }
+      if (context.activeTabId === previous.id) context.activeTabId = nextId
+    }
+  }
+
+  closeProjectFile(projectId: string, fileTabIds: ReadonlySet<string>): void {
+    for (const context of Object.values(this.contexts)) {
+      const closingIds = new Set(
+        context.tabs
+          .filter(
+            (tab) =>
+              tab.kind === 'files' &&
+              tab.projectId === projectId &&
+              tab.fileTabId !== null &&
+              fileTabIds.has(tab.fileTabId)
+          )
+          .map((tab) => tab.id)
+      )
+      if (closingIds.size === 0) continue
+      context.tabs = context.tabs.filter((tab) => !closingIds.has(tab.id))
+      if (context.tabs.length === 0) {
+        context.tabs = [
+          {
+            id: `files:${context.projectId}:${context.threadId}:browser`,
+            kind: 'files',
+            title: 'Open file',
+            projectId: context.projectId,
+            threadId: context.threadId,
+            fileTabId: null,
+            path: null,
+            preview: false
+          }
+        ]
+      }
+      if (context.activeTabId && closingIds.has(context.activeTabId)) {
+        context.activeTabId = context.tabs.at(-1)?.id ?? null
+      }
+    }
+  }
+
+  openDiff(projectId: string, threadId: string, checkpointId: string | null = null): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `diff:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing?.kind === 'diff') {
+      existing.checkpointId = checkpointId
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'diff',
+      title: 'Changes',
+      projectId,
+      threadId,
+      checkpointId
+    })
+  }
+
+  openSources(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `sources:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'sources',
+      title: 'Sources',
+      projectId,
+      threadId
+    })
+  }
+
+  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `memory:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'memory' && section) existing.memorySection = section
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'memory',
+      title: 'Memory',
+      projectId,
+      threadId,
+      memorySection: section ?? 'active'
+    })
+  }
+
+  toggleNotifications(): void {
+    const id = 'notifications'
+    const context = this.ensureActiveContext()
+    if (context) {
+      const existing = context.tabs.find((tab) => tab.id === id)
+      if (existing && context.visible && context.activeTabId === id) {
+        context.visible = false
+        return
+      }
+      if (existing) {
+        this.focusInContext(context, id)
+        return
+      }
+      this.open(context, {
+        id,
+        kind: 'notifications',
+        title: 'Notifications'
+      })
+      return
+    }
+    // No active thread context — use a pseudo-global entry so the
+    // notification panel can be toggled from any view.
+    const globalKey = '__notifications_global__'
+    let global = this.contexts[globalKey]
+    if (!global) {
+      global = {
+        projectId: '',
+        threadId: '',
+        tabs: [],
+        activeTabId: null,
+        visible: false,
+        terminalSequence: 0
+      }
+      this.contexts[globalKey] = global
+    }
+    const existing = global.tabs.find((tab) => tab.id === id)
+    if (existing && global.visible && global.activeTabId === id) {
+      global.visible = false
+      return
+    }
+    if (existing) {
+      this.activeKey = globalKey
+      this.focusInContext(global, id)
+      return
+    }
+    this.activeKey = globalKey
+    this.open(global, { id, kind: 'notifications', title: 'Notifications' })
+  }
+
+  openTemporaryChat(
+    projectId: string,
+    threadId: string,
+    mode: TemporaryChatMode,
+    selection: string,
+    initialContext: string,
+    settings: ThreadSettings
+  ): TemporaryChatContextTab {
+    const context = this.ensureContext(projectId, threadId)
+    const temporaryChatId = crypto.randomUUID()
+    const tab: TemporaryChatContextTab = {
+      id: `temporary-chat:${temporaryChatId}`,
+      kind: 'temporary-chat',
+      title: mode === 'elaborate' ? 'Explain' : 'Quick chat',
+      projectId,
+      threadId,
+      temporaryChatId,
+      sessionId: null,
+      mode,
+      selection,
+      initialContext,
+      settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
+      messages: [],
+      busy: false,
+      error: '',
+      draft: '',
+      selectionAttached: true,
+      selectionMessageId: null,
+      autoPromptSent: false,
+      sessionStarted: false,
+      expired: false,
+      expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
+    }
+    this.open(context, tab)
+    this.scheduleTemporaryChatExpiry(tab)
+    return tab
+  }
+
+  openAuditSession(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings
+  ): TemporaryChatContextTab {
+    const context = this.ensureContext(projectId, threadId)
+    const existing = context.tabs.find(
+      (tab): tab is TemporaryChatContextTab => tab.kind === 'temporary-chat' && tab.mode === 'audit'
+    )
+    if (existing) {
+      existing.settings = { ...settings, engineeringMode: false, permissionLevel: 'auto_review' }
+      this.focusInContext(context, existing.id)
+      this.touchTemporaryChat(existing)
+      return existing
+    }
+
+    const temporaryChatId = crypto.randomUUID()
+    const tab: TemporaryChatContextTab = {
+      id: `temporary-chat:${temporaryChatId}`,
+      kind: 'temporary-chat',
+      title: 'Audit',
+      projectId,
+      threadId,
+      temporaryChatId,
+      sessionId: null,
+      mode: 'audit',
+      selection: '',
+      initialContext: '',
+      settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
+      messages: [],
+      busy: false,
+      error: '',
+      draft: '',
+      selectionAttached: false,
+      selectionMessageId: null,
+      autoPromptSent: true,
+      sessionStarted: false,
+      expired: false,
+      expiresAt: Date.now() + AUDIT_SESSION_INACTIVITY_MS
+    }
+    this.open(context, tab)
+    this.scheduleTemporaryChatExpiry(tab)
+    return tab
+  }
+
+  touchTemporaryChat(
+    tab: TemporaryChatContextTab,
+    expiresAt = Date.now() +
+      (tab.mode === 'audit' ? AUDIT_SESSION_INACTIVITY_MS : TEMPORARY_CHAT_INACTIVITY_MS)
+  ): void {
+    if (tab.expired) return
+    tab.expiresAt = expiresAt
+    this.scheduleTemporaryChatExpiry(tab)
+  }
+
+  expireTemporaryChat(tab: TemporaryChatContextTab, closeRemote = true): void {
+    if (tab.expired) return
+    const temporaryChatId = tab.temporaryChatId
+    tab.expired = true
+    tab.messages = []
+    tab.draft = ''
+    tab.initialContext = ''
+    tab.busy = false
+    tab.error = ''
+    tab.selectionAttached = false
+    tab.selectionMessageId = null
+    this.clearTemporaryChatExpiry(temporaryChatId)
+    if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
+  }
+
+  restartTemporaryChat(tab: TemporaryChatContextTab): void {
+    this.clearTemporaryChatExpiry(tab.temporaryChatId)
+    tab.temporaryChatId = crypto.randomUUID()
+    tab.sessionId = null
+    tab.messages = []
+    tab.busy = false
+    tab.error = ''
+    tab.draft = ''
+    tab.selectionAttached = true
+    tab.selectionMessageId = null
+    tab.autoPromptSent = false
+    tab.sessionStarted = false
+    tab.expired = false
+    tab.expiresAt =
+      Date.now() +
+      (tab.mode === 'audit' ? AUDIT_SESSION_INACTIVITY_MS : TEMPORARY_CHAT_INACTIVITY_MS)
+    this.scheduleTemporaryChatExpiry(tab)
+  }
+
+  openPrimaryTerminal(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const existing = context.tabs.find(
+      (tab) => tab.kind === 'terminal' && tab.projectId === projectId && tab.threadId === threadId
+    )
+    if (existing) {
+      this.focusInContext(context, existing.id)
+      return
+    }
+    this.openNewTerminal(projectId, threadId)
+  }
+
+  openNewTerminal(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    context.terminalSequence += 1
+    const sequence = context.terminalSequence
+    const id = `terminal:${projectId}:${threadId}:${sequence}`
+    this.open(context, {
+      id,
+      kind: 'terminal',
+      title: sequence === 1 ? 'Terminal' : `Terminal ${sequence}`,
+      terminalId: `workbench-${projectId}-${threadId}-${sequence}`,
+      projectId,
+      threadId
+    })
+  }
+
+  openDebugger(projectId: string, threadId: string): void {
+    if (!import.meta.env.DEV) return
+    const context = this.ensureContext(projectId, threadId)
+    const id = `debugger:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'debugger',
+      title: 'Debugger',
+      projectId,
+      threadId
+    })
+  }
+
+  openSubagent(
+    projectId: string,
+    threadId: string,
+    partId: string,
+    activity: AgentSubagentActivity
+  ): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `subagent:${projectId}:${threadId}:${activity.childSessionId ?? partId}`
+    const existingIndex = context.tabs.findIndex(
+      (tab) =>
+        tab.kind === 'subagent' &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        (tab.sourcePartId === partId ||
+          (activity.childSessionId && tab.activity.childSessionId === activity.childSessionId))
+    )
+    const next: SubagentContextTab = {
+      id,
+      kind: 'subagent',
+      title: activity.description || activity.agent || 'Sub-agent',
+      projectId,
+      threadId,
+      sourcePartId: partId,
+      activity
+    }
+
+    if (existingIndex >= 0) {
+      const previousId = context.tabs[existingIndex].id
+      context.tabs[existingIndex] = next
+      context.tabs = [...context.tabs]
+      if (context.activeTabId === previousId) context.activeTabId = id
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, next)
+  }
+
+  updateSubagent(
+    projectId: string,
+    threadId: string,
+    partId: string,
+    activity: AgentSubagentActivity
+  ): void {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    if (!context) return
+    const index = context.tabs.findIndex(
+      (tab) =>
+        tab.kind === 'subagent' &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        (tab.sourcePartId === partId ||
+          (activity.childSessionId && tab.activity.childSessionId === activity.childSessionId))
+    )
+    if (index < 0) return
+    const current = context.tabs[index]
+    if (current.kind !== 'subagent') return
+    const nextId = `subagent:${projectId}:${threadId}:${activity.childSessionId ?? partId}`
+    const nextTitle = activity.agent || 'Sub-agent'
+    if (
+      current.id === nextId &&
+      current.title === nextTitle &&
+      sameSubagentActivity(current.activity, activity)
+    ) {
+      return
+    }
+    context.tabs[index] = {
+      ...current,
+      id: nextId,
+      title: nextTitle,
+      activity
+    }
+    if (context.activeTabId === current.id) {
+      context.activeTabId = context.tabs[index].id
+    }
+    context.tabs = [...context.tabs]
+  }
+
+  focus(id: string): void {
+    const context = this.activeContext
+    if (context) this.focusInContext(context, id)
+  }
+
+  close(id: string): void {
+    const context = this.activeContext
+    if (!context) return
+    const index = context.tabs.findIndex((tab) => tab.id === id)
+    if (index < 0) return
+    const tab = context.tabs[index]
+    if (tab.kind === 'temporary-chat') {
+      this.clearTemporaryChatExpiry(tab.temporaryChatId)
+    }
+    context.tabs = context.tabs.filter((tab) => tab.id !== id)
+    if (context.activeTabId === id) {
+      const replacement = context.tabs[Math.min(index, context.tabs.length - 1)]
+      context.activeTabId = replacement?.id ?? null
+    }
+    if (context.tabs.length === 0) {
+      context.visible = false
+    }
+  }
+
+  reorder(id: string, targetId: string, position: 'before' | 'after'): void {
+    const context = this.activeContext
+    if (!context) return
+    const fromIndex = context.tabs.findIndex((tab) => tab.id === id)
+    const toIndex = context.tabs.findIndex((tab) => tab.id === targetId)
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+    const ordered = [...context.tabs]
+    const [moved] = ordered.splice(fromIndex, 1)
+    const adjustedTarget = ordered.findIndex((tab) => tab.id === targetId)
+    ordered.splice(position === 'before' ? adjustedTarget : adjustedTarget + 1, 0, moved)
+    context.tabs = ordered
+  }
+
+  setWidth(width: number): void {
+    this.width = Math.max(CONTEXT_SIDEBAR_MIN_WIDTH, Math.min(width, CONTEXT_SIDEBAR_MAX_WIDTH))
+  }
+
+  setTerminalHeight(height: number): void {
+    this.terminalHeight = Math.max(
+      TERMINAL_DOCK_MIN_HEIGHT,
+      Math.min(height, TERMINAL_DOCK_MAX_HEIGHT)
+    )
+  }
+
+  setTerminalPlacement(placement: TerminalPlacement): void {
+    this.terminalPlacement = placement
+  }
+
+  private get activeContext(): ThreadSidebarContext | null {
+    return this.activeKey ? (this.contexts[this.activeKey] ?? null) : null
+  }
+
+  private ensureActiveContext(): ThreadSidebarContext | null {
+    if (!this.activeKey) return null
+    const existing = this.contexts[this.activeKey]
+    if (existing) return existing
+    const separator = this.activeKey.indexOf(':')
+    if (separator < 0) return null
+    return this.ensureContext(
+      this.activeKey.slice(0, separator),
+      this.activeKey.slice(separator + 1)
+    )
+  }
+
+  private ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
+    const key = contextKey(projectId, threadId)
+    const existing = this.contexts[key]
+    if (existing) return existing
+    const context: ThreadSidebarContext = {
+      projectId,
+      threadId,
+      tabs: [],
+      activeTabId: null,
+      visible: false,
+      terminalSequence: 0
+    }
+    this.contexts[key] = context
+    return context
+  }
+
+  private focusInContext(context: ThreadSidebarContext, id: string): void {
+    if (!context.tabs.some((tab) => tab.id === id)) return
+    context.activeTabId = id
+    context.visible = true
+  }
+
+  private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
+    const index = context.tabs.findIndex((existing) => existing.id === tab.id)
+    if (index >= 0) {
+      context.tabs[index] = tab
+      context.tabs = [...context.tabs]
+    } else {
+      context.tabs = [...context.tabs, tab]
+    }
+    context.activeTabId = tab.id
+    context.visible = true
+  }
+
+  private scheduleTemporaryChatExpiry(tab: TemporaryChatContextTab): void {
+    this.clearTemporaryChatExpiry(tab.temporaryChatId)
+    if (tab.expired) return
+    const temporaryChatId = tab.temporaryChatId
+    const timer = setTimeout(
+      () => {
+        if (tab.temporaryChatId === temporaryChatId) {
+          this.expireTemporaryChat(tab)
+        }
+      },
+      Math.max(0, tab.expiresAt - Date.now())
+    )
+    this.temporaryChatExpiryTimers.set(temporaryChatId, timer)
+  }
+
+  private clearTemporaryChatExpiry(temporaryChatId: string): void {
+    const timer = this.temporaryChatExpiryTimers.get(temporaryChatId)
+    if (timer) clearTimeout(timer)
+    this.temporaryChatExpiryTimers.delete(temporaryChatId)
+  }
+}
+
+export const contextSidebarState = new ContextSidebarState()

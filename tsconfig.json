@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "paths": {
+      "$lib/*": ["./src/renderer/lib/*"],
+      "$engines/*": ["./src/lib/engines/*"],
+      "$adapters/*": ["./src/lib/adapters/*"],
+      "$shared/*": ["./src/lib/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "electron.vite.config.ts"
+  ],
+  "exclude": ["node_modules", "out"]
+}

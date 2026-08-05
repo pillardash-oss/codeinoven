@@ -1,0 +1,196 @@
+import { join } from 'path'
+import type { Database } from '../../main/database/database'
+import type { StorageEngine } from '../../main/storage-engine'
+import type {
+  AuditAnnotation,
+  AuditReport,
+  AuditReportContent,
+  AuditSectionId,
+  SpecProvenance
+} from '../types'
+import { exportAuditReportMarkdown } from '../audit/audit-markdown'
+import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
+import { generateId } from '../utils'
+
+export interface CreateAuditReportInput {
+  projectId: string
+  threadId: string
+  specId: string
+  specVersion: number
+  content: AuditReportContent
+  provenance: Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
+}
+
+export interface AddAuditAnnotationInput {
+  section: AuditSectionId
+  body: string
+  author: string
+  quote?: string
+  startLine?: number
+  endLine?: number
+  startOffset?: number
+  endOffset?: number
+}
+
+export class AuditEngine {
+  constructor(
+    private readonly storage: StorageEngine,
+    private readonly db: Database,
+    private readonly now: () => number = Date.now,
+    private readonly idFactory: () => string = generateId
+  ) {}
+
+  async create(input: CreateAuditReportInput): Promise<AuditReport> {
+    const previous = this.getActive(input.projectId, input.threadId)
+    const now = this.now()
+    const report: AuditReport = {
+      schemaVersion: 1,
+      id: previous?.id ?? this.idFactory(),
+      projectId: input.projectId,
+      threadId: input.threadId,
+      specId: input.specId,
+      specVersion: input.specVersion,
+      version: (previous?.version ?? 0) + 1,
+      content: structuredClone(input.content),
+      annotations: [],
+      provenance: {
+        ...input.provenance,
+        ...(previous ? { parentVersion: previous.version } : {}),
+        createdAt: now
+      },
+      createdAt: now,
+      updatedAt: now
+    }
+    this.writeStored(report)
+    return report
+  }
+
+  getActive(projectId: string, threadId: string): AuditReport | null {
+    const row = this.db.get<{ data: string }>(
+      'SELECT data FROM audit_reports WHERE project_id=? AND thread_id=? ORDER BY version DESC LIMIT 1',
+      projectId,
+      threadId
+    )
+    return row ? (JSON.parse(row.data) as AuditReport) : null
+  }
+
+  listVersions(projectId: string, threadId: string, reportId: string): AuditReport[] {
+    const rows = this.db.all<{ data: string }>(
+      'SELECT data FROM audit_reports WHERE report_id=? ORDER BY version',
+      reportId
+    )
+    return rows.map((r) => JSON.parse(r.data) as AuditReport)
+  }
+
+  async save(report: AuditReport): Promise<AuditReport> {
+    const updated = { ...report, updatedAt: this.now() }
+    this.writeStored(updated)
+    return updated
+  }
+
+  async addAnnotation(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number,
+    input: AddAuditAnnotationInput
+  ): Promise<AuditReport> {
+    const report = this.requireVersion(projectId, threadId, reportId, version)
+    const annotation: AuditAnnotation = {
+      id: this.idFactory(),
+      ...input,
+      status: 'open',
+      createdAt: this.now()
+    }
+    return this.save({ ...report, annotations: [...report.annotations, annotation] })
+  }
+
+  async updateAnnotation(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number,
+    annotationId: string,
+    body: string
+  ): Promise<AuditReport> {
+    const report = this.requireVersion(projectId, threadId, reportId, version)
+    return this.save({
+      ...report,
+      annotations: report.annotations.map((annotation) =>
+        annotation.id === annotationId ? { ...annotation, body } : annotation
+      )
+    })
+  }
+
+  async resolveAnnotation(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number,
+    annotationId: string
+  ): Promise<AuditReport> {
+    const report = this.requireVersion(projectId, threadId, reportId, version)
+    const now = this.now()
+    return this.save({
+      ...report,
+      annotations: report.annotations.map((annotation) =>
+        annotation.id === annotationId
+          ? { ...annotation, status: 'resolved' as const, resolvedAt: now }
+          : annotation
+      )
+    })
+  }
+
+  private requireVersion(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number
+  ): AuditReport {
+    const row = this.db.get<{ data: string }>(
+      'SELECT data FROM audit_reports WHERE report_id=? AND version=?',
+      reportId,
+      version
+    )
+    if (!row) throw new Error(`Audit report not found: ${reportId} v${version}`)
+    return JSON.parse(row.data) as AuditReport
+  }
+
+  private writeStored(report: AuditReport): void {
+    this.db.run(
+      'INSERT OR REPLACE INTO audit_reports(report_id, version, project_id, thread_id, spec_id, spec_version, data, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+      report.id,
+      report.version,
+      report.projectId,
+      report.threadId,
+      report.specId,
+      report.specVersion,
+      JSON.stringify(report),
+      report.createdAt,
+      report.updatedAt
+    )
+  }
+
+  private async write(report: AuditReport): Promise<void> {
+    this.writeStored(report)
+    const featureSlug = await ensureFeatureSlug(this.db, report.projectId, report.threadId)
+    const project = requireLocalProject(this.db, report.projectId)
+    const markdown = exportAuditReportMarkdown(report)
+    await Promise.all([
+      this.storage.writeProjectSpecRaw(
+        report.projectId,
+        featureSlug,
+        'audit.md',
+        markdown,
+        project
+      ),
+      this.storage.writeProjectSpecRaw(
+        report.projectId,
+        featureSlug,
+        join('versions', `${report.id}-audit-v${report.version}.md`),
+        markdown,
+        project
+      )
+    ])
+  }
+}

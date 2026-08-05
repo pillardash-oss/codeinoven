@@ -1,0 +1,626 @@
+/**
+ * Navigation-safe cache for thread messages.
+ *
+ * Messages are kept keyed by thread so switching away and back does not lose
+ * optimistic user messages or the in-progress agent turn. The store reconciles
+ * server state with local optimistic state and applies streaming agent events
+ * even when the thread view is not mounted.
+ */
+import { invoke, subscribe } from '$lib/ipc.svelte'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { messageId as createMessageId } from '$shared/id'
+import { SvelteMap } from 'svelte/reactivity'
+import type {
+  AgentEvent,
+  AgentMessage,
+  AgentPart,
+  PromptAttachment,
+  PromptAssignmentTaskReference,
+  PromptProjectReference,
+  PromptReference,
+  SpecActionIntent,
+  ThreadSettings,
+  UserMessagePresentation
+} from '$shared/types'
+
+interface ThreadMessagesEntry {
+  messages: AgentMessage[]
+  loaded: boolean
+  loading: boolean
+  error: string
+}
+
+const EMPTY_MESSAGES: AgentMessage[] = []
+
+function threadKey(projectId: string, threadId: string): string {
+  return `${projectId}:${threadId}`
+}
+
+function messageText(msg: AgentMessage): string {
+  return msg.parts
+    .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
+    .map((p) => p.text)
+    .join('\n')
+}
+
+function mergePartSnapshot(cached: AgentPart, incoming: AgentPart): AgentPart {
+  if (
+    cached.type === incoming.type &&
+    (cached.type === 'text' || cached.type === 'reasoning') &&
+    (incoming.type === 'text' || incoming.type === 'reasoning') &&
+    cached.text.length > incoming.text.length &&
+    cached.text.startsWith(incoming.text)
+  ) {
+    return { ...incoming, text: cached.text }
+  }
+  return incoming
+}
+
+/** A disk/provider snapshot may trail the live event stream; never downgrade cached parts. */
+function mergeMessageSnapshot(cached: AgentMessage, incoming: AgentMessage): AgentMessage {
+  const incomingParts = new Map(incoming.parts.map((part) => [part.id, part]))
+  const cachedPartIds = new Set(cached.parts.map((part) => part.id))
+  return {
+    ...cached,
+    ...incoming,
+    parts: [
+      ...cached.parts.map((part) => {
+        const replacement = incomingParts.get(part.id)
+        return replacement ? mergePartSnapshot(part, replacement) : part
+      }),
+      ...incoming.parts.filter((part) => !cachedPartIds.has(part.id))
+    ]
+  }
+}
+
+class ThreadMessagesStore {
+  #threads = new Map<string, ThreadMessagesEntry>()
+
+  /** Reactive cache keyed by `projectId:threadId`. */
+  threads = $state(new Map<string, ThreadMessagesEntry>())
+
+  /** Active session IDs per thread, used to filter streaming events. */
+  #sessionIds = new Map<string, string>()
+  /** Reverse lookup keeps inactive threads subscribed to their live session stream. */
+  #threadsBySession = new Map<string, { projectId: string; threadId: string }>()
+
+  constructor() {
+    subscribe('agent:event', (...args: unknown[]) => {
+      const event = args[0] as AgentEvent | undefined
+      if (event) this.#handleAgentEvent(event)
+    })
+  }
+
+  /** Return or create a cache entry for the given thread. */
+  private entry(projectId: string, threadId: string): ThreadMessagesEntry {
+    const key = threadKey(projectId, threadId)
+    let entry = this.#threads.get(key)
+    if (!entry) {
+      entry = { messages: [], loaded: false, loading: false, error: '' }
+      this.#threads.set(key, entry)
+      this.threads = new Map(this.#threads)
+    }
+    return entry
+  }
+
+  /** Current message list for a thread — safe to use in deriveds/effects. */
+  messages(projectId: string, threadId: string): AgentMessage[] {
+    return this.threads.get(threadKey(projectId, threadId))?.messages ?? EMPTY_MESSAGES
+  }
+
+  /** Whether the thread has finished its first load. */
+  loaded(projectId: string, threadId: string): boolean {
+    return this.threads.get(threadKey(projectId, threadId))?.loaded ?? false
+  }
+
+  /** Whether the thread is currently loading messages. */
+  loading(projectId: string, threadId: string): boolean {
+    return this.threads.get(threadKey(projectId, threadId))?.loading ?? false
+  }
+
+  /** Last load error for the thread, if any. */
+  error(projectId: string, threadId: string): string {
+    return this.threads.get(threadKey(projectId, threadId))?.error ?? ''
+  }
+
+  /** Bind a session ID to a thread so streaming events are routed correctly. */
+  setSessionId(projectId: string, threadId: string, sessionId: string | undefined): void {
+    const key = threadKey(projectId, threadId)
+    const previousSessionId = this.#sessionIds.get(key)
+    if (previousSessionId && previousSessionId !== sessionId) {
+      this.#threadsBySession.delete(previousSessionId)
+    }
+    if (sessionId) {
+      this.#sessionIds.set(key, sessionId)
+      this.#threadsBySession.set(sessionId, { projectId, threadId })
+    } else {
+      this.#sessionIds.delete(key)
+    }
+  }
+
+  /** Load the authoritative mirror and merge it with local optimistic state. */
+  async load(projectId: string, threadId: string): Promise<void> {
+    const entry = this.entry(projectId, threadId)
+    if (entry.loading) return
+    entry.loading = true
+    entry.error = ''
+    this.#notify()
+
+    try {
+      const serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+      this.reconcile(projectId, threadId, serverMessages)
+      entry.loaded = true
+    } catch (err) {
+      entry.error = err instanceof Error ? err.message : 'Could not load messages.'
+    } finally {
+      entry.loading = false
+      this.#notify()
+    }
+  }
+
+  /** Non-destructively merge server messages with the local cache. */
+  reconcile(projectId: string, threadId: string, serverMessages: AgentMessage[]): void {
+    const entry = this.entry(projectId, threadId)
+    const local = entry.messages
+
+    // Build a map of server messages by ID.
+    const serverById = new Map(serverMessages.map((m) => [m.id, m]))
+    const localById = new Map(local.map((message) => [message.id, message]))
+    const activeTurnUserMessageId = agentRuns.currentTurnUserMessageId(projectId, threadId)
+    const activeTurnStartedAt = activeTurnUserMessageId
+      ? localById.get(activeTurnUserMessageId)?.createdAt
+      : undefined
+
+    // Stable renderer-generated IDs are forwarded through every driver. Keep
+    // local optimistic messages until the server confirms that exact ID, and
+    // retain live assistant messages from the active turn while the provider
+    // or disk snapshot catches up with the event stream.
+    const keptLocal = local.filter(
+      (message) =>
+        !serverById.has(message.id) &&
+        (message.role === 'user' ||
+          (activeTurnStartedAt !== undefined && message.createdAt >= activeTurnStartedAt))
+    )
+
+    // Merge by sorting all messages by createdAt, stable by ID.
+    const merged = [
+      ...serverMessages.map((message) => {
+        const cached = localById.get(message.id)
+        return cached ? mergeMessageSnapshot(cached, message) : message
+      }),
+      ...keptLocal
+    ].sort((a, b) => {
+      const timeDiff = a.createdAt - b.createdAt
+      if (timeDiff !== 0) return timeDiff
+      return a.id.localeCompare(b.id)
+    })
+
+    entry.messages = merged
+    entry.loaded = true
+    this.#notify()
+  }
+
+  /** Merge a bounded history page without discarding pages already loaded for the thread. */
+  mergePage(projectId: string, threadId: string, pageMessages: AgentMessage[]): void {
+    const entry = this.entry(projectId, threadId)
+    const mergedById = new SvelteMap(entry.messages.map((message) => [message.id, message]))
+    for (const message of pageMessages) {
+      const cached = mergedById.get(message.id)
+      mergedById.set(message.id, cached ? mergeMessageSnapshot(cached, message) : message)
+    }
+    entry.messages = [...mergedById.values()].sort((a, b) => {
+      const timeDiff = a.createdAt - b.createdAt
+      if (timeDiff !== 0) return timeDiff
+      return a.id.localeCompare(b.id)
+    })
+    entry.loaded = true
+    this.#notify()
+  }
+
+  private appendOptimistic(
+    projectId: string,
+    threadId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    userMessageId?: string,
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    presentation?: UserMessagePresentation
+  ): { entry: ThreadMessagesEntry; messageId: string } {
+    const entry = this.entry(projectId, threadId)
+    const messageId = userMessageId ?? createMessageId()
+    const optimistic: AgentMessage = {
+      id: messageId,
+      role: 'user',
+      origin: 'user',
+      visibility: 'conversation',
+      parts: [
+        ...(!presentation
+          ? [
+              {
+                type: 'text' as const,
+                id: `${messageId}-text`,
+                messageID: messageId,
+                text
+              }
+            ]
+          : []),
+        ...attachments.map((file, index): AgentPart => ({
+          type: 'file',
+          id: `${messageId}-file-${index}`,
+          messageID: messageId,
+          mime: file.mime,
+          url: file.url,
+          filename: file.filename
+        })),
+        ...(presentation
+          ? [
+              {
+                type: 'user-presentation' as const,
+                id: `${messageId}-presentation`,
+                messageID: messageId,
+                presentation
+              }
+            ]
+          : [])
+      ],
+      references: promptReferences?.length ? promptReferences : undefined,
+      projectReferences: projectReferences?.length ? projectReferences : undefined,
+      createdAt: Date.now(),
+      completedAt: Date.now()
+    }
+    entry.messages = [...entry.messages, optimistic]
+    this.#notify()
+    return { entry, messageId }
+  }
+
+  private confirmOptimistic(
+    entry: ThreadMessagesEntry,
+    messageId: string,
+    confirmed: AgentMessage
+  ): void {
+    const index = entry.messages.findIndex((message) => message.id === messageId)
+    if (index === -1) return
+    entry.messages = [
+      ...entry.messages.slice(0, index),
+      confirmed,
+      ...entry.messages.slice(index + 1)
+    ]
+    this.#notify()
+  }
+
+  private rejectOptimistic(entry: ThreadMessagesEntry, messageId: string, error: unknown): void {
+    entry.error = error instanceof Error ? error.message : 'Message failed to send.'
+    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    this.#notify()
+  }
+
+  /**
+   * Send a user message. Inserts an optimistic message immediately, persists it
+   * on the server, and reconciles the optimistic ID with the confirmed ID.
+   * Returns the message ID so callers can synchronously act on the optimistic
+   * message (e.g. scroll to it).
+   */
+  async send(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[],
+    specAction: SpecActionIntent | undefined,
+    userMessageId?: string,
+    prepare?: () => Promise<void>,
+    promptContext?: string,
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    presentation?: UserMessagePresentation,
+    taskReferences?: PromptAssignmentTaskReference[]
+  ): Promise<string> {
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      threadId,
+      text,
+      attachments,
+      userMessageId,
+      promptReferences,
+      projectReferences,
+      presentation
+    )
+
+    try {
+      await prepare?.()
+      const confirmed = await invoke(
+        'agent:sendPrompt',
+        projectId,
+        threadId,
+        settings,
+        text,
+        attachments,
+        specAction,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        presentation,
+        taskReferences
+      )
+      this.confirmOptimistic(entry, messageId, confirmed)
+    } catch (err) {
+      this.rejectOptimistic(entry, messageId, err)
+      throw err
+    }
+    return messageId
+  }
+
+  /** Append a user message to the harness's active native turn. */
+  async steer(
+    projectId: string,
+    threadId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    userMessageId?: string,
+    promptContext?: string,
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    presentation?: UserMessagePresentation,
+    taskReferences?: PromptAssignmentTaskReference[]
+  ): Promise<string> {
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      threadId,
+      text,
+      attachments,
+      userMessageId,
+      promptReferences,
+      projectReferences,
+      presentation
+    )
+    try {
+      const confirmed = await invoke(
+        'agent:steerPrompt',
+        projectId,
+        threadId,
+        text,
+        attachments,
+        messageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        presentation,
+        taskReferences
+      )
+      this.confirmOptimistic(entry, messageId, confirmed)
+    } catch (error) {
+      this.rejectOptimistic(entry, messageId, error)
+      throw error
+    }
+    return messageId
+  }
+
+  /** Apply a streaming part update to the cached messages. */
+  upsertPart(projectId: string, threadId: string, sessionId: string, part: AgentPart): void {
+    if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    const entry = this.entry(projectId, threadId)
+    const msgId = part.messageID
+    const msgIndex = entry.messages.findIndex((m) => m.id === msgId)
+
+    if (msgIndex === -1) {
+      // If the part's text matches the last user's message, it's an echo from
+      // the server — skip it to prevent a duplicate assistant message.
+      if (part.type === 'text') {
+        const lastUser = [...entry.messages].reverse().find((m) => m.role === 'user')
+        if (lastUser && messageText(lastUser) === part.text) return
+      }
+      const newMsg: AgentMessage = {
+        id: msgId,
+        role: 'assistant',
+        parts: [part],
+        createdAt: Date.now()
+      }
+      entry.messages = [...entry.messages, newMsg]
+    } else {
+      const msg = entry.messages[msgIndex]
+      const partIndex = msg.parts.findIndex((p) => p.id === part.id)
+      if (partIndex === -1) {
+        msg.parts = [...msg.parts, part]
+      } else {
+        msg.parts[partIndex] = part
+      }
+      entry.messages = [...entry.messages]
+    }
+    this.#notify()
+  }
+
+  /** Append streaming text to a specific part field. */
+  applyDelta(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    messageId: string,
+    partId: string,
+    field: string,
+    delta: string
+  ): void {
+    if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    const entry = this.entry(projectId, threadId)
+    const msg = entry.messages.find((m) => m.id === messageId)
+    if (!msg) return
+    const part = msg.parts.find((p) => p.id === partId)
+    if (!part) return
+    if (field === 'text' && (part.type === 'text' || part.type === 'reasoning')) {
+      part.text += delta
+      entry.messages = [...entry.messages]
+      this.#notify()
+    }
+  }
+
+  /** Mark a message as completed and stamp reasoning end times. */
+  markCompleted(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    messageId: string,
+    error?: string,
+    compaction = false,
+    tokens?: AgentMessage['tokens'],
+    contextWindow?: number,
+    contextUsed?: number
+  ): void {
+    if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    const entry = this.entry(projectId, threadId)
+    const doneMsg = entry.messages.find((m) => m.id === messageId)
+    if (!doneMsg) return
+    const now = Date.now()
+    doneMsg.completedAt = now
+    doneMsg.error = error
+    if (tokens) doneMsg.tokens = tokens
+    if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
+    if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (compaction) {
+      doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
+        part.type === 'text'
+          ? {
+              type: 'compaction-summary',
+              id: part.id,
+              messageID: part.messageID,
+              text: part.text
+            }
+          : part
+      )
+    }
+    for (const part of doneMsg.parts) {
+      if (part.type === 'reasoning' && !part.time?.end) {
+        part.time = { ...part.time, end: now }
+      }
+    }
+    entry.messages = [...entry.messages]
+    this.#notify()
+  }
+
+  /** Apply provider account telemetry without creating a duplicate answer. */
+  updateUsage(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    messageId: string,
+    tokens?: AgentMessage['tokens'],
+    contextWindow?: number,
+    contextUsed?: number,
+    cost?: number,
+    rateLimits?: AgentMessage['rateLimits']
+  ): void {
+    if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    const entry = this.entry(projectId, threadId)
+    const message = entry.messages.find((candidate) => candidate.id === messageId)
+    if (!message) return
+    if (tokens) message.tokens = tokens
+    if (contextWindow !== undefined) message.contextWindow = contextWindow
+    if (contextUsed !== undefined) message.contextUsed = contextUsed
+    if (cost !== undefined) message.cost = cost
+    if (rateLimits) message.rateLimits = rateLimits
+    entry.messages = [...entry.messages]
+    this.#notify()
+  }
+
+  /** Drop a message and everything after it from the cache. */
+  async truncate(projectId: string, threadId: string, messageId: string): Promise<AgentMessage[]> {
+    const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
+    const key = threadKey(projectId, threadId)
+    const entry = this.entry(projectId, threadId)
+    entry.messages = kept
+    entry.loaded = true
+    entry.error = ''
+    this.#sessionIds.delete(key)
+    this.#notify()
+    return kept
+  }
+
+  /** Clear the cache for a thread (e.g. on deletion). */
+  clear(projectId: string, threadId: string): void {
+    const key = threadKey(projectId, threadId)
+    const sessionId = this.#sessionIds.get(key)
+    if (sessionId) this.#threadsBySession.delete(sessionId)
+    this.#threads.delete(key)
+    this.#sessionIds.delete(key)
+    this.threads = new Map(this.#threads)
+  }
+
+  #matchesSession(projectId: string, threadId: string, sessionId: string): boolean {
+    return this.#sessionIds.get(threadKey(projectId, threadId)) === sessionId
+  }
+
+  #handleAgentEvent(event: AgentEvent): void {
+    if (!('sessionId' in event)) return
+    const target = this.#threadsBySession.get(event.sessionId)
+    if (!target) return
+    const { projectId, threadId } = target
+
+    switch (event.type) {
+      case 'message.part.updated':
+        this.upsertPart(projectId, threadId, event.sessionId, event.part)
+        break
+      case 'message.part.delta':
+        this.applyDelta(
+          projectId,
+          threadId,
+          event.sessionId,
+          event.messageId,
+          event.partId,
+          event.field,
+          event.delta
+        )
+        break
+      case 'message.completed':
+        this.markCompleted(
+          projectId,
+          threadId,
+          event.sessionId,
+          event.messageId,
+          event.error,
+          event.compaction,
+          event.tokens,
+          event.contextWindow,
+          event.contextUsed
+        )
+        break
+      case 'usage.updated':
+        this.updateUsage(
+          projectId,
+          threadId,
+          event.sessionId,
+          event.messageId,
+          event.tokens,
+          event.contextWindow,
+          event.contextUsed,
+          event.cost,
+          event.rateLimits
+        )
+        break
+      case 'session.status':
+        if (event.status.state === 'working' || event.status.state === 'waiting') {
+          agentRuns.setBusy(
+            projectId,
+            threadId,
+            true,
+            this.#latestUserMessageId(projectId, threadId)
+          )
+        }
+        break
+    }
+  }
+
+  #latestUserMessageId(projectId: string, threadId: string): string | undefined {
+    const messages = this.entry(projectId, threadId).messages
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (messages[index]?.role === 'user') return messages[index].id
+    }
+    return undefined
+  }
+
+  #notify(): void {
+    // Reassign the reactive map so Svelte subscribers see the change.
+    this.threads = new Map(this.#threads)
+  }
+}
+
+export const threadMessages = new ThreadMessagesStore()
