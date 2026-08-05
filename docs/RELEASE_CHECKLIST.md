@@ -98,9 +98,13 @@ The goal: maintainers review high-signal PRs, not triage noise.
 - [x] **Document local dev setup** in README (exists: Bun, `bun run dev`, packaging) — low-friction first contribution = fewer "how do I build this" issues.
 - [x] **Create one "maintainer playlist"**: a checklist/saved-reply set for common review outcomes (needs baseline tests, vanity feature, perf concern) so you never write the same paragraph twice.
 
-## 6. Docker & Coolify deployment
+## 6. Docker & Coolify deployment (marketing website only)
 
-Deploy the website/server side on your own server via Coolify.
+> Coolify applies **only to the marketing website** in the `codeinoven-site`
+> repo. The CodeInOven desktop app has no server component — it ships via
+> GitHub Releases and self-updates. This phase is about the website.
+
+Deploy the website on your own server via Coolify.
 
 The Docker files live in the **`pillardash-oss/codeinoven-site`** repository (the `apps/marketing` and `apps/agents-favicon` apps), which has been published to that repo.
 
