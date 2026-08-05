@@ -20,7 +20,7 @@
     "predev": "bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "build:production": "NODE_ENV=production electron-vite build --mode production",
+    "build:production": "electron-vite build --mode production",
     "preview": "electron-vite preview",
     "check": "bun scripts/check.ts",
     "lint": "eslint --max-warnings 0",
