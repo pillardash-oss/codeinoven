@@ -70,16 +70,34 @@
   let imageUrls = new FileBlobUrlManager()
   let elapsed = $state(0)
 
+  // When no explicit start is available, fall back to the earliest working
+  // part timestamp so the timer keeps counting even at message boundaries.
+  const effectiveStartTime = $derived.by((): number | undefined => {
+    if (startTime && startTime > 0) return startTime
+    for (const part of parts) {
+      const start =
+        part.type === 'tool'
+          ? part.state.time?.start
+          : part.type === 'reasoning'
+            ? part.time?.start
+            : part.type === 'subagent'
+              ? part.activity.time?.start
+              : undefined
+      if (start && start > 0) return start
+    }
+    return undefined
+  })
+
   // Live count of how long the agent has been working. Ticks every second
   // while the trace is busy; only rendered beside the busy indicator.
   $effect(() => {
-    if (!busy || !startTime) {
+    if (!busy || !effectiveStartTime) {
       elapsed = 0
       return
     }
-    elapsed = Math.max(0, Math.floor((Date.now() - startTime) / 1000))
+    elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
     const interval = setInterval(() => {
-      elapsed = Math.max(0, Math.floor((Date.now() - startTime) / 1000))
+      elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
     }, 1000)
     return () => clearInterval(interval)
   })
@@ -295,7 +313,7 @@
       <div class="flex items-center gap-2">
         <Loader2 size={11} class="animate-spin text-info" />
         <span class="text-[10px] text-info/80">Agent working…</span>
-        {#if startTime}
+        {#if effectiveStartTime}
           <span class="tabular-nums text-[10px] text-info/80">
             · {formatDuration(elapsed)}
           </span>
