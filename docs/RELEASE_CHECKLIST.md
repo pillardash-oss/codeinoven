@@ -131,7 +131,7 @@ The Docker files live in the **`pillardash-oss/codeinoven-site`** repository (th
 
 The public-facing cutover.
 
-- [ ] **Confirm the website is live at `codeinoven.dev`** (did not resolve during this audit — must be up before launch).
+- [ ] **Confirm the website is live at `codeinoven.com`** (did not resolve during this audit — must be up before launch).
 - [x] **Link the website** in the repo: README top, repo `About`/homepage URL on GitHub.
 - [x] **Update the README release links** to the OSS repo (Phase 1) and add a hero section/logo + badges (CI status, license, downloads, version).
 - [ ] **Tag and release `v0.2.1`** (next after current version) via the release workflow with signed installers, checksums, and release notes from `CHANGELOG.md`.

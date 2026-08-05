@@ -2,7 +2,7 @@
 
 **A desktop workstation for coordinated agentic software engineering.**
 
-> Website: [codeinoven.dev](https://codeinoven.dev) · [Report a vulnerability](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+> Website: [codeinoven.com](https://codeinoven.com) · [Report a vulnerability](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
 
 [![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
 [![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
