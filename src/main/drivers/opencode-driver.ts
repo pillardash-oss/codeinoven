@@ -1251,9 +1251,21 @@ export class OpenCodeDriver implements HarnessDriver {
     sessionId: string,
     isolated?: IsolatedHandle
   ): Promise<AgentMessage[]> {
-    const handle =
-      isolated ?? this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
-    return this.fetchMessages(handle, sessionId)
+    const turnHandle = isolated ? undefined : this.turnServers.get(sessionId)
+    const handle = isolated ?? turnHandle ?? (await this.ensureServer(projectPath))
+    try {
+      return await this.fetchMessages(handle, sessionId)
+    } catch (error) {
+      // End-of-turn mirroring and renderer refreshes can read concurrently.
+      // Utility cleanup deliberately kills the per-turn server after the
+      // canonical mirror finishes, which terminates any other fetch already in
+      // flight. OpenCode sessions persist outside that process, so retry the
+      // read once through whichever transport owns the session now.
+      if (!turnHandle || isolated || this.turnServers.get(sessionId) === turnHandle) throw error
+      const replacementHandle =
+        this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
+      return this.fetchMessages(replacementHandle, sessionId)
+    }
   }
 
   async abort(projectPath: string, sessionId: string, isolated?: IsolatedHandle): Promise<void> {
