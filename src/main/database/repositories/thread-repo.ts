@@ -1,6 +1,9 @@
 import type { Database } from '../database'
 import type {
+  AgentRateLimitWindow,
+  AgentTokenUsage,
   Thread,
+  ThreadContextUsage,
   ThreadSearchResult,
   ThreadStatus,
   ThreadSettings,
@@ -23,6 +26,7 @@ interface ThreadRow {
   feature_slug: string | null
   scope_bucket_id: string | null
   settings: string | null
+  context_usage: string | null
   session_id: string | null
   dismissed_spec_id: string | null
   dismissed_spec_version: number | null
@@ -43,6 +47,55 @@ interface ThreadRow {
   working_directory: string
 }
 
+/** Safe JSON read for optional blob columns — a corrupt row must not break a thread list. */
+function parseStoredJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Validate a raw context-usage snapshot with integrity checks so a corrupt or
+ * legacy blob can never crash a thread list or render a bogus meter. Returns
+ * null when the shape is unusable.
+ */
+export function parseThreadContextUsage(value: unknown): ThreadContextUsage | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  if (typeof record.harnessId !== 'string' || typeof record.providerId !== 'string') return null
+  if (typeof record.contextUsed !== 'number' || typeof record.costUsd !== 'number') return null
+  const tokenRecord = record.tokens
+  if (!tokenRecord || typeof tokenRecord !== 'object') return null
+  const tokenFields: Array<keyof AgentTokenUsage> = [
+    'input',
+    'output',
+    'reasoning',
+    'cacheRead',
+    'cacheWrite',
+    'total'
+  ]
+  const tokens = tokenRecord as Record<string, unknown>
+  for (const field of tokenFields) {
+    if (typeof tokens[field] !== 'number') return null
+  }
+  const rateLimits = Array.isArray(record.rateLimits)
+    ? (record.rateLimits as AgentRateLimitWindow[])
+    : []
+  return {
+    harnessId: record.harnessId,
+    providerId: record.providerId,
+    contextUsed: record.contextUsed,
+    contextPercent: typeof record.contextPercent === 'number' ? record.contextPercent : undefined,
+    contextWindow: typeof record.contextWindow === 'number' ? record.contextWindow : undefined,
+    costUsd: record.costUsd,
+    tokens: tokens as unknown as AgentTokenUsage,
+    rateLimits
+  }
+}
+
+/** Parse a raw thread row into a display-facing Thread. */
 function rowToThread(row: ThreadRow): Thread {
   return {
     id: row.id,
@@ -60,6 +113,9 @@ function rowToThread(row: ThreadRow): Thread {
     featureSlug: row.feature_slug ?? undefined,
     scopeBucketId: row.scope_bucket_id ?? undefined,
     settings: row.settings ? (JSON.parse(row.settings) as ThreadSettings) : undefined,
+    contextUsage: row.context_usage
+      ? (parseThreadContextUsage(parseStoredJson(row.context_usage)) ?? undefined)
+      : undefined,
     sessionId: row.session_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
@@ -140,13 +196,13 @@ export class ThreadRepo {
       `INSERT INTO threads(
         id, project_id, provider_id, title, title_source, status,
         pinned, sort_order, scope_sort_order, archived, read,
-        branch, feature_slug, scope_bucket_id, settings,
+        branch, feature_slug, scope_bucket_id, settings, context_usage,
         session_id, dismissed_spec_id, dismissed_spec_version,
         audit_state, loop_iteration, active_audit_id, active_audit_version,
         assignment_id, assignment_role, assignment_task_id,
         coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
         created_at, updated_at, last_activity, working_directory
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         project_id=excluded.project_id,
         provider_id=excluded.provider_id,
@@ -162,6 +218,7 @@ export class ThreadRepo {
         feature_slug=excluded.feature_slug,
         scope_bucket_id=excluded.scope_bucket_id,
         settings=excluded.settings,
+        context_usage=excluded.context_usage,
         session_id=excluded.session_id,
         dismissed_spec_id=excluded.dismissed_spec_id,
         dismissed_spec_version=excluded.dismissed_spec_version,
@@ -195,6 +252,7 @@ export class ThreadRepo {
       thread.featureSlug ?? null,
       thread.scopeBucketId ?? null,
       thread.settings ? JSON.stringify(thread.settings) : null,
+      thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
       thread.sessionId ?? null,
       thread.dismissedSpecId ?? null,
       thread.dismissedSpecVersion ?? null,
@@ -239,6 +297,15 @@ export class ThreadRepo {
 
   delete(id: string): void {
     this.db.run('DELETE FROM threads WHERE id = ?', id)
+  }
+
+  /** Persist a usage snapshot without bumping updated_at/last_activity. */
+  updateContextUsage(id: string, contextUsage: ThreadContextUsage): void {
+    this.db.run(
+      'UPDATE threads SET context_usage = ? WHERE id = ?',
+      JSON.stringify(contextUsage),
+      id
+    )
   }
 
   updateField(id: string, field: string, value: unknown): void {

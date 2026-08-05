@@ -238,6 +238,7 @@ const INVOKE_CHANNELS = [
   'thread:markRead',
   'thread:setArchived',
   'thread:setPinned',
+  'thread:setContextUsage',
   'thread:setStatus',
   'thread:update',
   'thread:updateSettings',

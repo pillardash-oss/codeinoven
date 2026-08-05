@@ -159,6 +159,8 @@ export interface Thread {
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
   settings?: ThreadSettings
+  /** Last-known context/token usage snapshot, for instant meter restore. */
+  contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
   /** Last specification card explicitly dismissed by the user. */
@@ -1153,6 +1155,15 @@ export interface AgentContextUsage {
   costUsd: number
   tokens: AgentTokenUsage
   rateLimits: AgentRateLimitWindow[]
+}
+
+/** Last-known usage snapshot stored with a thread so the meter restores
+ *  instantly on mount and is evacuated automatically when the thread row is
+ *  deleted. The harness/provider pair guard against showing usage from a
+ *  different agent configuration. */
+export interface ThreadContextUsage extends AgentContextUsage {
+  harnessId: string
+  providerId: string
 }
 
 /** A selectable option within an agent question. */

@@ -17,6 +17,7 @@ import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
 import { broadcastThreadUpdate, dismissThreadNotifications } from './thread-events'
+import { parseThreadContextUsage } from './database/repositories/thread-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -2434,6 +2435,18 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID'),
       validateBoolean(pinned, 'Pinned')
     )
+  )
+  ipcMain.handle(
+    'thread:setContextUsage',
+    (_, projectId: unknown, threadId: unknown, usage: unknown) => {
+      const parsed = parseThreadContextUsage(usage)
+      if (!parsed) throw new TypeError('Thread context usage is malformed')
+      threadManager.setContextUsage(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        parsed
+      )
+    }
   )
   ipcMain.handle(
     'thread:setArchived',

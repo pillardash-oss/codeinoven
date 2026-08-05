@@ -15,6 +15,7 @@ import {
   type CreateThreadInput,
   type ThreadStatus,
   type ThreadSettings,
+  type ThreadContextUsage,
   type AgentMessage,
   type ThreadMessageCursor,
   type ThreadMessagePage
@@ -384,6 +385,17 @@ export class ThreadManager {
     this.threadRepo.upsert(updated)
     this.onChange?.(updated)
     return updated
+  }
+
+  /**
+   * Persist the thread's last-known usage snapshot. No onChange broadcast: the
+   * meter commits too often (every quiet second of a long turn) for every write
+   * to re-render the sidebar, and the snapshot is only needed to seed the next
+   * mount. The row is deleted with the thread, so no orphan cleanup is needed.
+   */
+  setContextUsage(projectId: string, threadId: string, contextUsage: ThreadContextUsage): void {
+    this.requireOwnedThread(projectId, threadId)
+    this.threadRepo.updateContextUsage(threadId, contextUsage)
   }
 
   async setLoopIteration(

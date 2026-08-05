@@ -98,6 +98,7 @@
     Thread,
     ThreadMessageCursor,
     ThreadSettings,
+    ThreadContextUsage,
     ThinkingLevel,
     PermissionLevel,
     ScopedHarnessCommand,
@@ -141,7 +142,7 @@
     PendingAgentQuestionRequest,
     UserMessagePresentation
   } from '$shared/types'
-  import { APP_NAME, APP_SLUG } from '$shared/brand'
+  import { APP_NAME } from '$shared/brand'
 
   interface Props {
     thread: Thread
@@ -203,6 +204,9 @@
   let projectIconUrl = $state<string | null>(null)
   let errorMessage = $state('')
   let providerStatus = $state<AgentSessionStatus | null>(null)
+  /** True once the live session status is established on mount; makes the
+   *  DB-status fallback in loadLocal defer to it instead of racing it. */
+  let liveStatusKnown = false
   let compacting = $state(false)
   let commandExecuting = $state(false)
   /** True when a compaction message completed this turn and no answer followed. */
@@ -498,78 +502,45 @@
   /** Minimum quiet time before the rendered battery settles mid-turn. */
   const CONTEXT_USAGE_SETTLE_MS = 6000
 
-  /** localStorage key under which a thread's last-known usage snapshot lives. */
-  const contextUsageSnapshotKey = (projectId: string, threadId: string): string =>
-    `${APP_SLUG}.contextUsage.${projectId}.${threadId}`
-
-  interface ContextUsageSnapshot extends AgentContextUsage {
-    harnessId: string
-    providerId: string
-  }
-
-  function loadContextUsageSnapshot(
-    projectId: string,
-    threadId: string
-  ): ContextUsageSnapshot | null {
-    try {
-      const raw = window.localStorage.getItem(contextUsageSnapshotKey(projectId, threadId))
-      if (!raw) return null
-      const parsed = JSON.parse(raw) as Partial<ContextUsageSnapshot> | null
-      return parsed && typeof parsed.harnessId === 'string'
-        ? (parsed as ContextUsageSnapshot)
-        : null
-    } catch {
-      return null
-    }
-  }
-
-  function persistContextUsageSnapshot(
-    projectId: string,
-    threadId: string,
-    snapshot: ContextUsageSnapshot
-  ): void {
-    try {
-      window.localStorage.setItem(
-        contextUsageSnapshotKey(projectId, threadId),
-        JSON.stringify(snapshot)
-      )
-    } catch {
-      // Storage unavailable — non-fatal; the meter simply waits for messages.
-    }
-  }
-
   /**
-   * Restore the last-known usage snapshot from the previous session so the
-   * meter renders instantly on restart, before the async message load lands.
-   * Usage never carries across a harness or provider switch, so the snapshot is
-   * only shown when it belongs to the thread's current provider.
+   * Seed the meter from a thread-attached usage snapshot. The snapshot lives on
+   * the thread row (not localStorage), so it restores instantly on mount, is
+   * validated for integrity, and is evacuated automatically when the thread is
+   * deleted. Usage never carries across a harness/provider switch, so the
+   * snapshot is only shown when it belongs to the thread's current provider.
    */
-  const initialContextUsage = (() => {
-    const snapshot = loadContextUsageSnapshot(thread.projectId, thread.id)
-    if (
-      !snapshot ||
-      snapshot.harnessId !== settings.harnessId ||
-      snapshot.providerId !== settings.providerId
-    ) {
-      return undefined
+  function seedContextUsageSnapshot(snapshot: ThreadContextUsage | undefined): void {
+    if (!snapshot || contextUsageDisplay) return
+    if (snapshot.harnessId !== settings.harnessId || snapshot.providerId !== settings.providerId) {
+      return
     }
-    return snapshot
-  })()
+    contextUsageDisplay = snapshot
+  }
+
+  // Re-evaluate asynchronously: settings may be corrected by loadLocal after the
+  // first render, so a valid snapshot is admitted as soon as it matches.
+  $effect(() => {
+    seedContextUsageSnapshot(thread.contextUsage)
+  })
 
   /** Snapshot of usage actually rendered — it settles at the end of a turn or
    *  after a quiet period, and flushes to the latest value on hover. */
-  let contextUsageDisplay = $state<AgentContextUsage | undefined>(initialContextUsage)
+  let contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
 
   function commitContextUsage(usage: AgentContextUsage): void {
     contextUsageDisplay = usage
     contextUsageCommittedAt = Date.now()
-    persistContextUsageSnapshot(thread.projectId, thread.id, {
+    const snapshot: ThreadContextUsage = {
       ...usage,
       harnessId: settings.harnessId,
       providerId: settings.providerId
-    })
+    }
+    // Persist with the thread so the next mount restores instantly. Fire and
+    // forget — the live value is already displayed; a failed write only delays
+    // the next seed.
+    void invoke('thread:setContextUsage', thread.projectId, thread.id, snapshot).catch(() => {})
   }
 
   function revealContextUsage(): void {
@@ -1600,15 +1571,18 @@
     )
   }
 
+  /** Restore the run's busy state from the persisted thread status. Treat every
+   *  in-flight status (including a pending approval gate) as working so the
+   *  trace and its live timer survive a thread switch. */
   function restoreWorkingState(status: Thread['status']): void {
-    if (status === 'planning' || status === 'executing') {
+    if (status === 'planning' || status === 'executing' || status === 'awaiting_approval') {
       agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
       return
     }
     setIdleFromRestore()
   }
 
-  async function loadLocal(): Promise<void> {
+  async function loadLocal(attempt = 0): Promise<void> {
     const { projectId, id } = thread
     try {
       const [threadData, page, config] = await Promise.all([
@@ -1628,10 +1602,19 @@
       // pages already loaded for this thread.
       threadMessages.mergePage(projectId, id, page.messages)
       syncOpenSubagentTabs()
-      restoreWorkingState(threadData?.status ?? thread.status)
+      // The live session status (connectSession) is authoritative; only fall
+      // back to the persisted thread status when no live status was seen.
+      if (!liveStatusKnown) {
+        restoreWorkingState(threadData?.status ?? thread.status)
+      }
+      seedContextUsageSnapshot(threadData?.contextUsage)
       restoreQueuedMessage()
     } catch {
-      // Non-fatal — the background session sync still populates the view.
+      // A single transient failure must not silently drop the settings, mirror,
+      // and status restore — retry once, then degrade gracefully.
+      if (attempt === 0) {
+        return loadLocal(1)
+      }
     }
   }
 
@@ -1666,10 +1649,12 @@
     try {
       providerStatus = await invoke('agent:getSessionStatus', projectId, id)
       if (!alive) return
+      // The live session status is the single source of truth on mount. Once
+      // established, loadLocal's DB-status fallback must not override it.
+      liveStatusKnown = providerStatus !== null
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
         agentRuns.setBusy(projectId, id, true, latestUserMessageId())
-      }
-      if (providerStatus?.state === 'error' || providerStatus?.state === 'idle') {
+      } else if (providerStatus?.state === 'error' || providerStatus?.state === 'idle') {
         setIdleFromRestore()
       }
       await refreshPendingPermissions()
