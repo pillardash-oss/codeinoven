@@ -8,6 +8,8 @@
 interface AgentRunEntry {
   /** True while the agent is processing the current turn. */
   busy: boolean;
+  /** When the current busy run started, used for the live working timer. */
+  busySince: number | null;
   /** User message ID that started the current turn; used as the trace key. */
   currentTurnUserMessageId: string | null;
   /** Whether the working trace is currently open. */
@@ -32,6 +34,7 @@ class AgentRunsStore {
     if (!entry) {
       entry = {
         busy: false,
+        busySince: null,
         currentTurnUserMessageId: null,
         traceOpen: false,
         traceUserOpened: false,
@@ -53,6 +56,11 @@ class AgentRunsStore {
       this.runs.get(threadKey(projectId, threadId))?.currentTurnUserMessageId ??
       null
     );
+  }
+
+  /** When the current busy run started, or undefined when idle. */
+  busySince(projectId: string, threadId: string): number | undefined {
+    return this.runs.get(threadKey(projectId, threadId))?.busySince ?? undefined;
   }
 
   /** Whether the working trace is open for the current turn. */
@@ -83,6 +91,11 @@ class AgentRunsStore {
       busy &&
       turnUserMessageId !== undefined &&
       turnUserMessageId !== entry.currentTurnUserMessageId;
+    if (busy) {
+      if (!wasBusy || isNewTurn) {
+        entry.busySince = Date.now();
+      }
+    }
     entry.busy = busy;
 
     if (isNewTurn && turnUserMessageId) {
@@ -119,6 +132,7 @@ class AgentRunsStore {
   setIdle(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId);
     entry.busy = false;
+    entry.busySince = null;
     entry.currentTurnUserMessageId = null;
     if (!entry.traceUserOpened) {
       entry.traceOpen = false;

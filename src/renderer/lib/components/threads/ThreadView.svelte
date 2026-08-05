@@ -181,6 +181,11 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  /** When the current busy run started; authoritative source for the live timer. */
+  const activeTurnStartTime = $derived.by(() => {
+    const since = agentRuns.busySince(thread.projectId, thread.id)
+    return since && since > 0 ? since : undefined
+  })
   // Intentional initial-value capture — view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
@@ -4955,7 +4960,9 @@
                         open={busy && isLatestTurn}
                         busy={busy && isLatestTurn}
                         latest={isLatestTurn}
-                        startTime={getTurnStartTime(msgIndex)}
+                        startTime={isLatestTurn
+                          ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
+                          : getTurnStartTime(msgIndex)}
                         {modelLabel}
                         providerName={provider?.name}
                         {harnessId}
@@ -5111,6 +5118,7 @@
               open
               busy
               latest
+              startTime={activeTurnStartTime}
               projectId={thread.projectId}
               threadId={thread.id}
             />
