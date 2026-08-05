@@ -52,7 +52,7 @@ These live in **Coolify → your project → Environment Variables** for the
 
 | Variable | What it is | Where to get it |
 | -------- | ---------- | --------------- |
-| `ORIGIN` | Public URL of the deployed site (adapter-node requirement). | The site URL, e.g. `https://codeinoven.dev`. |
+| `ORIGIN` | Public URL of the deployed site (adapter-node requirement). | The site URL, e.g. `https://codeinoven.com`. |
 | `DATA_DIR` | SQLite data path inside the container (persisted volume). | Keep the default `/app/data`. |
 | `GITHUB_TOKEN` | Token for the icon crawler to raise GitHub API rate limits (60/h anonymous → 5000/h authed). | GitHub → Settings → Developer settings → **Fine-grained personal access token** (read access to public repos) or a classic token with `public_repo`. |
 | `ENABLE_CRON` | Whether the container runs the daily crawl cron. | Set `false` and use a Coolify scheduled task instead if you prefer. |
