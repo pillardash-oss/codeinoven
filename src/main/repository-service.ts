@@ -20,12 +20,7 @@ export class RepositoryService {
     const validatedPath = await this.validateLocalDirectory(projectPath)
 
     try {
-      const result = await this.runGit([
-        '-C',
-        validatedPath,
-        'rev-parse',
-        '--show-toplevel'
-      ])
+      const result = await this.runGit(['-C', validatedPath, 'rev-parse', '--show-toplevel'])
       const repositoryRoot = result.stdout.trim()
 
       return {
@@ -73,7 +68,7 @@ export class RepositoryService {
       }
 
       Logger.error('Repository initialization failed:', validatedPath, detail)
-      throw new Error(`Unable to initialize Git repository: ${detail}`)
+      throw new Error(`Unable to initialize Git repository: ${detail}`, { cause: failure })
     }
 
     Logger.info('Initialized Git repository:', validatedPath)
@@ -87,15 +82,25 @@ export class RepositoryService {
   async getCurrentBranch(projectPath: string): Promise<string | null> {
     try {
       const validatedPath = await this.validateLocalDirectory(projectPath)
-      const result = await this.runGit([
-        '-C',
-        validatedPath,
-        'rev-parse',
-        '--abbrev-ref',
-        'HEAD'
-      ])
+      const result = await this.runGit(['-C', validatedPath, 'rev-parse', '--abbrev-ref', 'HEAD'])
       const branch = result.stdout.trim()
       return branch || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Resolve the git remote `origin` URL for the repository at the given path.
+   * Returns null when there is no origin, the directory is not a git
+   * repository, or git is unavailable.
+   */
+  async getRemoteOrigin(projectPath: string): Promise<string | null> {
+    try {
+      const validatedPath = await this.validateLocalDirectory(projectPath)
+      const result = await this.runGit(['-C', validatedPath, 'remote', 'get-url', 'origin'])
+      const url = result.stdout.trim()
+      return url || null
     } catch {
       return null
     }
@@ -125,19 +130,14 @@ export class RepositoryService {
 
   private runGit(args: string[]): Promise<GitCommandResult> {
     return new Promise((resolveCommand, rejectCommand) => {
-      execFile(
-        'git',
-        args,
-        { encoding: 'utf8', windowsHide: true },
-        (error, stdout, stderr) => {
-          if (error) {
-            rejectCommand({ error, stderr } satisfies GitCommandFailure)
-            return
-          }
-
-          resolveCommand({ stdout, stderr })
+      execFile('git', args, { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
+        if (error) {
+          rejectCommand({ error, stderr } satisfies GitCommandFailure)
+          return
         }
-      )
+
+        resolveCommand({ stdout, stderr })
+      })
     })
   }
 

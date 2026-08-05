@@ -747,6 +747,7 @@ export interface IpcInvokeContract {
   'pty:destroy': Contract<[id: string], void>
   'repository:init': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:preflight': Contract<[projectPath: string], RepositoryPreflightResult>
+  'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
   'spec:addAnnotation': Contract<

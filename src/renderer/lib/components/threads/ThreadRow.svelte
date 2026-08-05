@@ -14,7 +14,8 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
-  import { projectIdentityTitle } from '$lib/project-location'
+  import { projectIdentityTitle, remoteOriginLabel } from '$lib/project-location'
+  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import type { Thread } from '$shared/types'
 
@@ -268,6 +269,9 @@
     scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
   )
 
+  /** Git remote origin URL for the thread's project, resolved lazily on hover. */
+  let remoteOriginUrl = $derived(projectRemotes.get(thread.projectId) ?? null)
+
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
   )
@@ -378,6 +382,7 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
+    if (project) void projectRemotes.ensure(thread.projectId, project.path)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -626,9 +631,9 @@
             <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
             <dd
               class="truncate text-muted"
-              title={project ? projectIdentityTitle(project) : undefined}
+              title={remoteOriginUrl ?? (project ? projectIdentityTitle(project) : undefined)}
             >
-              {project?.name ?? '—'}
+              {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : (project?.name ?? '—')}
             </dd>
           </div>
           <div class="flex gap-2">
