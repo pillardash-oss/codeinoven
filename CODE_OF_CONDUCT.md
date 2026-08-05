@@ -52,7 +52,7 @@ an individual is officially representing the community in public spaces.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-`oss@pillardash.com`. All complaints will be reviewed and investigated promptly
+`hey@pillardash.com`. All complaints will be reviewed and investigated promptly
 and fairly.
 
 ## Enforcement Guidelines
