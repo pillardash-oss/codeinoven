@@ -48,3 +48,17 @@ export function projectIdentityTitle(project: ProjectLocationSource): string {
   const location = projectLocationLabel(project)
   return location ? `${project.name}\n${location}` : project.name
 }
+
+/**
+ * Reduce a git remote `origin` URL to a compact `owner/repo` identity.
+ * Handles `https://host/owner/repo(.git)` and scp-style
+ * `git@host:owner/repo(.git)` remotes; falls back to the trimmed URL.
+ */
+export function remoteOriginLabel(url: string): string {
+  const cleaned = url.trim().replace(/\.git$/u, '')
+  const httpsMatch = cleaned.match(/^https?:\/\/[^/]+\/(.+)$/u)
+  if (httpsMatch) return httpsMatch[1]
+  const scpMatch = cleaned.match(/^(?:[^@]+@)?[^:]+:(.+)$/u)
+  if (scpMatch) return scpMatch[1]
+  return cleaned
+}

@@ -192,6 +192,7 @@ const INVOKE_CHANNELS = [
   'pty:destroy',
   'repository:init',
   'repository:preflight',
+  'repository:remoteOrigin',
   'shell:openExternal',
   'shell:revealPath',
   'spec:addAnnotation',

@@ -2264,6 +2264,9 @@ export function registerIpcHandlers(
   ipcMain.handle('repository:init', (_, projectPath: string) =>
     repositoryService.initialize(projectPath)
   )
+  ipcMain.handle('repository:remoteOrigin', (_, projectPath: string) =>
+    repositoryService.getRemoteOrigin(projectPath)
+  )
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)
   )

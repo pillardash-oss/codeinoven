@@ -36,6 +36,7 @@
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
+  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import {
     getInlineFileTypeIconDataUri,
     getInlineFolderTypeIconDataUri
@@ -259,6 +260,19 @@
       value: taskReferenceToken(reference)
     }))
   ])
+  /** Git remote origin URL for the active project, surfaced on the branch pill. */
+  let remoteOriginUrl = $derived(projectRemotes.get(projectId ?? '') ?? null)
+  let branchPillTitle = $derived(
+    remoteOriginUrl ?? (projectContext ? projectIdentityTitle(projectContext) : undefined)
+  )
+
+  // Resolve the project's GitHub repo so hovering the branch pill can reveal it.
+  $effect(() => {
+    const id = projectId
+    const path = projectContext?.path
+    if (!id || !path) return
+    void projectRemotes.ensure(id, path)
+  })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
   /** Object URLs for image previews, keyed by attachment file:// URL. */
@@ -1208,7 +1222,7 @@
             {#if projectContext.branch}
               <span
                 class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
-                title={projectIdentityTitle(projectContext)}
+                title={branchPillTitle}
               >
                 <GitBranch size={9} class="shrink-0" />
                 <span class="truncate">{projectContext.branch}</span>
