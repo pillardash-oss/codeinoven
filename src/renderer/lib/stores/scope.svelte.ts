@@ -1,0 +1,617 @@
+import { SvelteMap } from 'svelte/reactivity'
+import { invoke } from '$lib/ipc.svelte'
+import { getProjectIcon } from '$lib/project-icons'
+import { APP_SLUG } from '$shared/brand'
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  type Project,
+  type ScopeBoard,
+  type ScopeBucket,
+  type ScopeSlice,
+  type Thread,
+  scopeSliceForStatus
+} from '$shared/types'
+
+export type ThreadStage = ScopeSlice
+
+export interface ScopeProject {
+  id: string
+  name: string
+  path?: string
+  source?: 'local' | 'ssh'
+  host?: string
+  iconUrl?: string | null
+  color?: string
+}
+
+export interface ScopeSidebarContext {
+  projectId: string
+  bucketId: string
+  stage: ThreadStage
+  threadId: string
+}
+
+export interface ScopeBucketEdit {
+  name: string
+  color?: string
+  iconType?: string
+}
+
+export interface ProjectBadge {
+  hasWorking: boolean
+  hasUnread: boolean
+  hasAttention: boolean
+  hasError: boolean
+}
+
+export const STAGE_LABELS: Record<ThreadStage, string> = {
+  pinned: 'Pinned',
+  todo: 'Todo',
+  working: 'Working',
+  issue: 'Issue',
+  unread: 'Unread',
+  done: 'Done'
+}
+
+export const STAGE_COLORS: Record<ThreadStage, string> = {
+  pinned: 'var(--color-thread-pinned)',
+  todo: 'var(--color-dimmed)',
+  working: 'var(--color-thread-working)',
+  issue: 'var(--color-warning)',
+  unread: 'var(--color-thread-unread)',
+  done: 'var(--color-thread-done)'
+}
+
+export const STAGE_ORDER: ThreadStage[] = ['pinned', 'todo', 'working', 'issue', 'unread', 'done']
+
+const EMPTY_BOARD: ScopeBoard = {
+  version: 1,
+  buckets: [
+    {
+      id: DEFAULT_SCOPE_BUCKET_ID,
+      name: 'Default',
+      sortOrder: 0,
+      collapsed: false,
+      collapsedSlices: []
+    }
+  ]
+}
+
+interface ScopeSnapshot {
+  activeProjectId: string | null
+  sidebarContext: ScopeSidebarContext | null
+}
+
+const SCOPE_STORAGE_KEY = `${APP_SLUG}.scope.v1`
+
+function parseSidebarContext(value: unknown): ScopeSidebarContext | null {
+  if (!value || typeof value !== 'object') return null
+  const obj = value as Record<string, unknown>
+  if (
+    typeof obj.projectId !== 'string' ||
+    typeof obj.bucketId !== 'string' ||
+    typeof obj.threadId !== 'string' ||
+    typeof obj.stage !== 'string' ||
+    !STAGE_ORDER.includes(obj.stage as ThreadStage)
+  ) {
+    return null
+  }
+  return {
+    projectId: obj.projectId,
+    bucketId: obj.bucketId,
+    stage: obj.stage as ThreadStage,
+    threadId: obj.threadId
+  }
+}
+
+function loadScopeSnapshot(): ScopeSnapshot {
+  if (typeof window === 'undefined') return { activeProjectId: null, sidebarContext: null }
+  try {
+    const raw = window.localStorage.getItem(SCOPE_STORAGE_KEY)
+    if (!raw) return { activeProjectId: null, sidebarContext: null }
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return {
+      activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : null,
+      sidebarContext: parseSidebarContext(parsed.sidebarContext)
+    }
+  } catch {
+    return { activeProjectId: null, sidebarContext: null }
+  }
+}
+
+function persistScopeSnapshot(snapshot: ScopeSnapshot): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(SCOPE_STORAGE_KEY, JSON.stringify(snapshot))
+  } catch {
+    // Scope persistence is optional; unavailable storage must not break the app.
+  }
+}
+
+export function clearScopeSnapshot(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(SCOPE_STORAGE_KEY)
+  } catch {
+    // Best-effort cleanup.
+  }
+}
+
+export function threadStage(thread: Thread, draftThreadId?: string | null): ThreadStage {
+  if (draftThreadId && thread.id === draftThreadId) return 'todo'
+  if (thread.pinned) return 'pinned'
+  if (thread.status === 'completed' && !thread.read) return 'unread'
+  return scopeSliceForStatus(thread.status)
+}
+
+function orderedBuckets(board: ScopeBoard): ScopeBucket[] {
+  return [...board.buckets].sort((a, b) => a.sortOrder - b.sortOrder)
+}
+
+function cloneBoard(board: ScopeBoard): ScopeBoard {
+  return {
+    version: 1,
+    buckets: orderedBuckets(board).map((bucket) => ({
+      ...bucket,
+      collapsedSlices: [...bucket.collapsedSlices]
+    }))
+  }
+}
+
+class ScopeState {
+  projectRecords: Project[] = $state([])
+  projects: ScopeProject[] = $state([])
+  activeProjectId: string | null = $state(loadScopeSnapshot().activeProjectId)
+  board: ScopeBoard = $state(cloneBoard(EMPTY_BOARD))
+  boards: Map<string, ScopeBoard> = $state(new SvelteMap())
+  allScopeThreads: Thread[] = $state([])
+  sidebarContext: ScopeSidebarContext | null = $state(loadScopeSnapshot().sidebarContext)
+  /**
+   * Saved scope context for when the user navigates away from the project view
+   * (e.g. to chats) and comes back.  Cleared whenever the sidebar is explicitly
+   * dismissed.
+   */
+  stashedSidebarContext: ScopeSidebarContext | null = $state(null)
+  /** Thread that was active in the project scope before the user switched away. */
+  stashedProjectThreadId: string | null = $state(null)
+  /** Thread that was active in the chat view before the user switched away. */
+  stashedChatThreadId: string | null = $state(null)
+  lastBucketByProject: Map<string, string> = $state(new SvelteMap())
+  loading = $state(false)
+  saving = $state(false)
+  error: string | null = $state(null)
+  draftThreadId: string | null = $state(null)
+  /** Signal for ScopeView to create a thread in a specific bucket (triggered by Cmd+N). */
+  requestCreateScopedThreadCount = $state(0)
+  pendingCreateBucketId: string | null = $state(null)
+  private loadSequence = 0
+  private saveSequence = 0
+
+  /** Compatibility aliases while the shell migrates from project-as-scope naming. */
+  get scopes(): ScopeProject[] {
+    return this.projects
+  }
+
+  get activeScopeId(): string | null {
+    return this.activeProjectId
+  }
+
+  get projectBadges(): SvelteMap<string, ProjectBadge> {
+    const badges = new SvelteMap<string, ProjectBadge>()
+    for (const project of this.projects) {
+      const projectThreads = this.allScopeThreads.filter(
+        (t) => t.projectId === project.id && !t.archived
+      )
+      badges.set(project.id, {
+        hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
+        hasUnread: projectThreads.some((t) => t.status === 'completed' && !t.read),
+        hasAttention: projectThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
+        hasError: projectThreads.some((t) => t.status === 'failed')
+      })
+    }
+    return badges
+  }
+
+  get buckets(): ScopeBucket[] {
+    return orderedBuckets(this.board)
+  }
+
+  get currentProjectThreads(): Thread[] {
+    if (!this.activeProjectId) return []
+    return this.allScopeThreads.filter(
+      (thread) => thread.projectId === this.activeProjectId && !thread.archived
+    )
+  }
+
+  setScopesFromProjects(
+    projects: Project[],
+    icons: Map<string, string>,
+    activeProjectId?: string | null
+  ): void {
+    this.projectRecords = projects.filter((project) => !project.hidden)
+    this.projects = this.projectRecords.map((project) => ({
+      id: project.id,
+      name: project.name,
+      path: project.path,
+      source: project.source,
+      host: project.host,
+      iconUrl: getProjectIcon(project, icons.get(project.id)),
+      color: project.color
+    }))
+
+    const preferredId =
+      activeProjectId && this.projects.some((project) => project.id === activeProjectId)
+        ? activeProjectId
+        : this.activeProjectId &&
+            this.projects.some((project) => project.id === this.activeProjectId)
+          ? this.activeProjectId
+          : (this.projects[0]?.id ?? null)
+
+    if (preferredId !== this.activeProjectId) {
+      this.activeProjectId = preferredId
+      this.board = cloneBoard(EMPTY_BOARD)
+      persistScopeSnapshot({
+        activeProjectId: this.activeProjectId,
+        sidebarContext: this.sidebarContext
+      })
+    }
+  }
+
+  setThreads(threads: Thread[]): void {
+    this.allScopeThreads = threads
+  }
+
+  setSelectedThreadDraftState(threadId: string | null, hasDraft: boolean): void {
+    this.draftThreadId = hasDraft ? threadId : null
+  }
+
+  async activateProject(id: string): Promise<void> {
+    if (id === this.activeProjectId) {
+      const loadedBoard = this.boards.get(id)
+      if (loadedBoard) {
+        this.board = loadedBoard
+        return
+      }
+      await this.loadBoard(id)
+      return
+    }
+    this.activeProjectId = id
+    this.board = this.boards.get(id) ?? cloneBoard(EMPTY_BOARD)
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+    await this.loadBoard(id)
+  }
+
+  activateScope(id: string): void {
+    void this.activateProject(id)
+  }
+
+  bucketFor(projectId: string, bucketId: string): ScopeBucket | null {
+    const board = this.boards.get(projectId)
+    if (!board) return null
+    return board.buckets.find((b) => b.id === bucketId) ?? null
+  }
+
+  async ensureBoardLoaded(projectId: string): Promise<void> {
+    if (this.boards.has(projectId)) return
+    await this.loadBoard(projectId)
+  }
+
+  async loadBoard(projectId = this.activeProjectId): Promise<void> {
+    if (!projectId) {
+      this.board = cloneBoard(EMPTY_BOARD)
+      return
+    }
+
+    const sequence = ++this.loadSequence
+    this.loading = true
+    this.error = null
+    try {
+      const board = await invoke('scope:get', projectId)
+      if (sequence === this.loadSequence) {
+        const cloned = cloneBoard(board)
+        this.boards.set(projectId, cloned)
+        if (projectId === this.activeProjectId) {
+          this.board = cloned
+        }
+      }
+    } catch (error) {
+      if (sequence === this.loadSequence) {
+        this.error = error instanceof Error ? error.message : 'The scope board could not be loaded.'
+      }
+    } finally {
+      if (sequence === this.loadSequence) this.loading = false
+    }
+  }
+
+  async saveBoard(nextBoard: ScopeBoard): Promise<void> {
+    const projectId = this.activeProjectId
+    if (!projectId) return
+
+    const previous = cloneBoard(this.board)
+    const sequence = ++this.saveSequence
+    this.board = cloneBoard(nextBoard)
+    this.saving = true
+    this.error = null
+    try {
+      const saved = await invoke('scope:save', projectId, cloneBoard(nextBoard))
+      if (sequence === this.saveSequence && projectId === this.activeProjectId) {
+        const cloned = cloneBoard(saved)
+        this.board = cloned
+        this.boards.set(projectId, cloned)
+      }
+    } catch (error) {
+      if (sequence === this.saveSequence) {
+        this.board = previous
+        this.boards.set(projectId, previous)
+        this.error = error instanceof Error ? error.message : 'The scope board could not be saved.'
+      }
+      throw error
+    } finally {
+      if (sequence === this.saveSequence) this.saving = false
+    }
+  }
+
+  async createBucket(name: string): Promise<ScopeBucket | null> {
+    const trimmedName = name.trim()
+    if (!trimmedName) return null
+
+    const bucket: ScopeBucket = {
+      id: crypto.randomUUID(),
+      name: trimmedName,
+      sortOrder: this.buckets.length,
+      collapsed: false,
+      collapsedSlices: []
+    }
+    await this.saveBoard({ version: 1, buckets: [...this.buckets, bucket] })
+    return bucket
+  }
+
+  async editBucket(bucketId: string, edit: ScopeBucketEdit): Promise<void> {
+    const trimmedName = edit.name.trim()
+    if (!trimmedName) return
+    await this.saveBoard({
+      version: 1,
+      buckets: this.buckets.map((bucket) => {
+        if (bucket.id !== bucketId) return bucket
+        const updated: ScopeBucket = { ...bucket, name: trimmedName }
+        if (edit.color) updated.color = edit.color
+        else delete updated.color
+        if (edit.iconType) updated.iconType = edit.iconType
+        else delete updated.iconType
+        return updated
+      })
+    })
+  }
+
+  async reorderBucket(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    if (draggedId === targetId || this.saving) return
+    const buckets = [...this.buckets]
+    const draggedIndex = buckets.findIndex((bucket) => bucket.id === draggedId)
+    if (draggedIndex === -1) return
+    const [dragged] = buckets.splice(draggedIndex, 1)
+    const targetIndex = buckets.findIndex((bucket) => bucket.id === targetId)
+    if (targetIndex === -1) return
+    buckets.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, dragged)
+    await this.saveBoard({
+      version: 1,
+      buckets: buckets.map((bucket, sortOrder) => ({ ...bucket, sortOrder }))
+    })
+  }
+
+  async removeBucket(bucketId: string): Promise<void> {
+    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return
+    await this.saveBoard({
+      version: 1,
+      buckets: this.buckets
+        .filter((bucket) => bucket.id !== bucketId)
+        .map((bucket, sortOrder) => ({ ...bucket, sortOrder }))
+    })
+  }
+
+  async toggleBucket(bucketId: string): Promise<void> {
+    await this.saveBoard({
+      version: 1,
+      buckets: this.buckets.map((bucket) =>
+        bucket.id === bucketId ? { ...bucket, collapsed: !bucket.collapsed } : bucket
+      )
+    })
+  }
+
+  async toggleSlice(bucketId: string, slice: ThreadStage): Promise<void> {
+    await this.saveBoard({
+      version: 1,
+      buckets: this.buckets.map((bucket) => {
+        if (bucket.id !== bucketId) return bucket
+        const collapsedSlices = bucket.collapsedSlices.includes(slice)
+          ? bucket.collapsedSlices.filter((candidate) => candidate !== slice)
+          : [...bucket.collapsedSlices, slice]
+        return { ...bucket, collapsedSlices }
+      })
+    })
+  }
+
+  bucketForThread(thread: Thread): string {
+    const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    return this.board.buckets.some((bucket) => bucket.id === bucketId)
+      ? bucketId
+      : DEFAULT_SCOPE_BUCKET_ID
+  }
+
+  threadsFor(bucketId: string, slice: ThreadStage): Thread[] {
+    const threads = this.currentProjectThreads.filter(
+      (thread) => this.bucketForThread(thread) === bucketId && this.stageForThread(thread) === slice
+    )
+    return threads.sort((a, b) => {
+      const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+      const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+      if (aPosition !== bPosition) return aPosition - bPosition
+      if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
+      return a.id.localeCompare(b.id)
+    })
+  }
+
+  async reorderThreads(
+    bucketId: string,
+    slice: ThreadStage,
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    const projectId = this.activeProjectId
+    if (!projectId || draggedId === targetId) return
+
+    const orderedIds = this.threadsFor(bucketId, slice).map((thread) => thread.id)
+    const draggedIndex = orderedIds.indexOf(draggedId)
+    if (draggedIndex === -1) return
+    orderedIds.splice(draggedIndex, 1)
+
+    const targetIndex = orderedIds.indexOf(targetId)
+    if (targetIndex === -1) return
+    orderedIds.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedId)
+
+    const updatedThreads = await invoke(
+      'thread:reorderScope',
+      projectId,
+      bucketId,
+      slice,
+      orderedIds
+    )
+    const updates = new Map(updatedThreads.map((thread) => [thread.id, thread]))
+    this.allScopeThreads = this.allScopeThreads.map((thread) => updates.get(thread.id) ?? thread)
+  }
+
+  stageForThread(thread: Thread): ThreadStage {
+    return threadStage(thread, this.draftThreadId)
+  }
+
+  threadsByStage(stage: ThreadStage): Thread[] {
+    return this.currentProjectThreads.filter((thread) => this.stageForThread(thread) === stage)
+  }
+
+  showSidebarForThread(thread: Thread, bucketId?: string): void {
+    if (thread.projectId !== this.activeProjectId) {
+      void this.activateProject(thread.projectId)
+    }
+    this.sidebarContext = {
+      projectId: thread.projectId,
+      bucketId: bucketId ?? thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
+      stage: this.stageForThread(thread),
+      threadId: thread.id
+    }
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  showSidebarForProject(projectId: string): void {
+    if (projectId !== this.activeProjectId) {
+      void this.activateProject(projectId)
+    }
+    this.sidebarContext = {
+      projectId,
+      bucketId: this.lastBucketForProject(projectId),
+      stage: 'todo',
+      threadId: ''
+    }
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  selectSidebarStage(stage: ThreadStage): void {
+    if (!this.sidebarContext) return
+    this.sidebarContext = { ...this.sidebarContext, stage }
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  setSidebarBucket(bucketId: string): void {
+    if (!this.sidebarContext) return
+    this.sidebarContext = { ...this.sidebarContext, bucketId }
+    if (this.activeProjectId) this.lastBucketByProject.set(this.activeProjectId, bucketId)
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  lastBucketForProject(projectId: string): string {
+    const saved = this.lastBucketByProject.get(projectId)
+    if (saved) return saved
+    const board = this.boards.get(projectId)
+    if (board && board.buckets.length > 0) return orderedBuckets(board)[0].id
+    return DEFAULT_SCOPE_BUCKET_ID
+  }
+
+  requestCreateScopedThread(bucketId: string): void {
+    this.pendingCreateBucketId = bucketId
+    this.requestCreateScopedThreadCount++
+  }
+
+  /** Save the current sidebar context so it can be restored later (e.g. when
+   *  the user switches to chats and comes back).  Also clears the live context
+   *  so the sidebar disappears immediately. */
+  stashSidebarContext(): void {
+    if (!this.sidebarContext) return
+    this.stashedSidebarContext = { ...this.sidebarContext }
+    this.sidebarContext = null
+    persistScopeSnapshot({ activeProjectId: this.activeProjectId, sidebarContext: null })
+  }
+
+  /** Restore a previously-stashed sidebar context.  No-op if nothing stashed. */
+  restoreStashedSidebarContext(): void {
+    if (!this.stashedSidebarContext) return
+    this.sidebarContext = this.stashedSidebarContext
+    this.stashedSidebarContext = null
+    if (this.sidebarContext.projectId !== this.activeProjectId) {
+      void this.activateProject(this.sidebarContext.projectId)
+    }
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  clearSidebarContext(): void {
+    this.sidebarContext = null
+    this.stashedSidebarContext = null
+    this.stashedProjectThreadId = null
+    persistScopeSnapshot({ activeProjectId: this.activeProjectId, sidebarContext: null })
+  }
+
+  updateThread(updated: Thread): void {
+    const exists = this.allScopeThreads.some((thread) => thread.id === updated.id)
+    this.allScopeThreads = exists
+      ? this.allScopeThreads.map((thread) => (thread.id === updated.id ? updated : thread))
+      : [updated, ...this.allScopeThreads]
+    if (this.sidebarContext?.threadId === updated.id) {
+      this.sidebarContext = {
+        projectId: updated.projectId,
+        bucketId: this.bucketForThread(updated),
+        stage: this.stageForThread(updated),
+        threadId: updated.id
+      }
+      persistScopeSnapshot({
+        activeProjectId: this.activeProjectId,
+        sidebarContext: this.sidebarContext
+      })
+    }
+  }
+
+  removeThread(threadId: string): void {
+    this.allScopeThreads = this.allScopeThreads.filter((thread) => thread.id !== threadId)
+  }
+}
+
+export const scopeState = new ScopeState()

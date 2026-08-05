@@ -1,0 +1,216 @@
+import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
+import { CursorShapeDecoder } from './cursor-shape'
+import { attachMouseTracking } from './mouse-tracking'
+import { invoke, subscribe } from '$lib/ipc.svelte'
+
+export interface TerminalSession {
+  id: string
+  term: Terminal
+  fitAddon: FitAddon
+  host: HTMLDivElement
+  exited: boolean
+  ptySpawned: boolean
+}
+
+function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
+  return styles.getPropertyValue(token).trim()
+}
+
+function terminalTheme(): ITheme {
+  const styles = getComputedStyle(document.documentElement)
+  return {
+    background: readThemeColor(styles, '--color-terminal-background'),
+    foreground: readThemeColor(styles, '--color-terminal-foreground'),
+    cursor: readThemeColor(styles, '--color-terminal-cursor'),
+    selectionBackground: readThemeColor(styles, '--color-terminal-selection'),
+    black: readThemeColor(styles, '--color-terminal-black'),
+    red: readThemeColor(styles, '--color-terminal-red'),
+    green: readThemeColor(styles, '--color-terminal-green'),
+    yellow: readThemeColor(styles, '--color-terminal-yellow'),
+    blue: readThemeColor(styles, '--color-terminal-blue'),
+    magenta: readThemeColor(styles, '--color-terminal-magenta'),
+    cyan: readThemeColor(styles, '--color-terminal-cyan'),
+    white: readThemeColor(styles, '--color-terminal-white'),
+    brightBlack: readThemeColor(styles, '--color-terminal-bright-black'),
+    brightRed: readThemeColor(styles, '--color-terminal-bright-red'),
+    brightGreen: readThemeColor(styles, '--color-terminal-bright-green'),
+    brightYellow: readThemeColor(styles, '--color-terminal-bright-yellow'),
+    brightBlue: readThemeColor(styles, '--color-terminal-bright-blue'),
+    brightMagenta: readThemeColor(styles, '--color-terminal-bright-magenta'),
+    brightCyan: readThemeColor(styles, '--color-terminal-bright-cyan'),
+    brightWhite: readThemeColor(styles, '--color-terminal-bright-white')
+  }
+}
+
+/**
+ * Keeps Ghostty terminal state and its PTY alive independently of component
+ * lifecycles. Each session owns a stable host element that can move between
+ * Svelte containers without rebuilding the WASM terminal or losing scrollback.
+ *
+ * The Ghostty `Terminal` instance is the single source of truth for scrollback:
+ * PTY output is written to it continuously (even while the panel is hidden),
+ * so reattaching the host later restores the full buffer.
+ */
+class TerminalSessionManager {
+  private sessions = new Map<string, TerminalSession>()
+  private pendingSessions = new Map<string, Promise<TerminalSession>>()
+  private disposables = new Map<string, Array<() => void>>()
+  private runtime: Promise<Ghostty> | undefined
+
+  /** Return the live session for `id`, creating its Ghostty terminal if needed. */
+  async getOrCreate(id: string): Promise<TerminalSession> {
+    const existing = this.sessions.get(id)
+    if (existing && !existing.exited) return existing
+    if (existing?.exited) this.teardown(id)
+
+    const pending = this.pendingSessions.get(id)
+    if (pending) return pending
+
+    const creation = this.create(id)
+    this.pendingSessions.set(id, creation)
+    try {
+      return await creation
+    } finally {
+      if (this.pendingSessions.get(id) === creation) {
+        this.pendingSessions.delete(id)
+      }
+    }
+  }
+
+  getSession(id: string): TerminalSession | undefined {
+    return this.sessions.get(id)
+  }
+
+  /** Move a live session into the visible panel and ensure its shell is running. */
+  async attach(
+    session: TerminalSession,
+    container: HTMLDivElement,
+    projectId: string
+  ): Promise<void> {
+    if (session.host.parentElement !== container) {
+      container.replaceChildren(session.host)
+    }
+    session.fitAddon.fit()
+    await this.ensurePty(session, projectId)
+    session.term.focus()
+  }
+
+  private getRuntime(): Promise<Ghostty> {
+    if (!this.runtime) {
+      this.runtime = Ghostty.load().catch((error: unknown) => {
+        this.runtime = undefined
+        throw error
+      })
+    }
+    return this.runtime
+  }
+
+  /** Spawn the shell PTY after the terminal has been attached and sized. */
+  private async ensurePty(session: TerminalSession, projectId: string): Promise<void> {
+    if (session.ptySpawned) return
+    session.ptySpawned = true
+    try {
+      await invoke('pty:create', session.id, projectId, session.term.cols, session.term.rows)
+    } catch (error) {
+      session.ptySpawned = false
+      throw error
+    }
+  }
+
+  private async create(id: string): Promise<TerminalSession> {
+    const ghostty = await this.getRuntime()
+    const term = new Terminal({
+      ghostty,
+      cursorBlink: true,
+      cursorStyle: 'bar',
+      fontSize: 13,
+      fontFamily:
+        "'JetBrainsMono Nerd Font Mono', 'JetBrainsMono Nerd Font', ui-monospace, 'SFMono-Regular', Menlo, Monaco, 'Cascadia Code', 'Ubuntu Mono', monospace",
+      scrollback: 5000,
+      smoothScrollDuration: 80,
+      theme: terminalTheme()
+    })
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+
+    const host = document.createElement('div')
+    host.className = 'terminal-host'
+    term.open(host)
+    fitAddon.observeResize()
+
+    const session: TerminalSession = {
+      id,
+      term,
+      fitAddon,
+      host,
+      exited: false,
+      ptySpawned: false
+    }
+    this.sessions.set(id, session)
+
+    const subs: Array<() => void> = []
+    const cursorShape = new CursorShapeDecoder()
+
+    // PTY output → terminal buffer. Always active so the buffer stays current
+    // even while the panel is hidden or the component is unmounted. DECSCUSR
+    // cursor shape changes (e.g. Neovim normal/insert mode) are applied to the
+    // renderer as they stream in.
+    subs.push(
+      subscribe(`pty:data:${id}`, (data) => {
+        const text = data as string
+        term.write(text)
+        const shape = cursorShape.push(text)
+        if (shape && term.renderer) {
+          term.renderer.setCursorStyle(shape.style)
+          term.renderer.setCursorBlink(shape.blinking)
+        }
+      })
+    )
+
+    subs.push(
+      subscribe(`pty:exit:${id}`, () => {
+        session.exited = true
+        term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+      })
+    )
+
+    // Terminal input → PTY
+    const inputDisposable = term.onData((data) => {
+      window.api.send('pty:write', id, data)
+    })
+    subs.push(() => inputDisposable.dispose())
+
+    const resizeDisposable = term.onResize(({ cols, rows }) => {
+      if (session.ptySpawned) {
+        window.api.send('pty:resize', id, cols, rows)
+      }
+    })
+    subs.push(() => resizeDisposable.dispose())
+
+    // Forward mouse events to the PTY while a program owns mouse tracking
+    // (nvim, htop, tmux...). ghostty-web never does this on its own.
+    subs.push(
+      attachMouseTracking({ term, host }, (data) => {
+        window.api.send('pty:write', id, data)
+      })
+    )
+
+    this.disposables.set(id, subs)
+    return session
+  }
+
+  private teardown(id: string): void {
+    const subs = this.disposables.get(id)
+    if (subs) {
+      for (const unsub of subs) unsub()
+      this.disposables.delete(id)
+    }
+    const session = this.sessions.get(id)
+    if (session) {
+      session.term.dispose()
+      this.sessions.delete(id)
+    }
+  }
+}
+
+export const terminalSessions = new TerminalSessionManager()

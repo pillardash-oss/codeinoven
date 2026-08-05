@@ -1,0 +1,38 @@
+appId: com.pillardash.codeinoven
+productName: CodeInOven
+directories:
+  buildResources: build
+  output: dist
+publish:
+  provider: github
+  owner: pillardash
+  repo: codeinoven
+  releaseType: release
+files:
+  - out/**/*
+  - '!node_modules/better-sqlite3/deps/**'
+  - '!node_modules/better-sqlite3/src/**'
+  - '!node_modules/better-sqlite3/binding.gyp'
+forceCodeSigning: true
+mac:
+  identity: 'Pillardash Solutions Limited (KU8UFSTCN5)'
+  hardenedRuntime: true
+  notarize: true
+  icon: src/renderer/static/macos/AppIcon.icns
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  artifactName: ${name}-${version}-${arch}.${ext}
+win:
+  icon: src/renderer/static/icon.png
+  target:
+    - nsis
+  artifactName: ${name}-${version}-setup.${ext}
+linux:
+  icon: src/renderer/static/icon.png
+  target:
+    - AppImage
+    - deb
+  category: Development
+  artifactName: ${name}-${version}.${ext}

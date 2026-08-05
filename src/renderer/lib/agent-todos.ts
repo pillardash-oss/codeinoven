@@ -1,0 +1,174 @@
+import type { AgentMessage, AgentPart } from "$shared/types";
+
+export type AgentTodoStatus = "pending" | "in_progress" | "completed";
+
+export interface AgentTodoItem {
+  id: string;
+  label: string;
+  status: AgentTodoStatus;
+}
+
+export interface AgentTodoSnapshot {
+  items: AgentTodoItem[];
+  signature: string;
+}
+
+type ToolPart = Extract<AgentPart, { type: "tool" }>;
+
+const TODO_TOOL_NAMES = new Set([
+  "todo",
+  "todos",
+  "todowrite",
+  "writetodo",
+  "writetodos",
+  "updateplan",
+  "tasklist",
+  "updatetasklist",
+]);
+
+export function isTodoToolPart(part: AgentPart): part is ToolPart {
+  if (part.type !== "tool") return false;
+  const normalized = part.tool.toLowerCase().replace(/[^a-z0-9]/gu, "");
+  if (TODO_TOOL_NAMES.has(normalized)) return true;
+  return [...TODO_TOOL_NAMES].some((name) => normalized.endsWith(name));
+}
+
+export function latestAgentTodo(
+  messages: AgentMessage[],
+): AgentTodoSnapshot | null {
+  let turnStartIndex = 0;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "user") {
+      turnStartIndex = index + 1;
+      break;
+    }
+  }
+
+  const hasAssistantMessage = messages
+    .slice(turnStartIndex)
+    .some((message) => message.role === "assistant");
+  if (!hasAssistantMessage) return null;
+
+  let latestItems: AgentTodoItem[] | null = null;
+  for (let index = turnStartIndex; index < messages.length; index++) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (!isTodoToolPart(part)) continue;
+      const items = parseTodoItems(part.state.input, part.state.output);
+      if (items.length > 0) latestItems = items;
+    }
+  }
+
+  if (
+    !latestItems ||
+    latestItems.every((item) => item.status === "completed")
+  ) {
+    return null;
+  }
+
+  return {
+    items: latestItems,
+    signature: latestItems
+      .map((item) => `${item.id}:${item.status}:${item.label}`)
+      .join("|"),
+  };
+}
+
+function parseTodoItems(
+  input: Record<string, unknown>,
+  output?: string,
+): AgentTodoItem[] {
+  const source =
+    findTodoArray(input) ??
+    (output ? findTodoArray(parseRecord(output) ?? {}) : undefined);
+  if (!source) return [];
+
+  return source.flatMap((value, index) => {
+    if (typeof value === "string" && value.trim()) {
+      return [
+        {
+          id: `todo-${index}`,
+          label: value.trim(),
+          status: "pending" as const,
+        },
+      ];
+    }
+    const item = recordValue(value);
+    if (!item) return [];
+    const label = firstString(
+      item["content"],
+      item["step"],
+      item["text"],
+      item["title"],
+      item["task"],
+      item["description"],
+    );
+    if (!label) return [];
+    const id =
+      firstString(item["id"], item["key"]) ?? `todo-${index}-${label}`;
+    return [{ id, label, status: normalizeStatus(item) }];
+  });
+}
+
+function findTodoArray(
+  input: Record<string, unknown>,
+): unknown[] | undefined {
+  for (const key of ["todos", "plan", "items", "tasks", "steps"]) {
+    const value = input[key];
+    if (Array.isArray(value)) return value;
+  }
+  for (const key of ["input", "arguments", "payload", "data"]) {
+    const nested = recordValue(input[key]);
+    if (!nested) continue;
+    const value = findTodoArray(nested);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function normalizeStatus(item: Record<string, unknown>): AgentTodoStatus {
+  if (item["completed"] === true || item["done"] === true) return "completed";
+  const status = firstString(item["status"], item["state"])
+    ?.toLowerCase()
+    .replace(/[\s-]+/gu, "_");
+  if (
+    status === "completed" ||
+    status === "complete" ||
+    status === "done" ||
+    status === "cancelled" ||
+    status === "canceled"
+  ) {
+    return "completed";
+  }
+  if (
+    status === "in_progress" ||
+    status === "active" ||
+    status === "running" ||
+    status === "doing"
+  ) {
+    return "in_progress";
+  }
+  return "pending";
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find(
+    (value): value is string =>
+      typeof value === "string" && value.trim().length > 0,
+  )?.trim();
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function parseRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    return recordValue(JSON.parse(value));
+  } catch {
+    return undefined;
+  }
+}

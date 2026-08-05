@@ -1,0 +1,23 @@
+<script lang="ts">
+  import { Folder, FolderOpen } from '@lucide/svelte'
+  import { getFolderTypeIconDataUri } from './file-type-icons'
+
+  interface Props {
+    name: string
+    open?: boolean
+    size?: number
+    class?: string
+  }
+
+  let { name, open = false, size = 13, class: className = '' }: Props = $props()
+
+  let dataUri = $derived(getFolderTypeIconDataUri(name, open))
+</script>
+
+{#if dataUri}
+  <img src={dataUri} alt="" width={size} height={size} class="shrink-0 {className}" />
+{:else if open}
+  <FolderOpen {size} class="shrink-0 text-muted {className}" />
+{:else}
+  <Folder {size} class="shrink-0 text-muted {className}" />
+{/if}

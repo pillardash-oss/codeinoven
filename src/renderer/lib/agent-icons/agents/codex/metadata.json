@@ -1,0 +1,13 @@
+{
+  "id": "codex",
+  "name": "Codex",
+  "vendor": "OpenAI",
+  "website": "https://developers.openai.com/codex",
+  "icon": "icon.svg",
+  "monochrome": "mono.svg",
+  "primaryColor": "#10A37F",
+  "aliases": [
+    "openai-codex",
+    "openai"
+  ]
+}

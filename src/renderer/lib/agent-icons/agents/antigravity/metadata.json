@@ -1,0 +1,13 @@
+{
+  "id": "antigravity",
+  "name": "Antigravity",
+  "vendor": "Google",
+  "website": "https://antigravity.google",
+  "icon": "icon.svg",
+  "monochrome": "mono.svg",
+  "primaryColor": "#3389F5",
+  "aliases": [
+    "agy",
+    "google-antigravity"
+  ]
+}

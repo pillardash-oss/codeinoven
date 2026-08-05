@@ -1,0 +1,168 @@
+<script lang="ts">
+  import { AlertTriangle, Clock3, Code2, RotateCcw, Square, X } from '@lucide/svelte'
+  import type { AgentProviderIssueKind, AgentSessionStatus } from '$shared/types'
+  import Modal from '../ui/Modal.svelte'
+
+  interface Props {
+    status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
+    providerName: string
+    onStop?: () => void
+    onRetry?: () => void
+    onDismiss?: () => void
+  }
+
+  let { status, providerName, onStop, onRetry, onDismiss }: Props = $props()
+  let now = $state(Date.now())
+  let showRawError = $state(false)
+  const issue = $derived(status.issue)
+  const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
+  const waiting = $derived(status.state === 'waiting')
+
+  $effect(() => {
+    if (!issue.retryAt) return
+    now = Date.now()
+    const timer = window.setInterval(() => {
+      now = Date.now()
+    }, 1_000)
+    return () => window.clearInterval(timer)
+  })
+
+  function issueTitle(kind: AgentProviderIssueKind): string {
+    switch (kind) {
+      case 'rate_limit':
+      case 'quota':
+        return 'Usage limit reached'
+      case 'authentication':
+        return 'Provider sign-in required'
+      case 'billing':
+        return 'Provider billing issue'
+      case 'provider_unavailable':
+        return 'Provider temporarily unavailable'
+      case 'network':
+        return 'Provider connection interrupted'
+      default:
+        return waiting ? 'Provider retry scheduled' : 'Agent output error'
+    }
+  }
+
+  function relativeRetryTime(retryAt: number): string {
+    const remainingSeconds = Math.max(0, Math.ceil((retryAt - now) / 1_000))
+    if (remainingSeconds < 60) return `${remainingSeconds}s`
+    const minutes = Math.ceil(remainingSeconds / 60)
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    const remainingMinutes = minutes % 60
+    if (hours < 24) return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+    const days = Math.floor(hours / 24)
+    const remainingHours = hours % 24
+    return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`
+  }
+
+  function absoluteRetryTime(retryAt: number): string {
+    return new Date(retryAt).toLocaleString([], {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    })
+  }
+</script>
+
+<div
+  class={[
+    'rounded-xl border px-4 py-3',
+    waiting ? 'border-warning/25 bg-warning/5' : 'border-danger/20 bg-danger/5'
+  ]}
+  role={waiting ? 'status' : 'alert'}
+  aria-live="polite"
+>
+  <div class="flex items-start gap-3">
+    {#if waiting}
+      <Clock3 size={16} class="mt-0.5 shrink-0 text-warning" />
+    {:else}
+      <AlertTriangle size={16} class="mt-0.5 shrink-0 text-danger" />
+    {/if}
+
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <p class="text-sm font-semibold text-foreground">{issueTitle(issue.kind)}</p>
+        <span class="rounded-full bg-raised px-2 py-0.5 text-[10px] font-semibold text-muted">
+          {providerName}
+        </span>
+      </div>
+
+      <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
+
+      {#if waiting && issue.retryAt}
+        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
+          Retrying {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          {#if issue.attempt}
+            · attempt {issue.attempt}
+          {/if}
+        </p>
+      {:else if issue.retryAt}
+        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
+          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+        </p>
+      {:else if waiting}
+        <p class="mt-2 text-xs font-medium text-foreground">
+          {providerName} will retry automatically.
+        </p>
+      {/if}
+
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        {#if waiting && onStop}
+          <button
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            onclick={onStop}
+          >
+            <Square size={12} />
+            Stop request
+          </button>
+        {:else if !waiting && onRetry}
+          <button
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            onclick={onRetry}
+          >
+            <RotateCcw size={13} />
+            Retry
+          </button>
+        {/if}
+        {#if !waiting && rawError}
+          <button
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            onclick={() => (showRawError = true)}
+          >
+            <Code2 size={13} />
+            Raw Error
+          </button>
+        {/if}
+      </div>
+    </div>
+
+    {#if !waiting && onDismiss}
+      <button
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Dismiss provider error"
+        title="Dismiss"
+        onclick={onDismiss}
+      >
+        <X size={14} />
+      </button>
+    {/if}
+  </div>
+</div>
+
+{#if rawError}
+  <Modal
+    open={showRawError}
+    title={`${providerName} Raw Error`}
+    onClose={() => (showRawError = false)}
+  >
+    <pre
+      class="max-h-96 overflow-auto rounded-lg border border-border bg-raised p-3 text-xs leading-relaxed text-foreground"><code
+        >{rawError}</code
+      ></pre>
+  </Modal>
+{/if}
