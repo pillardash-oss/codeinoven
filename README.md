@@ -189,4 +189,4 @@ The IPC contract (`src/lib/ipc-contract.ts`) is a hard boundary — the renderer
 
 ## License
 
-CodeInOven is **proprietary** (`UNLICENSED`) — all rights reserved by **Pillardash Solutions Limited**. You may build and run it for evaluation, but no redistribution or reuse is granted without permission.
+CodeInOven is released under the [MIT License](LICENSE).
