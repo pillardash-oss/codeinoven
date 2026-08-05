@@ -1571,11 +1571,14 @@
     )
   }
 
-  /** Restore the run's busy state from the persisted thread status. Treat every
-   *  in-flight status (including a pending approval gate) as working so the
-   *  trace and its live timer survive a thread switch. */
+  /** Restore the run's busy state from the persisted thread status. Only the
+   *  genuinely in-flight statuses keep the trace/live timer working across a
+   *  thread switch; an awaiting-approval thread has finished its turn and is
+   *  waiting on the user, so it must read as idle (Needs attention), never as
+   *  still working. Live session activity for pending permission/question gates
+   *  is re-established by connectSession's live status instead. */
   function restoreWorkingState(status: Thread['status']): void {
-    if (status === 'planning' || status === 'executing' || status === 'awaiting_approval') {
+    if (status === 'planning' || status === 'executing') {
       agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
       return
     }

@@ -73,7 +73,10 @@
   }
 
   function statusFor(thread: Thread): StatusPresentation {
-    if (agentRuns.isBusy(thread.projectId, thread.id)) {
+    // Live activity only overrides statuses that are not waiting on the user.
+    // A finished brainstorm/spec (awaiting_approval) must always read as
+    // "Needs attention", never as a stale "Working" spinner.
+    if (thread.status !== 'awaiting_approval' && agentRuns.isBusy(thread.projectId, thread.id)) {
       return { label: 'Working', stage: 'working', variant: 'spinner' }
     }
     switch (thread.status) {
