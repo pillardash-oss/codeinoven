@@ -14,6 +14,7 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import type {
     AgentMessage,
     AgentEvent,
@@ -38,6 +39,25 @@
     tab.selectionAttached
       ? [{ id: `${tab.id}:selection`, label: 'Selection 1', text: tab.selection }]
       : []
+  )
+  let modelLabel = $derived.by((): string | null => {
+    const modelId = tab.settings.modelId
+    if (!modelId) return null
+    const model = providers
+      .flatMap((p) => p.models)
+      .find(
+        (m) =>
+          m.id === modelId && (!tab.settings.providerId || m.providerId === tab.settings.providerId)
+      )
+    return model?.name ?? modelId
+  })
+  let providerName = $derived(
+    providers.find((p) => p.id === tab.settings.providerId)?.name ?? undefined
+  )
+  let harnessName = $derived(
+    tab.settings.harnessId
+      ? (getAgentIcon(tab.settings.harnessId)?.name ?? tab.settings.harnessId)
+      : null
   )
 
   function textFor(message: AgentMessage): string {
@@ -470,6 +490,10 @@
                   busy={tab.busy}
                   latest={tab.busy}
                   startTime={turnStartTime(messageIndex)}
+                  {modelLabel}
+                  {providerName}
+                  harnessId={tab.settings.harnessId}
+                  {harnessName}
                 />
               {/if}
               {#if textFor(message)}
@@ -483,6 +507,10 @@
               busy={tab.busy}
               latest={tab.busy}
               startTime={turnStartTime(messageIndex)}
+              {modelLabel}
+              {providerName}
+              harnessId={tab.settings.harnessId}
+              {harnessName}
             />
           {/if}
         {/each}

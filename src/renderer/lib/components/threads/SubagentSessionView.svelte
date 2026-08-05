@@ -2,6 +2,7 @@
   import { onMount, tick } from 'svelte'
   import { AlertCircle, CheckCircle2, Clock, Loader2 } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -42,6 +43,21 @@
     return tab.activity.status
   })
   const busy = $derived(effectiveStatus === 'running')
+  let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
+  let modelLabel = $derived.by((): string | null => {
+    const modelId = tab.activity.modelId
+    if (!modelId) return null
+    const model = providers
+      .flatMap((p) => p.models)
+      .find(
+        (m) =>
+          m.id === modelId && (!tab.activity.providerId || m.providerId === tab.activity.providerId)
+      )
+    return model?.name ?? modelId
+  })
+  let providerName = $derived(
+    providers.find((p) => p.id === tab.activity.providerId)?.name ?? undefined
+  )
   const visibleMessages = $derived.by(() => {
     const prompt = tab.activity.prompt?.trim()
     if (!prompt) return messages
@@ -344,6 +360,8 @@
                 {busy}
                 latest={busy}
                 startTime={tab.activity.time?.start}
+                {modelLabel}
+                {providerName}
                 {onOpenSubagent}
               />
             {/if}
