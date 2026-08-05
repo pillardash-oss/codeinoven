@@ -59,7 +59,7 @@ Each harness has its own install channel (npm, Homebrew, or a native installer).
 
 ### From releases
 
-Download the latest installer for your platform from the [releases](https://github.com/pillardash/codeinoven/releases) page:
+Download the latest installer for your platform from the [releases](https://github.com/pillardash-oss/codeinoven/releases) page:
 
 - **macOS:** `.dmg` or `.zip` (Apple Silicon and Intel)
 - **Windows:** `.exe` (NSIS installer)
@@ -70,7 +70,7 @@ Install and launch like any desktop app. On first launch you'll be guided to con
 ### From source
 
 ```bash
-git clone https://github.com/pillardash/codeinoven.git
+git clone https://github.com/pillardash-oss/codeinoven.git
 cd codeinoven
 bun install
 bun run dev

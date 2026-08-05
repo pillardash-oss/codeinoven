@@ -11,7 +11,7 @@
 The repo must be clean before it goes public — no stale config pointing at private repos, no accidental secrets, and no "private-only" assumptions baked into files.
 
 - [ ] **Remove `"private": true` from `package.json`.** A public release cannot be marked private.
-- [ ] **Point release metadata at the OSS repo.** `electron-builder.yml` (`publish.owner`/`publish.repo`) and every `github.com/pillardash/codeinoven` link in `README.md` must reference **`pillardash-oss/codeinoven`**, not the private `pillardash/codeinoven`.
+- [x] **Point release metadata at the OSS repo.** `electron-builder.yml` (`publish.owner`/`publish.repo`) and every `github.com/pillardash/codeinoven` link in `README.md` must reference **`pillardash-oss/codeinoven`**, not the private `pillardash/codeinoven`.
 - [ ] **Verify the default `main` branch is the one that publishes.** Currently `origin/main` on the OSS remote matches local `main`.
 - [ ] **Scan git history for leaked secrets before going public** — `gitleaks` or `trufflehog` over the full history. You cannot un-leak a secret once the repo is public; if anything is found, rotate it and scrub history before the first push.
 - [ ] **Confirm `.gitignore` covers every local/private artifact**: `node_modules/`, `out/`, `dist/`, `.env*`, `agent-out/`, `.cio/`, `.opencode/`, logs, `.DS_Store`. Already present — verify nothing private is force-added.
