@@ -43,7 +43,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -76,7 +76,7 @@ jobs:
           fi
           bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never "${flags[@]}"
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: codeinoven-${{ matrix.target }}
           path: |
@@ -100,7 +100,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Determine release tag
         id: tag
@@ -112,10 +112,16 @@ jobs:
           fi
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.dmg *.zip *.exe *.AppImage *.deb 2>/dev/null > SHA256SUMS.txt || true
+          ls -la
 
       - name: Create or update release
         env:
@@ -123,7 +129,7 @@ jobs:
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           files=()
-          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/latest*.yml; do
+          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/latest*.yml artifacts/SHA256SUMS.txt; do
             [ -f "$f" ] && files+=("$f")
           done
           if gh release view "$tag" >/dev/null 2>&1; then

@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a problem with CodeInOven
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what actually happened?
+      placeholder: Tell us what you saw.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the issue.
+      placeholder: |
+        1. Open CodeInOven
+        2. Create a thread with harness X
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: CodeInOven version
+      description: From the About screen, or `version` in package.json.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+      description: Which platform did you experience this on?
+    validations:
+      required: true
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Which harness were you using?
+      options:
+        - OpenCode
+        - Codex CLI
+        - Claude Code
+        - Pi
+        - Cline
+        - Antigravity
+        - Multiple / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / diagnostics
+      description: Export diagnostics from the app (Help → Export diagnostics) and paste the bundle path or relevant excerpts.
+      render: shell
+    validations:
+      required: false

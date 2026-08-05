@@ -1,0 +1,19 @@
+# Default owners for everything in the repo.
+# Auto-requests review from the maintainers team.
+* @pillardash-oss/maintainers
+
+# Core subsystems get targeted reviewers.
+/src/main/ @pillardash-oss/maintainers
+/src/renderer/ @pillardash-oss/maintainers
+/src/lib/ @pillardash-oss/maintainers
+/scripts/ @pillardash-oss/maintainers
+
+# CI and release infrastructure.
+/.github/ @pillardash-oss/maintainers
+/electron-builder.yml @pillardash-oss/maintainers
+/Dockerfile @pillardash-oss/maintainers
+
+# Documentation.
+/README.md @pillardash-oss/maintainers
+/docs/ @pillardash-oss/maintainers
+/SECURITY.md @pillardash-oss/maintainers
