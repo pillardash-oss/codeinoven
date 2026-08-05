@@ -175,6 +175,21 @@ The IPC contract (`src/lib/ipc-contract.ts`) is a hard boundary — the renderer
 | `bun run package:win`   | Windows NSIS `.exe`                       |
 | `bun run release:mac`   | Verified + signed/notarized macOS release |
 
+**Release workflow.** A GitHub Actions workflow (`.github/workflows/release.yml`) builds installers for all three platforms on native runners and publishes them as a GitHub Release. It runs on any pushed tag matching `v*` or manually via **Actions → Release → Run workflow**. Set `publish: false` on a manual run to build and attach workflow artifacts without creating a release.
+
+| Trigger             | Behavior                                                                                       |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| Tag `v0.2.2` pushed | Builds macOS (universal), Windows, and Linux, then creates/publishes a GitHub Release `v0.2.2` |
+| Manual dispatch     | Builds all three platforms; creates a Release when `publish` is checked (default)              |
+
+Artifacts produced per platform:
+
+- **macOS:** `.dmg` + `.zip` (universal: Apple Silicon + Intel)
+- **Windows:** NSIS `.exe`
+- **Linux:** `.AppImage` + `.deb`
+
+Code signing and macOS notarization are used automatically when the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` repository secrets are configured; otherwise installers are built unsigned so the workflow stays runnable on a fresh fork.
+
 ---
 
 ## Troubleshooting
