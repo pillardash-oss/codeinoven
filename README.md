@@ -140,7 +140,7 @@ The whole thread — agent messages, tools, permission requests, diffs, checkpoi
 
 ## Security
 
-To report a vulnerability privately, use [private vulnerability reporting](https://github.com/pillardash-oss/codeinoven/security/advisories/new) or email `security@pillardash.com`. See [SECURITY.md](SECURITY.md) for the scope, response SLAs, and what CodeInOven does to keep your data local.
+To report a vulnerability privately, use [private vulnerability reporting](https://github.com/pillardash-oss/codeinoven/security/advisories/new) or email `hey@pillardash.com`. See [SECURITY.md](SECURITY.md) for the scope, response SLAs, and what CodeInOven does to keep your data local.
 
 ---
 

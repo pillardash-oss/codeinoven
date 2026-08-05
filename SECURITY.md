@@ -10,7 +10,7 @@ vulnerabilities and what you can expect from the maintainers.
 To report a vulnerability privately, use GitHub's
 [private vulnerability reporting](https://github.com/pillardash-oss/codeinoven/security/advisories/new)
 for this repository, or email the maintainers at
-`security@pillardash.com`. Include:
+`hey@pillardash.com`. Include:
 
 - A description of the vulnerability and its impact.
 - The affected version(s) and the commit/tag if known.
