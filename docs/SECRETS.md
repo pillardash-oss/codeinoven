@@ -40,6 +40,13 @@ gh secret set GITLEAKS_LICENSE --repo pillardash-oss/codeinoven
 
 ## 2. Website deployment secrets (Coolify)
 
+> **This section applies only to the marketing website repository
+> (`pillardash-oss/codeinoven-site`), not to the CodeInOven desktop app.**
+> The desktop app has no server component — it is distributed through GitHub
+> Releases and updates itself via the built-in auto-updater. Only the website
+> (and the AI Agent Icons Directory app inside it) is deployed to your own
+> server, and that is where Coolify comes in.
+
 These live in **Coolify → your project → Environment Variables** for the
 `codeinoven-site` deployment. Never in the repo, never in a committed `.env`.
 
