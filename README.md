@@ -2,6 +2,13 @@
 
 **A desktop workstation for coordinated agentic software engineering.**
 
+> Website: [codeinoven.dev](https://codeinoven.dev) · [Report a vulnerability](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+
+[![CI](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/quality.yml)
+[![Security](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml/badge.svg)](https://github.com/pillardash-oss/codeinoven/actions/workflows/security.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
+
 CodeInOven is a control plane that sits on top of your existing AI coding CLIs — OpenCode, Claude Code, Codex, Pi, Cline, and Antigravity — and coordinates them through a clear, reviewable lifecycle:
 
 ```
@@ -129,6 +136,11 @@ The whole thread — agent messages, tools, permission requests, diffs, checkpoi
 - History is **chunked** (capped) and **checkpointed**; pinned threads survive cleanup, and per-thread branches keep everything inspectable, diffable, and rollback-able.
 - **Memory** is yours: entries are categorized, scoped, verifiable, and searchable, and agents record them explicitly through slash commands rather than silently.
 - Project and thread limits (e.g. 70 threads per project by default) keep growth deliberate.
+- **Provider credentials are encrypted at rest** with the OS keychain-backed `safeStorage` and never cross the IPC boundary in plaintext.
+
+## Security
+
+To report a vulnerability privately, use [private vulnerability reporting](https://github.com/pillardash-oss/codeinoven/security/advisories/new) or email `security@pillardash.com`. See [SECURITY.md](SECURITY.md) for the scope, response SLAs, and what CodeInOven does to keep your data local.
 
 ---
 

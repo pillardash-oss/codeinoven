@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a feature you actually use
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before proposing: read `CONTRIBUTING.md`. CodeInOven only builds
+        features that serve a real shared problem — ask _did I hit this
+        myself, do I use it, do others share it?_ Feature ideas and questions
+        belong in [Discussions](https://github.com/pillardash-oss/codeinoven/discussions)
+        unless you plan to implement them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you hit
+      description: Describe the real problem, with a concrete scenario from your own work.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should change, and how would you use it?
+    validations:
+      required: true
+  - type: textarea
+    id: group
+    attributes:
+      label: Who else shares this problem?
+      description: Name the group of people (beyond yourself) who would benefit.
+    validations:
+      required: true
+  - type: checkboxes
+    id: commitment
+    attributes:
+      label: Implementation
+      options:
+        - label: I plan to implement this myself (opens a PR)

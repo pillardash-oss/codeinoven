@@ -13,9 +13,11 @@ files:
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/binding.gyp'
-forceCodeSigning: true
+# Signing is driven by CI environment variables (CSC_LINK, CSC_KEY_PASSWORD,
+# APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
+# produce unsigned artifacts so contributors can package locally.
+forceCodeSigning: false
 mac:
-  identity: 'Pillardash Solutions Limited (KU8UFSTCN5)'
   hardenedRuntime: true
   notarize: true
   icon: src/renderer/static/macos/AppIcon.icns
