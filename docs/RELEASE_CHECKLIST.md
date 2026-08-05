@@ -47,6 +47,8 @@ Control who can merge, what must pass, and what runs automatically.
 - [x] **Add a secret-scanning step to CI** (`gitleaks-action`) so pushes with secrets fail the build.
 - [x] **Add `concurrency` groups** to workflows so rapid PR pushes cancel superseded runs instead of stacking CI time.
 - [x] **Enable GitHub secret scanning & push protection** on the repo (repo Settings → Security).
+- [x] **Environment branches created and protected**: `dev` (PR review + quality checks + linear history) and `nightly` (PR review + quality checks) exist and are protected; CI runs on all three (`main`/`dev`/`nightly`).
+- [x] **Nightly build workflow** (`.github/workflows/nightly.yml`): scheduled daily build from `nightly` branch publishing a `nightly` prerelease with checksums.
 - [ ] **Require signed/verified commits** for maintainer pushes (optional but recommended for auditability).
 
 ## 3. Secrets security
@@ -155,6 +157,8 @@ The public-facing cutover.
 | `.github/workflows/release.yml` | Tagged release + publish (added previously) |
 | `.github/workflows/security.yml` | Gitleaks + `bun audit` |
 | `.github/workflows/stale.yml` | Stale issue/PR cleanup |
+| `.github/workflows/nightly.yml` | Scheduled nightly prerelease build |
+| `docs/SECRETS.md` | Where to get and store every secret |
 
 ## Quick reference: Docker files (in `pillardash-oss/codeinoven-site`)
 
