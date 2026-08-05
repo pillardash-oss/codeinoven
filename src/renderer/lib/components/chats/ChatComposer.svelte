@@ -35,7 +35,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
-  import { hasProjectNameCollision } from '$lib/project-location'
+  import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     getInlineFileTypeIconDataUri,
     getInlineFolderTypeIconDataUri
@@ -1208,6 +1208,7 @@
             {#if projectContext.branch}
               <span
                 class="flex min-w-0 shrink items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+                title={projectIdentityTitle(projectContext)}
               >
                 <GitBranch size={9} class="shrink-0" />
                 <span class="truncate">{projectContext.branch}</span>

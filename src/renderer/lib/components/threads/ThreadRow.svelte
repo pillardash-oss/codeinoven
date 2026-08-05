@@ -14,6 +14,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
+  import { projectIdentityTitle } from '$lib/project-location'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import type { Thread } from '$shared/types'
 
@@ -261,6 +262,11 @@
     if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return null
     return scopeState.bucketFor(thread.projectId, bucketId)
   })
+
+  /** Project (repo) that owns this thread, resolved for the hover popover. */
+  let project = $derived(
+    scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+  )
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -616,6 +622,15 @@
       >
         <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
         <dl class="space-y-1.5 text-[11px]">
+          <div class="flex gap-2">
+            <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
+            <dd
+              class="truncate text-muted"
+              title={project ? projectIdentityTitle(project) : undefined}
+            >
+              {project?.name ?? '—'}
+            </dd>
+          </div>
           <div class="flex gap-2">
             <dt class="w-16 shrink-0 text-dimmed">Branch</dt>
             <dd class="truncate text-muted">{thread.branch ?? '—'}</dd>
