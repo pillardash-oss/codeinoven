@@ -162,6 +162,9 @@ export class Database {
     if (!names.has('auditor_thread_id')) {
       this.db?.exec('ALTER TABLE threads ADD COLUMN auditor_thread_id TEXT')
     }
+    if (!names.has('context_usage')) {
+      this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
+    }
   }
 
   /**

@@ -78,6 +78,7 @@ import type {
   SpecValidationIssue,
   SpecValidationResult,
   Thread,
+  ThreadContextUsage,
   ThreadMessageCursor,
   ThreadMessagePage,
   ThreadSettings,
@@ -948,6 +949,10 @@ export interface IpcInvokeContract {
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
   'thread:setArchived': Contract<[projectId: string, threadId: string, archived: boolean], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
+  'thread:setContextUsage': Contract<
+    [projectId: string, threadId: string, usage: ThreadContextUsage],
+    void
+  >
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
   'thread:update': Contract<
     [

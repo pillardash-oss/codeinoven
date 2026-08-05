@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS threads (
   feature_slug         TEXT,
   scope_bucket_id      TEXT DEFAULT 'default',
   settings             TEXT,
+  context_usage        TEXT,
   session_id           TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
