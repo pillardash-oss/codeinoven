@@ -604,7 +604,13 @@ class ThreadMessagesStore {
             true,
             this.#latestUserMessageId(projectId, threadId)
           )
+        } else if (event.status.state === 'idle') {
+          agentRuns.setIdle(projectId, threadId)
         }
+        break
+      case 'session.idle':
+      case 'session.error':
+        agentRuns.setIdle(projectId, threadId)
         break
     }
   }
