@@ -13,6 +13,12 @@
 
 import type { PeerRef } from './routes'
 import { remoteLog } from './logger'
+import {
+  createHandshakeToken,
+  decryptPayload,
+  encryptPayload,
+  generateNonce
+} from './session-security'
 
 export type TransportEvent =
   | { kind: 'connecting'; peer: PeerRef }
@@ -43,7 +49,7 @@ export interface LanTransportOptions {
 
 export interface LanTransport {
   connect(): Promise<TransportConnectResult>
-  send(data: string): void
+  send(data: string): Promise<void>
   close(): void
 }
 
@@ -61,29 +67,9 @@ interface ReplyMessage {
   reason?: string
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary)
-}
-
-/** HMAC-SHA256 token over the nonce, keyed by the shared auth secret. */
-export async function createAuthToken(secret: string, nonce: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  )
-  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(nonce))
-  return toBase64(new Uint8Array(signature))
-}
-
-export function createNonce(): string {
-  const bytes = new Uint8Array(16)
-  crypto.getRandomValues(bytes)
-  return toBase64(bytes)
+interface DataEnvelope {
+  type: 'remote:data'
+  payload: string
 }
 
 function parseReply(data: string): ReplyMessage | null {
@@ -95,6 +81,21 @@ function parseReply(data: string): ReplyMessage | null {
     return {
       type: record.type,
       reason: typeof record.reason === 'string' ? record.reason : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function parseDataEnvelope(data: string): DataEnvelope | null {
+  try {
+    const parsed: unknown = JSON.parse(data)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    if (record.type !== 'remote:data') return null
+    return {
+      type: 'remote:data',
+      payload: typeof record.payload === 'string' ? record.payload : ''
     }
   } catch {
     return null
@@ -137,9 +138,9 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
       socket.onopen = () => {
         if (settled) return
         options.onEvent({ kind: 'handshaking', peer })
-        const nonce = createNonce()
+        const nonce = generateNonce()
         const secret = options.authSecret ?? ''
-        void createAuthToken(secret, nonce).then((token) => {
+        void createHandshakeToken(secret, nonce).then((token) => {
           if (settled) return
           const hello: HelloMessage = { type: 'remote:hello', version: 1, nonce, token }
           socket.send(JSON.stringify(hello))
@@ -153,23 +154,36 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
 
       socket.onmessage = (event) => {
         const reply = parseReply(event.data)
-        if (!reply) {
-          options.onEvent({ kind: 'message', data: event.data })
+        if (reply) {
+          if (reply.type === 'remote:hello:ok') {
+            open = true
+            remoteLog.dev(`LAN handshake accepted for ${url}`)
+            finish('open', { kind: 'handshake:ok', peer })
+            return
+          }
+          remoteLog.error(`LAN handshake rejected for ${url}: ${reply.reason ?? 'unknown'}`)
+          finish('rejected', {
+            kind: 'handshake:rejected',
+            peer,
+            reason: reply.reason ?? 'auth-failed'
+          })
+          socket.close()
           return
         }
-        if (reply.type === 'remote:hello:ok') {
-          open = true
-          remoteLog.dev(`LAN handshake accepted for ${url}`)
-          finish('open', { kind: 'handshake:ok', peer })
+
+        const envelope = parseDataEnvelope(event.data)
+        if (envelope) {
+          void decryptPayload(options.authSecret ?? '', envelope.payload)
+            .then((plaintext) => options.onEvent({ kind: 'message', data: plaintext }))
+            .catch(() => {
+              remoteLog.error(`LAN payload decryption failed for ${url}`)
+              finish('failed', { kind: 'disconnected', peer, reason: 'decrypt-failed' })
+              socket.close()
+            })
           return
         }
-        remoteLog.error(`LAN handshake rejected for ${url}: ${reply.reason ?? 'unknown'}`)
-        finish('rejected', {
-          kind: 'handshake:rejected',
-          peer,
-          reason: reply.reason ?? 'auth-failed'
-        })
-        socket.close()
+
+        options.onEvent({ kind: 'message', data: event.data })
       }
 
       socket.onclose = () => {
@@ -192,12 +206,13 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
       })
     },
 
-    send(data: string): void {
+    async send(data: string): Promise<void> {
       if (!open || !socket) {
         remoteLog.error('LAN transport send attempted before the channel was open')
         return
       }
-      socket.send(data)
+      const payload = await encryptPayload(options.authSecret ?? '', data)
+      socket.send(JSON.stringify({ type: 'remote:data', payload } satisfies DataEnvelope))
     },
 
     close(): void {
