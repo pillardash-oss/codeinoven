@@ -1,17 +1,18 @@
+import { SvelteSet } from 'svelte/reactivity'
 import { APP_SLUG } from '$shared/brand'
 
 const STORAGE_KEY = `${APP_SLUG}.timelinePins.v1`
 
-function load(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
+function load(): SvelteSet<string> {
+  if (typeof window === 'undefined') return new SvelteSet()
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return new Set()
+    if (!raw) return new SvelteSet()
     const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return new Set()
-    return new Set(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0))
+    if (!Array.isArray(parsed)) return new SvelteSet()
+    return new SvelteSet(parsed.filter((id): id is string => typeof id === 'string' && id.length > 0))
   } catch {
-    return new Set()
+    return new SvelteSet()
   }
 }
 
@@ -23,13 +24,11 @@ class TimelinePinsStore {
   }
 
   toggle(threadId: string): void {
-    const next = new Set(this.pins)
-    if (next.has(threadId)) {
-      next.delete(threadId)
+    if (this.pins.has(threadId)) {
+      this.pins.delete(threadId)
     } else {
-      next.add(threadId)
+      this.pins.add(threadId)
     }
-    this.pins = next
     this.persist()
   }
 

@@ -3,13 +3,17 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Logger } from './logger'
+import type { Database } from './database/database'
+import { createTestDb, destroyTestDb } from './database/test-helper'
 
 const temporaryPaths: string[] = []
+const testDatabases: Database[] = []
 
 afterEach(async () => {
   await Promise.all(
     temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   )
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
   vi.restoreAllMocks()
 })
 
@@ -156,7 +160,9 @@ describe('lifecycle — PtyService destroyAll', () => {
     const { StorageEngine } = await import('./storage-engine')
 
     const storage = new StorageEngine()
-    const pty = new PtyService(storage)
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const pty = new PtyService(storage, database)
 
     const killSpy = vi.fn()
 

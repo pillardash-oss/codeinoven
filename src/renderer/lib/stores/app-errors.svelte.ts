@@ -123,8 +123,8 @@ function captureWith(kind: AppErrorKind, original: ToastFn): ToastFn {
 const originalError = toast.error
 const originalWarning = toast.warning
 
-toast.error = captureWith('error', toast.error) as typeof toast.error
-toast.warning = captureWith('warning', toast.warning) as typeof toast.warning
+toast.error = captureWith('error', originalError) as typeof toast.error
+toast.warning = captureWith('warning', originalWarning) as typeof toast.warning
 
 function messageFrom(error: unknown, fallback: string): string {
   if (typeof error === 'string' && error.trim()) return error

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { ListFilter, RefreshCw, Search, Wrench } from '@lucide/svelte'
+  import { RefreshCw, Search, Wrench } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'

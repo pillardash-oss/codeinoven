@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageCircleDashed, MessageCirclePlus, MessageSquareDashed, X } from '@lucide/svelte'
+  import { MessageCircleDashed, MessageCirclePlus, MessageSquareDashed } from '@lucide/svelte'
 
   interface Props {
     text: string

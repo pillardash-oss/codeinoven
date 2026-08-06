@@ -965,6 +965,7 @@
     <div
       bind:this={treeScroll}
       class="min-h-0 flex-1 overflow-auto py-1"
+      role="tree"
       tabindex="0"
       onclick={handleTreeContainerClick}
       onkeydown={handleTreeKeydown}

@@ -73,7 +73,7 @@ class ProviderStore {
       detail: undefined
     }))
 
-    let results: ProviderConnectionInfo[] = []
+    let results: ProviderConnectionInfo[]
     try {
       results = await invoke('providers:checkAll')
     } catch {
@@ -94,7 +94,7 @@ class ProviderStore {
       p.id === id ? { ...p, status: 'checking' as const, detail: undefined } : p
     )
 
-    let result: ProviderConnectionInfo | null = null
+    let result: ProviderConnectionInfo | null
     try {
       result = await invoke('providers:check', id)
     } catch {

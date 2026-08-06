@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, mkdir, readFile, rm, symlink } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { APP_SLUG, ORG_SLUG } from '../lib/brand'
 import type { Project, Thread } from '../lib/types'
 import { DiagnosticsService, type DiagnosticsMetadata } from './diagnostics-service'
-import { StorageEngine } from './storage-engine'
+import type { Database } from './database/database'
+import { createTestDb, destroyTestDb } from './database/test-helper'
+import { ProjectRepo } from './database/repositories/project-repo'
+import { ThreadRepo } from './database/repositories/thread-repo'
 
 const temporaryPaths: string[] = []
+const testDatabases: Database[] = []
+const originalHome = process.env.HOME
 
 const metadata: DiagnosticsMetadata = {
   appName: 'CodeInOven',
@@ -17,23 +23,32 @@ const metadata: DiagnosticsMetadata = {
   electronVersion: '43.2.0'
 }
 
-async function createStorage(): Promise<{ root: string; storage: StorageEngine }> {
-  const root = await mkdtemp(join(tmpdir(), 'codeinoven-diagnostics-'))
-  temporaryPaths.push(root)
-  const storage = new StorageEngine(root)
-  await storage.initialize()
-  return { root, storage }
+async function createTestEnvironment(): Promise<{
+  home: string
+  configRoot: string
+  database: Database
+}> {
+  const home = await mkdtemp(join(tmpdir(), 'codeinoven-diagnostics-home-'))
+  temporaryPaths.push(home)
+  process.env.HOME = home
+  const configRoot = join(home, '.config', ORG_SLUG, APP_SLUG)
+  await mkdir(join(configRoot, 'logs'), { recursive: true })
+  const database = await createTestDb()
+  testDatabases.push(database)
+  return { home, configRoot, database }
 }
 
 afterEach(async () => {
+  process.env.HOME = originalHome
   await Promise.all(
     temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   )
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
 })
 
 describe('DiagnosticsService', () => {
   it('returns recent redacted logs and metadata-only project/thread summaries', async () => {
-    const { storage } = await createStorage()
+    const { configRoot, database } = await createTestEnvironment()
     const now = 1_700_000_000_000
     const project: Project = {
       id: 'project-1',
@@ -63,13 +78,10 @@ describe('DiagnosticsService', () => {
       lastActivity: now,
       workingDirectory: '/private/source/path'
     }
-    await storage.write('projects/project-1/project.json', project)
-    await storage.write('projects/project-1/threads/thread-1/thread.json', thread)
-    await storage.write('projects/project-1/threads/thread-1/messages.json', [
-      { role: 'user', content: 'User prompt contents must not be exported' }
-    ])
-    await storage.appendRaw(
-      'logs/main.jsonl',
+    new ProjectRepo(database).upsert(project)
+    new ThreadRepo(database).upsert(thread)
+    await writeFile(
+      join(configRoot, 'logs', 'main.jsonl'),
       [
         JSON.stringify({
           timestamp: '2026-01-01T00:00:00.000Z',
@@ -82,10 +94,11 @@ describe('DiagnosticsService', () => {
           message: 'Authorization: Bearer top-secret apiKey=also-secret'
         }),
         '{partial'
-      ].join('\n')
+      ].join('\n'),
+      'utf-8'
     )
-    await storage.appendRaw(
-      'logs/permission-events.jsonl',
+    await writeFile(
+      join(configRoot, 'logs', 'permission-events.jsonl'),
       `${JSON.stringify({
         requestId: 'request-secret',
         sessionId: 'session-secret',
@@ -99,10 +112,11 @@ describe('DiagnosticsService', () => {
         reply: 'reject',
         decidedBy: 'user',
         timestamp: now
-      })}\n`
+      })}\n`,
+      'utf-8'
     )
 
-    const report = await new DiagnosticsService(storage).createReport(metadata, {
+    const report = await new DiagnosticsService(database).createReport(metadata, {
       logLimit: 1,
       now: () => new Date('2026-07-26T12:00:00.000Z')
     })
@@ -146,11 +160,11 @@ describe('DiagnosticsService', () => {
   })
 
   it('writes an atomic JSON report only to an explicit safe destination', async () => {
-    const { root, storage } = await createStorage()
-    const exportDirectory = join(root, 'exports')
+    const { home, database } = await createTestEnvironment()
+    const exportDirectory = join(home, 'exports')
     await mkdir(exportDirectory)
     const destination = join(exportDirectory, 'diagnostics.json')
-    const service = new DiagnosticsService(storage)
+    const service = new DiagnosticsService(database)
 
     await expect(service.writeReport(destination, metadata)).resolves.toBe(destination)
     const report = JSON.parse(await readFile(destination, 'utf-8')) as {
@@ -160,9 +174,9 @@ describe('DiagnosticsService', () => {
     expect(report.schemaVersion).toBe(1)
     expect(report.metadata.appName).toBe('CodeInOven')
 
-    await expect(
-      service.writeReport('relative/diagnostics.json', metadata)
-    ).rejects.toThrow('absolute path')
+    await expect(service.writeReport('relative/diagnostics.json', metadata)).rejects.toThrow(
+      'absolute path'
+    )
     await expect(
       service.writeReport(`${exportDirectory}/../escaped.json`, metadata)
     ).rejects.toThrow('parent traversal')
