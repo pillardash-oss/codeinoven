@@ -158,14 +158,39 @@ export class GitService {
         const boundedContent = truncated
           ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
           : content
+        const binary = file?.binary ?? false
+
+        // Resolve the before/after sides so the renderer can reuse the app's
+        // unified diff viewer instead of re-parsing the raw text.
+        let before: string | undefined
+        let after: string | undefined
+        let sideTruncated = false
+        if (!binary) {
+          if (staged) {
+            const head = await this.readBlob(git, `HEAD:${safePath}`)
+            const index = await this.readBlob(git, `:${safePath}`)
+            before = head?.content
+            after = index?.content
+            sideTruncated = (head?.truncated ?? false) || (index?.truncated ?? false)
+          } else {
+            const index = await this.readBlob(git, `:${safePath}`)
+            const working = await this.workingFileContent(directory, safePath)
+            before = index?.content
+            after = working?.content
+            sideTruncated = (index?.truncated ?? false) || (working?.truncated ?? false)
+          }
+        }
+
         return {
           path: safePath,
           staged,
           content: boundedContent,
-          binary: file?.binary ?? false,
+          binary,
           additions,
           deletions,
-          truncated
+          truncated: truncated || sideTruncated,
+          before,
+          after
         }
       })
     })
@@ -584,15 +609,53 @@ export class GitService {
       binary: false,
       additions: 0,
       deletions: 0,
-      truncated: false
+      truncated: false,
+      before: '',
+      after: ''
     }
   }
 
-  /** Build a bounded `+` diff for an untracked file, detecting binary content. */
-  private async untrackedDiff(directory: string, path: string): Promise<GitDiff> {
+  /**
+   * Read a git blob (e.g. `HEAD:src/a.ts` or `:src/a.ts`) with a payload cap.
+   * Returns null when the path does not exist in that ref (new/deleted files).
+   * Blobs larger than 8x the diff bound are skipped rather than buffered whole.
+   */
+  private async readBlob(
+    git: SimpleGit,
+    ref: string
+  ): Promise<{ content: string; truncated: boolean } | null> {
+    let size: number | null
+    try {
+      const sizeOutput = await git.raw(['cat-file', '-s', ref])
+      size = Number.parseInt(String(sizeOutput).trim(), 10)
+    } catch {
+      return null
+    }
+    if (size === null || !Number.isFinite(size) || size < 0) return null
+    if (size === 0) return { content: '', truncated: false }
+    if (size > MAX_DIFF_BYTES * 8) return { content: '', truncated: true }
+    let output: unknown
+    try {
+      output = await git.raw(['cat-file', 'blob', ref])
+    } catch {
+      return null
+    }
+    const text = String(output ?? '')
+    const truncated = size > MAX_DIFF_BYTES
+    return { content: truncated ? text.slice(0, MAX_DIFF_BYTES) : text, truncated }
+  }
+
+  /**
+   * Read a working-tree file bounded to the diff payload cap, detecting binary
+   * content via NUL bytes (mirrors the old untracked-diff probe).
+   */
+  private async workingFileContent(
+    directory: string,
+    path: string
+  ): Promise<{ content: string; truncated: boolean; binary: boolean } | null> {
     const filePath = resolve(directory, path)
     const metadata = await stat(filePath).catch(() => null)
-    if (!metadata) return this.emptyDiff(path, false)
+    if (!metadata) return null
 
     const readHead = async (): Promise<string | null> => {
       const size = Math.min(metadata.size, MAX_DIFF_BYTES + 1)
@@ -611,24 +674,34 @@ export class GitService {
     }
 
     const head = await readHead()
-    if (head === null) return this.emptyDiff(path, false)
-    if (head.includes('\0')) {
-      return { ...this.emptyDiff(path, false), binary: true }
-    }
+    if (head === null) return null
     const truncated = metadata.size > MAX_DIFF_BYTES
-    const bounded = truncated ? head.slice(0, MAX_DIFF_BYTES) : head
-    const additions = bounded.split('\n').length
+    return {
+      content: truncated ? head.slice(0, MAX_DIFF_BYTES) : head,
+      truncated,
+      binary: head.includes('\0')
+    }
+  }
+
+  /** Build a bounded `+` diff for an untracked file, detecting binary content. */
+  private async untrackedDiff(directory: string, path: string): Promise<GitDiff> {
+    const file = await this.workingFileContent(directory, path)
+    if (!file) return this.emptyDiff(path, false)
+    if (file.binary) return { ...this.emptyDiff(path, false), binary: true }
+    const additions = file.content.split('\n').length
     return {
       path,
       staged: false,
-      content: bounded
+      content: file.content
         .split('\n')
         .map((line) => `+${line}`)
         .join('\n'),
+      before: '',
+      after: file.content,
       binary: false,
       additions,
       deletions: 0,
-      truncated
+      truncated: file.truncated
     }
   }
 

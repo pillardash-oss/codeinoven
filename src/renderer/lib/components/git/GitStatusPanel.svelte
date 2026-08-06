@@ -35,6 +35,7 @@
   let diffs = $state<Record<string, GitDiff>>({})
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
+  let diffErrors = $state<Record<string, string | null>>({})
   let showCommitSheet = $state(false)
   let showPullRequestSheet = $state(false)
   let showIdentityForm = $state(false)
@@ -116,11 +117,15 @@
       return
     }
     expanded = { ...expanded, [key]: true }
+    diffErrors = { ...diffErrors, [key]: null }
     if (diffs[key]) return
     loadingDiff = { ...loadingDiff, [key]: true }
     try {
       const diff = await gitState.getDiff(projectId, change.path, change.staged)
       diffs = { ...diffs, [key]: diff }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'The diff could not be loaded'
+      diffErrors = { ...diffErrors, [key]: message }
     } finally {
       loadingDiff = { ...loadingDiff, [key]: false }
     }
@@ -783,6 +788,7 @@
                 {change}
                 diff={diffs[fileDiffKey(change)] ?? null}
                 loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                error={diffErrors[fileDiffKey(change)] ?? null}
                 expanded={expanded[fileDiffKey(change)] ?? false}
                 onToggleDiff={() => void toggleDiff(change)}
                 onToggleStage={() => void toggleStage(change)}

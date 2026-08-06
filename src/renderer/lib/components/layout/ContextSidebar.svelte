@@ -8,6 +8,7 @@
     Bug,
     FileDiff,
     Files,
+    GitBranch,
     Info,
     Maximize2,
     MessageCircleDashed,
@@ -221,6 +222,8 @@
                 <Bell size={12} class="shrink-0" />
               {:else if tab.kind === 'memory'}
                 <BrainCircuit size={12} class="shrink-0" />
+              {:else if tab.kind === 'git'}
+                <GitBranch size={12} class="shrink-0" />
               {:else}
                 <Bot size={12} class="shrink-0 text-info" />
               {/if}
