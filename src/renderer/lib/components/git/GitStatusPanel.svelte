@@ -23,6 +23,7 @@
   } from '@lucide/svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import BranchPicker from './BranchPicker.svelte'
 
   interface Props {
     projectId: string
@@ -405,23 +406,13 @@
       {/if}
 
       {#if gitState.branches.length > 0}
-        <div
-          class="mb-2 flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5"
-        >
-          <GitBranch size={12} class="shrink-0 text-muted" />
-          <select
-            class="h-7 min-w-0 flex-1 cursor-pointer rounded-md border border-border bg-elevated px-2 font-mono text-[10px] text-foreground outline-none transition-colors hover:border-primary/40 focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
-            value={status?.branch ?? ''}
-            disabled={gitState.isBusy('checkout')}
-            aria-label="Check out a branch"
-            title="Check out a branch"
-            onchange={(event: Event) =>
-              void checkoutBranch((event.currentTarget as HTMLSelectElement).value)}
-          >
-            {#each gitState.branches as branch (branch.name)}
-              <option value={branch.name}>{branch.name}</option>
-            {/each}
-          </select>
+        <div class="mb-2">
+          <BranchPicker
+            branches={gitState.branches}
+            currentBranch={status?.branch ?? null}
+            isBusy={gitState.isBusy('checkout')}
+            onSelect={(branch) => void checkoutBranch(branch)}
+          />
         </div>
       {/if}
 
@@ -808,61 +799,89 @@
           </p>
         </div>
       {:else if status}
-        {#each fileSections as section (section.title)}
-          <p
-            class="mb-1 flex items-center gap-1.5 px-1 text-[9px] font-semibold uppercase tracking-wide text-muted"
-          >
-            {section.title}
-            <span class="rounded bg-elevated px-1 py-0.5 text-[8px] tabular-nums text-dimmed">
-              {section.files.length}
-            </span>
-          </p>
-          <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
-            {#each section.files as change (change.path)}
-              <GitFileRow
-                {change}
-                diff={diffs[fileDiffKey(change)] ?? null}
-                loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                error={diffErrors[fileDiffKey(change)] ?? null}
-                expanded={expanded[fileDiffKey(change)] ?? false}
-                onToggleDiff={() => void toggleDiff(change)}
-                onToggleStage={() => void toggleStage(change)}
-              />
-            {/each}
-          </div>
-        {/each}
-
-        <div class="flex items-center gap-2 border-t border-border px-1 pt-2 pb-1">
-          {#if changes.length > 0}
-            <button
-              type="button"
-              class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-              disabled={gitState.isBusy('stage')}
-              onclick={() => void stageAll()}
+        <!-- Changes -->
+        <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+          <div class="flex items-center gap-2 px-3 py-2">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Changes</p>
+            <span
+              class="rounded bg-elevated px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-dimmed"
             >
-              Stage all
-            </button>
+              {changes.length}
+              {changes.length === 1 ? 'file' : 'files'}
+            </span>
+          </div>
+          {#if fileSections.length > 0}
+            <div class="border-t border-border">
+              {#each fileSections as section (section.title)}
+                <div class="border-b border-border last:border-b-0">
+                  <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                    <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                      {section.title}
+                    </span>
+                    <span class="text-[8px] tabular-nums text-dimmed">
+                      {section.files.length}
+                    </span>
+                  </div>
+                  {#each section.files as change (change.path)}
+                    <GitFileRow
+                      {change}
+                      diff={diffs[fileDiffKey(change)] ?? null}
+                      loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                      error={diffErrors[fileDiffKey(change)] ?? null}
+                      expanded={expanded[fileDiffKey(change)] ?? false}
+                      onToggleDiff={() => void toggleDiff(change)}
+                      onToggleStage={() => void toggleStage(change)}
+                    />
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="px-3 py-2 text-[10px] text-dimmed">No changes.</p>
           {/if}
-          <span class="flex-1"></span>
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-            disabled={!status?.branch || gitState.isBusy('pr-create')}
-            title="Create or merge a pull request"
-            onclick={() => (showPullRequestSheet = true)}
-          >
-            <GitPullRequest size={12} />
-            Pull request
-          </button>
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-            disabled={staged.length === 0 || gitState.isBusy('commit')}
-            onclick={() => (showCommitSheet = true)}
-          >
-            <GitCommit size={12} />
-            Commit {staged.length > 0 ? `(${staged.length})` : ''}
-          </button>
+        </div>
+
+        <!-- Commit or push -->
+        <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+          <div class="flex items-center gap-2 px-3 py-2">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Commit or push
+            </p>
+          </div>
+          <div class="border-t border-border px-3 py-2">
+            <div class="flex items-center gap-1.5">
+              {#if changes.length > 0}
+                <button
+                  type="button"
+                  class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                  disabled={gitState.isBusy('stage')}
+                  onclick={() => void stageAll()}
+                >
+                  Stage all
+                </button>
+              {/if}
+              <span class="flex-1"></span>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                disabled={!status?.branch || gitState.isBusy('pr-create')}
+                title="Create or merge a pull request"
+                onclick={() => (showPullRequestSheet = true)}
+              >
+                <GitPullRequest size={12} />
+                Pull request
+              </button>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+                disabled={staged.length === 0 || gitState.isBusy('commit')}
+                onclick={() => (showCommitSheet = true)}
+              >
+                <GitCommit size={12} />
+                Commit {staged.length > 0 ? `(${staged.length})` : ''}
+              </button>
+            </div>
+          </div>
         </div>
       {/if}
     {/if}
