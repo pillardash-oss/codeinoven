@@ -162,7 +162,8 @@ const remoteMode = new RemoteModeController({
   rpc: new RemoteRpcDispatcher({
     database,
     chatEngine
-  })
+  }),
+  storage
 })
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -388,6 +389,9 @@ void app
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
     remoteMode.registerIpc()
+    // Restore remote mode from the previous session so the phone connection
+    // survives a desktop restart without the user re-enabling it by hand.
+    void remoteMode.restoreRemoteMode()
     ptyService.register()
     providerConnection.register()
     harnessUpdateService.register()

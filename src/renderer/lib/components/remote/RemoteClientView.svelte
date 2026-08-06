@@ -124,17 +124,36 @@
   })
 
   // The phone client reads `?pair=<secret>` from the QR code and connects
-  // automatically — the human never types anything.
-  let pwaPairHandled = $state(false)
+  // automatically — the human never types anything. If the first attempt fails
+  // (e.g. the desktop was mid-restart), retry in the background so returning to
+  // the page eventually connects without a manual tap.
+  let pwaPair = $state('')
+  let pwaRetryTimer: number | null = null
   $effect(() => {
-    if (!pwa || pwaPairHandled || typeof window === 'undefined') return
+    if (!pwa || typeof window === 'undefined') return
     const params = new URLSearchParams(window.location.search)
     const pair = params.get('pair')
-    if (pair && pair.length > 0) {
-      pwaPairHandled = true
+    if (pair && pair.length > 0 && pwaPair.length === 0) {
+      pwaPair = pair
       secret = pair
-      void handleConnect(pair)
     }
+  })
+
+  $effect(() => {
+    if (!pwa || pwaPair.length === 0 || connected || busy) return
+    // Retry the auto-connect until it lands, so a desktop restart mid-session
+    // heals on its own once the gateway is back up.
+    pwaRetryTimer = window.setTimeout(() => {
+      void handleConnect(pwaPair)
+    }, 1500)
+    return () => {
+      if (pwaRetryTimer !== null) window.clearTimeout(pwaRetryTimer)
+    }
+  })
+
+  $effect(() => {
+    if (!pwa || pwaPair.length === 0) return
+    void handleConnect(pwaPair)
   })
 </script>
 
@@ -179,13 +198,15 @@
     />
 
     {#if !embedded}
-      <PeerConnect
-        bind:secret
-        {connected}
-        {busy}
-        onConnect={(value) => void handleConnect(value)}
-        onDisconnect={handleDisconnect}
-      />
+      {#if !pwa || pwaPair.length === 0}
+        <PeerConnect
+          bind:secret
+          {connected}
+          {busy}
+          onConnect={(value) => void handleConnect(value)}
+          onDisconnect={handleDisconnect}
+        />
+      {/if}
     {/if}
 
     {#if !pwa}

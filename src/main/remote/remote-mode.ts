@@ -18,6 +18,7 @@ import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/li
 import { loadOrCreatePeerSecret } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
+import { readRemoteModeState, writeRemoteModeState } from './remote-state'
 
 export interface RemoteModeOptions {
   lanPort: number
@@ -27,6 +28,8 @@ export interface RemoteModeOptions {
   iconPath: string
   /** Optional remote RPC dispatcher that serves the phone chat client. */
   rpc?: RemoteRpcDispatcher | null
+  /** Optional storage used to persist the remote-mode flag across restarts. */
+  storage?: import('../storage-engine').StorageEngine | null
 }
 
 export const DEFAULT_LAN_PORT = 4455
@@ -55,6 +58,7 @@ export class RemoteModeController {
   private readonly staticRoot: string
   private readonly iconPath: string
   private readonly rpc: RemoteRpcDispatcher | null
+  private readonly storage: import('../storage-engine').StorageEngine | null
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -63,6 +67,38 @@ export class RemoteModeController {
     this.staticRoot = options.staticRoot
     this.iconPath = options.iconPath
     this.rpc = options.rpc ?? null
+    this.storage = options.storage ?? null
+  }
+
+  /**
+   * Restore remote mode at startup if it was enabled before the app quit, so a
+   * desktop restart never silently breaks the phone connection. Only starts the
+   * gateway + keep-alive (and Tray); it never hides the freshly opened window.
+   */
+  async restoreRemoteMode(): Promise<void> {
+    if (this.remoteModeActive) return
+    const enabled = await this.readPersistedEnabled()
+    if (!enabled) return
+    this.keepAlive.dispatch({ type: 'arm' })
+    await this.startGateway()
+    this.ensureTray()
+    this.syncTray()
+    this.broadcast()
+    Logger.info('Remote mode restored from previous session')
+  }
+
+  /** Persist the enabled flag so a restart restores the gateway. */
+  private async persistEnabled(enabled: boolean): Promise<void> {
+    try {
+      if (this.storage) await writeRemoteModeState(this.storage, enabled)
+    } catch (error) {
+      Logger.error('Could not persist remote-mode state:', error)
+    }
+  }
+
+  private async readPersistedEnabled(): Promise<boolean> {
+    if (!this.storage) return false
+    return readRemoteModeState(this.storage)
   }
 
   /**
@@ -112,6 +148,7 @@ export class RemoteModeController {
       void this.startGateway()
       this.ensureTray()
       this.hideWindowToTray()
+      void this.persistEnabled(true)
       Logger.info('Remote mode enabled')
     } else if (!enabled && this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'disarm' })
@@ -119,6 +156,7 @@ export class RemoteModeController {
       this.gateway = null
       this.tray?.destroy()
       this.tray = null
+      void this.persistEnabled(false)
       Logger.info('Remote mode disabled')
     }
     this.syncTray()
