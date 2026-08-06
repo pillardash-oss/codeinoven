@@ -80,12 +80,17 @@
   let goToLineOpen = $state(false)
   let goToLineFocusTrigger = $state(0)
   let lastTurnPaths = $state<string[]>([])
+  let activeCheckpointPaths = $state<string[]>([])
   let lastTurnRequest = 0
 
-  async function loadLastTurnPaths(threadId: string | null): Promise<void> {
+  async function loadCheckpointPaths(
+    threadId: string | null,
+    checkpointId: string | null
+  ): Promise<void> {
     const request = ++lastTurnRequest
     if (!threadId) {
       lastTurnPaths = []
+      activeCheckpointPaths = []
       return
     }
     try {
@@ -95,13 +100,20 @@
         (checkpoint: TurnCheckpointSummary) => checkpoint.status !== 'active'
       )
       lastTurnPaths = latest ? latest.changes.map((change) => change.path) : []
+      const active = checkpointId
+        ? checkpoints.find((checkpoint: TurnCheckpointSummary) => checkpoint.id === checkpointId)
+        : null
+      activeCheckpointPaths = active ? active.changes.map((change) => change.path) : []
     } catch {
-      if (request === lastTurnRequest) lastTurnPaths = []
+      if (request === lastTurnRequest) {
+        lastTurnPaths = []
+        activeCheckpointPaths = []
+      }
     }
   }
 
   $effect(() => {
-    void loadLastTurnPaths(activeThreadId)
+    void loadCheckpointPaths(activeThreadId, activeTab?.checkpointId ?? null)
   })
 
   onMount(() =>
@@ -112,7 +124,7 @@
         event.projectId === projectId &&
         event.threadId === activeThreadId
       ) {
-        void loadLastTurnPaths(activeThreadId)
+        void loadCheckpointPaths(activeThreadId, activeTab?.checkpointId ?? null)
       }
     })
   )
@@ -191,6 +203,10 @@
   function fullscreenOpenFile(path: string): void {
     if (!activeTab) {
       void projectFilesWorkspace.openFile(projectId, path)
+      return
+    }
+    if (activeTab.checkpointId && activeCheckpointPaths.includes(path)) {
+      void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
       return
     }
     if (dirty) {
@@ -658,6 +674,7 @@
         {projectState}
         selectedPath={activeTab?.path ?? null}
         {lastTurnPaths}
+        {activeCheckpointPaths}
         activeCheckpointId={activeTab?.checkpointId ?? null}
       />
     {/if}
@@ -897,6 +914,7 @@
             {projectState}
             selectedPath={activeTab.path}
             {lastTurnPaths}
+            {activeCheckpointPaths}
             activeCheckpointId={activeTab.checkpointId}
             onFileSelect={fullscreenOpenFile}
           />

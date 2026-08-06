@@ -1,5 +1,6 @@
 <script lang="ts">
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { diffLayoutState } from '$lib/stores/diff-layout.svelte'
   import type { ToolFileDiff } from './tool-diff'
 
   interface Props {
@@ -9,11 +10,20 @@
   let { diffs }: Props = $props()
 </script>
 
-<div class="space-y-2">
+<div
+  class={diffLayoutState.layout === 'horizontal'
+    ? 'flex items-start gap-2 overflow-x-auto'
+    : 'space-y-2'}
+>
   {#each diffs as diff, diffIndex (`${diff.path}:${diffIndex}`)}
     {@const additions = diff.lines.filter((line) => line.kind === 'added').length}
     {@const deletions = diff.lines.filter((line) => line.kind === 'deleted').length}
-    <section class="overflow-hidden rounded-md border border-border bg-app">
+    <section
+      class={[
+        'overflow-hidden rounded-md border border-border bg-app',
+        diffLayoutState.layout === 'horizontal' ? 'min-w-72 flex-1' : ''
+      ]}
+    >
       <div class="flex h-8 items-center gap-2 border-b border-border px-2.5">
         <FileTypeIcon path={diff.path} size={13} />
         <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{diff.path}</span>
