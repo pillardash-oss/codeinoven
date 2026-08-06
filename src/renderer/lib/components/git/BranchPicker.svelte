@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, Check, GitBranch, Plus, Search } from '@lucide/svelte'
+  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
 
@@ -8,12 +8,16 @@
     currentBranch: string | null
     isBusy: boolean
     onSelect: (branch: string) => void
+    onCreate?: (name: string) => void
+    onDelete?: (name: string) => void
   }
 
-  let { branches, currentBranch, isBusy, onSelect }: Props = $props()
+  let { branches, currentBranch, isBusy, onSelect, onCreate, onDelete }: Props = $props()
 
   let open = $state(false)
   let search = $state('')
+  let creating = $state(false)
+  let newBranchName = $state('')
 
   const filtered = $derived(
     search.trim()
@@ -29,32 +33,64 @@
     onSelect(branch)
     open = false
     search = ''
+    creating = false
+    newBranchName = ''
+  }
+
+  function handleCreate(): void {
+    const name = newBranchName.trim()
+    if (!name || !onCreate) return
+    onCreate(name)
+    open = false
+    search = ''
+    creating = false
+    newBranchName = ''
+  }
+
+  function handleDelete(event: MouseEvent, name: string): void {
+    event.stopPropagation()
+    if (!onDelete) return
+    onDelete(name)
+    open = false
+    search = ''
   }
 
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       open = false
       search = ''
+      creating = false
+      newBranchName = ''
+    }
+    if (event.key === 'Enter' && creating) {
+      handleCreate()
     }
   }
 </script>
 
-<DropdownMenu.Root bind:open onOpenChange={() => (search = '')}>
+<DropdownMenu.Root
+  bind:open
+  onOpenChange={() => {
+    search = ''
+    creating = false
+    newBranchName = ''
+  }}
+>
   <DropdownMenu.Trigger
-    class="flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:border-primary/40"
+    class="flex h-7 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
     title="Switch branch"
     aria-label="Switch branch"
   >
-    <GitBranch size={12} class="shrink-0 text-muted" />
-    <span class="max-w-[12ch] truncate">{currentBranch ?? 'detached'}</span>
-    <ChevronDown size={11} class="shrink-0 text-dimmed" />
+    <GitBranch size={11} class="shrink-0" />
+    <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
+    <ChevronDown size={10} class="shrink-0 text-dimmed" />
   </DropdownMenu.Trigger>
 
   <DropdownMenu.Portal>
     <DropdownMenu.Content
       side="bottom"
-      align="start"
+      align="end"
       sideOffset={4}
       collisionPadding={8}
       class="z-50 w-56 overflow-hidden rounded-xl border bg-surface shadow-xl"
@@ -74,15 +110,17 @@
       <div class="max-h-60 overflow-y-auto py-1">
         {#if localBranches.length > 0}
           <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
-            Branches
+            Local
           </p>
           {#each localBranches as branch (branch.name)}
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-              onSelect={() => handleSelect(branch.name)}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
+              onclick={() => handleSelect(branch.name)}
+              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch.name)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
-              <span class="min-w-0 flex-1 truncate text-foreground">{branch.name}</span>
+              <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
               {#if branch.ahead > 0 || branch.behind > 0}
                 <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
                   {#if branch.ahead > 0}
@@ -95,8 +133,18 @@
               {/if}
               {#if branch.current}
                 <Check size={12} class="shrink-0 text-primary" />
+              {:else if onDelete}
+                <button
+                  type="button"
+                  class="shrink-0 rounded p-0.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                  title="Delete branch {branch.name}"
+                  aria-label="Delete branch {branch.name}"
+                  onclick={(e: MouseEvent) => handleDelete(e, branch.name)}
+                >
+                  <Trash2 size={10} />
+                </button>
               {/if}
-            </DropdownMenu.Item>
+            </div>
           {/each}
         {/if}
 
@@ -106,16 +154,19 @@
             Remote
           </p>
           {#each remoteBranches as branch (branch.name)}
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-              onSelect={() => handleSelect(branch.name)}
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
+              onclick={() => handleSelect(branch.name)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
-              <span class="min-w-0 flex-1 truncate text-muted">{branch.remote}/{branch.name}</span>
+              <span class="min-w-0 flex-1 truncate text-left text-muted"
+                >{branch.remote}/{branch.name}</span
+              >
               {#if branch.current}
                 <Check size={12} class="shrink-0 text-primary" />
               {/if}
-            </DropdownMenu.Item>
+            </button>
           {/each}
         {/if}
 
@@ -124,16 +175,34 @@
         {/if}
       </div>
 
-      <div class="border-t border-border">
-        <DropdownMenu.Item
-          class="flex w-full items-center gap-2 px-3 py-2 text-[11px] text-muted outline-none transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated"
-          onSelect={() => {
-            /* TODO: create branch flow */
-          }}
-        >
-          <Plus size={12} class="shrink-0" />
-          Create and checkout new branch…
-        </DropdownMenu.Item>
+      <div class="border-t border-border px-3 py-2">
+        {#if creating}
+          <div class="flex items-center gap-1.5">
+            <input
+              class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              placeholder="new-feature"
+              bind:value={newBranchName}
+              onkeydown={handleKeydown}
+            />
+            <button
+              type="button"
+              class="shrink-0 rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              disabled={!newBranchName.trim()}
+              onclick={handleCreate}
+            >
+              Create
+            </button>
+          </div>
+        {:else}
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 text-[11px] text-muted outline-none transition-colors hover:text-foreground"
+            onclick={() => (creating = true)}
+          >
+            <Plus size={12} class="shrink-0" />
+            New branch…
+          </button>
+        {/if}
       </div>
     </DropdownMenu.Content>
   </DropdownMenu.Portal>

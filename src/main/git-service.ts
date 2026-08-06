@@ -274,6 +274,26 @@ export class GitService {
     })
   }
 
+  async createBranch(projectPath: string, name: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).checkoutLocalBranch(name)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  async deleteBranch(projectPath: string, name: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).deleteLocalBranch(name)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async log(projectPath: string, limit = DEFAULT_LOG_LIMIT): Promise<GitCommitInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)

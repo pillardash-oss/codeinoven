@@ -641,6 +641,8 @@ export interface IpcInvokeContract {
   'git:init': Contract<[projectId: string], GitStatus>
   'git:branches': Contract<[projectId: string], GitBranchInfo[]>
   'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
+  'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
+  'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:log': Contract<[projectId: string, limit?: number], GitCommitInfo[]>
   'git:getIdentity': Contract<[projectId: string], GitIdentity>
   'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>

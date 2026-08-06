@@ -124,6 +124,8 @@ const INVOKE_CHANNELS = [
   'git:init',
   'git:branches',
   'git:checkout',
+  'git:createBranch',
+  'git:deleteBranch',
   'git:log',
   'git:getIdentity',
   'git:setIdentity',

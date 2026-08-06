@@ -177,6 +177,32 @@ class GitState {
     }
   }
 
+  async createBranch(projectId: string, name: string): Promise<void> {
+    this.markBusy('checkout', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:createBranch', projectId, name)
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Branch creation failed')
+    } finally {
+      this.markBusy('checkout', false)
+    }
+  }
+
+  async deleteBranch(projectId: string, name: string): Promise<void> {
+    this.markBusy('checkout', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:deleteBranch', projectId, name)
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Branch deletion failed')
+    } finally {
+      this.markBusy('checkout', false)
+    }
+  }
+
   async setIdentity(projectId: string, name: string, email: string): Promise<void> {
     this.error = null
     try {
