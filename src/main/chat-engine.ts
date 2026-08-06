@@ -183,7 +183,6 @@ const ACTIONABLE_AUDIT_SEVERITIES = new Set(['critical', 'high', 'medium', 'low'
 const DEFAULT_QUESTION_TIMEOUT_MS = 300_000
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_PIPELINE_VERSION = 7
-const MAX_SPEC_INSTRUCTIONS_LENGTH = 200_000
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -1094,7 +1093,7 @@ export class ChatEngine {
         threadId: string,
         brainstormId: string,
         version: number,
-        note: string
+        note?: string
       ) => this.finalizeBrainstorm(projectId, threadId, brainstormId, version, note)
     )
     ipcMain.handle(
@@ -5214,7 +5213,7 @@ export class ChatEngine {
     threadId: string,
     brainstormId: string,
     version: number,
-    note: string
+    note = ''
   ): Promise<EngineeringSpec> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -5686,7 +5685,7 @@ export class ChatEngine {
       request.instructions,
       'Specification instructions',
       1,
-      MAX_SPEC_INSTRUCTIONS_LENGTH
+      20_000
     )
     if (request.mode !== 'problem' && request.mode !== 'conversation') {
       throw new TypeError('Invalid specification generation mode')

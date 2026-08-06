@@ -233,7 +233,7 @@ export interface IpcInvokeContract {
     BrainstormDocument
   >
   'agent:finalizeBrainstorm': Contract<
-    [projectId: string, threadId: string, brainstormId: string, version: number, note: string],
+    [projectId: string, threadId: string, brainstormId: string, version: number, note?: string],
     EngineeringSpec
   >
   'assignment:getActive': Contract<
