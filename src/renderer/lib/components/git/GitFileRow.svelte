@@ -38,7 +38,6 @@
         : 'text-warning'
   )
 
-  /** Map the git diff onto the shared checkpoint-diff shape used by FileDiffView. */
   const viewDiff = $derived(
     diff
       ? ({
@@ -58,12 +57,12 @@
   )
 </script>
 
-<div class="border-b border-border last:border-b-0">
-  <div class="flex min-h-9 items-center pr-1.5">
+<div class="overflow-hidden border-b border-border last:border-b-0">
+  <div class="group flex min-h-9 items-center pr-1.5">
     <button
       type="button"
-      class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left"
-      title={expanded ? `Collapse ${change.path}` : `Show diff for ${change.path}`}
+      class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated/50"
+      title={expanded ? `Collapse diff for ${change.path}` : `Show diff for ${change.path}`}
       aria-expanded={expanded}
       onclick={onToggleDiff}
     >
@@ -74,6 +73,16 @@
       <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{change.path}</span>
       {#if change.oldPath}
         <span class="shrink-0 text-[9px] text-dimmed">from {change.oldPath}</span>
+      {/if}
+      {#if diff && !diff.binary}
+        <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+          +{diff.additions}
+        </span>
+        <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+          −{diff.deletions}
+        </span>
+      {:else if diff?.binary}
+        <span class="shrink-0 text-[9px] text-dimmed">binary</span>
       {/if}
       {#if loadingDiff}
         <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
