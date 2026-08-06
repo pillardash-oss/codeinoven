@@ -1470,6 +1470,9 @@
     })
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
+      if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
+        restoreWorkingState(updatedThread.status)
+      }
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id)
