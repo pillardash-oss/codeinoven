@@ -5166,18 +5166,6 @@
           {/if}
         {/if}
       </div>
-      {#if userScrolledAway}
-        <button
-          type="button"
-          class="absolute top-4 left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
-          title="Scroll to latest message"
-          aria-label="Scroll to latest message"
-          onclick={scrollToLatest}
-          transition:fly={{ y: -8, duration: 140 }}
-        >
-          <ChevronDown size={18} />
-        </button>
-      {/if}
     </div>
 
     <!-- Provider status — between messages and composer, always visible -->
@@ -5326,7 +5314,19 @@
 
     <!-- Composer — always anchored at the bottom. Blocking permission and question
        tools replace it until the user responds. -->
-    <div class="conversation-gutter composer-gutter shrink-0 px-6 pb-5 pt-2">
+    <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
+      {#if userScrolledAway}
+        <button
+          type="button"
+          class="absolute -top-11 left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          title="Scroll to latest message"
+          aria-label="Scroll to latest message"
+          onclick={scrollToLatest}
+          transition:fly={{ y: -8, duration: 140 }}
+        >
+          <ChevronDown size={18} />
+        </button>
+      {/if}
       <div class="mx-auto w-full max-w-3xl">
         {#if isAssignmentAuditorThread}
           <AuditGeneratedCard
