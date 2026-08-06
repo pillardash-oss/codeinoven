@@ -1,14 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
+    Check,
     ChevronDown,
+    ChevronRight,
     Loader2,
     MessageSquare,
     PanelLeft,
-    Plus,
+    Paperclip,
     Send,
-    Smartphone,
-    X
+    Sparkles,
+    X,
+    Zap
   } from '@lucide/svelte'
   import { remoteBridge, isRemoteConnected } from '$lib/remote/remote-bridge'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -16,8 +19,11 @@
   import { threadStatusSort } from '$lib/stores/workspace.svelte'
   import { supportsFastInference, fastSelectionModelId } from '$shared/fast-inference'
   import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
+  import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
+  import ContextUsageIndicator from '$lib/components/chats/ContextUsageIndicator.svelte'
   import type {
     AgentContextUsage,
+    AgentMessage,
     Project,
     PromptAttachment,
     ProviderCatalog,
@@ -64,15 +70,6 @@
 
   const selectedThread = $derived(threads.find((t) => t.id === selectedThreadId) ?? null)
   const selectedProject = $derived(projects.find((p) => p.id === selectedProjectId) ?? null)
-
-  // Keep the composer settings in sync with the selected thread's settings whenever
-  // the selected thread changes (see openThread and loadData). This is event-driven
-  // rather than an $effect so we don't write to $state inside an effect.
-  function syncSettingsFrom(thread: Thread | null): void {
-    if (thread?.settings) {
-      settings = { ...DEFAULT_SETTINGS, ...thread.settings }
-    }
-  }
 
   const visibleMessages = $derived(
     selectedThread ? threadMessages.messages(selectedThread.projectId, selectedThread.id) : []
@@ -132,6 +129,8 @@
     }
   })
 
+  const canSend = $derived(!busy && draft.trim().length > 0 && selectedThread !== null && connected)
+
   function groupedThreads(): Array<{ key: string; label: string; threads: Thread[] }> {
     const scoped = threads.filter((t) =>
       view === 'projects' ? t.projectId === selectedProjectId : true
@@ -146,14 +145,12 @@
     loading = true
     error = ''
     try {
-      const [projectList, threadList, snapshots] = await Promise.all([
+      const [projectList, threadList] = await Promise.all([
         remoteBridge.invoke('project:list'),
-        remoteBridge.invoke('thread:listAll'),
-        remoteBridge.invoke('agent:listProviderSnapshot', selectedProjectId ?? '')
+        remoteBridge.invoke('thread:listAll')
       ])
       projects = (projectList as Project[]).filter((p) => !p.hidden)
       threads = threadList as Thread[]
-      catalog = snapshots as ProviderCatalog[]
       if (!selectedProjectId && projects.length > 0) {
         selectedProjectId = projects[0].id
       }
@@ -164,15 +161,31 @@
         const first = threads.find((t) => t.projectId === selectedProjectId)
         if (first) selectedThreadId = first.id
       }
+      await refreshCatalog()
       if (selectedThreadId && selectedProjectId) {
-        const thread = threads.find((t) => t.id === selectedThreadId) ?? null
-        syncSettingsFrom(thread)
-        await openThreadMessages(thread)
+        const active = threads.find((t) => t.id === selectedThreadId)
+        if (active) await openThreadMessages(active)
       }
     } catch (e) {
       error = e instanceof Error ? e.message : 'Could not load your threads.'
     } finally {
       loading = false
+    }
+  }
+
+  async function refreshCatalog(): Promise<void> {
+    if (!selectedProjectId) return
+    try {
+      const snapshots = (await remoteBridge.invoke(
+        'agent:listProviderSnapshot',
+        selectedProjectId
+      )) as ProviderCatalog[]
+      catalog = snapshots
+      if (selectedThread?.settings) {
+        settings = { ...DEFAULT_SETTINGS, ...selectedThread.settings }
+      }
+    } catch {
+      catalog = []
     }
   }
 
@@ -182,12 +195,14 @@
     sidebarOpen = false
     draft = ''
     attachments = []
-    syncSettingsFrom(thread)
+    settings = thread.settings
+      ? { ...DEFAULT_SETTINGS, ...thread.settings }
+      : { ...DEFAULT_SETTINGS }
+    await refreshCatalog()
     await openThreadMessages(thread)
   }
 
-  async function openThreadMessages(thread: Thread | null): Promise<void> {
-    if (!thread) return
+  async function openThreadMessages(thread: Thread): Promise<void> {
     loadingMessages = true
     try {
       await threadMessages.load(thread.projectId, thread.id)
@@ -251,6 +266,7 @@
     await commitSettings()
     showModelPicker = false
   }
+
   async function setPermission(permissionLevel: 'auto_review' | 'full_access'): Promise<void> {
     settings = { ...settings, permissionLevel }
     await commitSettings()
@@ -261,6 +277,7 @@
     await commitSettings()
     showThinkingPicker = false
   }
+
   async function toggleFast(enabled: boolean): Promise<void> {
     const harnessId = settings.harnessId
     if (enabled && selectedCatalog) {
@@ -275,14 +292,6 @@
     await commitSettings()
   }
 
-  /** Captures the hidden file input so the attach button can trigger it. */
-  function captureFileInput(node: HTMLInputElement): (() => void) | void {
-    fileInput = node
-    return () => {
-      fileInput = undefined
-    }
-  }
-
   function onFileChange(): void {
     const file = fileInput?.files?.[0]
     if (!file) return
@@ -295,6 +304,13 @@
       }
     ]
     if (fileInput) fileInput.value = ''
+  }
+
+  function captureFileInput(node: HTMLInputElement): void | (() => void) {
+    fileInput = node
+    return () => {
+      fileInput = undefined
+    }
   }
 
   function removeAttachment(index: number): void {
@@ -322,6 +338,37 @@
     }
   }
 
+  function messageBody(message: AgentMessage): string {
+    return message.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('\n')
+  }
+
+  function reasoningText(message: AgentMessage): string {
+    return message.parts
+      .filter((part) => part.type === 'reasoning')
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('\n')
+  }
+
+  function partLabel(partType: string): string {
+    switch (partType) {
+      case 'tool':
+        return 'Tool call'
+      case 'subagent':
+        return 'Agent activity'
+      case 'file':
+        return 'File'
+      case 'question':
+        return 'Question'
+      case 'compaction-summary':
+        return 'Compaction'
+      default:
+        return partType
+    }
+  }
+
   onMount(() => {
     void loadData()
     const interval = window.setInterval(() => {
@@ -336,123 +383,156 @@
 
 {#if !connected}
   <div class="flex h-full flex-col items-center justify-center gap-4 bg-app p-6">
-    <Smartphone size={32} class="text-muted" />
-    <p class="text-sm text-muted">Connection to your desktop was lost.</p>
+    <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface shadow-sm">
+      <MessageSquare size={26} class="text-primary" />
+    </div>
+    <p class="text-sm font-medium text-foreground">Connection lost</p>
+    <p class="max-w-60 text-center text-xs leading-relaxed text-dimmed">
+      The connection to your desktop dropped. Make sure the desktop is still running and on the same
+      network.
+    </p>
     <button
       type="button"
-      class="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary"
+      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
       onclick={onDisconnect}
     >
       Reconnect
     </button>
   </div>
 {:else}
-  <div class="flex h-full bg-app">
-    {#if sidebarOpen}
-      <aside class="flex w-72 shrink-0 flex-col border-r bg-surface">
-        <div class="flex items-center justify-between border-b px-3 py-2">
-          <div class="flex items-center gap-2">
+  <div class="flex h-full bg-app text-foreground">
+    <!-- Sidebar -->
+    <aside
+      class="absolute inset-y-0 left-0 z-30 flex w-72 flex-col border-r border-border bg-surface shadow-xl transition-transform duration-200 lg:static lg:translate-x-0 lg:shadow-none {sidebarOpen
+        ? 'translate-x-0'
+        : '-translate-x-full'}"
+    >
+      <div class="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        <div class="flex items-center gap-2">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
             <MessageSquare size={15} class="text-primary" />
-            <span class="text-sm font-semibold">Threads</span>
           </div>
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Hide the sidebar"
-            title="Hide the sidebar"
-            onclick={() => (sidebarOpen = false)}
-          >
-            <PanelLeft size={14} />
-          </button>
+          <span class="text-sm font-semibold">Threads</span>
         </div>
-
-        <!-- Projects / Threads view switcher -->
-        <div class="border-b px-3 py-2">
-          <div class="relative">
-            <select
-              class="w-full appearance-none rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary"
-              bind:value={view}
-              aria-label="Switch between projects and threads"
-            >
-              <option value="projects">Projects</option>
-              <option value="threads">Threads</option>
-            </select>
-            <ChevronDown
-              size={12}
-              class="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-dimmed"
-            />
-          </div>
-          {#if view === 'projects'}
-            <div class="relative mt-2">
-              <select
-                class="w-full appearance-none rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary"
-                bind:value={selectedProjectId}
-                aria-label="Select project"
-              >
-                {#each projects as project (project.id)}
-                  <option value={project.id}>{project.name}</option>
-                {/each}
-              </select>
-              <ChevronDown
-                size={12}
-                class="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 text-dimmed"
-              />
-            </div>
-          {/if}
-        </div>
-
-        <div class="min-h-0 flex-1 overflow-y-auto p-2">
-          {#if loading}
-            <div class="flex items-center gap-2 px-2 py-3 text-xs text-muted">
-              <Loader2 size={13} class="animate-spin" />
-              Loading threads…
-            </div>
-          {:else if error}
-            <p class="px-2 py-3 text-xs text-danger">{error}</p>
-          {:else}
-            {#each groupedThreads() as group (group.key)}
-              <p
-                class="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-              >
-                {group.label}
-              </p>
-              <div class="space-y-px">
-                {#each group.threads as thread (thread.id)}
-                  {@const selected = thread.id === selectedThreadId}
-                  <button
-                    type="button"
-                    class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors {selected
-                      ? 'bg-primary/10 text-foreground'
-                      : 'text-muted hover:bg-elevated hover:text-foreground'}"
-                    title={thread.title || 'Untitled thread'}
-                    onclick={() => void openThread(thread)}
-                  >
-                    <span class="min-w-0 flex-1 truncate">{thread.title || 'Untitled thread'}</span>
-                    {#if !thread.read}
-                      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
-                    {/if}
-                  </button>
-                {/each}
-              </div>
-            {:else}
-              <p class="px-2 py-3 text-xs text-dimmed">No threads yet.</p>
-            {/each}
-          {/if}
-        </div>
-      </aside>
-    {/if}
-
-    <main class="flex min-w-0 flex-1 flex-col">
-      <!-- Chat header: title + context usage -->
-      <header class="flex h-12 shrink-0 items-center gap-2 border-b px-3">
         <button
           type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground lg:hidden"
+          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground lg:hidden"
+          aria-label="Close the sidebar"
+          title="Close the sidebar"
+          onclick={() => (sidebarOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+
+      <!-- Projects / Threads switcher -->
+      <div class="space-y-2 border-b border-border p-3">
+        <div class="relative">
+          <select
+            class="w-full appearance-none rounded-lg border border-border bg-elevated px-3 py-2 pr-8 text-[13px] font-medium outline-none focus:border-primary"
+            bind:value={view}
+            aria-label="Switch between projects and threads"
+          >
+            <option value="projects">Projects</option>
+            <option value="threads">Threads</option>
+          </select>
+          <ChevronDown
+            size={14}
+            class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-dimmed"
+          />
+        </div>
+        {#if view === 'projects'}
+          <div class="relative">
+            <select
+              class="w-full appearance-none rounded-lg border border-border bg-elevated px-3 py-2 pr-8 text-[13px] font-medium outline-none focus:border-primary"
+              bind:value={selectedProjectId}
+              aria-label="Select project"
+            >
+              {#each projects as project (project.id)}
+                <option value={project.id}>{project.name}</option>
+              {/each}
+            </select>
+            <ChevronDown
+              size={14}
+              class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-dimmed"
+            />
+          </div>
+        {/if}
+      </div>
+
+      <!-- Thread list -->
+      <div class="min-h-0 flex-1 overflow-y-auto p-2">
+        {#if loading}
+          <div class="flex items-center gap-2 px-3 py-4 text-[13px] text-muted">
+            <Loader2 size={14} class="animate-spin" />
+            Loading threads…
+          </div>
+        {:else if error}
+          <p class="px-3 py-4 text-[13px] text-danger">{error}</p>
+        {:else}
+          {#each groupedThreads() as group (group.key)}
+            <p
+              class="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              {group.label}
+            </p>
+            <div class="space-y-px">
+              {#each group.threads as thread (thread.id)}
+                {@const selected = thread.id === selectedThreadId}
+                <button
+                  type="button"
+                  class="group flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors {selected
+                    ? 'bg-primary/10'
+                    : 'hover:bg-elevated'}"
+                  title={thread.title || 'Untitled thread'}
+                  onclick={() => void openThread(thread)}
+                >
+                  <div class="min-w-0 flex-1">
+                    <p
+                      class="truncate text-[13px] font-medium {selected
+                        ? 'text-foreground'
+                        : 'text-muted group-hover:text-foreground'}"
+                    >
+                      {thread.title || 'Untitled thread'}
+                    </p>
+                    <p class="truncate text-[11px] text-dimmed">{statusLabel(thread.status)}</p>
+                  </div>
+                  {#if !thread.read}
+                    <span class="h-2 w-2 shrink-0 rounded-full bg-primary"></span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {:else}
+            <div class="px-4 py-10 text-center">
+              <MessageSquare size={22} class="mx-auto text-dimmed" />
+              <p class="mt-2 text-[13px] text-dimmed">No threads yet.</p>
+            </div>
+          {/each}
+        {/if}
+      </div>
+    </aside>
+
+    {#if sidebarOpen}
+      <div
+        class="fixed inset-0 z-20 bg-black/30 backdrop-blur-sm lg:hidden"
+        role="presentation"
+        onclick={() => (sidebarOpen = false)}
+      ></div>
+    {/if}
+
+    <!-- Main chat -->
+    <main class="flex min-w-0 flex-1 flex-col">
+      <!-- Header -->
+      <header class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3">
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
           aria-label="Show the sidebar"
           title="Show the sidebar"
           onclick={() => (sidebarOpen = true)}
         >
-          <PanelLeft size={15} />
+          <PanelLeft size={16} />
         </button>
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold">{selectedThread?.title || 'Select a thread'}</p>
@@ -462,68 +542,83 @@
           </p>
         </div>
         {#if contextUsage}
-          <div
-            class="flex shrink-0 items-center gap-3 text-[11px] text-muted"
-            aria-label="Context usage"
-          >
-            {#if contextUsage.contextWindow}
-              <span class="tabular-nums">
-                {contextUsage.contextPercent !== undefined
-                  ? `${Math.round(contextUsage.contextPercent)}% context`
-                  : `${(contextUsage.contextUsed / 1_000_000).toFixed(1)}M tokens`}
-              </span>
-            {/if}
-            <span class="tabular-nums">{contextUsage.tokens.output.toLocaleString()} out</span>
-            <span class="tabular-nums">${contextUsage.costUsd.toFixed(3)}</span>
+          <div class="flex shrink-0 items-center gap-2">
+            <ContextUsageIndicator usage={contextUsage} />
           </div>
         {/if}
       </header>
 
       <!-- Messages -->
-      <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div class="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 py-5" aria-live="polite">
         {#if loadingMessages}
-          <div class="flex items-center gap-2 text-xs text-muted">
-            <Loader2 size={13} class="animate-spin" />
+          <div class="flex items-center justify-center gap-2 py-10 text-[13px] text-muted">
+            <Loader2 size={14} class="animate-spin" />
             Loading conversation…
           </div>
         {:else if visibleMessages.length === 0}
-          <p class="text-center text-xs text-dimmed">
-            Start the conversation — this thread is empty.
-          </p>
-        {:else}
-          <div class="space-y-4">
-            {#each visibleMessages as message (message.id)}
-              {@const isUser = message.role === 'user'}
-              <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
-                <div
-                  class="max-w-[85%] rounded-xl border px-3 py-2 {isUser
-                    ? 'bg-primary/10'
-                    : 'bg-surface'}"
-                >
-                  {#each message.parts as part (part.id)}
-                    {#if (part.type === 'text' || part.type === 'reasoning') && part.text}
-                      <p class="whitespace-pre-wrap text-[13px] leading-relaxed">{part.text}</p>
-                    {/if}
-                  {/each}
-                </div>
-              </div>
-            {/each}
+          <div class="flex flex-col items-center justify-center py-16 text-center">
+            <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10">
+              <Sparkles size={22} class="text-primary" />
+            </div>
+            <p class="mt-3 text-sm font-medium">Start the conversation</p>
+            <p class="mt-1 max-w-64 text-xs leading-relaxed text-dimmed">
+              This thread is empty. Send a message below and your agent will pick it up.
+            </p>
           </div>
+        {:else}
+          {#each visibleMessages as message (message.id)}
+            {@const isUser = message.role === 'user'}
+            <div class="flex {isUser ? 'justify-end' : 'justify-start'}">
+              <div
+                class="max-w-[90%] space-y-2 rounded-2xl border px-4 py-3 {isUser
+                  ? 'border-transparent bg-primary/10'
+                  : 'border-border bg-surface'}"
+              >
+                {#if !isUser && reasoningText(message)}
+                  <details class="text-[12px] text-dimmed">
+                    <summary class="cursor-pointer select-none text-[11px] font-medium">
+                      Reasoning
+                    </summary>
+                    <p class="mt-1 whitespace-pre-wrap leading-relaxed">
+                      {reasoningText(message)}
+                    </p>
+                  </details>
+                {/if}
+                {#if messageBody(message)}
+                  <div class="text-[14px] leading-relaxed">
+                    <MarkdownView text={messageBody(message)} />
+                  </div>
+                {/if}
+                {#each message.parts.filter((p) => p.type !== 'text' && p.type !== 'reasoning') as part (part.id)}
+                  <div
+                    class="flex items-center gap-1.5 rounded-lg bg-elevated px-2.5 py-1.5 text-[11px] text-muted"
+                  >
+                    <ChevronRight size={12} class="text-dimmed" />
+                    {partLabel(part.type)}
+                  </div>
+                {/each}
+                {#if message.error}
+                  <p class="text-[11px] text-danger">{message.error}</p>
+                {/if}
+              </div>
+            </div>
+          {/each}
         {/if}
       </div>
 
       <!-- Composer -->
-      <div class="border-t px-3 py-2">
+      <div class="border-t border-border bg-surface px-3 py-3">
         {#if attachments.length > 0}
-          <div class="mb-1.5 flex flex-wrap gap-1.5">
+          <div class="mb-2 flex flex-wrap gap-1.5">
             {#each attachments as attachment, index (attachment.url)}
               <span
-                class="flex items-center gap-1 rounded-md bg-elevated px-2 py-1 text-[11px] text-muted"
+                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
               >
-                {attachment.filename ?? 'attachment'}
+                <Paperclip size={11} class="text-dimmed" />
+                <span class="max-w-32 truncate">{attachment.filename ?? 'attachment'}</span>
                 <button
                   type="button"
-                  class="text-dimmed hover:text-danger"
+                  class="flex h-4 w-4 items-center justify-center rounded text-dimmed transition-colors hover:text-danger"
                   aria-label="Remove attachment"
                   title="Remove attachment"
                   onclick={() => removeAttachment(index)}
@@ -537,7 +632,7 @@
 
         <div class="flex items-end gap-2">
           <div
-            class="flex min-w-0 flex-1 items-end gap-1.5 rounded-lg border bg-elevated px-2 py-1.5"
+            class="flex min-w-0 flex-1 items-end gap-1.5 rounded-xl border border-border bg-app px-2 py-1.5 transition-colors focus-within:border-primary"
           >
             <input
               {@attach captureFileInput}
@@ -548,16 +643,16 @@
             />
             <button
               type="button"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Attach a file"
               title="Attach a file"
               onclick={() => fileInput?.click()}
             >
-              <Plus size={15} />
+              <Paperclip size={16} />
             </button>
             <textarea
-              class="min-h-9 max-h-40 flex-1 resize-none bg-transparent py-1 text-sm text-foreground outline-none placeholder:text-dimmed"
-              placeholder="Message {selectedThread?.title ?? 'the agent'}…"
+              class="min-h-9 max-h-36 flex-1 resize-none bg-transparent py-1.5 text-[14px] leading-relaxed text-foreground outline-none placeholder:text-dimmed"
+              placeholder="Message the agent…"
               rows="1"
               bind:value={draft}
               onkeydown={(e: KeyboardEvent) => {
@@ -569,26 +664,30 @@
           </div>
           <button
             type="button"
-            class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:opacity-90 disabled:pointer-events-none disabled:opacity-50"
-            disabled={busy || draft.trim().length === 0 || !selectedThread}
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary transition-all hover:bg-primary-hover disabled:pointer-events-none disabled:opacity-40"
+            disabled={!canSend}
             title="Send message"
+            aria-label="Send message"
             onclick={() => void handleSend()}
           >
             {#if busy}
-              <Loader2 size={13} class="animate-spin" />
+              <Loader2 size={16} class="animate-spin" />
             {:else}
-              <Send size={13} />
+              <Send size={16} />
             {/if}
           </button>
         </div>
 
-        <!-- Model / permission / thinking / fast controls -->
-        <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <!-- Controls -->
+        <div class="mt-2 flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            class="flex items-center gap-1 rounded-md bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
+            class="flex items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
             title="Choose model"
-            onclick={() => (showModelPicker = !showModelPicker)}
+            onclick={() => {
+              showThinkingPicker = false
+              showModelPicker = !showModelPicker
+            }}
           >
             {settings.modelId || 'Model'}
             <ChevronDown size={11} />
@@ -596,7 +695,7 @@
 
           <button
             type="button"
-            class="flex items-center gap-1 rounded-md bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
+            class="rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
             title="Permission level"
             onclick={() =>
               void setPermission(
@@ -608,9 +707,12 @@
 
           <button
             type="button"
-            class="flex items-center gap-1 rounded-md bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
+            class="flex items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:text-foreground"
             title="Thinking level"
-            onclick={() => (showThinkingPicker = !showThinkingPicker)}
+            onclick={() => {
+              showModelPicker = false
+              showThinkingPicker = !showThinkingPicker
+            }}
           >
             {settings.thinkingLevel}
             <ChevronDown size={11} />
@@ -619,60 +721,69 @@
           {#if fastSupported}
             <button
               type="button"
-              class="rounded-md px-2 py-1 text-[11px] transition-colors {settings.inferenceMode ===
+              class="rounded-lg px-2 py-1 text-[11px] transition-colors {settings.inferenceMode ===
               'fast'
                 ? 'bg-primary/15 text-primary'
                 : 'bg-elevated text-muted hover:text-foreground'}"
               title="Toggle fast mode"
               onclick={() => void toggleFast(settings.inferenceMode !== 'fast')}
             >
+              <Zap size={11} class="mr-0.5 inline" />
               Fast
             </button>
           {/if}
+        </div>
 
-          {#if showModelPicker}
-            <div class="w-full rounded-lg border bg-surface p-2">
-              {#each catalog as provider (provider.id)}
-                <p class="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                  {provider.name ?? provider.id}
-                </p>
-                <div class="mb-1 grid grid-cols-2 gap-1">
-                  {#each provider.models as model (model.id)}
-                    <button
-                      type="button"
-                      class="rounded-md px-2 py-1 text-left text-[11px] transition-colors {settings.modelId ===
-                        model.id && settings.providerId === provider.id
-                        ? 'bg-primary/10 text-foreground'
-                        : 'text-muted hover:bg-elevated hover:text-foreground'}"
-                      onclick={() => void selectModel(provider.id, model.id)}
-                    >
-                      {model.name}
-                    </button>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          {#if showThinkingPicker}
-            <div class="w-full rounded-lg border bg-surface p-2">
+        {#if showModelPicker}
+          <div class="mt-2 max-h-56 overflow-y-auto rounded-xl border border-border bg-surface p-2">
+            {#each catalog as provider (provider.id)}
+              <p
+                class="px-1.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed first:pt-0"
+              >
+                {provider.name ?? provider.id}
+              </p>
               <div class="grid grid-cols-2 gap-1">
-                {#each thinkingPresets as preset (preset.id)}
+                {#each provider.models as model (model.id)}
                   <button
                     type="button"
-                    class="rounded-md px-2 py-1 text-left text-[11px] transition-colors {settings.thinkingLevel ===
-                    preset.id
+                    class="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors {settings.modelId ===
+                      model.id && settings.providerId === provider.id
                       ? 'bg-primary/10 text-foreground'
                       : 'text-muted hover:bg-elevated hover:text-foreground'}"
-                    onclick={() => void setThinking(preset.id as ThreadSettings['thinkingLevel'])}
+                    onclick={() => void selectModel(provider.id, model.id)}
                   >
-                    {preset.label}
+                    <span class="min-w-0 flex-1 truncate">{model.name}</span>
+                    {#if settings.modelId === model.id && settings.providerId === provider.id}
+                      <Check size={11} class="shrink-0 text-primary" />
+                    {/if}
                   </button>
                 {/each}
               </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if showThinkingPicker}
+          <div class="mt-2 rounded-xl border border-border bg-surface p-2">
+            <div class="grid grid-cols-2 gap-1">
+              {#each thinkingPresets as preset (preset.id)}
+                <button
+                  type="button"
+                  class="flex items-center justify-between gap-1.5 rounded-lg px-2 py-1.5 text-left text-[11px] transition-colors {settings.thinkingLevel ===
+                  preset.id
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                  onclick={() => void setThinking(preset.id as ThreadSettings['thinkingLevel'])}
+                >
+                  <span>{preset.label}</span>
+                  {#if settings.thinkingLevel === preset.id}
+                    <Check size={11} class="shrink-0 text-primary" />
+                  {/if}
+                </button>
+              {/each}
             </div>
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
     </main>
   </div>

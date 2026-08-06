@@ -15,6 +15,7 @@
 import type { Database } from '../database/database'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
+import { ProjectFilesService } from '../project-files-service'
 import type { ChatEngine } from '../chat-engine'
 import { broadcastThreadUpdate } from '../thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
@@ -64,12 +65,14 @@ export type RemoteRpcResult = { ok: true; result: unknown } | { ok: false; messa
 export class RemoteRpcDispatcher {
   private readonly threadManager: ThreadManager
   private readonly projectManager: ProjectManager
+  private readonly projectFilesService: ProjectFilesService
 
   constructor(private readonly services: RemoteRpcServices) {
     this.threadManager = new ThreadManager(services.database, broadcastThreadUpdate, (thread) => {
       void services.chatEngine.deleteThreadSession(thread.projectId, thread.id)
     })
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
+    this.projectFilesService = new ProjectFilesService(this.projectManager)
   }
 
   /** Whether a channel is callable over the remote bridge. */
@@ -198,6 +201,15 @@ export class RemoteRpcDispatcher {
           this.string(args[2]),
           args[3] as string[][]
         )
+      case 'projectFiles:resolveCitationPaths':
+        return this.projectFilesService.resolveCitationPaths(
+          this.string(args[0]),
+          (args[1] ?? []) as string[]
+        )
+      case 'shell:openExternal':
+        // Opening an external browser from a phone makes no sense; accept the
+        // call so the shared renderer's link handling does not error.
+        return undefined
       default:
         throw new Error(`Unknown remote channel: ${channel}`)
     }

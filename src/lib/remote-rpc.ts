@@ -56,7 +56,9 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:listPermissions',
   'agent:replyPermission',
   'agent:listQuestions',
-  'agent:answerQuestion'
+  'agent:answerQuestion',
+  'projectFiles:resolveCitationPaths',
+  'shell:openExternal'
 ]
 
 /** Channels the desktop pushes to the phone as live events. */
