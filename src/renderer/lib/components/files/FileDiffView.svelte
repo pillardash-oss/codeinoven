@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { TurnCheckpointFileDiff } from '$shared/types'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
 
   interface Props {
     diff: TurnCheckpointFileDiff
@@ -19,6 +21,11 @@
     beforeCount: number
     afterStart: number
     afterCount: number
+  }
+
+  interface SplitRow {
+    before: DiffLine | null
+    after: DiffLine | null
   }
 
   let { diff }: Props = $props()
@@ -163,6 +170,27 @@
   let hunks = $derived(diffHunks(lines))
   let additions = $derived(lines.filter((line) => line.kind === 'added').length)
   let deletions = $derived(lines.filter((line) => line.kind === 'deleted').length)
+
+  /** Pair deleted lines with the added lines that follow them so the split
+   *  (horizontal) view can render before and after side by side. */
+  function splitRows(hunkLines: DiffLine[]): SplitRow[] {
+    const rows: SplitRow[] = []
+    for (const line of hunkLines) {
+      if (line.kind === 'context') {
+        rows.push({ before: line, after: line })
+      } else if (line.kind === 'deleted') {
+        rows.push({ before: line, after: null })
+      } else {
+        const previous = rows.at(-1)
+        if (previous && previous.before && !previous.after && previous.before.kind === 'deleted') {
+          previous.after = line
+        } else {
+          rows.push({ before: null, after: line })
+        }
+      }
+    }
+    return rows
+  }
 </script>
 
 {#if diff.binary}
@@ -176,13 +204,73 @@
     >
       <span class="text-success">+{additions}</span>
       <span class="text-danger">−{deletions}</span>
+      <span class="flex-1"></span>
       {#if diff.truncated}
-        <span class="ml-auto text-warning">Preview truncated at 64 KiB</span>
+        <span class="text-warning">Preview truncated at 64 KiB</span>
       {/if}
+      <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} />
     </div>
     <div class="min-h-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-5">
       {#if hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
+      {:else if diffLayoutState.layout === 'horizontal'}
+        {#each hunks as hunk (hunk.startIndex)}
+          <section class="not-first:mt-1 border-y border-border first:border-t-0">
+            <div class="flex items-center gap-2 bg-elevated px-3 py-0.5 text-[10px] text-info">
+              <span
+                >@@ -{hunk.beforeStart},{hunk.beforeCount} +{hunk.afterStart},{hunk.afterCount} @@</span
+              >
+              <span class="ml-auto flex items-center gap-3 text-dimmed">
+                <span>Before</span>
+                <span>After</span>
+              </span>
+            </div>
+            {#each splitRows(hunk.lines) as row, index (`${row.before?.kind ?? 'none'}:${row.before?.beforeLine ?? 0}:${row.after?.afterLine ?? 0}:${index}`)}
+              <div class="grid min-w-max grid-cols-[3rem_minmax(0,1fr)_3rem_minmax(0,1fr)] px-2">
+                <span
+                  class={[
+                    'select-none pr-2 text-right text-dimmed',
+                    row.before?.kind === 'deleted' ? 'bg-danger/10 text-danger' : ''
+                  ]}
+                >
+                  {row.before?.beforeLine ?? ''}
+                </span>
+                <span
+                  class={[
+                    'whitespace-pre pr-2',
+                    row.before?.kind === 'deleted'
+                      ? 'bg-danger/10 text-foreground'
+                      : row.before?.kind === 'context'
+                        ? 'text-muted'
+                        : ''
+                  ]}
+                >
+                  {row.before ? row.before.text || ' ' : ''}
+                </span>
+                <span
+                  class={[
+                    'select-none border-l border-border pr-2 text-right text-dimmed',
+                    row.after?.kind === 'added' ? 'bg-success/10 text-success' : ''
+                  ]}
+                >
+                  {row.after?.afterLine ?? ''}
+                </span>
+                <span
+                  class={[
+                    'whitespace-pre pr-4',
+                    row.after?.kind === 'added'
+                      ? 'bg-success/10 text-foreground'
+                      : row.after?.kind === 'context'
+                        ? 'text-muted'
+                        : ''
+                  ]}
+                >
+                  {row.after ? row.after.text || ' ' : ''}
+                </span>
+              </div>
+            {/each}
+          </section>
+        {/each}
       {:else}
         {#each hunks as hunk (hunk.startIndex)}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">

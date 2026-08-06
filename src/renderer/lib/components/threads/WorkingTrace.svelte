@@ -7,6 +7,8 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import type { AgentPart } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -189,6 +191,7 @@
   const hasCompaction = $derived(
     parts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
+  const hasToolParts = $derived(parts.some((part) => part.type === 'tool'))
 </script>
 
 <details class="rounded-xl border border-border bg-surface" open={isOpen}>
@@ -203,8 +206,11 @@
     {/if}
     Working Trace
     <span class="tabular-nums text-dimmed">({parts.length})</span>
-    {#if hasCompaction || subagentCount > 0}
-      <span class="ml-auto flex items-center gap-1.5">
+    <span class="ml-auto flex items-center gap-1.5">
+      {#if hasToolParts}
+        <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
+      {/if}
+      {#if hasCompaction || subagentCount > 0}
         {#if hasCompaction}
           <span
             class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info"
@@ -227,8 +233,8 @@
             {/if}
           </span>
         {/if}
-      </span>
-    {/if}
+      {/if}
+    </span>
   </summary>
   <div class="flex flex-col px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2">
     {#each parts as part (part.id)}

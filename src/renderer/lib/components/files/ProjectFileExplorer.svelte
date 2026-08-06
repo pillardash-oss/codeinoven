@@ -28,6 +28,8 @@
     selectedPath: string | null
     lastTurnPaths: string[]
     activeCheckpointId: string | null
+    /** Paths changed by the active checkpoint tab, used to keep browsing in diff view. */
+    activeCheckpointPaths?: string[]
     onFileSelect?: (path: string) => void
   }
 
@@ -38,6 +40,7 @@
     selectedPath,
     lastTurnPaths,
     activeCheckpointId,
+    activeCheckpointPaths = [],
     onFileSelect = undefined
   }: Props = $props()
   let filterQuery = $state('')
@@ -199,6 +202,13 @@
     if (entry.kind === 'file') {
       if (onFileSelect) {
         onFileSelect(entry.path)
+      } else if (activeCheckpointId && activeCheckpointPaths.includes(entry.path)) {
+        await projectFilesWorkspace.openCheckpointFile(
+          projectId,
+          activeCheckpointId,
+          entry.path,
+          'diff'
+        )
       } else if (mode === 'normal' || selectedFromSearch) {
         await projectFilesWorkspace.openFile(projectId, entry.path)
       } else {
