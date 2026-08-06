@@ -81,7 +81,11 @@ export function pathToFileUrl(path: string): string {
 
 /** Convert a `file://` URL back into an absolute local file path. */
 export function fileUrlToPath(url: string): string {
-  if (url.startsWith('file:///')) return url.slice('file:///'.length)
+  // `file:///Users/…` is `file://` + `/Users/…` — the path's leading slash
+  // starts at index 7, so slice(7) keeps it. Slicing 8 (`file:///`) would
+  // drop the leading slash and turn the absolute path into a broken relative
+  // path that readFile() cannot resolve.
+  if (url.startsWith('file:///')) return url.slice('file://'.length)
   if (url.startsWith('file://')) return url.slice('file://'.length)
   return url
 }
