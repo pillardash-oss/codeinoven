@@ -11,6 +11,7 @@ import type {
   GitIdentity,
   GitRemoteInfo,
   GitResetMode,
+  GitStashEntry,
   GitStatus,
   GitSyncSummary,
   MergeSummary
@@ -612,6 +613,59 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         const args = message ? ['push', '-m', message] : ['push']
+        await this.client(directory).stash(args)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** List stashes newest-first, e.g. `stash@{0}` → `stash@{n}`. */
+  async listStashes(projectPath: string): Promise<GitStashEntry[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        const output = await git.raw(['stash', 'list', '--format=%gd%x00%gs%x00%ct%x00'])
+        const raw = String(output)
+        if (!raw.trim()) return []
+        return raw
+          .split('\n')
+          .filter((line) => line.trim())
+          .map((line) => {
+            const [id, message, date, ...rest] = line.split('\0')
+            if (!id) return null
+            const fullMessage = message ?? (rest.length > 0 ? rest.join('\0') : '')
+            const branchMatch = /^(?:WIP on|On) ([^:\s]+):/u.exec(fullMessage)
+            return {
+              id,
+              message: fullMessage,
+              branch: branchMatch?.[1] ?? null,
+              date: Number.parseInt(date ?? '0', 10) * 1000 || Date.now()
+            } satisfies GitStashEntry
+          })
+          .filter((entry): entry is GitStashEntry => entry !== null)
+      })
+    })
+  }
+
+  /** Restore a stash (defaults to the newest) and drop it when it applies cleanly. */
+  async popStash(projectPath: string, id?: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        const args = id ? ['pop', id] : ['pop']
+        await this.client(directory).stash(args)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** Discard a stash (defaults to the newest). */
+  async dropStash(projectPath: string, id?: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        const args = id ? ['drop', id] : ['drop']
         await this.client(directory).stash(args)
       })
       return this.readStatus(directory)

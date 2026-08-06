@@ -39,7 +39,47 @@ export class GitHubAuthService {
 
   async status(): Promise<GitHubAuthStatus> {
     if (!this.configured) return { connected: false, configured: false }
-    return { connected: await this.vault.exists(GITHUB_TOKEN_REF), configured: true }
+    const connected = await this.vault.exists(GITHUB_TOKEN_REF)
+    if (!connected) return { connected: false, configured: true }
+    return {
+      connected: true,
+      configured: true,
+      user: await this.fetchUserProfile()
+    }
+  }
+
+  /** Resolve the public profile of the signed-in user (never the token). */
+  private async fetchUserProfile(): Promise<GitHubAuthStatus['user']> {
+    const token = await this.vault.resolve(GITHUB_TOKEN_REF)
+    if (!token) return null
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
+      try {
+        const response = await fetch('https://api.github.com/user', {
+          headers: {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${token}`,
+            'User-Agent': 'CodeInOven'
+          },
+          signal: controller.signal
+        })
+        if (!response.ok) return null
+        const record = (await response.json()) as Record<string, unknown>
+        const login = this.readString(record, 'login')
+        const avatarUrl = this.readString(record, 'avatar_url')
+        if (!login || !avatarUrl) return null
+        return {
+          login,
+          name: this.readString(record, 'name'),
+          avatarUrl
+        }
+      } finally {
+        clearTimeout(timer)
+      }
+    } catch {
+      return null
+    }
   }
 
   async startDeviceFlow(): Promise<GitHubDeviceCode> {
@@ -137,7 +177,7 @@ export class GitHubAuthService {
       return await response.json()
     } catch (failure) {
       if (failure instanceof Error && failure.name === 'AbortError') {
-        throw new Error('GitHub request timed out')
+        throw new Error('GitHub request timed out', { cause: failure })
       }
       throw failure
     } finally {

@@ -2451,4 +2451,25 @@ export interface GitHubAuthStatus {
   connected: boolean
   /** Whether the app has a GitHub App client ID configured to sign in with. */
   configured: boolean
+  /** Public profile of the signed-in user, when connected. */
+  user?: GitHubUser | null
+}
+
+/** Public GitHub user profile, safe to surface in the UI. */
+export interface GitHubUser {
+  login: string
+  name: string | null
+  avatarUrl: string
+}
+
+/** One entry from `git stash list`, e.g. `stash@{0}`. */
+export interface GitStashEntry {
+  /** Reflog selector, e.g. `stash@{0}`. */
+  id: string
+  /** Stash message, e.g. `WIP on main: abc1234 feat: thing`. */
+  message: string
+  /** Branch the stash was created on, when derivable. */
+  branch: string | null
+  /** Unix timestamp of the stash commit. */
+  date: number
 }

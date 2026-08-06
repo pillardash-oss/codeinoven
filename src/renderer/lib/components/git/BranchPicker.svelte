@@ -1,18 +1,45 @@
 <script lang="ts">
-  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
+  import {
+    ChevronDown,
+    Check,
+    GitBranch,
+    Plus,
+    Search,
+    Trash2,
+    LogIn,
+    LogOut,
+    GitFork
+  } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
-  import type { GitBranchInfo } from '$shared/types'
+  import type { GitBranchInfo, GitHubAuthStatus } from '$shared/types'
 
   interface Props {
     branches: GitBranchInfo[]
     currentBranch: string | null
     isBusy: boolean
+    /** Primary remote (origin) shown as info at the top of the picker. */
+    primaryRemote: { name: string; url: string } | null
+    /** GitHub account status surfaced in the picker header. */
+    github: GitHubAuthStatus
     onSelect: (branch: string) => void
     onCreate?: (name: string) => void
     onDelete?: (name: string) => void
+    onSignIn: () => void
+    onSignOut: () => void
   }
 
-  let { branches, currentBranch, isBusy, onSelect, onCreate, onDelete }: Props = $props()
+  let {
+    branches,
+    currentBranch,
+    isBusy,
+    primaryRemote,
+    github,
+    onSelect,
+    onCreate,
+    onDelete,
+    onSignIn,
+    onSignOut
+  }: Props = $props()
 
   let open = $state(false)
   let search = $state('')
@@ -28,6 +55,8 @@
 
   const localBranches = $derived(filtered.filter((b) => !b.remote))
   const remoteBranches = $derived(filtered.filter((b) => b.remote))
+
+  const githubUser = $derived(github.user ?? null)
 
   function handleSelect(branch: string): void {
     if (branch === currentBranch) return
@@ -99,8 +128,67 @@
       align="end"
       sideOffset={4}
       collisionPadding={8}
-      class="z-50 w-56 overflow-hidden rounded-xl border bg-surface shadow-xl"
+      class="z-50 w-60 overflow-hidden rounded-xl border bg-surface shadow-xl"
     >
+      <!-- GitHub account -->
+      <div class="border-b border-border px-3 py-2">
+        {#if github.connected && githubUser}
+          <div class="flex items-center gap-2">
+            <img
+              src={githubUser.avatarUrl}
+              alt=""
+              class="h-6 w-6 shrink-0 rounded-full bg-elevated"
+            />
+            <div class="min-w-0 flex-1">
+              <p class="truncate text-[11px] font-medium text-foreground">
+                {githubUser.name ?? githubUser.login}
+              </p>
+              <p class="truncate text-[9px] text-dimmed">@{githubUser.login}</p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              title="Sign out of GitHub"
+              aria-label="Sign out of GitHub"
+              onclick={(e: MouseEvent) => {
+                e.stopPropagation()
+                onSignOut()
+              }}
+            >
+              <LogOut size={12} />
+            </button>
+          </div>
+        {:else if github.configured}
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Sign in to GitHub"
+            onclick={(e: MouseEvent) => {
+              e.stopPropagation()
+              open = false
+              onSignIn()
+            }}
+          >
+            <LogIn size={12} class="shrink-0" />
+            Sign in to GitHub
+          </button>
+        {:else}
+          <p class="px-1 text-[9px] leading-relaxed text-dimmed">
+            GitHub sign-in needs a client ID to be configured.
+          </p>
+        {/if}
+      </div>
+
+      <!-- Origin -->
+      {#if primaryRemote}
+        <div class="flex items-center gap-2 border-b border-border px-3 py-1.5">
+          <GitFork size={11} class="shrink-0 text-dimmed" />
+          <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed">
+            {primaryRemote.name}: {primaryRemote.url}
+          </span>
+        </div>
+      {/if}
+
       <div class="border-b border-border px-3 py-2">
         <div class="flex items-center gap-2 rounded-lg bg-elevated px-2 py-1">
           <Search size={12} class="shrink-0 text-dimmed" />

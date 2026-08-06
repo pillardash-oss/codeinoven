@@ -63,6 +63,7 @@ import type {
   GitIdentityInput,
   GitRemoteInfo,
   GitStatus,
+  GitStashEntry,
   MergeSummary,
   PrCreateInput,
   PrMergeMethod,
@@ -672,6 +673,9 @@ export interface IpcInvokeContract {
   'git:merge': Contract<[projectId: string, target: string], MergeSummary>
   'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
   'git:stash': Contract<[projectId: string, message?: string], GitStatus>
+  'git:stashList': Contract<[projectId: string], GitStashEntry[]>
+  'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
+  'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
   'git:abortMerge': Contract<[projectId: string], GitStatus>
   'git:abortRebase': Contract<[projectId: string], GitStatus>
   'pr:create': Contract<[projectId: string, input: PrCreateInput], PullRequestReference>

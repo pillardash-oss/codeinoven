@@ -290,6 +290,19 @@ export function validateStashMessage(value: unknown): string | undefined {
   return value.trim() || undefined
 }
 
+/** Validate an optional stash selector, e.g. `stash@{0}`. */
+export function validateStashId(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > 64) {
+    throw new TypeError('Stash id must be a string of at most 64 characters')
+  }
+  const trimmed = value.trim()
+  if (!/^stash@\{[0-9]+\}$/u.test(trimmed)) {
+    throw new TypeError('Stash id must look like stash@{0}')
+  }
+  return trimmed
+}
+
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`)
