@@ -6,6 +6,7 @@
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -30,6 +31,7 @@
     Files,
     FileText,
     FolderKanban,
+    GitBranch,
     GitFork,
     History,
     Kanban,
@@ -379,6 +381,26 @@
   function toggleContextSidebar(): void {
     if (!workspaceState.selectedThread) return
     contextSidebarState.toggle()
+  }
+
+  // ─── Git status chip ─────────────────────────────────────────────────────
+
+  /** Refresh git status whenever the active thread's project changes. */
+  $effect(() => {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    gitState.ensureProjectEvents(thread.projectId)
+    void gitState.refresh(thread.projectId)
+  })
+
+  function openGitPanel(): void {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'git') {
+      contextSidebarState.hide()
+    } else {
+      contextSidebarState.openGit(thread.projectId, thread.id)
+    }
   }
 
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
@@ -1136,6 +1158,39 @@
               ? 'Retry spec'
               : 'Spec'}
         </span>
+      </button>
+    {/if}
+
+    <!-- Git status chip — only when a thread is open in a project view -->
+    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread}
+      <button
+        class={[
+          'relative flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 transition-colors duration-150',
+          gitState.conflicted.length > 0
+            ? 'text-warning hover:bg-warning/10'
+            : gitState.clean
+              ? 'text-dimmed hover:bg-elevated hover:text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label="Open Git panel"
+        title="Open Git panel"
+        onclick={openGitPanel}
+      >
+        <GitBranch size={13} class="shrink-0" />
+        {#if gitState.branch}
+          <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
+            {gitState.branch}
+          </span>
+        {/if}
+        {#if gitState.conflicted.length > 0}
+          <span
+            class="shrink-0 rounded-full bg-warning px-1.5 text-[9px] font-semibold tabular-nums text-on-primary"
+          >
+            {gitState.conflicted.length}
+          </span>
+        {:else if gitState.status && !gitState.clean}
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>
+        {/if}
       </button>
     {/if}
 

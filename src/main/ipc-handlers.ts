@@ -9,6 +9,10 @@ import { StorageEngine } from './storage-engine'
 import { Logger } from './logger'
 import { EditorService } from './editor-service'
 import { RepositoryService } from './repository-service'
+import { GitService } from './git-service'
+import { SecretVault } from './secret-vault'
+import { GitHubProvider } from './providers/github-provider'
+import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
 import { DiagnosticsService } from './diagnostics-service'
@@ -22,13 +26,27 @@ import {
   validateBoundedInteger,
   validateBoundedString,
   validateBoolean,
+  validateBranchName,
   validateChecklistItemStatus,
+  validateCommitMessage,
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
+  validateGitIdentity,
+  validateGitPathArray,
+  validateGitRelativePath,
   validateHistoryRole,
+  validateMergeMethod,
+  validateMergeTarget,
+  validatePrCreateInput,
+  validatePrNumber,
+  validatePrState,
+  validatePushOptions,
+  validateRemoteName,
+  validateRemoteUrl,
   validateScopeBoard,
   validateScopeSlice,
+  validateStashMessage,
   validateThreadSettings,
   validateThreadStatus,
   validateThreadUpdateInput
@@ -868,6 +886,8 @@ export function registerIpcHandlers(
   const specContextService = new SpecContextService(database, projectManager)
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
+  const gitService = new GitService()
+  const vault = new SecretVault(storage)
   const checkpointManager = new CheckpointManager(database)
   const diagnosticsService = new DiagnosticsService(database)
   const memoryService = new MemoryService(storage)
@@ -2276,6 +2296,226 @@ export function registerIpcHandlers(
   ipcMain.handle('repository:remoteOrigin', (_, projectPath: string) =>
     repositoryService.getRemoteOrigin(projectPath)
   )
+
+  // ─── Git management ─────────────────────────────────────────────────────
+  const resolveProjectPath = async (projectId: string): Promise<string> => {
+    const project = await projectManager.getProject(projectId)
+    if (!project?.path) throw new Error(`Project not found: ${projectId}`)
+    return project.path
+  }
+  ipcMain.handle('git:status', async (_, projectId: unknown) =>
+    gitService.getStatus(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle(
+    'git:diff',
+    async (_, projectId: unknown, relativePath: unknown, staged: unknown) =>
+      gitService.getDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath),
+        validateBoolean(staged, 'Staged')
+      )
+  )
+  ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
+    gitService.stage(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:unstage', async (_, projectId: unknown, paths: unknown) =>
+    gitService.unstage(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:commit', async (_, projectId: unknown, message: unknown) =>
+    gitService.commit(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateCommitMessage(message)
+    )
+  )
+  ipcMain.handle('git:init', async (_, projectId: unknown) =>
+    gitService.initialize(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:branches', async (_, projectId: unknown) =>
+    gitService.listBranches(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:checkout', async (_, projectId: unknown, branch: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.checkout(
+      await resolveProjectPath(safeProjectId),
+      validateBranchName(branch)
+    )
+    // Keep thread.branch coherent when the app drives a checkout (D7): update
+    // every owned thread whose working directory is this project.
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown) => {
+    const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
+    return gitService.log(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      bounded
+    )
+  })
+  ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
+    gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:setIdentity', async (_, projectId: unknown, identity: unknown) => {
+    const safe = validateGitIdentity(identity)
+    return gitService.setIdentity(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      safe.name,
+      safe.email
+    )
+  })
+  // ─── Git remotes, sync & credentials ────────────────────────────────────
+  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
+  const gitCredentialStatus = async (projectId: string) => ({
+    configured: await vault.exists(gitCredentialRef(projectId)),
+    secureStorageAvailable: vault.isAvailable()
+  })
+  ipcMain.handle('git:remotes', async (_, projectId: unknown) =>
+    gitService.listRemotes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:addRemote', async (_, projectId: unknown, name: unknown, url: unknown) =>
+    gitService.addRemote(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateRemoteName(name),
+      validateRemoteUrl(url)
+    )
+  )
+  ipcMain.handle('git:removeRemote', async (_, projectId: unknown, name: unknown) =>
+    gitService.removeRemote(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateRemoteName(name)
+    )
+  )
+  ipcMain.handle('git:fetch', async (_, projectId: unknown) =>
+    gitService.fetch(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:pull', async (_, projectId: unknown) =>
+    gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:push', async (_, projectId: unknown, options: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeOptions = validatePushOptions(options)
+    // Resolve the vaulted PAT in main only; the token never crosses IPC.
+    const tokenRef = gitCredentialRef(safeProjectId)
+    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+    return gitService.push(await resolveProjectPath(safeProjectId), { ...safeOptions, token })
+  })
+  ipcMain.handle('git:getCredentialStatus', async (_, projectId: unknown) =>
+    gitCredentialStatus(validateEntityId(projectId, 'Project ID'))
+  )
+  ipcMain.handle('git:setCredential', async (_, projectId: unknown, token: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeToken = validateBoundedString(token, 'Provider token', 1, 16_384)
+    await vault.save(safeToken, gitCredentialRef(safeProjectId))
+    return gitCredentialStatus(safeProjectId)
+  })
+  ipcMain.handle('git:removeCredential', async (_, projectId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    await vault.remove(gitCredentialRef(safeProjectId))
+    return gitCredentialStatus(safeProjectId)
+  })
+
+  // ─── Merge / rebase / stash (Phase 4) ───────────────────────────────────
+  ipcMain.handle('git:merge', async (_, projectId: unknown, target: unknown) =>
+    gitService.merge(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateMergeTarget(target)
+    )
+  )
+  ipcMain.handle('git:rebase', async (_, projectId: unknown, target: unknown) =>
+    gitService.rebase(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateMergeTarget(target)
+    )
+  )
+  ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown) =>
+    gitService.stash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashMessage(message)
+    )
+  )
+  ipcMain.handle('git:abortMerge', async (_, projectId: unknown) =>
+    gitService.abortMerge(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:abortRebase', async (_, projectId: unknown) =>
+    gitService.abortRebase(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+
+  // ─── Pull requests (GitHub-first) ───────────────────────────────────────
+  const providerForProject = async (projectId: string): Promise<GitProvider | null> => {
+    const tokenRef = gitCredentialRef(projectId)
+    if (!(await vault.exists(tokenRef))) return null
+    const token = await vault.resolve(tokenRef)
+    return new GitHubProvider(token)
+  }
+  const remoteIdentity = async (projectId: string): Promise<{ owner: string; repo: string }> => {
+    const remoteUrl = await repositoryService.getRemoteOrigin(await resolveProjectPath(projectId))
+    const provider = new GitHubProvider('')
+    const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
+    if (!identity) {
+      throw new Error('No GitHub remote (origin) is configured for this project')
+    }
+    return identity
+  }
+  ipcMain.handle('pr:create', async (_, projectId: unknown, input: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const provider = await providerForProject(safeProjectId)
+    if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+    const identity = await remoteIdentity(safeProjectId)
+    const draft = validatePrCreateInput(input)
+    return provider.createPullRequest({
+      owner: identity.owner,
+      repo: identity.repo,
+      title: draft.title,
+      body: draft.body,
+      head: draft.head,
+      base: draft.base,
+      draft: draft.draft
+    })
+  })
+  ipcMain.handle(
+    'pr:list',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state?: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) return []
+      return provider.listPullRequests({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        ...(state === undefined ? {} : { state: validatePrState(state) })
+      })
+    }
+  )
+  ipcMain.handle(
+    'pr:merge',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      method: unknown
+    ) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+      return provider.mergePullRequest({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        pullNumber: validatePrNumber(pullNumber),
+        method: validateMergeMethod(method)
+      })
+    }
+  )
+
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)
   )

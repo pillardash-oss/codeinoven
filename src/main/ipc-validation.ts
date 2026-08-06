@@ -92,6 +92,195 @@ export function validateScopeSlice(value: unknown): ScopeSlice {
   return value as ScopeSlice
 }
 
+const GIT_PATH_PATTERN = /^[^\0]*$/u
+const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
+const GIT_REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
+const GIT_URL_SCHEMES = new Set(['https:', 'http:', 'ssh:', 'git:', 'file:'])
+const GIT_COMMIT_MESSAGE_MAX = 4096
+
+/**
+ * Validate a project-relative git path: must be non-empty, bounded, free of
+ * control characters, and must not contain `..` segments (path traversal).
+ */
+export function validateGitRelativePath(value: unknown, label = 'Git file path'): string {
+  const path = validateBoundedString(value, label, 1, 4096)
+  if (!GIT_PATH_PATTERN.test(path)) {
+    throw new TypeError(`${label} must not contain control characters`)
+  }
+  const segments = path.split('/')
+  if (segments.some((segment) => segment === '..')) {
+    throw new TypeError(`${label} must not escape the repository root`)
+  }
+  return path
+}
+
+/** Validate a list of project-relative git paths. */
+export function validateGitPathArray(value: unknown, label = 'Git file paths'): string[] {
+  if (!Array.isArray(value) || value.length > 2000) {
+    throw new TypeError(`${label} must be an array of at most 2000 paths`)
+  }
+  return value.map((entry, index) => validateGitRelativePath(entry, `${label}[${index}]`))
+}
+
+/** Validate a branch name (letters, numbers, dots, underscores, hyphens, slashes). */
+export function validateBranchName(value: unknown, label = 'Git branch'): string {
+  const branch = validateBoundedString(value, label, 1, 256)
+  if (!GIT_BRANCH_PATTERN.test(branch) || branch.endsWith('/') || branch.endsWith('.')) {
+    throw new TypeError(`${label} is not a valid git branch name`)
+  }
+  return branch
+}
+
+/** Validate a commit message, allowing free-form multi-line text. */
+export function validateCommitMessage(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Commit message must be a string')
+  if (value.length === 0 || value.length > GIT_COMMIT_MESSAGE_MAX || value.includes('\0')) {
+    throw new TypeError(`Commit message must be between 1 and ${GIT_COMMIT_MESSAGE_MAX} characters`)
+  }
+  return value.replace(/\r\n/gu, '\n')
+}
+
+/** Validate a git identity name/email pair. */
+export function validateGitIdentity(value: unknown): { name: string; email: string } {
+  const input = assertRecord(value, 'Git identity')
+  rejectUnknownFields(input, new Set(['name', 'email']), 'git identity')
+  return {
+    name: validateBoundedString(input.name, 'Git identity name', 1, 256),
+    email: validateBoundedString(input.email, 'Git identity email', 1, 256)
+  }
+}
+
+/** Validate a remote name (single path-safe segment). */
+export function validateRemoteName(value: unknown): string {
+  const name = validateBoundedString(value, 'Remote name', 1, 128)
+  if (!GIT_REMOTE_NAME_PATTERN.test(name)) {
+    throw new TypeError(
+      'Remote name must contain only letters, numbers, dots, underscores, and hyphens'
+    )
+  }
+  return name
+}
+
+/** Validate a remote URL (scheme-constrained, bounded length). */
+export function validateRemoteUrl(value: unknown): string {
+  const url = validateBoundedString(value, 'Remote URL', 1, 4096)
+  if (!url.includes(':') && !url.startsWith('/')) {
+    throw new TypeError('Remote URL must be a valid git remote URL')
+  }
+  const schemeMatch = /^([a-z][a-z0-9+.-]*):/iu.exec(url)
+  if (schemeMatch && !GIT_URL_SCHEMES.has(schemeMatch[1]!.toLowerCase())) {
+    throw new TypeError(`Remote URL scheme "${schemeMatch[1]}" is not supported`)
+  }
+  if (url.includes('\n') || url.includes('\r') || url.includes('\0')) {
+    throw new TypeError('Remote URL must not contain control characters')
+  }
+  return url
+}
+
+const MERGE_METHODS = new Set<import('../lib/types').PrMergeMethod>(['merge', 'squash', 'rebase'])
+const PR_STATES = new Set<import('../lib/types').PrState>(['open', 'closed', 'all'])
+
+/** Validate a PR merge method (merge|squash|rebase). */
+export function validateMergeMethod(value: unknown): import('../lib/types').PrMergeMethod {
+  return assertEnum(value, MERGE_METHODS, 'merge method')
+}
+
+/** Validate a PR draft create request. */
+export function validatePrDraft(value: unknown): import('../lib/types').PrDraft {
+  const input = assertRecord(value, 'Pull request draft')
+  rejectUnknownFields(
+    input,
+    new Set(['owner', 'repo', 'title', 'body', 'head', 'base', 'draft']),
+    'pull request draft'
+  )
+  const draft: import('../lib/types').PrDraft = {
+    owner: validateBoundedString(input.owner, 'PR owner', 1, 128),
+    repo: validateBoundedString(input.repo, 'PR repository', 1, 128),
+    title: validateBoundedString(input.title, 'PR title', 1, 512),
+    head: validateBranchName(input.head, 'PR head branch'),
+    base: validateBranchName(input.base, 'PR base branch')
+  }
+  if (input.body !== undefined) {
+    if (typeof input.body !== 'string' || input.body.length > 32_768 || input.body.includes('\0')) {
+      throw new TypeError('PR body must be a string of at most 32768 characters')
+    }
+    draft.body = input.body
+  }
+  if (input.draft !== undefined) {
+    draft.draft = validateBoolean(input.draft, 'PR draft')
+  }
+  return draft
+}
+
+/** Validate a PR create request (owner/repo resolved from the origin in main). */
+export function validatePrCreateInput(value: unknown): import('../lib/types').PrCreateInput {
+  const input = assertRecord(value, 'Pull request create input')
+  rejectUnknownFields(
+    input,
+    new Set(['title', 'body', 'head', 'base', 'draft']),
+    'pull request create input'
+  )
+  const draft: import('../lib/types').PrCreateInput = {
+    title: validateBoundedString(input.title, 'PR title', 1, 512),
+    head: validateBranchName(input.head, 'PR head branch'),
+    base: validateBranchName(input.base, 'PR base branch')
+  }
+  if (input.body !== undefined) {
+    if (typeof input.body !== 'string' || input.body.length > 32_768 || input.body.includes('\0')) {
+      throw new TypeError('PR body must be a string of at most 32768 characters')
+    }
+    draft.body = input.body
+  }
+  if (input.draft !== undefined) {
+    draft.draft = validateBoolean(input.draft, 'PR draft')
+  }
+  return draft
+}
+
+/** Validate a pull request number. */
+export function validatePrNumber(value: unknown): number {
+  return validateBoundedInteger(value, 'Pull request number', 1, 2_147_483_647)
+}
+
+/** Validate a merge/rebase target branch or ref. */
+export function validateMergeTarget(value: unknown): string {
+  return validateBranchName(value, 'Merge target')
+}
+
+/** Validate push options passed to `git:push`. */
+export function validatePushOptions(value: unknown): {
+  setUpstream: boolean
+  remote?: string
+  branch?: string
+} {
+  const input = assertRecord(value, 'Push options')
+  rejectUnknownFields(input, new Set(['setUpstream', 'remote', 'branch']), 'push options')
+  const options: { setUpstream: boolean; remote?: string; branch?: string } = {
+    setUpstream: validateBoolean(input.setUpstream, 'Set upstream')
+  }
+  if (input.remote !== undefined) {
+    options.remote = validateRemoteName(input.remote)
+  }
+  if (input.branch !== undefined) {
+    options.branch = validateBranchName(input.branch, 'Push branch')
+  }
+  return options
+}
+
+/** Validate a PR list state filter. */
+export function validatePrState(value: unknown): import('../lib/types').PrState {
+  return assertEnum(value, PR_STATES, 'PR state')
+}
+
+/** Validate an optional stash message. */
+export function validateStashMessage(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > 256 || value.includes('\0')) {
+    throw new TypeError('Stash message must be a string of at most 256 characters')
+  }
+  return value.trim() || undefined
+}
+
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`)

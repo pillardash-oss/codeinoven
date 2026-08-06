@@ -51,6 +51,18 @@ import type {
   ProjectFileInfo,
   ProjectFileTransferMode,
   ProjectTextFile,
+  GitBranchInfo,
+  GitCommitInfo,
+  GitCredentialStatus,
+  GitDiff,
+  GitIdentity,
+  GitIdentityInput,
+  GitRemoteInfo,
+  GitStatus,
+  MergeSummary,
+  PrCreateInput,
+  PrMergeMethod,
+  PullRequestReference,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -621,6 +633,43 @@ export interface IpcInvokeContract {
   'editors:detect': Contract<[], EditorInfo[]>
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
+  'git:status': Contract<[projectId: string], GitStatus>
+  'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
+  'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:commit': Contract<[projectId: string, message: string], GitStatus>
+  'git:init': Contract<[projectId: string], GitStatus>
+  'git:branches': Contract<[projectId: string], GitBranchInfo[]>
+  'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
+  'git:log': Contract<[projectId: string, limit?: number], GitCommitInfo[]>
+  'git:getIdentity': Contract<[projectId: string], GitIdentity>
+  'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
+  'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>
+  'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>
+  'git:removeRemote': Contract<[projectId: string, name: string], GitRemoteInfo[]>
+  'git:fetch': Contract<[projectId: string], GitStatus>
+  'git:pull': Contract<[projectId: string], GitStatus>
+  'git:push': Contract<
+    [projectId: string, options: { setUpstream: boolean; remote?: string; branch?: string }],
+    GitStatus
+  >
+  'git:getCredentialStatus': Contract<[projectId: string], GitCredentialStatus>
+  'git:setCredential': Contract<[projectId: string, token: string], GitCredentialStatus>
+  'git:removeCredential': Contract<[projectId: string], GitCredentialStatus>
+  'git:merge': Contract<[projectId: string, target: string], MergeSummary>
+  'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
+  'git:stash': Contract<[projectId: string, message?: string], GitStatus>
+  'git:abortMerge': Contract<[projectId: string], GitStatus>
+  'git:abortRebase': Contract<[projectId: string], GitStatus>
+  'pr:create': Contract<[projectId: string, input: PrCreateInput], PullRequestReference>
+  'pr:list': Contract<
+    [projectId: string, owner: string, repo: string, state?: string],
+    PullRequestReference[]
+  >
+  'pr:merge': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, method: PrMergeMethod],
+    PullRequestReference
+  >
   'history:search': Contract<[query: string, projectId?: string, limit?: number], HistoryEntry[]>
   'project:search': Contract<[query: string, limit?: number], Project[]>
   'threads:search': Contract<

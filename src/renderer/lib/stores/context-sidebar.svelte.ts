@@ -65,6 +65,14 @@ export interface SourcesContextTab {
   threadId: string
 }
 
+export interface GitContextTab {
+  id: string
+  kind: 'git'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface NotificationContextTab {
   id: string
   kind: 'notifications'
@@ -115,6 +123,7 @@ export type ContextSidebarTab =
   | SubagentContextTab
   | DebuggerContextTab
   | SourcesContextTab
+  | GitContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
   | MemoryContextTab
@@ -381,6 +390,23 @@ class ContextSidebarState {
       id,
       kind: 'sources',
       title: 'Sources',
+      projectId,
+      threadId
+    })
+  }
+
+  openGit(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `git:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'git',
+      title: 'Git',
       projectId,
       threadId
     })
