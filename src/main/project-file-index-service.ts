@@ -9,16 +9,34 @@ const MAX_INDEX_ENTRIES = 500_000
 const MAX_GIT_INDEX_BYTES = 128 * 1024 * 1024
 const INDEX_MAX_AGE_MS = 5_000
 const MAX_CACHED_INDEXES = 8
-const FALLBACK_IGNORED_DIRECTORIES = new Set([
+const INDEX_EXCLUDED_DIRECTORY_NAMES = [
   '.git',
+  '.cache',
+  '.gradle',
+  '.next',
+  '.nuxt',
+  '.parcel-cache',
   '.svelte-kit',
   '.turbo',
+  '.venv',
+  '.vite',
+  '__pycache__',
+  'bower_components',
   'build',
   'coverage',
+  'DerivedData',
   'dist',
   'node_modules',
   'out',
-  'target'
+  'Pods',
+  'target',
+  'venv',
+  'vendor'
+] as const
+const INDEX_EXCLUDED_DIRECTORIES = new Set<string>(INDEX_EXCLUDED_DIRECTORY_NAMES)
+const GIT_EXCLUDED_DIRECTORY_PATHS = INDEX_EXCLUDED_DIRECTORY_NAMES.flatMap((directory) => [
+  `:(exclude,glob)${directory}/**`,
+  `:(exclude,glob)**/${directory}/**`
 ])
 
 interface IndexedProjectEntry {
@@ -142,14 +160,26 @@ export class ProjectFileIndexService {
   }
 
   /**
-   * Ask Git for tracked and untracked files while honoring nested .gitignore,
-   * info/exclude, and global excludes. NUL parsing preserves newlines.
+   * Ask Git for tracked and untracked files, including useful ignored files.
+   * Explicit pathspecs prune dependency, cache, and build directories without
+   * allowing a broad .gitignore rule to hide files that users may want to tag.
+   * NUL parsing preserves newlines.
    */
   private readGitProjectPaths(root: string): Promise<string[] | null> {
     return new Promise((resolvePaths, rejectPaths) => {
       const child = spawn(
         'git',
-        ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', '.'],
+        [
+          '-C',
+          root,
+          'ls-files',
+          '--cached',
+          '--others',
+          '-z',
+          '--',
+          '.',
+          ...GIT_EXCLUDED_DIRECTORY_PATHS
+        ],
         { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
       )
       const decoder = new StringDecoder('utf8')
@@ -274,7 +304,7 @@ export class ProjectFileIndexService {
       const children = await readdir(directory.absolutePath, { withFileTypes: true })
       for (const child of children) {
         if (child.isSymbolicLink()) continue
-        if (child.isDirectory() && FALLBACK_IGNORED_DIRECTORIES.has(child.name)) continue
+        if (child.isDirectory() && INDEX_EXCLUDED_DIRECTORIES.has(child.name)) continue
         if (!child.isDirectory() && !child.isFile()) continue
         const path = directory.relativePath ? `${directory.relativePath}/${child.name}` : child.name
         entries.push({
