@@ -132,6 +132,7 @@ const INVOKE_CHANNELS = [
   'memory:rejectProposal',
   'memory:createProposal',
   'notification:test',
+  'notification:getPermissionStatus',
   'scope:get',
   'scope:save',
   'plan:approve',
