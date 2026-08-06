@@ -5169,11 +5169,11 @@
       {#if userScrolledAway}
         <button
           type="button"
-          class="absolute right-6 bottom-4 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          class="absolute top-4 left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
           title="Scroll to latest message"
           aria-label="Scroll to latest message"
           onclick={scrollToLatest}
-          transition:fly={{ y: 8, duration: 140 }}
+          transition:fly={{ y: -8, duration: 140 }}
         >
           <ChevronDown size={18} />
         </button>
