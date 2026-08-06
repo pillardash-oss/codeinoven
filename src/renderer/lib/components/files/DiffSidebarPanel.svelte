@@ -24,12 +24,11 @@
 
   interface Props {
     projectId: string
-    projectName: string
     threadId: string
     checkpointId: string | null
   }
 
-  let { projectId, projectName, threadId, checkpointId }: Props = $props()
+  let { projectId, threadId, checkpointId }: Props = $props()
 
   let checkpoints = $state<TurnCheckpointSummary[]>([])
   let selectedCheckpointId = $state<string | null>(null)
@@ -202,24 +201,6 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
-  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
-    <FileDiff size={13} class="shrink-0 text-muted" />
-    <span class="min-w-0 flex-1 truncate text-[11px] font-semibold text-foreground">
-      {projectName} changes
-    </span>
-    <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={13} />
-    <button
-      type="button"
-      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      aria-label="Refresh change history"
-      title="Refresh changes"
-      disabled={loading}
-      onclick={() => void refresh()}
-    >
-      <RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
-    </button>
-  </div>
-
   {#if turns.length > 0}
     <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-border px-2">
       <button
@@ -246,40 +227,52 @@
         <ChevronRight size={13} />
       </button>
     </div>
-
-    <div class="flex shrink-0 items-center border-b border-border px-2 py-1.5">
-      <div
-        class="flex items-center rounded-md bg-elevated p-0.5"
-        role="group"
-        aria-label="Changes view"
-      >
-        <button
-          type="button"
-          class={[
-            'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-            mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
-          ]}
-          aria-pressed={mode === 'diffs'}
-          title="Show each file's diff stacked by file"
-          onclick={() => (mode = 'diffs')}
-        >
-          Diffs
-        </button>
-        <button
-          type="button"
-          class={[
-            'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-            mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
-          ]}
-          aria-pressed={mode === 'files'}
-          title="Show the list of changed files with restore options"
-          onclick={() => (mode = 'files')}
-        >
-          File List
-        </button>
-      </div>
-    </div>
   {/if}
+
+  <div class="flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
+    <div
+      class="flex items-center rounded-md bg-elevated p-0.5"
+      role="group"
+      aria-label="Changes view"
+    >
+      <button
+        type="button"
+        class={[
+          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
+          mode === 'diffs' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+        ]}
+        aria-pressed={mode === 'diffs'}
+        title="Show each file's diff stacked by file"
+        onclick={() => (mode = 'diffs')}
+      >
+        Diffs
+      </button>
+      <button
+        type="button"
+        class={[
+          'flex h-6 items-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
+          mode === 'files' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
+        ]}
+        aria-pressed={mode === 'files'}
+        title="Show the list of changed files with restore options"
+        onclick={() => (mode = 'files')}
+      >
+        File List
+      </button>
+    </div>
+    <span class="flex-1"></span>
+    <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={13} />
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      aria-label="Refresh change history"
+      title="Refresh changes"
+      disabled={loading}
+      onclick={() => void refresh()}
+    >
+      <RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
+    </button>
+  </div>
 
   <div class="min-h-0 flex-1 overflow-auto p-2">
     {#if loading && turns.length === 0}

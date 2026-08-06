@@ -2422,7 +2422,6 @@
               {:else if activeContextTab.kind === 'diff'}
                 <DiffSidebarPanel
                   projectId={activeContextTab.projectId}
-                  projectName={activeProject?.name ?? 'Project'}
                   threadId={activeContextTab.threadId}
                   checkpointId={activeContextTab.checkpointId}
                 />
