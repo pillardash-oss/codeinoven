@@ -45,6 +45,7 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 
 - **Operating system:** macOS, Windows, or Linux (see [Packaging](#packaging) for supported targets).
 - **A coding harness CLI** installed and on your `PATH` (at least one of the supported harnesses below).
+- **Git** installed and on your `PATH` — required for the in-app Git panel (status, diff, stage/commit, push, pull requests, and merge/rebase). Git-less machines get a clear empty state pointing to the official Git install for the OS.
 - **Node.js ≥ 22.13.0 and Bun ≥ 1.3.10** are only required to build from source — released binaries run standalone.
 
 ### Supported harnesses
@@ -211,14 +212,17 @@ The IPC contract (`src/lib/ipc-contract.ts`) is a hard boundary — the renderer
 
 | Trigger             | Behavior                                                                                       |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
-| Tag `v0.2.2` pushed | Builds macOS (universal), Windows, and Linux, then creates/publishes a GitHub Release `v0.2.2` |
+| Tag `v0.2.2` pushed | Builds macOS (Apple Silicon arm64), Windows, and Linux, then creates/publishes a GitHub Release `v0.2.2` |
 | Manual dispatch     | Builds all three platforms; creates a Release when `publish` is checked (default)              |
 
 Artifacts produced per platform:
 
-- **macOS:** `.dmg` + `.zip` (Apple Silicon, arm64)
+- **macOS:** `.dmg` + `.zip` (Apple Silicon, arm64 only)
 - **Windows:** NSIS `.exe`
 - **Linux:** `.AppImage` + `.deb`
+
+The Git panel shells out to the system `git` binary, so the app does not bundle
+a Git runtime — installers stay OS-native and macOS packaging remains arm64-only.
 
 Code signing and macOS notarization are used automatically when the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` repository secrets are configured; otherwise installers are built unsigned so the workflow stays runnable on a fresh fork.
 
