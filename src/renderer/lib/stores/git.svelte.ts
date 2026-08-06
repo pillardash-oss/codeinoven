@@ -6,7 +6,11 @@ import type {
   GitIdentity,
   GitRemoteInfo,
   GitStatus,
-  MergeSummary
+  MergeSummary,
+  PrCreateInput,
+  PrMergeMethod,
+  PrState,
+  PullRequestReference
 } from '$shared/types'
 
 /** One in-flight git operation, tracked per project for busy/disabled UI. */
@@ -321,6 +325,54 @@ class GitState {
       this.error = errorMessage(reason, 'Stash failed')
     } finally {
       this.markBusy('stash', false)
+    }
+  }
+
+  async createPullRequest(
+    projectId: string,
+    input: PrCreateInput
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-create', true)
+    this.error = null
+    try {
+      return await invoke('pr:create', projectId, input)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be created')
+      return null
+    } finally {
+      this.markBusy('pr-create', false)
+    }
+  }
+
+  async mergePullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    method: PrMergeMethod
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-merge', true)
+    this.error = null
+    try {
+      return await invoke('pr:merge', projectId, owner, repo, pullNumber, method)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be merged')
+      return null
+    } finally {
+      this.markBusy('pr-merge', false)
+    }
+  }
+
+  async listPullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState = 'open'
+  ): Promise<PullRequestReference[]> {
+    try {
+      return await invoke('pr:list', projectId, owner, repo, state)
+    } catch {
+      return []
     }
   }
 }
