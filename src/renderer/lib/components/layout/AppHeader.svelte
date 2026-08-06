@@ -50,7 +50,7 @@
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
-  import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
+  import ProjectInfoDropdown from '$lib/components/shared/ProjectInfoDropdown.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
@@ -182,6 +182,14 @@
 
     scopeState.clearSidebarContext()
     await scopeState.activateProject(projectId)
+  }
+
+  /** Keep the header and project registry in sync after a pin toggle. */
+  function handleProjectPinToggled(updated: Project): void {
+    workspaceState.activeProject = updated
+    scopeState.projectRecords = scopeState.projectRecords.map((record) =>
+      record.id === updated.id ? updated : record
+    )
   }
 
   /** Find a thread by ID across all projects and open it, restoring the
@@ -705,22 +713,23 @@
           thread.status === 'planning' ||
           thread.status === 'executing'}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
-          {#if !chatMode && workspaceState.activeProjectIconUrl}
+          {#if !chatMode && workspaceState.activeProjectIconUrl && workspaceState.activeProject}
             <div class="pointer-events-auto shrink-0">
-              <ProjectSwitch
-                activeProjectId={workspaceState.activeProject?.id ?? null}
+              <ProjectInfoDropdown
+                project={workspaceState.activeProject}
+                iconUrl={workspaceState.activeProjectIconUrl}
                 class="group/icon relative h-5 w-5"
-                onSwitch={(projectId) => void switchProject(projectId)}
+                onPinToggled={handleProjectPinToggled}
+                onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
+                onError={(message) => toast.error(message)}
               >
                 <img
                   src={workspaceState.activeProjectIconUrl}
                   alt=""
                   class="h-4 w-4 object-contain"
-                  onerror={workspaceState.activeProject
-                    ? projectIconOnError(workspaceState.activeProject)
-                    : undefined}
+                  onerror={projectIconOnError(workspaceState.activeProject)}
                 />
-              </ProjectSwitch>
+              </ProjectInfoDropdown>
             </div>
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
