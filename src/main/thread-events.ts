@@ -1,11 +1,17 @@
 import { BrowserWindow } from 'electron'
 import type { Thread } from '../lib/types'
 import type { NotificationService } from './notification-service'
+import type { PowerWakeService } from './power-wake-service'
 
 let _notificationService: NotificationService | null = null
+let _powerWakeService: PowerWakeService | null = null
 
 export function setNotificationService(service: NotificationService | null): void {
   _notificationService = service
+}
+
+export function setPowerWakeService(service: PowerWakeService | null): void {
+  _powerWakeService = service
 }
 
 export function markNotificationAborting(projectId: string, threadId: string): void {
@@ -33,6 +39,7 @@ export function broadcastThreadUpdate(thread: Thread): void {
   if (thread.read) {
     dismissThreadNotifications(thread.projectId, thread.id)
   }
+  _powerWakeService?.onThreadUpdate(thread)
   void _notificationService?.notify(thread)
 }
 

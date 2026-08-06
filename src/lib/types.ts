@@ -2231,6 +2231,8 @@ export interface AppConfig {
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
   autoInstallUpdates: boolean
+  /** Prevent the display and system from sleeping while any agent is working. */
+  keepAwakeWhileWorking: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2254,5 +2256,6 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
+    | 'keepAwakeWhileWorking'
   >
 >
