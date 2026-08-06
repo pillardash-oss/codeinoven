@@ -1619,7 +1619,16 @@
    *  is re-established by connectSession's live status instead. */
   function restoreWorkingState(status: Thread['status']): void {
     if (status === 'planning' || status === 'executing') {
-      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
+      // A persisted in-flight status is only trustworthy when the run is still
+      // tracked live by the agentRuns store (i.e. we switched back to a thread
+      // that is genuinely working this session). On a fresh app restart the
+      // store is empty and the harness session is gone, so a stale status must
+      // never re-mark the thread busy — doing so left the thread (and its
+      // file-changes card) permanently in a "working" state until some later
+      // event forced a re-render.
+      if (agentRuns.isBusy(thread.projectId, thread.id)) {
+        agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
+      }
       return
     }
     setIdleFromRestore()
