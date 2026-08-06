@@ -1,6 +1,7 @@
 <script lang="ts">
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import { diffLayoutState } from '$lib/stores/diff-layout.svelte'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import type { ToolFileDiff } from './tool-diff'
 
   interface Props {
@@ -29,6 +30,7 @@
         <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{diff.path}</span>
         <span class="font-mono text-[10px] tabular-nums text-success">+{additions}</span>
         <span class="font-mono text-[10px] tabular-nums text-danger">−{deletions}</span>
+        <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
       </div>
       <div class="max-h-72 overflow-auto py-1 font-mono text-[11px] leading-5">
         {#each diff.lines as line, lineIndex (`${line.kind}:${line.beforeLine ?? 0}:${line.afterLine ?? 0}:${lineIndex}`)}
