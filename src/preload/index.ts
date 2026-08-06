@@ -251,6 +251,7 @@ const INVOKE_CHANNELS = [
   'updater:download',
   'updater:install',
   'remote:getStatus',
+  'remote:ensureGateway',
   'remote:toggle',
   'app:confirmClose'
 ] as const satisfies readonly InvokeChannel[]

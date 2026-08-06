@@ -362,4 +362,30 @@ describe('RemoteGateway', () => {
       await gateway.stop()
     }
   })
+
+  it('exposes a QR pairing URL that embeds the peer secret', async () => {
+    const { gateway } = await makeGateway()
+    try {
+      const info = gateway.info()
+      expect(info.pairingUrl).toMatch(/^https:\/\/.+:\d+\/remote\.html\?pair=/)
+      expect(info.pairingUrl).toContain(encodeURIComponent(SECRET))
+      expect(info.url).not.toContain('pair=')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('omits the QR pairing URL while the gateway is not listening', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-nolisten-'))
+    const gateway = new RemoteGateway({
+      port: 0,
+      localPort: 0,
+      peerSecret: SECRET,
+      certificateDir: join(dir, 'cert'),
+      staticRoot: join(dir, 'renderer'),
+      handlers: { onSessionChange: () => undefined }
+    })
+    expect(gateway.info().pairingUrl).toBeNull()
+    expect(gateway.info().url).toBeNull()
+  })
 })
