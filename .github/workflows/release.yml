@@ -32,18 +32,22 @@ jobs:
             os: macos-14
             target: mac
             arch: --arm64
+            artifact: mac-arm64
           - name: macOS (Intel)
             os: macos-14
             target: mac
             arch: --x64
+            artifact: mac-x64
           - name: Windows (x64)
             os: windows-latest
             target: win
             arch: --x64
+            artifact: win-x64
           - name: Linux (x64)
             os: ubuntu-latest
             target: linux
             arch: --x64
+            artifact: linux-x64
 
     steps:
       - name: Check out repository
@@ -82,7 +86,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: codeinoven-${{ matrix.target }}
+          name: codeinoven-${{ matrix.artifact }}
           path: |
             dist/*.dmg
             dist/*.zip
