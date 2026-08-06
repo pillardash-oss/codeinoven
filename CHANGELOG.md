@@ -3,6 +3,13 @@
 All notable changes to CodeInOven are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-08-06
+
+### Changed
+
+- macOS builds target **Apple Silicon (arm64) only**; Intel (x64) support is
+  dropped. Windows (x64) and Linux (x64) remain unchanged.
+
 ## [0.5.0] - 2026-08-06
 
 ### Added
