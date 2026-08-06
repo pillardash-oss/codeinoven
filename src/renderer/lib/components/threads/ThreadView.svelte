@@ -2617,10 +2617,6 @@
       const dismissed =
         workflowThread?.dismissedSpecId === active.id &&
         workflowThread.dismissedSpecVersion === active.version
-      if (!isAssignmentAuditorThread && active.status !== 'approved' && !dismissed) {
-        await invoke('thread:setStatus', projectId, workflowThreadId, 'awaiting_approval')
-      }
-      if (!alive) return
       specReadyToolVisible =
         !isAssignmentAuditorThread && active.status !== 'approved' && !dismissed
     } else {
