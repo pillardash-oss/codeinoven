@@ -26,6 +26,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../base-url-provider-service'
 import type { SecretVault } from '../secret-vault'
 import type { StorageEngine } from '../storage-engine'
@@ -90,7 +91,7 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
         providerId: 'cline',
         name: 'DeepSeek Chat',
         reasoning: false,
-        attachment: false,
+        attachment: true,
         toolcall: true
       },
       {
@@ -150,7 +151,7 @@ function mapRemoteClineModel(value: unknown, providerId: string): ProviderModel 
     name,
     reasoning,
     ...(reasoning ? { thinkingPresets: CLINE_THINKING_PRESETS } : {}),
-    attachment: /gemini|gpt-4o|kimi|qwen|mimo/iu.test(`${id} ${name}`),
+    attachment: true,
     toolcall: true
   }
 }
@@ -679,7 +680,7 @@ export class ClineDriver extends PersistentCliDriver {
     nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
@@ -748,7 +749,7 @@ export class ClineDriver extends PersistentCliDriver {
             name: model.name || model.id,
             reasoning: model.reasoning,
             thinkingPresets: model.reasoning ? CLINE_THINKING_PRESETS : undefined,
-            attachment: false,
+            attachment: true,
             toolcall: true,
             ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
           }))
@@ -848,10 +849,6 @@ export class ClineDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length) {
-      throw new Error('Cline CLI driver does not support prompt attachments')
-    }
-
     const args: string[] = ['--json']
     const previousTurnCount = Math.max(
       this.turnCounts.get(session.id) ?? 0,
@@ -900,7 +897,9 @@ export class ClineDriver extends PersistentCliDriver {
 
     // Cline 3 treats a single-word positional prompt as an unquoted command.
     // A trailing newline preserves the prompt while selecting headless prompt mode.
-    const prompt = /\s/u.test(options.text) ? options.text : `${options.text}\n`
+    const attached = await attachmentReferences(options.attachments)
+    const promptBody = [attached, options.text].filter(Boolean).join('\n\n')
+    const prompt = /\s/u.test(promptBody) ? promptBody : `${promptBody}\n`
     args.push(prompt)
 
     const env = buildHarnessEnvironment()

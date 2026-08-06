@@ -12,6 +12,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReferences } from './attachment-reference'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -195,7 +196,7 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
       thinkingPresets: EFFORT_ORDER.filter((effort) => modelVariants.has(effort)).map(
         (effort) => EFFORT_PRESETS[effort as 'low' | 'medium' | 'high']
       ),
-      attachment: false,
+      attachment: true,
       toolcall: true
     })
   }
@@ -205,7 +206,7 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
       providerId: ANTIGRAVITY_PROVIDER_ID,
       name: prettyModelName(modelId),
       reasoning: modelId.endsWith('-thinking'),
-      attachment: false,
+      attachment: true,
       toolcall: true
     })
   }
@@ -515,7 +516,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
@@ -589,11 +590,8 @@ export class AntigravityDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length) {
-      throw new Error('Antigravity CLI driver does not support prompt attachments')
-    }
-
-    const prompt = [options.systemPrompt, options.text].filter(Boolean).join('\n\n')
+    const attached = await attachmentReferences(options.attachments)
+    const prompt = [options.systemPrompt, attached, options.text].filter(Boolean).join('\n\n')
     // agy's custom flag parser treats `--output-format` (and its value) as part
     // of the prompt unless the prompt directly follows `-p`. The prompt must
     // come immediately after `-p`, with every flag after it, or print mode
