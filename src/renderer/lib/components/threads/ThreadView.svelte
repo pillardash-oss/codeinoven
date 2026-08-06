@@ -5022,8 +5022,8 @@
 
                   {#if isTurnEnd}
                     <!-- Final text output + footer — hide only on the active in-progress turn -->
-                    {#if !busy || !isLatest}
-                      {#if isAssignmentAuditorThread}
+                    {#if isAssignmentAuditorThread}
+                      {#if !busy || !isLatest}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
                             state="report_ready"
@@ -5040,8 +5040,10 @@
                             onViewReport={() => openCoordinatorAuditReport(turnAuditReport)}
                           />
                         {/if}
-                      {:else}
-                        {@const turnFinalText = getTurnFinalText(msgIndex)}
+                      {/if}
+                    {:else}
+                      {@const turnFinalText = getTurnFinalText(msgIndex)}
+                      {#if !busy || !isLatest}
                         {#if turnFinalText}
                           <div
                             id={`msg-${msg.id}`}
@@ -5056,19 +5058,20 @@
                             />
                           </div>
                         {/if}
+                      {/if}
 
-                        {#if turnCheckpoint && turnCheckpoint.changes.length > 0}
-                          <div class="mt-3">
-                            <RunChangesCard
-                              checkpoint={turnCheckpoint}
-                              onOpenFile={(path) =>
-                                void openCheckpointFile(turnCheckpoint.id, path)}
-                              onReview={() => reviewCheckpoint(turnCheckpoint.id)}
-                              onUndo={() => undoCheckpoint(turnCheckpoint)}
-                            />
-                          </div>
-                        {/if}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0}
+                        <div class="mt-3">
+                          <RunChangesCard
+                            checkpoint={turnCheckpoint}
+                            onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
+                            onReview={() => reviewCheckpoint(turnCheckpoint.id)}
+                            onUndo={() => undoCheckpoint(turnCheckpoint)}
+                          />
+                        </div>
+                      {/if}
 
+                      {#if !busy || !isLatest}
                         <!-- Footer shown once per turn on the last assistant message -->
                         <div class="mt-1 flex flex-col">
                           <div class="flex items-center gap-1.5">
