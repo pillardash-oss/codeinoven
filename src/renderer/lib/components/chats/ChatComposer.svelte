@@ -287,6 +287,8 @@
   let slashOpen = $state(false)
   let slashQuery = $state('')
   let slashIndex = $state(0)
+  let lastCaretText: string | null = null
+  let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
 
   // Dropdown open state
@@ -673,6 +675,11 @@
   }
 
   function handleCaretTextChange(textBeforeCaret: string, supportsCommands: boolean): void {
+    if (textBeforeCaret === lastCaretText && supportsCommands === lastCaretSupportsCommands) {
+      return
+    }
+    lastCaretText = textBeforeCaret
+    lastCaretSupportsCommands = supportsCommands
     scheduleFileMentionSearch(supportsCommands ? textBeforeCaret : '')
     const slashMatch = supportsCommands ? /(^|\s)\/([^\s/]*)$/u.exec(textBeforeCaret) : null
     slashOpen = Boolean(slashMatch)
