@@ -1,6 +1,10 @@
 import { mount } from 'svelte'
 import { installRemoteApiShim } from './lib/remote/remote-api-shim'
 import { remoteLog } from './lib/remote/logger'
+// The global design-system sheet (Tailwind layers + theme tokens). The desktop
+// entry imports this too; without it the phone client renders as unstyled HTML,
+// because a component's scoped CSS carries none of the utility classes.
+import './app.css'
 
 // Installable phone client: register the service worker (isolated to this
 // origin), then mount the remote session UI.
