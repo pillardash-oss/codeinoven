@@ -42,9 +42,9 @@
     getInlineFolderTypeIconDataUri
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { mimeFromPath, isImageMime, pathToFileUrl, fileUrlToPath } from '$lib/mime'
+  import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
-  import ImagePreview from './ImagePreview.svelte'
+  import AttachmentPreview from './AttachmentPreview.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
@@ -275,8 +275,10 @@
   })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
-  /** Object URLs for image previews, keyed by attachment file:// URL. */
+  /** Object URLs for image/pdf previews, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
+  /** Decoded text content for markdown/plain-text previews, keyed by url. */
+  let previewTexts = $state<Record<string, string>>({})
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
@@ -600,6 +602,7 @@
     projectReferences = []
     taskReferences = []
     previewUrls = {}
+    previewTexts = {}
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
@@ -846,18 +849,31 @@
     else threadSettingsStore.commit(updated)
   }
 
+  /** Loads the preview payload for one attachment: blob URLs for images/pdfs,
+   *  decoded text for markdown/plain-text. Missing/undecodable files silently
+   *  yield no preview so the chip falls back to the file:// URL or the modal
+   *  shows its unavailable state. */
+  async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
+    const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
+    if (!kind) return
+    try {
+      const bytes = await window.api.readFile(fileUrlToPath(file.url))
+      if (kind === 'markdown' || kind === 'text') {
+        if (previewTexts[file.url] !== undefined) return
+        previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
+        return
+      }
+      if (previewUrls[file.url]) return
+      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: file.mime }))
+      previewUrls = { ...previewUrls, [file.url]: objectUrl }
+    } catch {
+      // Preview unavailable; the chip/modal will fall back to the file:// URL.
+    }
+  }
+
   async function loadAttachmentPreviews(files: PromptAttachment[]): Promise<void> {
     for (const file of files) {
-      if (!isImageMime(file.mime)) continue
-      try {
-        const path = fileUrlToPath(file.url)
-        const objectUrl = URL.createObjectURL(
-          new Blob([await window.api.readFile(path)], { type: file.mime })
-        )
-        previewUrls = { ...previewUrls, [file.url]: objectUrl }
-      } catch {
-        // Preview unavailable; the chip/modal will fall back to the file:// URL.
-      }
+      await loadAttachmentPreview(file)
     }
   }
 
@@ -872,17 +888,10 @@
       (filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'file').split('?')[0]
     const mime = file?.type || mimeFromPath(filePath)
     const url = pathToFileUrl(filePath)
-    attachments = [...attachments, { mime, url, filename }]
+    const attachment = { mime, url, filename }
+    attachments = [...attachments, attachment]
     onAttachmentsChange?.(attachments)
-    if (!isImageMime(mime)) return
-    try {
-      const objectUrl = file
-        ? URL.createObjectURL(file)
-        : URL.createObjectURL(new Blob([await window.api.readFile(filePath)], { type: mime }))
-      previewUrls = { ...previewUrls, [url]: objectUrl }
-    } catch {
-      // Preview unavailable; the chip/modal will fall back to the file:// URL.
-    }
+    void loadAttachmentPreview(attachment)
   }
 
   function removeAttachment(index: number): void {
@@ -895,6 +904,9 @@
         delete rest[removed.url]
         previewUrls = rest
       }
+      const restTexts = { ...previewTexts }
+      delete restTexts[removed.url]
+      previewTexts = restTexts
     }
     attachments = attachments.filter((_, i) => i !== index)
     onAttachmentsChange?.(attachments)
@@ -1158,9 +1170,10 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if previewFile}
-  <ImagePreview
-    src={previewUrls[previewFile.url] ?? previewFile.url}
-    filename={previewFile.filename ?? 'file'}
+  <AttachmentPreview
+    attachment={previewFile}
+    src={previewUrls[previewFile.url]}
+    text={previewTexts[previewFile.url]}
     onClose={() => (previewFile = null)}
   />
 {/if}
@@ -1369,8 +1382,8 @@
       {#if attachments.length > 0}
         <div class="flex flex-wrap gap-1.5">
           {#each attachments as file, i (file.url)}
-            {@const isImage = isImageMime(file.mime)}
-            {#if isImage}
+            {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
+            {#if previewKind === 'image'}
               {@const previewSrc = previewUrls[file.url] ?? file.url}
               <button
                 type="button"
@@ -1383,6 +1396,34 @@
                   alt={file.filename ?? 'file'}
                   class="h-5 w-5 shrink-0 rounded object-cover"
                 />
+                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
+                <span
+                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
+                  role="button"
+                  tabindex="0"
+                  aria-label="Remove attachment"
+                  onclick={(e: MouseEvent) => {
+                    e.stopPropagation()
+                    removeAttachment(i)
+                  }}
+                  onkeydown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation()
+                      removeAttachment(i)
+                    }
+                  }}
+                >
+                  <X size={10} />
+                </span>
+              </button>
+            {:else if previewKind}
+              <button
+                type="button"
+                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-overlay"
+                title="Click to preview"
+                onclick={() => (previewFile = file)}
+              >
+                <FileText size={11} class="shrink-0" />
                 <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
                 <span
                   class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
