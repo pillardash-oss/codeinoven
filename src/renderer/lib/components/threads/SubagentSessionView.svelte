@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { AlertCircle, CheckCircle2, Clock, Loader2 } from '@lucide/svelte'
+  import { AlertCircle, CheckCircle2, Clock, Loader2, X } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
 
   interface Props {
@@ -19,7 +20,10 @@
   let loading = $state(false)
   let loadError = $state('')
   let liveStatus: AgentSessionStatus | null = $state(null)
-  let liveError = $state('')
+  let actionError = $state('')
+  let retrying = $state(false)
+  let stopping = $state(false)
+  let recoveryNotice: { message: string; recoveredAt: number } | null = $state(null)
   let scrollElement: HTMLDivElement | null = $state(null)
   let userScrolledAway = $state(false)
 
@@ -35,7 +39,24 @@
   }
 
   const sessionId = $derived(tab.activity.childSessionId)
+  const fallbackIssue = $derived.by(() => {
+    const message = tab.activity.error?.trim()
+    if (!message) return null
+    return {
+      kind: 'unknown' as const,
+      message,
+      rawError: message,
+      harnessId: 'agent',
+      retryable: true
+    }
+  })
+  const visibleProviderStatus = $derived.by(() => {
+    if (liveStatus?.state === 'waiting' || liveStatus?.state === 'error') return liveStatus
+    if (liveStatus) return null
+    return fallbackIssue ? ({ state: 'error', issue: fallbackIssue } as const) : null
+  })
   const effectiveStatus = $derived.by(() => {
+    if (visibleProviderStatus?.state === 'error') return 'error'
     if (liveStatus?.state === 'working') return 'running'
     if (liveStatus?.state === 'waiting') return 'waiting'
     if (liveStatus?.state === 'error') return 'error'
@@ -58,6 +79,7 @@
   let providerName = $derived(
     providers.find((p) => p.id === tab.activity.providerId)?.name ?? undefined
   )
+  let providerLabel = $derived(providerName ?? tab.activity.providerId ?? 'Provider')
   const visibleMessages = $derived.by(() => {
     const prompt = tab.activity.prompt?.trim()
     if (!prompt) return messages
@@ -74,7 +96,7 @@
   })
 
   onMount(() => {
-    void loadMessages()
+    void initializeSession()
     const unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as AgentEvent
       if (!event || !sessionId || !('sessionId' in event) || event.sessionId !== sessionId) {
@@ -84,6 +106,28 @@
     })
     return unsubscribe
   })
+
+  async function initializeSession(): Promise<void> {
+    await loadMessages()
+    await loadStatus()
+  }
+
+  async function loadStatus(): Promise<void> {
+    if (!sessionId) return
+    try {
+      const status = await invoke(
+        'agent:getChildSessionStatus',
+        tab.projectId,
+        tab.threadId,
+        sessionId
+      )
+      if (status && (status.state !== 'idle' || liveStatus?.state !== 'error')) {
+        liveStatus = status
+      }
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'Live sub-agent status is unavailable.'
+    }
+  }
 
   $effect(() => {
     void messages.length
@@ -99,7 +143,7 @@
     loadError = ''
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
-      messages = await Promise.race([
+      const loadedMessages = await Promise.race([
         invoke('agent:loadSessionMessages', tab.projectId, tab.threadId, sessionId),
         new Promise<never>((_, reject) => {
           timeout = setTimeout(
@@ -108,6 +152,22 @@
           )
         })
       ])
+      messages = loadedMessages
+      const lastAssistant = [...loadedMessages]
+        .reverse()
+        .find((message) => message.role === 'assistant')
+      if (!liveStatus && lastAssistant?.error) {
+        liveStatus = {
+          state: 'error',
+          issue: {
+            kind: 'unknown',
+            message: lastAssistant.error,
+            rawError: lastAssistant.error,
+            harnessId: lastAssistant.harnessId ?? 'agent',
+            retryable: true
+          }
+        }
+      }
     } catch (error) {
       loadError =
         error instanceof Error ? error.message : 'The sub-agent session could not be loaded.'
@@ -127,23 +187,94 @@
         break
       case 'message.completed':
         markCompleted(event.messageId, event.error)
-        if (event.error) liveError = event.issue?.message ?? event.error
+        if (event.error) {
+          const issue = event.issue ?? {
+            kind: 'unknown' as const,
+            message: event.error,
+            rawError: event.error,
+            harnessId: 'agent',
+            retryable: true
+          }
+          liveStatus = { state: 'error', issue }
+          recoveryNotice = null
+        }
         void loadMessages()
         break
-      case 'session.status':
-        liveStatus = event.status
-        if (event.status.state === 'error') liveError = event.status.issue.message
+      case 'session.status': {
+        const previousStatus = liveStatus
+        if (event.status.state === 'working') {
+          if (previousStatus?.state === 'waiting' || previousStatus?.state === 'error') {
+            recoveryNotice = {
+              message: `Connection restored after: ${previousStatus.issue.message}`,
+              recoveredAt: Date.now()
+            }
+          }
+          actionError = ''
+        } else if (event.status.state === 'waiting' || event.status.state === 'error') {
+          recoveryNotice = null
+        }
+        if (event.status.state !== 'idle' || previousStatus?.state !== 'error') {
+          liveStatus = event.status
+        }
         break
+      }
       case 'session.idle':
-        liveStatus = { state: 'idle' }
+        if (liveStatus?.state !== 'error') liveStatus = { state: 'idle' }
         void loadMessages()
         break
       case 'session.error':
         liveStatus = event.issue ? { state: 'error', issue: event.issue } : liveStatus
-        liveError = event.issue?.message ?? event.error ?? 'The sub-agent session failed.'
+        if (!event.issue) {
+          const message = event.error ?? 'The sub-agent session failed.'
+          liveStatus = {
+            state: 'error',
+            issue: {
+              kind: 'unknown',
+              message,
+              rawError: message,
+              harnessId: 'agent',
+              retryable: true
+            }
+          }
+        }
+        recoveryNotice = null
         void loadMessages()
         break
     }
+  }
+
+  function retryChild(): void {
+    if (!sessionId || retrying) return
+    retrying = true
+    actionError = ''
+    void invoke('agent:retryChildSession', tab.projectId, tab.threadId, sessionId)
+      .then(() => {
+        liveStatus = { state: 'working' }
+        recoveryNotice = {
+          message: 'A manual retry started in the existing sub-agent session.',
+          recoveredAt: Date.now()
+        }
+      })
+      .catch((error: unknown) => {
+        actionError =
+          error instanceof Error ? error.message : 'The sub-agent retry could not start.'
+      })
+      .finally(() => {
+        retrying = false
+      })
+  }
+
+  function stopChild(): void {
+    if (!sessionId || stopping) return
+    stopping = true
+    actionError = ''
+    void invoke('agent:abortChildSession', tab.projectId, tab.threadId, sessionId)
+      .catch((error: unknown) => {
+        actionError = error instanceof Error ? error.message : 'The sub-agent could not be stopped.'
+      })
+      .finally(() => {
+        stopping = false
+      })
   }
 
   function upsertPart(part: AgentPart): void {
@@ -282,17 +413,45 @@
         </div>
       {/if}
 
-      {#if liveStatus?.state === 'waiting'}
-        <div class="rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5">
-          <p class="text-xs font-medium text-foreground">Sub-agent paused by provider</p>
-          <p class="mt-1 text-[11px] leading-relaxed text-muted">
-            {liveStatus.issue.message}
-          </p>
-          {#if liveStatus.issue.retryAt}
-            <p class="mt-1.5 text-[10px] text-warning">
-              Retry scheduled for {new Date(liveStatus.issue.retryAt).toLocaleString()}
+      {#if visibleProviderStatus}
+        <AgentProviderStatusCard
+          status={visibleProviderStatus}
+          providerName={providerLabel}
+          onStop={stopChild}
+          onRetry={retryChild}
+        />
+      {/if}
+
+      {#if recoveryNotice}
+        <div
+          class="flex items-start gap-2.5 rounded-xl border border-success/25 bg-success/5 px-3 py-2.5"
+          role="status"
+          aria-live="polite"
+        >
+          <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-semibold text-foreground">Sub-agent connection recovered</p>
+            <p class="mt-0.5 text-[11px] leading-relaxed text-muted">{recoveryNotice.message}</p>
+            <p class="mt-1 text-[10px] text-dimmed">
+              {formatTime(recoveryNotice.recoveredAt)}
             </p>
-          {/if}
+          </div>
+          <button
+            type="button"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Dismiss sub-agent recovery notice"
+            title="Dismiss sub-agent recovery notice"
+            onclick={() => (recoveryNotice = null)}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      {/if}
+
+      {#if actionError}
+        <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
+          <p class="text-xs font-medium text-danger">Sub-agent action failed</p>
+          <p class="mt-1 text-[11px] text-muted">{actionError}</p>
         </div>
       {/if}
 
@@ -383,22 +542,6 @@
           </div>
         {/if}
       {/each}
-
-      {#if tab.activity.error && !loadError}
-        <div
-          class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-[11px] text-danger"
-        >
-          {tab.activity.error}
-        </div>
-      {/if}
-
-      {#if liveError && liveError !== tab.activity.error}
-        <div
-          class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5 text-[11px] text-danger"
-        >
-          {liveError}
-        </div>
-      {/if}
 
       {#if busy}
         <div class="flex items-center gap-2 text-[10px] text-info">

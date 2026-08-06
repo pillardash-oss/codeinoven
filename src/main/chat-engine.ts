@@ -660,6 +660,8 @@ interface ChildSessionInfo {
   threadId: string
   projectPath: string
   driverId: string
+  /** Root thread session whose watchdog must include this child's activity. */
+  parentSessionId?: string
 }
 
 interface PendingPermissionInfo {
@@ -1013,6 +1015,21 @@ export class ChatEngine {
     )
     ipcMain.handle('agent:getSessionStatus', (_, projectId: string, threadId: string) =>
       this.getSessionStatus(projectId, threadId)
+    )
+    ipcMain.handle(
+      'agent:getChildSessionStatus',
+      (_, projectId: string, threadId: string, sessionId: string) =>
+        this.getChildSessionStatus(projectId, threadId, sessionId)
+    )
+    ipcMain.handle(
+      'agent:retryChildSession',
+      (_, projectId: string, threadId: string, sessionId: string) =>
+        this.retryChildSession(projectId, threadId, sessionId)
+    )
+    ipcMain.handle(
+      'agent:abortChildSession',
+      (_, projectId: string, threadId: string, sessionId: string) =>
+        this.abortChildSession(projectId, threadId, sessionId)
     )
     ipcMain.handle(
       'agent:truncateMessages',
@@ -2253,34 +2270,136 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     sessionId = validateEntityId(sessionId, 'Session ID', 512)
-    const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread) return []
+    const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
     const cached = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
-    const driverId = thread.settings?.harnessId ?? 'opencode'
     if (cached.length > 0) {
-      void this.refreshChildSessionFromProvider(projectId, threadId, sessionId, driverId).catch(
-        (error) => Logger.dev('Sub-agent transcript refresh unavailable:', error)
+      void this.captureChildSession(owner, sessionId).catch((error) =>
+        Logger.dev('Sub-agent transcript refresh unavailable:', error)
       )
       return cached
     }
-    return this.refreshChildSessionFromProvider(projectId, threadId, sessionId, driverId)
+    return this.captureChildSession(owner, sessionId)
   }
 
-  private async refreshChildSessionFromProvider(
+  /** Resolve and verify that a provider-native child belongs to the requested thread. */
+  private async resolveChildSessionOwner(
     projectId: string,
     threadId: string,
-    sessionId: string,
-    driverId: string
-  ): Promise<AgentMessage[]> {
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    sessionId: string
+  ): Promise<ChildSessionInfo> {
+    const tracked = this.childSessionOwners.get(sessionId)
+    if (tracked) {
+      if (tracked.projectId !== projectId || tracked.threadId !== threadId) {
+        throw new Error('Sub-agent session does not belong to this thread')
+      }
+      return tracked
+    }
+
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) throw new Error(`Thread not found: ${threadId}`)
+    const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+    const referencedByThread = records.some((message) =>
+      [...message.parts, ...(message.transportParts ?? [])].some(
+        (part) => part.type === 'subagent' && part.activity.childSessionId === sessionId
+      )
+    )
+    if (!referencedByThread) {
+      throw new Error('Sub-agent session does not belong to this thread')
+    }
+
+    const driverId = thread.settings?.harnessId ?? 'opencode'
+    const { projectPath } = await this.resolve(projectId, driverId, threadId)
     const owner: ChildSessionInfo = {
       projectId,
       threadId,
       projectPath,
-      driverId
+      driverId,
+      parentSessionId: thread.sessionId
     }
     this.childSessionOwners.set(sessionId, owner)
-    return this.captureChildSession(owner, sessionId, driver)
+    return owner
+  }
+
+  /** Return retained lifecycle state for one verified child session. */
+  async getChildSessionStatus(
+    projectId: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<AgentSessionStatus | null> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    sessionId = validateEntityId(sessionId, 'Session ID', 512)
+    await this.resolveChildSessionOwner(projectId, threadId, sessionId)
+    return this.sessionStatuses.get(sessionId) ?? null
+  }
+
+  /** Resume a failed child in its provider-native session and existing context. */
+  async retryChildSession(projectId: string, threadId: string, sessionId: string): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    sessionId = validateEntityId(sessionId, 'Session ID', 512)
+    const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) throw new Error('Thread settings are unavailable')
+    const driver = this.drivers.get(owner.driverId)
+    if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
+    const messages = await this.threadManager.loadSubagentMessages(projectId, threadId, sessionId)
+    const latestModelMessage = [...messages]
+      .reverse()
+      .find((message) => message.providerId && message.modelId)
+    const settings = validateThreadSettings({
+      ...thread.settings,
+      providerId: latestModelMessage?.providerId ?? thread.settings.providerId,
+      modelId: latestModelMessage?.modelId ?? thread.settings.modelId
+    })
+
+    this.userAbortedSessions.delete(sessionId)
+    this.sessionStatuses.set(sessionId, { state: 'working' })
+    this.handledIdleSessions.delete(sessionId)
+    this.broadcast({ type: 'session.status', sessionId, status: { state: 'working' } })
+    this.startSessionWatchdog(sessionId)
+    this.startOwningParentWatchdog(owner)
+    try {
+      await driver.sendPrompt(owner.projectPath, {
+        sessionId,
+        settings,
+        text: 'Retry the interrupted work. Continue from the existing context and finish the delegated task.',
+        attachments: [],
+        userMessageId: createMessageId()
+      })
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'The sub-agent retry failed to start.'
+      const issue: AgentProviderIssue = {
+        kind: classifyProviderIssue(message),
+        message,
+        rawError: message,
+        harnessId: owner.driverId,
+        retryable: true
+      }
+      this.sessionStatuses.set(sessionId, { state: 'error', issue })
+      this.clearSessionWatchdog(sessionId)
+      this.broadcast({ type: 'session.error', sessionId, error: message, issue })
+      throw error
+    }
+  }
+
+  /** Stop only the selected child without cancelling its parent thread. */
+  async abortChildSession(projectId: string, threadId: string, sessionId: string): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    sessionId = validateEntityId(sessionId, 'Session ID', 512)
+    const owner = await this.resolveChildSessionOwner(projectId, threadId, sessionId)
+    const driver = this.drivers.get(owner.driverId)
+    if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
+    this.userAbortedSessions.add(sessionId)
+    await driver.abort(owner.projectPath, sessionId)
+    this.clearSessionWatchdog(sessionId)
+    this.sessionStatuses.set(sessionId, { state: 'idle' })
+    this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
+    this.startOwningParentWatchdog(owner)
   }
 
   private captureChildSession(
@@ -8012,6 +8131,7 @@ export class ChatEngine {
     void this.recordDriverEvent(driverId, event)
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
+    this.updateOwningParentWatchdog(event)
 
     // A scheduled provider retry can legitimately be hours or days away.
     // Never let the generic inactivity watchdog turn that wait into a failure.
@@ -8253,7 +8373,9 @@ export class ChatEngine {
       event.part.type === 'subagent' &&
       event.part.activity.childSessionId
     ) {
-      const parent = this.sessionRegistry.get(event.sessionId)
+      const registeredParent = this.sessionRegistry.get(event.sessionId)
+      const inheritedOwner = this.childSessionOwners.get(event.sessionId)
+      const parent = registeredParent ?? inheritedOwner
       if (parent) {
         const childSessionId = event.part.activity.childSessionId
         const alreadyTracked = this.childSessionOwners.has(childSessionId)
@@ -8261,7 +8383,8 @@ export class ChatEngine {
           projectId: parent.projectId,
           threadId: parent.threadId,
           projectPath: parent.projectPath,
-          driverId
+          driverId,
+          parentSessionId: registeredParent ? event.sessionId : inheritedOwner?.parentSessionId
         }
         this.childSessionOwners.set(childSessionId, owner)
         const isTerminal =
@@ -8291,6 +8414,30 @@ export class ChatEngine {
     }
   }
 
+  /** Keep a root turn alive while any provider-native descendant is active. */
+  private updateOwningParentWatchdog(event: SessionAgentEvent): void {
+    const owner = this.childSessionOwners.get(event.sessionId)
+    if (!owner) return
+    const parentSessionId = owner.parentSessionId
+    if (!parentSessionId || !this.sessionRegistry.has(parentSessionId)) return
+
+    if (event.type === 'session.status' && event.status.state === 'waiting') {
+      // Provider-controlled backoff is legitimate and may exceed five minutes.
+      this.clearSessionWatchdog(parentSessionId)
+      return
+    }
+
+    // Active child events refresh the root. Terminal child events also grant
+    // a fresh window for OpenCode to hand the result back to the parent.
+    this.startSessionWatchdog(parentSessionId)
+  }
+
+  private startOwningParentWatchdog(owner: ChildSessionInfo): void {
+    if (owner.parentSessionId && this.sessionRegistry.has(owner.parentSessionId)) {
+      this.startSessionWatchdog(owner.parentSessionId)
+    }
+  }
+
   private handleSessionIdleSignal(sessionId: string): void {
     if (this.handledIdleSessions.has(sessionId)) return
     this.handledIdleSessions.add(sessionId)
@@ -8311,6 +8458,7 @@ export class ChatEngine {
     if (event.type === 'message.part.updated' || event.type === 'message.part.delta') return
 
     const session = this.sessionRegistry.get(event.sessionId)
+    const childOwner = this.childSessionOwners.get(event.sessionId)
     const identifiers: Record<string, string> = {}
 
     if (event.type === 'message.completed') {
@@ -8331,8 +8479,8 @@ export class ChatEngine {
           eventType: event.type,
           driverId,
           sessionId: event.sessionId,
-          projectId: session?.projectId,
-          threadId: session?.threadId,
+          projectId: session?.projectId ?? childOwner?.projectId,
+          threadId: session?.threadId ?? childOwner?.threadId,
           turnId: session?.activeTurnId,
           ...identifiers
         })}\n`
