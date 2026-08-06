@@ -68,7 +68,7 @@ Each harness has its own install channel (npm, Homebrew, or a native installer).
 
 Download the latest installer for your platform from the [releases](https://github.com/pillardash-oss/codeinoven/releases) page:
 
-- **macOS:** `.dmg` or `.zip` (Apple Silicon and Intel)
+- **macOS:** `.dmg` or `.zip` (Apple Silicon)
 - **Windows:** `.exe` (NSIS installer)
 - **Linux:** `.AppImage` or `.deb`
 
@@ -196,7 +196,7 @@ The IPC contract (`src/lib/ipc-contract.ts`) is a hard boundary — the renderer
 
 Artifacts produced per platform:
 
-- **macOS:** `.dmg` + `.zip` (universal: Apple Silicon + Intel)
+- **macOS:** `.dmg` + `.zip` (Apple Silicon, arm64)
 - **Windows:** NSIS `.exe`
 - **Linux:** `.AppImage` + `.deb`
 

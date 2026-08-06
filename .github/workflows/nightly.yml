@@ -29,11 +29,6 @@ jobs:
             target: mac
             arch: --arm64
             artifact: mac-arm64
-          - name: macOS (Intel)
-            os: macos-14
-            target: mac
-            arch: --x64
-            artifact: mac-x64
           - name: Windows (x64)
             os: windows-latest
             target: win
