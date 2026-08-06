@@ -1383,83 +1383,44 @@
         <div class="flex flex-wrap gap-1.5">
           {#each attachments as file, i (file.url)}
             {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
-            {#if previewKind === 'image'}
-              {@const previewSrc = previewUrls[file.url] ?? file.url}
-              <button
-                type="button"
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-overlay"
-                title="Click to preview"
-                onclick={() => (previewFile = file)}
-              >
-                <img
-                  src={previewSrc}
-                  alt={file.filename ?? 'file'}
-                  class="h-5 w-5 shrink-0 rounded object-cover"
-                />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
-                <span
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  role="button"
-                  tabindex="0"
-                  aria-label="Remove attachment"
-                  onclick={(e: MouseEvent) => {
-                    e.stopPropagation()
-                    removeAttachment(i)
-                  }}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      removeAttachment(i)
-                    }
-                  }}
-                >
-                  <X size={10} />
-                </span>
-              </button>
-            {:else if previewKind}
-              <button
-                type="button"
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-overlay"
-                title="Click to preview"
-                onclick={() => (previewFile = file)}
-              >
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
-                <span
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  role="button"
-                  tabindex="0"
-                  aria-label="Remove attachment"
-                  onclick={(e: MouseEvent) => {
-                    e.stopPropagation()
-                    removeAttachment(i)
-                  }}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      removeAttachment(i)
-                    }
-                  }}
-                >
-                  <X size={10} />
-                </span>
-              </button>
-            {:else}
-              <span
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-              >
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
+            <div
+              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted transition-colors"
+            >
+              {#if previewKind}
                 <button
                   type="button"
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  title="Remove attachment"
-                  onclick={() => removeAttachment(i)}
+                  class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left transition-colors hover:text-foreground"
+                  title="Click to preview"
+                  aria-label="Preview {file.filename ?? 'file'}"
+                  onclick={() => (previewFile = file)}
                 >
-                  <X size={10} />
+                  {#if previewKind === 'image'}
+                    <img
+                      src={previewUrls[file.url] ?? file.url}
+                      alt={file.filename ?? 'file'}
+                      class="h-5 w-5 shrink-0 rounded object-cover"
+                    />
+                  {:else}
+                    <FileText size={11} class="shrink-0" />
+                  {/if}
+                  <span class="max-w-24 truncate">{file.filename ?? 'file'}</span>
                 </button>
-              </span>
-            {/if}
+              {:else}
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2">
+                  <FileText size={11} class="shrink-0" />
+                  <span class="max-w-24 truncate">{file.filename ?? 'file'}</span>
+                </span>
+              {/if}
+              <button
+                type="button"
+                class="flex flex-1 shrink-0 items-center justify-center border-l border-border text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                title="Remove attachment"
+                aria-label="Remove attachment"
+                onclick={() => removeAttachment(i)}
+              >
+                <X size={11} />
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
