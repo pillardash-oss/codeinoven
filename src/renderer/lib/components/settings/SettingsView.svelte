@@ -27,6 +27,7 @@
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
+  import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
@@ -63,6 +64,8 @@
   let notificationTestBusy = $state(false)
   let notificationTestResult = $state('')
   let notificationTestFailed = $state(false)
+  let nightlyModalOpen = $state(false)
+  let channelBusy = $state(false)
 
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -173,6 +176,31 @@
           : 'The system notification test failed.'
     } finally {
       notificationTestBusy = false
+    }
+  }
+
+  const isNightlyChannel = $derived(config.updateChannel === 'nightly')
+
+  /** Toggle ON opens the confirmation modal; only a confirmed choice persists. */
+  function onNightlyToggleRequested(enabled: boolean): void {
+    if (enabled) {
+      nightlyModalOpen = true
+    } else {
+      void setChannel('stable')
+    }
+  }
+
+  async function setChannel(channel: 'stable' | 'nightly'): Promise<void> {
+    if (channelBusy) return
+    channelBusy = true
+    nightlyModalOpen = false
+    try {
+      await updateConfig({ updateChannel: channel })
+      await updaterState.checkForUpdates()
+    } catch {
+      // updateConfig surfaces errors in the general settings header.
+    } finally {
+      channelBusy = false
     }
   }
 </script>
@@ -547,6 +575,23 @@
           {/if}
 
           <div class="space-y-3">
+            <!-- Nightly builds enrollment -->
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Nightly builds</p>
+                <p class="text-xs text-dimmed">
+                  Receive over-the-air updates from the nightly channel
+                </p>
+              </div>
+              <Switch
+                checked={isNightlyChannel}
+                onchange={onNightlyToggleRequested}
+                aria-label="Toggle nightly builds"
+                disabled={!settingsReady || channelBusy}
+                title="Opt into nightly prerelease builds"
+              />
+            </div>
+
             <!-- Auto-download toggle -->
             <div class="flex items-center justify-between">
               <div>
@@ -620,3 +665,56 @@
     {/if}
   </div>
 </div>
+
+{#if nightlyModalOpen}
+  <Modal
+    title="Enable nightly builds?"
+    size="md"
+    open={nightlyModalOpen}
+    onClose={() => {
+      nightlyModalOpen = false
+    }}
+  >
+    <div class="space-y-3 text-sm text-muted">
+      <p>
+        Nightly builds are bleeding-edge prereleases generated from the
+        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground">nightly</code>
+        branch. They ship continuously so you can try the latest changes early.
+      </p>
+      <ul class="list-disc space-y-1 pl-5">
+        <li>You may hit <strong class="text-foreground">unfinished features and bugs</strong>.</li>
+        <li>Updates arrive <strong class="text-foreground">more frequently</strong> than stable releases.</li>
+        <li>Downgrading to stable later is supported by the updater.</li>
+        <li>Opt out any time from this same setting.</li>
+      </ul>
+      <p class="text-xs text-dimmed">
+        Enabling this switches your over-the-air update feed to the nightly channel and checks
+        for updates immediately.
+      </p>
+    </div>
+    {#snippet footer()}
+      <button
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        title="Keep receiving stable updates"
+        onclick={() => {
+          nightlyModalOpen = false
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        title="Enroll in nightly builds"
+        disabled={channelBusy}
+        onclick={() => void setChannel('nightly')}
+      >
+        {#if channelBusy}
+          <Loader2 size={13} class="animate-spin" />
+        {:else}
+          <Download size={13} />
+        {/if}
+        Enable nightly builds
+      </button>
+    {/snippet}
+  </Modal>
+{/if}

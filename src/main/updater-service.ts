@@ -127,6 +127,7 @@ export class UpdaterService {
 
   async checkForUpdates(): Promise<UpdaterStatus> {
     try {
+      await this.applyConfiguredChannel()
       autoUpdater.checkForUpdates().catch((error: unknown) => {
         Logger.error('Updater: check failed', error)
         if (this._status.state !== 'downloaded' && this._status.state !== 'downloading') {
@@ -146,6 +147,24 @@ export class UpdaterService {
       }
     }
     return this.status
+  }
+
+  /**
+   * Point the auto-updater at the configured release channel before checking.
+   * `nightly` resolves the GitHub provider's `latest-nightly.yml` feed; the
+   * default (stable) uses the published release feed.
+   */
+  private async applyConfiguredChannel(): Promise<void> {
+    try {
+      const config = await this.storage.getConfig()
+      const channel = config.updateChannel === 'nightly' ? 'nightly' : null
+      if (autoUpdater.channel !== channel) {
+        autoUpdater.channel = channel
+        Logger.dev('Updater: channel set to', channel ?? 'latest')
+      }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read update channel', error)
+    }
   }
 
   async downloadUpdate(): Promise<void> {

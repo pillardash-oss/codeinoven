@@ -57,7 +57,8 @@ const defaultConfig: AppConfig = {
   memory: { enabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   autoDownloadUpdates: true,
-  autoInstallUpdates: true
+  autoInstallUpdates: true,
+  updateChannel: 'stable'
 }
 
 beforeEach(async () => {
