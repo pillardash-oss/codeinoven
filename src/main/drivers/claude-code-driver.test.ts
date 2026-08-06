@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { mkdtemp, rm } from 'fs/promises'
+import { mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -168,24 +168,47 @@ describe('ClaudeCodeDriver', () => {
     ).toBe(false)
   })
 
-  it('rejects unsupported prompt attachments before starting a process', async () => {
+  it('streams supported prompt attachments as Claude content blocks', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const root = await mkdtemp(join(tmpdir(), 'codeinoven-claude-attachment-'))
+    roots.push(root)
+    const image = join(root, 'a.png')
+    await writeFile(image, Buffer.from('image-bytes'))
     const driver = new ClaudeCodeDriver(await storage())
     const sessionId = await driver.createSession('/project', 'Claude thread')
-    await expect(
-      driver.sendPrompt('/project', {
-        sessionId,
-        text: 'Inspect this',
-        attachments: [{ mime: 'image/png', url: 'file:///tmp/a.png' }],
-        settings: {
-          harnessId: 'claude-code',
-          providerId: 'anthropic',
-          modelId: '',
-          thinkingLevel: 'low',
-          permissionLevel: 'auto_review',
-          engineeringMode: false
-        }
-      })
-    ).rejects.toThrow('does not support prompt attachments')
-    expect(spawnMock).not.toHaveBeenCalled()
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Inspect this',
+      attachments: [{ mime: 'image/png', url: image, filename: 'a.png' }],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+    expect(child.stdin.write).toHaveBeenCalledWith(
+      `${JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Inspect this' },
+            {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: 'image/png',
+                data: Buffer.from('image-bytes').toString('base64')
+              }
+            }
+          ]
+        },
+        parent_tool_use_id: null
+      })}\n`
+    )
   })
 })
