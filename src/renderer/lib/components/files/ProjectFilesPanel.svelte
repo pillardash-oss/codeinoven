@@ -22,6 +22,9 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
+  import { diffDetails } from './file-diff'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
@@ -52,6 +55,11 @@
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
   let dirty = $derived(activeSession ? activeSession.draft !== activeSession.source.content : false)
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
+  let diffStats = $derived(
+    activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
+      ? diffDetails(checkpointDiff.before, checkpointDiff.after)
+      : null
+  )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
@@ -484,6 +492,21 @@
           {#if deletedAtCheckpoint}
             <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
           {/if}
+          {#if diffStats}
+            <span
+              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              aria-label="Added lines">+{diffStats.additions}</span
+            >
+            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+              >−{diffStats.deletions}</span
+            >
+            {#if checkpointDiff?.truncated}
+              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+                >Truncated</span
+              >
+            {/if}
+            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
+          {/if}
           <span class="flex-1"></span>
           <ProjectFileViewerMenu
             diffView={activeTab.view === 'diff'}
@@ -805,6 +828,21 @@
           </button>
           {#if deletedAtCheckpoint}
             <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
+          {/if}
+          {#if diffStats}
+            <span
+              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              aria-label="Added lines">+{diffStats.additions}</span
+            >
+            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+              >−{diffStats.deletions}</span
+            >
+            {#if checkpointDiff?.truncated}
+              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+                >Truncated</span
+              >
+            {/if}
+            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
           {/if}
           <span class="flex-1"></span>
           <ProjectFileViewerMenu
