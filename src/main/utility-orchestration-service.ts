@@ -164,7 +164,7 @@ export class UtilityOrchestrationService {
     return {
       id,
       resolvedUtilities: [...always, gateway],
-      instructions: `A minimal app gateway is available. Use utility_search only when current tools are insufficient, activate one result with utility_activate, then use utility_invoke. Activated utilities exist only for this turn.`,
+      instructions: `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use utility_search to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with utility_activate, then use utility_invoke. Activated utilities exist only for this turn.`,
       cleanup
     }
   }
@@ -698,7 +698,7 @@ const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
 const tools = [
   {
     name: 'utility_search',
-    description: 'Search installed utilities only when current tools are insufficient.',
+    description: 'Search installed utilities for a skill or MCP when one is not directly available; only conclude it does not exist after a search returns no relevant result.',
     inputSchema: {
       type: 'object',
       properties: {

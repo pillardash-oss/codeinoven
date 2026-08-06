@@ -279,7 +279,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: 'utility_search',
     description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when the current toolset is insufficient.',
+      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when a skill or MCP is not directly available. Only conclude something does not exist after a search returns no relevant result.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -296,7 +296,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
       additionalProperties: false
     },
     source: 'application',
-    sentWhen: 'Every agent turn; used only when current tools are insufficient'
+    sentWhen: 'Every agent turn; search first when a needed skill or MCP is not directly available'
   },
   {
     name: 'utility_activate',

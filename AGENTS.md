@@ -80,7 +80,6 @@ However, if you have a way to name files like I just described above, maybe in y
 - If you ever get confused on how a feature in svelte works, USE THE SVELTE MCP TO LEARN IT!
 - DON'T EVER RUN `git push` OR ATTEMPT TO PUSH! It doesn't matter how many commits behind the project is!
 - Always use the equivalent MCP/skills available to you when working on various technologies. Example: when working on svelte, always use the MCP to look up docs, test and fix your code!
-- When looking for a skill or MCP that is not directly available, ALWAYS use the utility search tool to search for it first. Only after searching (and confirming no relevant result) may you conclude that the skill/MCP does not exist.
 - Do not write new tests unless explicitly told to.
 - IF YOU EVER SEE ANY CHANGES YOU DID NOT MAKE NEVER REVERT SO YOU DON'T DESTROY ANOTHER'S CHANGES!! ALWAYS WORK SURGICALLY!!
 - NEVER RUN `git reset` blindly. If you need to revert anything, list the files individually. NEVER CAUSE A USER TO LOSE THEIR CHANGES!
