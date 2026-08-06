@@ -24,6 +24,8 @@ describe('computePwaAssetClosure', () => {
         '<link rel="stylesheet" href="./assets/app-style.css">',
       'utf8'
     )
+    await writeFile(join(root, 'assets', 'entry-abc.js'), 'export default 1;', 'utf8')
+    await writeFile(join(root, 'assets', 'app-style.css'), 'body{}', 'utf8')
     const closure = await computePwaAssetClosure(root)
     expect(closure.has('/assets/entry-abc.js')).toBe(true)
     expect(closure.has('/assets/app-style.css')).toBe(true)
@@ -72,5 +74,41 @@ describe('computePwaAssetClosure', () => {
 
     const closure = await computePwaAssetClosure(root)
     expect(closure.has('/assets/index-desktop.js')).toBe(false)
+  })
+
+  it('captures stylesheets listed in a Vite dependency array inside a chunk', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    // Vite emits modulepreload dep arrays like ["./x.js","./Comp-xyz.css"].
+    await writeFile(
+      join(root, 'assets', 'entry-abc.js'),
+      'const deps = ["./shared-x.js","./Comp-xyz.css"]; void deps;',
+      'utf8'
+    )
+    await writeFile(join(root, 'assets', 'shared-x.js'), 'export default 1;', 'utf8')
+    await writeFile(join(root, 'assets', 'Comp-xyz.css'), 'body{color:red}', 'utf8')
+
+    const closure = await computePwaAssetClosure(root)
+    expect(closure.has('/assets/Comp-xyz.css')).toBe(true)
+    expect(closure.has('/assets/shared-x.js')).toBe(true)
+  })
+
+  it('never treats a root-level file (e.g. service-worker.js) as an asset', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    await writeFile(join(root, 'assets', 'entry-abc.js'), 'void 0;', 'utf8')
+    await writeFile(join(root, 'service-worker.js'), 'self.onfetch=()=>{}', 'utf8')
+
+    const closure = await computePwaAssetClosure(root)
+    expect(closure.has('/assets/service-worker.js')).toBe(false)
+    expect(closure.has('/assets/entry-abc.js')).toBe(true)
   })
 })
