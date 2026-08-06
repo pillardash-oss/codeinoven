@@ -127,6 +127,7 @@ const INVOKE_CHANNELS = [
   'git:createBranch',
   'git:deleteBranch',
   'git:log',
+  'git:commitDiff',
   'git:getIdentity',
   'git:setIdentity',
   'git:remotes',

@@ -21,10 +21,12 @@
   let body = $state('')
   let base = $state('main')
   let draft = $state(false)
-  let prNumber = $state('')
   let method = $state<PrMergeMethod>('squash')
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
+  let openPRs = $state<PullRequestReference[]>([])
+  let loadingPRs = $state(false)
+  let selectedPR = $state<PullRequestReference | null>(null)
 
   const branch = $derived(gitState.status?.branch ?? null)
   const creating = $derived(gitState.isBusy('pr-create'))
@@ -64,13 +66,12 @@
   }
 
   async function mergePullRequest(): Promise<void> {
-    const number = Number.parseInt(prNumber, 10)
-    if (!originIdentity || !Number.isSafeInteger(number) || number <= 0) return
+    if (!originIdentity || !selectedPR) return
     const reference = await gitState.mergePullRequest(
       projectId,
       originIdentity.owner,
       originIdentity.repo,
-      number,
+      selectedPR.number,
       method
     )
     if (reference) result = reference
@@ -83,8 +84,28 @@
     onClose()
   }
 
+  async function loadOpenPRs(): Promise<void> {
+    if (!originIdentity || loadingPRs) return
+    loadingPRs = true
+    try {
+      openPRs = await gitState.listPullRequests(
+        projectId,
+        originIdentity.owner,
+        originIdentity.repo
+      )
+    } catch {
+      openPRs = []
+    } finally {
+      loadingPRs = false
+    }
+  }
+
   $effect(() => {
     void loadOrigin()
+  })
+
+  $effect(() => {
+    if (mode === 'merge' && originIdentity) void loadOpenPRs()
   })
 </script>
 
@@ -230,41 +251,58 @@
       </div>
     {:else}
       <div class="space-y-2">
-        <div>
-          <label
-            class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-            for="pr-number"
-          >
-            Pull request number
-          </label>
-          <input
-            id="pr-number"
-            class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-            placeholder="e.g. 42"
-            inputmode="numeric"
-            bind:value={prNumber}
-          />
-        </div>
-        <div>
-          <label
-            class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-            for="pr-method"
-          >
-            Merge method
-          </label>
-          <select
-            id="pr-method"
-            class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-            bind:value={method}
-          >
-            <option value="merge">Merge commit</option>
-            <option value="squash">Squash and merge</option>
-            <option value="rebase">Rebase and merge</option>
-          </select>
-        </div>
-        <p class="text-[10px] leading-relaxed text-muted">
-          Merging closes the pull request on GitHub. Your local branch is left untouched.
-        </p>
+        {#if loadingPRs}
+          <div class="flex items-center justify-center gap-2 py-6 text-xs text-dimmed">
+            <Loader2 size={14} class="animate-spin" />
+            Loading pull requests
+          </div>
+        {:else if openPRs.length === 0}
+          <div class="rounded-lg border border-border bg-surface px-3 py-4 text-center">
+            <GitPullRequest size={18} class="mx-auto mb-1.5 text-dimmed" />
+            <p class="text-[11px] font-medium text-muted">No open pull requests</p>
+            <p class="mt-0.5 text-[10px] text-dimmed">
+              Create a pull request first, then come back to merge it.
+            </p>
+          </div>
+        {:else}
+          <div>
+            <label
+              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              for="pr-select"
+            >
+              Select pull request
+            </label>
+            <select
+              id="pr-select"
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+              bind:value={selectedPR}
+            >
+              {#each openPRs as pr (pr.number)}
+                <option value={pr}>#{pr.number} — {pr.title}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <label
+              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              for="pr-method"
+            >
+              Merge method
+            </label>
+            <select
+              id="pr-method"
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+              bind:value={method}
+            >
+              <option value="merge">Merge commit</option>
+              <option value="squash">Squash and merge</option>
+              <option value="rebase">Rebase and merge</option>
+            </select>
+          </div>
+          <p class="text-[10px] leading-relaxed text-muted">
+            Merging closes the pull request on GitHub. Your local branch is left untouched.
+          </p>
+        {/if}
       </div>
     {/if}
 
@@ -305,7 +343,7 @@
           <button
             type="button"
             class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={!originIdentity || !prNumber.trim() || merging}
+            disabled={!originIdentity || !selectedPR || merging}
             onclick={() => void mergePullRequest()}
           >
             {#if merging}

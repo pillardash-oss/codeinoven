@@ -64,6 +64,9 @@
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let commitMessage = $state('')
+  let selectedCommit = $state<GitCommitInfo | null>(null)
+  let commitDiffChanges = $state<GitFileChange[]>([])
+  let loadingCommitDiff = $state(false)
 
   const status = $derived(gitState.status)
   const changes = $derived(status?.changes ?? [])
@@ -185,6 +188,19 @@
     loadingHistory = true
     commitHistory = await gitState.getLog(projectId, 30)
     loadingHistory = false
+  }
+
+  async function selectCommit(commit: GitCommitInfo): Promise<void> {
+    selectedCommit = commit
+    activeTab = 'changes'
+    loadingCommitDiff = true
+    commitDiffChanges = await gitState.getCommitDiff(projectId, commit.hash)
+    loadingCommitDiff = false
+  }
+
+  function clearSelectedCommit(): void {
+    selectedCommit = null
+    commitDiffChanges = []
   }
 
   function relativeTime(timestamp: number): string {
@@ -565,99 +581,189 @@
       {/if}
 
       {#if activeTab === 'changes'}
-        <div class="p-2">
-          <!-- Conflicts -->
-          {#if conflicted.length > 0}
-            <div class="mb-2 overflow-hidden rounded-lg border border-warning/30 bg-warning/10">
-              <div class="flex items-center gap-2 px-3 py-2">
-                <p class="text-[10px] font-semibold text-warning">
-                  {conflicted.length} conflicted {conflicted.length === 1 ? 'file' : 'files'}
-                </p>
-                <span class="flex-1"></span>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md border border-warning/40 px-2 py-1 text-[10px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40"
-                  disabled={integrateBusy || conflictState === 'none'}
-                  onclick={() => void abortConflict()}
-                >
-                  {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-                    Aborting…
-                  {:else}
-                    Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-                  {/if}
-                </button>
-              </div>
-              <div class="border-t border-warning/20">
-                {#each conflicted as change (change.path)}
-                  <div class="flex h-8 items-center gap-2 px-3">
-                    <FileTypeIcon path={change.path} size={13} class="shrink-0" />
-                    <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
-                      {change.path}
-                    </span>
-                    <button
-                      type="button"
-                      class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-                      onclick={() => void openInEditor(change.path)}
-                    >
-                      Resolve
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            </div>
-          {/if}
-
-          <!-- File list -->
-          {#if status && changes.length === 0 && status.clean}
-            <div class="flex flex-col items-center justify-center py-12 text-center">
-              <div
-                class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10"
+        {#if selectedCommit}
+          <!-- Commit diff view -->
+          <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                title="Back to working changes"
+                aria-label="Back to working changes"
+                onclick={clearSelectedCommit}
               >
-                <Check size={18} class="text-success" />
+                <GitBranch size={12} />
+              </button>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[11px] font-medium text-foreground">
+                  {selectedCommit.message.split('\n')[0]}
+                </p>
+                <div class="flex items-center gap-1.5 text-[9px] text-dimmed">
+                  <span class="font-mono">{selectedCommit.shortHash}</span>
+                  <span>·</span>
+                  <span>{selectedCommit.author}</span>
+                  <span>·</span>
+                  <span>{relativeTime(selectedCommit.date)}</span>
+                </div>
               </div>
-              <p class="text-xs font-medium text-muted">Working tree is clean</p>
-              <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
-                No staged, unstaged, or untracked changes.
-              </p>
             </div>
-          {:else if status}
-            {#if fileSections.length > 0}
-              <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
-                {#each fileSections as section, si (section.title)}
-                  {#if si > 0}<div class="border-t border-border"></div>{/if}
-                  <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                    <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
-                      {section.title}
-                    </span>
-                    <span class="text-[8px] tabular-nums text-dimmed">
-                      {section.files.length}
-                    </span>
-                  </div>
-                  {#each section.files as change (change.path)}
-                    <GitFileRow
-                      {change}
-                      diff={diffs[fileDiffKey(change)] ?? null}
-                      loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                      error={diffErrors[fileDiffKey(change)] ?? null}
-                      expanded={expanded[fileDiffKey(change)] ?? false}
-                      onToggleDiff={() => void toggleDiff(change)}
-                      onToggleStage={() => void toggleStage(change)}
-                    />
-                  {/each}
+          </div>
+          <div class="p-2">
+            {#if loadingCommitDiff}
+              <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
+                <Loader2 size={14} class="animate-spin" />
+                Loading diff
+              </div>
+            {:else if commitDiffChanges.length === 0}
+              <div class="flex flex-col items-center justify-center py-12 text-center">
+                <GitCommit size={22} class="mx-auto mb-2 text-dimmed" />
+                <p class="text-xs font-medium text-muted">No file changes</p>
+                <p class="mt-1 text-[10px] text-dimmed">This commit has no changes.</p>
+              </div>
+            {:else}
+              <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                  <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                    Changed files
+                  </span>
+                  <span class="text-[8px] tabular-nums text-dimmed">
+                    {commitDiffChanges.length}
+                  </span>
+                </div>
+                {#each commitDiffChanges as change (change.path)}
+                  <GitFileRow
+                    {change}
+                    diff={null}
+                    loadingDiff={false}
+                    error={null}
+                    expanded={false}
+                    onToggleDiff={() => {}}
+                    onToggleStage={() => {}}
+                  />
                 {/each}
               </div>
             {/if}
-
-            <!-- Commit input -->
-            {#if staged.length > 0}
-              <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
-                <div class="px-3 pt-2 pb-1">
-                  <textarea
-                    class="min-h-12 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                    placeholder="Commit message…"
-                    bind:value={commitMessage}></textarea>
+          </div>
+        {:else}
+          <div class="p-2">
+            <!-- Conflicts -->
+            {#if conflicted.length > 0}
+              <div class="mb-2 overflow-hidden rounded-lg border border-warning/30 bg-warning/10">
+                <div class="flex items-center gap-2 px-3 py-2">
+                  <p class="text-[10px] font-semibold text-warning">
+                    {conflicted.length} conflicted {conflicted.length === 1 ? 'file' : 'files'}
+                  </p>
+                  <span class="flex-1"></span>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-warning/40 px-2 py-1 text-[10px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40"
+                    disabled={integrateBusy || conflictState === 'none'}
+                    onclick={() => void abortConflict()}
+                  >
+                    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+                      Aborting…
+                    {:else}
+                      Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+                    {/if}
+                  </button>
                 </div>
-                <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
+                <div class="border-t border-warning/20">
+                  {#each conflicted as change (change.path)}
+                    <div class="flex h-8 items-center gap-2 px-3">
+                      <FileTypeIcon path={change.path} size={13} class="shrink-0" />
+                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                        {change.path}
+                      </span>
+                      <button
+                        type="button"
+                        class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                        onclick={() => void openInEditor(change.path)}
+                      >
+                        Resolve
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- File list -->
+            {#if status && changes.length === 0 && status.clean}
+              <div class="flex flex-col items-center justify-center py-12 text-center">
+                <div
+                  class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10"
+                >
+                  <Check size={18} class="text-success" />
+                </div>
+                <p class="text-xs font-medium text-muted">Working tree is clean</p>
+                <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
+                  No staged, unstaged, or untracked changes.
+                </p>
+              </div>
+            {:else if status}
+              {#if fileSections.length > 0}
+                <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+                  {#each fileSections as section, si (section.title)}
+                    {#if si > 0}<div class="border-t border-border"></div>{/if}
+                    <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                      <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                        {section.title}
+                      </span>
+                      <span class="text-[8px] tabular-nums text-dimmed">
+                        {section.files.length}
+                      </span>
+                    </div>
+                    {#each section.files as change (change.path)}
+                      <GitFileRow
+                        {change}
+                        diff={diffs[fileDiffKey(change)] ?? null}
+                        loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                        error={diffErrors[fileDiffKey(change)] ?? null}
+                        expanded={expanded[fileDiffKey(change)] ?? false}
+                        onToggleDiff={() => void toggleDiff(change)}
+                        onToggleStage={() => void toggleStage(change)}
+                      />
+                    {/each}
+                  {/each}
+                </div>
+              {/if}
+
+              <!-- Commit input -->
+              {#if staged.length > 0}
+                <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+                  <div class="px-3 pt-2 pb-1">
+                    <textarea
+                      class="min-h-12 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                      placeholder="Commit message…"
+                      bind:value={commitMessage}></textarea>
+                  </div>
+                  <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
+                    <button
+                      type="button"
+                      class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      disabled={gitState.isBusy('stage')}
+                      onclick={() => void stageAll()}
+                    >
+                      Stage all
+                    </button>
+                    <span class="flex-1"></span>
+                    <button
+                      type="button"
+                      class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+                      disabled={!commitMessage.trim() || gitState.isBusy('commit')}
+                      onclick={() => void commitInline()}
+                    >
+                      {#if gitState.isBusy('commit')}
+                        <Loader2 size={11} class="animate-spin" />
+                      {:else}
+                        <GitCommit size={11} />
+                      {/if}
+                      Commit ({staged.length})
+                    </button>
+                  </div>
+                </div>
+              {:else if changes.length > 0}
+                <div class="mb-2 flex items-center gap-2">
                   <button
                     type="button"
                     class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
@@ -666,325 +772,304 @@
                   >
                     Stage all
                   </button>
-                  <span class="flex-1"></span>
+                </div>
+              {/if}
+
+              <!-- Sync + Integrate + PR -->
+              <div class="space-y-2">
+                <!-- Pull Request -->
+                <div class="overflow-hidden rounded-lg border border-border bg-surface">
                   <button
                     type="button"
-                    class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-                    disabled={!commitMessage.trim() || gitState.isBusy('commit')}
-                    onclick={() => void commitInline()}
+                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
+                    onclick={() => (showPullRequestSheet = true)}
                   >
-                    {#if gitState.isBusy('commit')}
-                      <Loader2 size={11} class="animate-spin" />
-                    {:else}
-                      <GitCommit size={11} />
-                    {/if}
-                    Commit ({staged.length})
+                    <GitPullRequest size={12} class="shrink-0 text-muted" />
+                    <span class="text-[10px] font-medium text-foreground">Pull request</span>
+                    <span class="flex-1"></span>
+                    <ChevronRight size={12} class="text-dimmed" />
                   </button>
                 </div>
-              </div>
-            {:else if changes.length > 0}
-              <div class="mb-2 flex items-center gap-2">
-                <button
-                  type="button"
-                  class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                  disabled={gitState.isBusy('stage')}
-                  onclick={() => void stageAll()}
-                >
-                  Stage all
-                </button>
-              </div>
-            {/if}
 
-            <!-- Sync + Integrate + PR -->
-            <div class="space-y-2">
-              <!-- Pull Request -->
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                <button
-                  type="button"
-                  class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                  onclick={() => (showPullRequestSheet = true)}
-                >
-                  <GitPullRequest size={12} class="shrink-0 text-muted" />
-                  <span class="text-[10px] font-medium text-foreground">Pull request</span>
-                  <span class="flex-1"></span>
-                  <ChevronRight size={12} class="text-dimmed" />
-                </button>
-              </div>
-
-              <!-- Sync -->
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                <button
-                  type="button"
-                  class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                  aria-expanded={showSync}
-                  onclick={() => (showSync = !showSync)}
-                >
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
-                    >Sync</span
+                <!-- Sync -->
+                <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                  <button
+                    type="button"
+                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
+                    aria-expanded={showSync}
+                    onclick={() => (showSync = !showSync)}
                   >
-                  <span class="flex-1"></span>
-                  {#if status?.upstream}
-                    <span class="font-mono text-[9px] text-dimmed">{status.upstream}</span>
-                  {/if}
+                    <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
+                      >Sync</span
+                    >
+                    <span class="flex-1"></span>
+                    {#if status?.upstream}
+                      <span class="font-mono text-[9px] text-dimmed">{status.upstream}</span>
+                    {/if}
+                    {#if showSync}
+                      <ChevronDown size={12} class="text-dimmed" />
+                    {:else}
+                      <ChevronRight size={12} class="text-dimmed" />
+                    {/if}
+                  </button>
                   {#if showSync}
-                    <ChevronDown size={12} class="text-dimmed" />
-                  {:else}
-                    <ChevronRight size={12} class="text-dimmed" />
-                  {/if}
-                </button>
-                {#if showSync}
-                  <div class="border-t border-border px-3 py-2">
-                    {#if remotes.length === 0}
-                      <p class="text-[9px] text-dimmed">No remotes configured.</p>
-                    {:else}
-                      <div class="mb-2 space-y-1">
-                        {#each remotes as remote (remote.name)}
-                          <div class="flex items-center gap-2">
-                            <span class="w-14 shrink-0 truncate font-mono text-[10px] text-muted">
-                              {remote.name}
-                            </span>
-                            <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed">
-                              {remote.url}
-                            </span>
-                            <button
-                              type="button"
-                              class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-danger hover:bg-danger/10"
-                              onclick={() => void removeRemoteAction(remote.name)}
-                            >
-                              ×
-                            </button>
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-
-                    {#if showRemoteForm}
-                      <div class="mb-2 space-y-1.5">
-                        <input
-                          class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                          placeholder="Remote name"
-                          bind:value={remoteName}
-                        />
-                        <input
-                          class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                          placeholder="https://github.com/owner/repo.git"
-                          bind:value={remoteUrl}
-                        />
-                        <div class="flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                            onclick={() => (showRemoteForm = false)}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                            disabled={!remoteName.trim() || !remoteUrl.trim()}
-                            onclick={() => void addRemoteAction()}
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
-                    {:else}
-                      <button
-                        type="button"
-                        class="mb-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-                        onclick={() => (showRemoteForm = true)}
-                      >
-                        Add remote
-                      </button>
-                    {/if}
-
-                    {#if pushConfirm}
-                      <div
-                        class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2"
-                      >
-                        <p class="text-[10px] font-medium text-foreground">Push with upstream?</p>
-                        <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
-                          Set <span class="font-mono text-foreground"
-                            >{primaryRemote?.name}/{status?.branch}</span
-                          > as upstream.
-                        </p>
-                        <div class="mt-1.5 flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                            onclick={() => (pushConfirm = false)}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                            disabled={syncBusy}
-                            onclick={() => void confirmPushUpstream()}
-                          >
-                            Push
-                          </button>
-                        </div>
-                      </div>
-                    {/if}
-
-                    <div class="flex gap-1.5">
-                      <button
-                        type="button"
-                        class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={remotes.length === 0 || syncBusy}
-                        onclick={() => void gitState.fetch(projectId)}
-                      >
-                        {#if gitState.isBusy('fetch')}
-                          <Loader2 size={10} class="animate-spin" />
-                        {/if}
-                        Fetch
-                      </button>
-                      <button
-                        type="button"
-                        class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={remotes.length === 0 || syncBusy}
-                        onclick={() => void gitState.pull(projectId)}
-                      >
-                        {#if gitState.isBusy('pull')}
-                          <Loader2 size={10} class="animate-spin" />
-                        {/if}
-                        Pull
-                      </button>
-                      <button
-                        type="button"
-                        class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
-                        onclick={() => void pushAction()}
-                      >
-                        {#if gitState.isBusy('push')}
-                          <Loader2 size={10} class="animate-spin" />
-                        {/if}
-                        Push
-                      </button>
-                    </div>
-
-                    {#if credentialConfigured || showCredentialForm}
-                      <div class="mt-2 border-t border-border pt-2">
-                        <p class="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted">
-                          Credentials
-                        </p>
-                        {#if credentialConfigured}
-                          <div class="flex items-center gap-2">
-                            <span class="flex-1 text-[10px] text-success">Token stored</span>
-                            <button
-                              type="button"
-                              class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
-                              onclick={() => void gitState.removeCredential(projectId)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        {:else}
-                          <div class="space-y-1.5">
-                            <input
-                              class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-                              placeholder="GitHub token"
-                              type="password"
-                              disabled={!secureStorageAvailable}
-                              bind:value={tokenValue}
-                            />
-                            <div class="flex justify-end gap-1.5">
+                    <div class="border-t border-border px-3 py-2">
+                      {#if remotes.length === 0}
+                        <p class="text-[9px] text-dimmed">No remotes configured.</p>
+                      {:else}
+                        <div class="mb-2 space-y-1">
+                          {#each remotes as remote (remote.name)}
+                            <div class="flex items-center gap-2">
+                              <span class="w-14 shrink-0 truncate font-mono text-[10px] text-muted">
+                                {remote.name}
+                              </span>
+                              <span
+                                class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed"
+                              >
+                                {remote.url}
+                              </span>
                               <button
                                 type="button"
-                                class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                                onclick={() => (showCredentialForm = false)}
+                                class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-danger hover:bg-danger/10"
+                                onclick={() => void removeRemoteAction(remote.name)}
                               >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                                disabled={!tokenValue.trim() || !secureStorageAvailable}
-                                onclick={() => void setCredentialAction()}
-                              >
-                                Save
+                                ×
                               </button>
                             </div>
-                          </div>
-                        {/if}
-                      </div>
-                    {:else}
-                      <button
-                        type="button"
-                        class="mt-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                        disabled={!secureStorageAvailable}
-                        onclick={() => (showCredentialForm = true)}
-                      >
-                        Add token
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
+                          {/each}
+                        </div>
+                      {/if}
 
-              <!-- Integrate -->
-              <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                <button
-                  type="button"
-                  class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                  aria-expanded={showIntegrate}
-                  onclick={() => (showIntegrate = !showIntegrate)}
-                >
-                  <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
-                    >Integrate</span
-                  >
-                  <span class="flex-1"></span>
-                  {#if showIntegrate}
-                    <ChevronDown size={12} class="text-dimmed" />
-                  {:else}
-                    <ChevronRight size={12} class="text-dimmed" />
+                      {#if showRemoteForm}
+                        <div class="mb-2 space-y-1.5">
+                          <input
+                            class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                            placeholder="Remote name"
+                            bind:value={remoteName}
+                          />
+                          <input
+                            class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                            placeholder="https://github.com/owner/repo.git"
+                            bind:value={remoteUrl}
+                          />
+                          <div class="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+                              onclick={() => (showRemoteForm = false)}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                              disabled={!remoteName.trim() || !remoteUrl.trim()}
+                              onclick={() => void addRemoteAction()}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </div>
+                      {:else}
+                        <button
+                          type="button"
+                          class="mb-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                          onclick={() => (showRemoteForm = true)}
+                        >
+                          Add remote
+                        </button>
+                      {/if}
+
+                      {#if pushConfirm}
+                        <div
+                          class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2"
+                        >
+                          <p class="text-[10px] font-medium text-foreground">Push with upstream?</p>
+                          <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+                            Set <span class="font-mono text-foreground"
+                              >{primaryRemote?.name}/{status?.branch}</span
+                            > as upstream.
+                          </p>
+                          <div class="mt-1.5 flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+                              onclick={() => (pushConfirm = false)}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                              disabled={syncBusy}
+                              onclick={() => void confirmPushUpstream()}
+                            >
+                              Push
+                            </button>
+                          </div>
+                        </div>
+                      {/if}
+
+                      <div class="flex gap-1.5">
+                        <button
+                          type="button"
+                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={remotes.length === 0 || syncBusy}
+                          onclick={() => void gitState.fetch(projectId)}
+                        >
+                          {#if gitState.isBusy('fetch')}
+                            <Loader2 size={10} class="animate-spin" />
+                          {/if}
+                          Fetch
+                        </button>
+                        <button
+                          type="button"
+                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={remotes.length === 0 || syncBusy}
+                          onclick={() => void gitState.pull(projectId)}
+                        >
+                          {#if gitState.isBusy('pull')}
+                            <Loader2 size={10} class="animate-spin" />
+                          {/if}
+                          Pull
+                        </button>
+                        <button
+                          type="button"
+                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
+                          onclick={() => void pushAction()}
+                        >
+                          {#if gitState.isBusy('push')}
+                            <Loader2 size={10} class="animate-spin" />
+                          {/if}
+                          Push
+                        </button>
+                      </div>
+
+                      {#if credentialConfigured || showCredentialForm}
+                        <div class="mt-2 border-t border-border pt-2">
+                          <p
+                            class="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                          >
+                            Credentials
+                          </p>
+                          {#if credentialConfigured}
+                            <div class="flex items-center gap-2">
+                              <span class="flex-1 text-[10px] text-success">Token stored</span>
+                              <button
+                                type="button"
+                                class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
+                                onclick={() => void gitState.removeCredential(projectId)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          {:else}
+                            <div class="space-y-1.5">
+                              <input
+                                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                                placeholder="GitHub token"
+                                type="password"
+                                disabled={!secureStorageAvailable}
+                                bind:value={tokenValue}
+                              />
+                              <div class="flex justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+                                  onclick={() => (showCredentialForm = false)}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                                  disabled={!tokenValue.trim() || !secureStorageAvailable}
+                                  onclick={() => void setCredentialAction()}
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
+                      {:else}
+                        <button
+                          type="button"
+                          class="mt-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                          disabled={!secureStorageAvailable}
+                          onclick={() => (showCredentialForm = true)}
+                        >
+                          Add token
+                        </button>
+                      {/if}
+                    </div>
                   {/if}
-                </button>
-                {#if showIntegrate}
-                  <div class="border-t border-border px-3 py-2">
-                    <div class="flex items-center gap-1.5">
-                      <input
-                        class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                        placeholder="Branch to merge / rebase onto"
-                        bind:value={mergeTarget}
-                      />
-                      <button
-                        type="button"
-                        class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={!mergeTarget.trim() || integrateBusy}
-                        onclick={() => requestMergeOrRebase('merge')}
-                      >
-                        Merge
-                      </button>
-                      <button
-                        type="button"
-                        class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={!mergeTarget.trim() || integrateBusy}
-                        onclick={() => requestMergeOrRebase('rebase')}
-                      >
-                        Rebase
-                      </button>
+                </div>
+
+                <!-- Integrate -->
+                <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                  <button
+                    type="button"
+                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
+                    aria-expanded={showIntegrate}
+                    onclick={() => (showIntegrate = !showIntegrate)}
+                  >
+                    <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
+                      >Integrate</span
+                    >
+                    <span class="flex-1"></span>
+                    {#if showIntegrate}
+                      <ChevronDown size={12} class="text-dimmed" />
+                    {:else}
+                      <ChevronRight size={12} class="text-dimmed" />
+                    {/if}
+                  </button>
+                  {#if showIntegrate}
+                    <div class="border-t border-border px-3 py-2">
+                      <div class="flex items-center gap-1.5">
+                        <input
+                          class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                          placeholder="Branch to merge / rebase onto"
+                          bind:value={mergeTarget}
+                        />
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={!mergeTarget.trim() || integrateBusy}
+                          onclick={() => requestMergeOrRebase('merge')}
+                        >
+                          Merge
+                        </button>
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={!mergeTarget.trim() || integrateBusy}
+                          onclick={() => requestMergeOrRebase('rebase')}
+                        >
+                          Rebase
+                        </button>
+                      </div>
+                      <div class="mt-1.5 flex items-center justify-between gap-2">
+                        <p class="text-[9px] leading-relaxed text-dimmed">
+                          Overwrites local changes.
+                        </p>
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={(status?.clean ?? true) || integrateBusy}
+                          onclick={() => void stashChanges()}
+                        >
+                          {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
+                        </button>
+                      </div>
                     </div>
-                    <div class="mt-1.5 flex items-center justify-between gap-2">
-                      <p class="text-[9px] leading-relaxed text-dimmed">
-                        Overwrites local changes.
-                      </p>
-                      <button
-                        type="button"
-                        class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                        disabled={(status?.clean ?? true) || integrateBusy}
-                        onclick={() => void stashChanges()}
-                      >
-                        {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
-                      </button>
-                    </div>
-                  </div>
-                {/if}
+                  {/if}
+                </div>
               </div>
-            </div>
-          {/if}
-        </div>
+            {/if}
+          </div>
+        {/if}
       {:else if activeTab === 'history'}
         <div class="p-2">
           {#if loadingHistory}
@@ -1001,7 +1086,11 @@
           {:else}
             <div class="space-y-0.5">
               {#each commitHistory as commit (commit.hash)}
-                <div class="group rounded-lg px-2 py-1.5 transition-colors hover:bg-elevated/50">
+                <button
+                  type="button"
+                  class="group w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
+                  onclick={() => void selectCommit(commit)}
+                >
                   <div class="flex items-start gap-2">
                     <div class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/40"></div>
                     <div class="min-w-0 flex-1">
@@ -1017,7 +1106,7 @@
                       </div>
                     </div>
                   </div>
-                </div>
+                </button>
               {/each}
             </div>
           {/if}
