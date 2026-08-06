@@ -3,11 +3,22 @@ import {
   validateBoolean,
   validateBoundedInteger,
   validateBoundedString,
+  validateBranchName,
   validateChecklistItemStatus,
+  validateCommitMessage,
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
+  validateGitPathArray,
+  validateGitRelativePath,
   validateHistoryRole,
+  validateMergeMethod,
+  validateMergeTarget,
+  validatePrCreateInput,
+  validatePrNumber,
+  validatePushOptions,
+  validateRemoteName,
+  validateRemoteUrl,
   validateThreadSettings,
   validateThreadStatus
 } from './ipc-validation'
@@ -192,5 +203,79 @@ describe('IPC structured input validation', () => {
         status: 'created'
       })
     ).toThrow('Unsupported create thread field')
+  })
+})
+
+describe('IPC git validation', () => {
+  it('validates project-relative git paths and rejects traversal', () => {
+    expect(validateGitRelativePath(' src/lib/types.ts ')).toBe('src/lib/types.ts')
+    expect(validateGitPathArray(['a.ts', 'b/c.ts'])).toEqual(['a.ts', 'b/c.ts'])
+    expect(() => validateGitRelativePath('../outside.ts')).toThrow(TypeError)
+    expect(() => validateGitRelativePath('a/../../outside.ts')).toThrow(TypeError)
+    expect(() => validateGitPathArray(['ok.ts', ''])).toThrow(TypeError)
+    expect(() => validateGitPathArray('a.ts')).toThrow(TypeError)
+  })
+
+  it('validates branch names and merge targets', () => {
+    expect(validateBranchName('feature/thing-1')).toBe('feature/thing-1')
+    expect(validateBranchName(' main ')).toBe('main')
+    expect(validateMergeTarget('feature/x')).toBe('feature/x')
+    expect(() => validateBranchName('../evil')).toThrow(TypeError)
+    expect(() => validateBranchName('a b')).toThrow(TypeError)
+    expect(() => validateBranchName('')).toThrow(TypeError)
+  })
+
+  it('validates commit messages without trimming or collapsing newlines', () => {
+    expect(validateCommitMessage('  fix: thing  ')).toBe('  fix: thing  ')
+    expect(validateCommitMessage('line one\r\nline two')).toBe('line one\nline two')
+    expect(() => validateCommitMessage('')).toThrow(TypeError)
+    expect(() => validateCommitMessage('bad\0value')).toThrow(TypeError)
+  })
+
+  it('validates remote names and scheme-constrained remote URLs', () => {
+    expect(validateRemoteName('origin')).toBe('origin')
+    expect(validateRemoteUrl('https://github.com/acme/app.git')).toBe(
+      'https://github.com/acme/app.git'
+    )
+    expect(validateRemoteUrl('git@github.com:acme/app.git')).toBe('git@github.com:acme/app.git')
+    expect(() => validateRemoteName('../origin')).toThrow(TypeError)
+    expect(() => validateRemoteUrl('ftp://github.com/acme/app.git')).toThrow(TypeError)
+    expect(() => validateRemoteUrl('https://github.com/acme/app.git\nx')).toThrow(TypeError)
+  })
+
+  it('validates merge methods and PR create inputs', () => {
+    expect(validateMergeMethod('squash')).toBe('squash')
+    expect(() => validateMergeMethod('rebase3')).toThrow(TypeError)
+    expect(validatePrNumber(42)).toBe(42)
+    expect(() => validatePrNumber(0)).toThrow(TypeError)
+    expect(
+      validatePrCreateInput({
+        title: 'Add feature',
+        body: 'Details',
+        head: 'feature/x',
+        base: 'main',
+        draft: true
+      })
+    ).toEqual({
+      title: 'Add feature',
+      body: 'Details',
+      head: 'feature/x',
+      base: 'main',
+      draft: true
+    })
+    expect(() =>
+      validatePrCreateInput({ title: 'X', head: 'feature/x', base: 'main', owner: 'x' })
+    ).toThrow('Unsupported pull request create input field')
+  })
+
+  it('validates push options', () => {
+    expect(validatePushOptions({ setUpstream: true, remote: 'origin', branch: 'main' })).toEqual({
+      setUpstream: true,
+      remote: 'origin',
+      branch: 'main'
+    })
+    expect(validatePushOptions({ setUpstream: false })).toEqual({ setUpstream: false })
+    expect(() => validatePushOptions({ setUpstream: 'yes' })).toThrow(TypeError)
+    expect(() => validatePushOptions({ setUpstream: true, force: true })).toThrow(TypeError)
   })
 })

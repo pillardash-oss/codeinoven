@@ -95,7 +95,7 @@ export function validateScopeSlice(value: unknown): ScopeSlice {
 const GIT_PATH_PATTERN = /^[^\0]*$/u
 const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
 const GIT_REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
-const GIT_URL_SCHEMES = new Set(['https:', 'http:', 'ssh:', 'git:', 'file:'])
+const GIT_URL_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file'])
 const GIT_COMMIT_MESSAGE_MAX = 4096
 
 /**

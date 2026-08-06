@@ -2415,8 +2415,15 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('git:setCredential', async (_, projectId: unknown, token: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeToken = validateBoundedString(token, 'Provider token', 1, 16_384)
-    await vault.save(safeToken, gitCredentialRef(safeProjectId))
+    if (
+      typeof token !== 'string' ||
+      token.length === 0 ||
+      token.length > 16_384 ||
+      token.includes('\0')
+    ) {
+      throw new TypeError('Provider token must be a string of at most 16384 characters')
+    }
+    await vault.save(token, gitCredentialRef(safeProjectId))
     return gitCredentialStatus(safeProjectId)
   })
   ipcMain.handle('git:removeCredential', async (_, projectId: unknown) => {
