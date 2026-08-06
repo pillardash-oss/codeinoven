@@ -17,6 +17,11 @@
  * are evicted after a timeout. Only one phone peer is live at a time — a
  * second peer is rejected (`session-live`), matching the takeover-rejection
  * semantics required by the spec.
+ *
+ * Asset serving: the PWA is a Vite code-split bundle, so its shared chunks
+ * have hashed, unrelated names. At startup the gateway computes the exact set
+ * of `/assets/...` files `remote.html` references (see `pwa-asset-graph.ts`)
+ * and serves only that closure — never the desktop app's shell or entry.
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -38,6 +43,7 @@ import {
   encryptPayload
 } from '../../renderer/lib/remote/session-security'
 import { loadOrCreateSelfSignedCertificate } from './self-signed-cert'
+import { computePwaAssetClosure } from './pwa-asset-graph'
 
 export interface GatewayHandlers {
   /** Called when a phone peer authenticates (live=true) or disconnects (live=false). */
@@ -93,9 +99,6 @@ const ALLOWED_STATIC: ReadonlySet<string> = new Set([
   '/favicon.ico'
 ])
 
-/** Only the PWA's hashed bundle/css are served from the assets directory. */
-const PWA_ASSET_PREFIX = '/assets/remote-'
-
 const UNAUTHENTICATED_TIMEOUT_MS = 10_000
 export class RemoteGateway {
   private httpsServer: HttpsServer | null = null
@@ -105,6 +108,8 @@ export class RemoteGateway {
   private port: number
   private localPort: number
   private stopped = false
+  /** Asset paths the PWA actually references (computed from the build output). */
+  private allowedAssets = new Set<string>()
 
   constructor(private readonly options: RemoteGatewayOptions) {
     this.port = options.port
@@ -127,6 +132,11 @@ export class RemoteGateway {
 
   async start(): Promise<{ port: number; localPort: number }> {
     const { key, cert } = await loadOrCreateSelfSignedCertificate(this.options.certificateDir)
+
+    this.allowedAssets = await computePwaAssetClosure(this.options.staticRoot)
+    if (this.allowedAssets.size > 0) {
+      Logger.info('PWA asset closure (allow-list):', [...this.allowedAssets])
+    }
 
     const httpsServer = createHttpsServer({ key, cert }, (request, response) =>
       this.handleHttp(request, response)
@@ -238,7 +248,7 @@ export class RemoteGateway {
     }
     const root = resolve(this.options.staticRoot)
     const path = pathOnly === '/' ? '/remote.html' : pathOnly
-    if (!ALLOWED_STATIC.has(path) && !path.startsWith(PWA_ASSET_PREFIX)) return null
+    if (!ALLOWED_STATIC.has(path) && !this.allowedAssets.has(path)) return null
     const requested = normalize(path).replace(/^([/\\])+/, '')
     const target = resolve(root, requested)
     if (target !== root && !target.startsWith(root + sep)) return null

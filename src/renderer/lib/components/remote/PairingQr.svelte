@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { toDataURL } from 'qrcode'
   import { Check, Copy, QrCode, Smartphone, Wifi } from '@lucide/svelte'
 
   interface Props {
@@ -11,16 +10,23 @@
 
   let { pairingUrl, phoneUrl = null }: Props = $props()
 
-  let qrPromise = $derived(
-    pairingUrl
-      ? toDataURL(pairingUrl, {
-          width: 224,
-          margin: 1,
-          errorCorrectionLevel: 'M',
-          color: { dark: '#0f1720', light: '#ffffff' }
-        })
-      : null
-  )
+  // The QR code only ever renders on the desktop (the PWA never shows it), so
+  // the `qrcode` package is imported lazily — Vite splits it into a separate
+  // chunk the phone never downloads. Keep this out of the PWA bundle.
+  let qrPromise = $derived.by(async (): Promise<string | null> => {
+    if (!pairingUrl) return null
+    try {
+      const { toDataURL } = await import('qrcode')
+      return toDataURL(pairingUrl, {
+        width: 224,
+        margin: 1,
+        errorCorrectionLevel: 'M',
+        color: { dark: '#0f1720', light: '#ffffff' }
+      })
+    } catch {
+      return null
+    }
+  })
   let copied = $state(false)
 
   async function copyPairingUrl(): Promise<void> {
@@ -45,7 +51,7 @@
     account, no typing, nothing to install manually.
   </p>
 
-  {#if pairingUrl && qrPromise}
+  {#if pairingUrl}
     <div class="mt-4 flex items-start gap-4">
       <div
         class="grid h-56 w-56 shrink-0 place-items-center rounded-xl border border-border bg-white p-2"
@@ -53,7 +59,11 @@
         {#await qrPromise}
           <QrCode size={40} class="animate-pulse text-dimmed" />
         {:then url}
-          <img src={url} alt="QR code to connect your phone" class="h-full w-full" />
+          {#if url}
+            <img src={url} alt="QR code to connect your phone" class="h-full w-full" />
+          {:else}
+            <p class="px-3 text-center text-xs text-danger">Could not generate the QR code.</p>
+          {/if}
         {:catch}
           <p class="px-3 text-center text-xs text-danger">Could not generate the QR code.</p>
         {/await}
