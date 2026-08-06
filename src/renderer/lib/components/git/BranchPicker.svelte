@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ChevronDown, Check, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
-  import { DropdownMenu } from 'bits-ui'
+  import { AlertDialog, DropdownMenu } from 'bits-ui'
   import type { GitBranchInfo } from '$shared/types'
 
   interface Props {
@@ -18,6 +18,7 @@
   let search = $state('')
   let creating = $state(false)
   let newBranchName = $state('')
+  let deleteTarget = $state<string | null>(null)
 
   const filtered = $derived(
     search.trim()
@@ -49,8 +50,13 @@
 
   function handleDelete(event: MouseEvent, name: string): void {
     event.stopPropagation()
-    if (!onDelete) return
-    onDelete(name)
+    deleteTarget = name
+  }
+
+  function confirmDelete(): void {
+    if (!deleteTarget || !onDelete) return
+    onDelete(deleteTarget)
+    deleteTarget = null
     open = false
     search = ''
   }
@@ -136,12 +142,12 @@
               {:else if onDelete}
                 <button
                   type="button"
-                  class="shrink-0 rounded p-0.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                  class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                   title="Delete branch {branch.name}"
                   aria-label="Delete branch {branch.name}"
                   onclick={(e: MouseEvent) => handleDelete(e, branch.name)}
                 >
-                  <Trash2 size={10} />
+                  <Trash2 size={12} />
                 </button>
               {/if}
             </div>
@@ -207,3 +213,32 @@
     </DropdownMenu.Content>
   </DropdownMenu.Portal>
 </DropdownMenu.Root>
+
+<AlertDialog.Root open={deleteTarget !== null} onOpenChange={() => (deleteTarget = null)}>
+  <AlertDialog.Portal>
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Delete branch?
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        Branch <strong class="text-foreground">{deleteTarget}</strong> will be permanently deleted. This
+        cannot be undone.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+          onclick={confirmDelete}
+        >
+          Delete
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>
