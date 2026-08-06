@@ -314,6 +314,26 @@
             </div>
           </div>
 
+          <!-- Power -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Keep device on while work is in progress</p>
+                <p class="text-xs text-dimmed">
+                  Prevent the display and system from sleeping while any agent is working
+                </p>
+              </div>
+              <Switch
+                checked={config.keepAwakeWhileWorking}
+                onchange={() =>
+                  void updateConfig({ keepAwakeWhileWorking: !config.keepAwakeWhileWorking })}
+                aria-label="Toggle keeping the device awake while work is in progress"
+                disabled={!settingsReady}
+              />
+            </div>
+          </div>
+
           <!-- Threads -->
           <div class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Threads</h3>

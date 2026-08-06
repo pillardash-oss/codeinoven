@@ -62,6 +62,11 @@ export class Database {
     Logger.info('SQLite database closed')
   }
 
+  /** Whether the database connection is currently open. */
+  isOpen(): boolean {
+    return this.db !== null
+  }
+
   /** Execute a write query (INSERT/UPDATE/DELETE) with optional params. */
   run(sql: string, ...params: unknown[]): void {
     try {
