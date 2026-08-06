@@ -18,7 +18,6 @@ export type MainView =
   | 'chats'
   | 'scope'
   | 'threads'
-  | 'remote-client'
   | 'settings'
   | 'settings-memory'
   | 'settings-audits'
@@ -91,7 +90,6 @@ const MAIN_VIEWS: readonly MainView[] = [
   'chats',
   'scope',
   'threads',
-  'remote-client',
   'settings',
   'settings-memory',
   'settings-audits',
