@@ -28,6 +28,12 @@ import { WindowStateService } from './window-state'
 import { NotificationService } from './notification-service'
 import { setNotificationService } from './thread-events'
 import {
+  RemoteModeController,
+  DEFAULT_LAN_PORT,
+  remoteEnvInt,
+  remotePeerSecret
+} from './remote/remote-mode'
+import {
   installProductionApplicationMenu,
   lockDownProductionWindow
 } from './production-housekeeping'
@@ -145,6 +151,14 @@ const chatEngine = new ChatEngine(storage, database, computerUsePipService)
 const notificationService = new NotificationService(storage, database, openThreadFromNotification)
 const updaterService = new UpdaterService(storage)
 
+/** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
+const remoteMode = new RemoteModeController({
+  lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
+  peerSecret: remotePeerSecret(),
+  staticRoot: join(mainBundleDirectory, '../renderer'),
+  iconPath: getAppIconPath()
+})
+
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
   return !isProduction && is.dev
@@ -260,6 +274,12 @@ function createWindow(): BrowserWindow {
   })
 
   window.on('close', (event) => {
+    // While remote mode is on, closing the window hides to the Tray instead
+    // of quitting — the desktop keeps running to accept phone sessions.
+    if (remoteMode.handleWindowClose()) {
+      event.preventDefault()
+      return
+    }
     // Gate the close while threads are working — ask the renderer to confirm
     // before letting the window (and with it the app) go away.
     if (quitConfirmed || quitCleanupStarted) return
@@ -361,6 +381,7 @@ void app
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
+    remoteMode.registerIpc()
     ptyService.register()
     providerConnection.register()
     harnessUpdateService.register()
@@ -405,10 +426,11 @@ void app
   })
 
 app.on('window-all-closed', () => {
-  // No platform keeps running without a window: closing the last window
-  // (traffic-light close button) fully quits the app. Cmd+Q follows the
-  // same path through before-quit → shutdown pipeline → will-quit, so the
-  // app never lingers in the Dock needing a second quit.
+  // While remote mode is on the app keeps running in the Tray with no window,
+  // so the desktop can keep accepting phone sessions. Otherwise closing the
+  // last window (traffic-light close button) fully quits the app. Cmd+Q
+  // follows the same path through before-quit → shutdown pipeline → will-quit.
+  if (remoteMode.handleAllWindowsClosed()) return
   app.quit()
 })
 
@@ -483,6 +505,11 @@ async function runShutdownPipeline(): Promise<void> {
 
 app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
+  // Refuse a full quit while a remote phone session is live.
+  if (remoteMode.handleBeforeQuit()) {
+    event.preventDefault()
+    return
+  }
   event.preventDefault()
 
   // If the user hasn't explicitly approved a force close, gate the quit on the
