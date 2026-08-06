@@ -79,7 +79,7 @@ jobs:
           fi
           bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never "${flags[@]}"
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codeinoven-${{ matrix.artifact }}
           path: |
