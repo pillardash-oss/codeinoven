@@ -3,6 +3,7 @@
     ChevronDown,
     ChevronLeft,
     ChevronRight,
+    Eye,
     FileDiff,
     Loader2,
     RefreshCw
@@ -321,35 +322,46 @@
                   : diffDetails(fileDiff.before, fileDiff.after)}
                 {@const expanded = expandedDiffs[fileDiff.path] ?? true}
                 <section class="overflow-hidden rounded-md border border-border bg-surface">
-                  <button
-                    type="button"
-                    class="flex min-h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
-                    aria-expanded={expanded}
-                    title={expanded
-                      ? `Collapse diff for ${fileDiff.path}`
-                      : `Show diff for ${fileDiff.path}`}
-                    onclick={() => toggleDiff(fileDiff.path)}
-                  >
-                    <FileTypeIcon path={fileDiff.path} size={13} />
-                    <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
-                      {fileDiff.path}
-                    </span>
-                    {#if fileDiff.binary}
-                      <span class="shrink-0 text-[9px] text-dimmed">binary</span>
-                    {:else if stats}
-                      <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
-                        +{stats.additions}
+                  <div class="flex min-h-9 items-center pr-1.5">
+                    <button
+                      type="button"
+                      class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
+                      aria-expanded={expanded}
+                      title={expanded
+                        ? `Collapse diff for ${fileDiff.path}`
+                        : `Show diff for ${fileDiff.path}`}
+                      onclick={() => toggleDiff(fileDiff.path)}
+                    >
+                      <FileTypeIcon path={fileDiff.path} size={13} />
+                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                        {fileDiff.path}
                       </span>
-                      <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
-                        −{stats.deletions}
-                      </span>
-                    {/if}
-                    {#if expanded}
-                      <ChevronDown size={12} class="shrink-0 text-dimmed" />
-                    {:else}
-                      <ChevronRight size={12} class="shrink-0 text-dimmed" />
-                    {/if}
-                  </button>
+                      {#if fileDiff.binary}
+                        <span class="shrink-0 text-[9px] text-dimmed">binary</span>
+                      {:else if stats}
+                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+                          +{stats.additions}
+                        </span>
+                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+                          −{stats.deletions}
+                        </span>
+                      {/if}
+                      {#if expanded}
+                        <ChevronDown size={12} class="shrink-0 text-dimmed" />
+                      {:else}
+                        <ChevronRight size={12} class="shrink-0 text-dimmed" />
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      aria-label={`Open ${fileDiff.path} in the file viewer`}
+                      title={`Open ${fileDiff.path} in the file viewer`}
+                      onclick={() => void openChange(checkpoint.id, fileDiff.path)}
+                    >
+                      <Eye size={13} />
+                    </button>
+                  </div>
                   {#if expanded}
                     <div class="border-t border-border">
                       <FileDiffView diff={fileDiff} maxHeight="24rem" />
