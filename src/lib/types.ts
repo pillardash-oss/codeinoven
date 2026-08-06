@@ -2259,3 +2259,152 @@ export type AppConfigPatch = Partial<
     | 'updateChannel'
   >
 >
+
+// ─── Git management ──────────────────────────────────────────────────────────
+
+/** Status of one file in the working tree. */
+export type GitFileStatus =
+  'modified' | 'added' | 'deleted' | 'untracked' | 'renamed' | 'conflicted'
+
+/** A single working-tree entry surfaced by porcelain status. */
+export interface GitFileChange {
+  path: string
+  /** Original path for renames/copies. */
+  oldPath?: string
+  status: GitFileStatus
+  /** True when the change is staged for commit. */
+  staged: boolean
+}
+
+/** A unified diff for a single file, bounded to protect the IPC contract. */
+export interface GitDiff {
+  path: string
+  /** True when the diff is computed against the index (staged). */
+  staged: boolean
+  /** Unified diff text; empty for binary files. */
+  content: string
+  binary: boolean
+  additions: number
+  deletions: number
+  /** True when the diff was cut at the payload bound. */
+  truncated: boolean
+}
+
+/** Snapshot of the repository working tree and branch state. */
+export interface GitStatus {
+  repositoryRoot: string
+  branch: string | null
+  /** True when HEAD is detached (no branch checked out). */
+  detached: boolean
+  clean: boolean
+  changes: GitFileChange[]
+  /** Count of staged changes (including staged deletions). */
+  stagedChanges: number
+  /** Count of unstaged modifications. */
+  unstagedChanges: number
+  /** Count of untracked files. */
+  untrackedChanges: number
+  /** Paths currently in a merge/rebase conflict. */
+  conflicted: string[]
+  /** Commits the local branch is ahead of its upstream by. */
+  ahead: number
+  /** Commits the local branch is behind its upstream by. */
+  behind: number
+}
+
+/** One local branch and its tracking relationship, when set. */
+export interface GitBranchInfo {
+  name: string
+  current: boolean
+  remote: string | null
+  ahead: number
+  behind: number
+}
+
+/** A configured remote. */
+export interface GitRemoteInfo {
+  name: string
+  url: string
+}
+
+/** Git identity read from `user.name` / `user.email` config. */
+export interface GitIdentity {
+  name: string | null
+  email: string | null
+  configured: boolean
+}
+
+/** Renderer-safe git identity write request. */
+export interface GitIdentityInput {
+  name: string
+  email: string
+}
+
+/** One commit from `git log`, surfaced in a compact form. */
+export interface GitCommitInfo {
+  hash: string
+  shortHash: string
+  author: string
+  date: number
+  message: string
+}
+
+/** Result of a push/pull that reports upstream drift. */
+export interface GitSyncSummary {
+  ahead: number
+  behind: number
+}
+
+/** Conflict information reported by a merge/rebase failure. */
+export interface GitConflictFile {
+  path: string
+  reason?: string
+}
+
+/** Normalized merge/rebase outcome, including conflict state. */
+export interface MergeSummary {
+  conflicted: GitConflictFile[]
+  merged: string[]
+  result: string
+  /** True when the operation was aborted (merge --abort / rebase --abort). */
+  aborted: boolean
+}
+
+/** Merge method accepted by provider merge endpoints. */
+export type PrMergeMethod = 'merge' | 'squash' | 'rebase'
+
+/** Filter for pull request listings. */
+export type PrState = 'open' | 'closed' | 'all'
+
+/** Draft-shaped request to create a pull request on the provider. */
+export interface PrDraft {
+  owner: string
+  repo: string
+  title: string
+  body?: string
+  head: string
+  base: string
+  draft?: boolean
+}
+
+/** PR create request as the renderer sends it; owner/repo resolve from the origin. */
+export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
+
+/** Renderer-safe PR reference created or merged by a provider. */
+export interface PullRequestReference {
+  number: number
+  url: string
+  title: string
+}
+
+/** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
+export interface GitRepositoryIdentity {
+  owner: string
+  repo: string
+}
+
+/** Result of a provider credential status query — presence only, never plaintext. */
+export interface GitCredentialStatus {
+  configured: boolean
+  secureStorageAvailable: boolean
+}
