@@ -460,7 +460,8 @@ class ContextSidebarState {
     mode: TemporaryChatMode,
     selection: string,
     initialContext: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    selectionAttached = true
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
     const temporaryChatId = crypto.randomUUID()
@@ -473,14 +474,14 @@ class ContextSidebarState {
       temporaryChatId,
       sessionId: null,
       mode,
-      selection,
+      selection: selectionAttached ? selection : '',
       initialContext,
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
       messages: [],
       busy: false,
       error: '',
       draft: '',
-      selectionAttached: true,
+      selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
       sessionStarted: false,
@@ -570,7 +571,9 @@ class ContextSidebarState {
     tab.busy = false
     tab.error = ''
     tab.draft = ''
-    tab.selectionAttached = true
+    // Re-attach the selection on restart only when there is one — a quick chat
+    // opened from the last agent turn has no selection attached.
+    tab.selectionAttached = tab.selection.length > 0
     tab.selectionMessageId = null
     tab.autoPromptSent = false
     tab.sessionStarted = false
