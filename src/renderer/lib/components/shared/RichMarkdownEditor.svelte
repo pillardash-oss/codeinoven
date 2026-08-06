@@ -369,19 +369,29 @@
   function inlineElementAtBoundary(left: boolean): HTMLElement | null {
     if (!editor) return null
     const selection = window.getSelection()
-    if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return null
-    const node = selection.anchorNode
-    const element = node.parentElement
+    if (!selection?.isCollapsed || !selection.anchorNode) return null
+    const anchor = selection.anchorNode
+    let element: HTMLElement | null
+    if (anchor instanceof Text) {
+      element = anchor.parentElement
+    } else if (anchor instanceof HTMLElement) {
+      // Caret collapsed directly inside an inline element that has no text child at the
+      // caret, e.g. an empty <code></code>. The element itself is the anchor node.
+      element = anchor
+    } else {
+      return null
+    }
     if (!(element instanceof HTMLElement) || !editor.contains(element)) return null
     if (!INLINE_BOUNDARY_TAGS.has(element.tagName)) return null
     // Ignore <code> inside <pre> — code-block content has its own boundary rules.
     if (element.parentElement?.tagName === 'PRE') return null
     const offset = selection.anchorOffset
-    if (left) {
-      if (offset !== 0 || node !== element.firstChild) return null
-    } else {
-      if (offset !== node.data.length || node !== element.lastChild) return null
-    }
+    // A boundary is the position where no text remains before (left) or after (right)
+    // the caret inside the element — even if the element ends in a <br> or is empty.
+    const boundary = left
+      ? !hasTextBefore(element, anchor, offset)
+      : !hasTextAfter(element, anchor, offset)
+    if (!boundary) return null
     return element
   }
 
