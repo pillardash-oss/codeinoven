@@ -54,6 +54,11 @@ export class Database {
     Logger.info('SQLite database initialised', { path: this.path })
   }
 
+  /** Whether the database connection is currently open. */
+  isOpen(): boolean {
+    return this.db !== null
+  }
+
   /** Close the database connection. */
   close(): void {
     if (!this.db) return

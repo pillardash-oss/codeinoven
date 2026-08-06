@@ -20,6 +20,7 @@ import { MemoryService, validateMemoryConfig } from './memory-service'
 import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
+import type { PowerWakeService } from './power-wake-service'
 import { broadcastThreadUpdate, dismissThreadNotifications } from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
 import {
@@ -139,7 +140,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentDefaults',
   'autoDownloadUpdates',
   'autoInstallUpdates',
-  'updateChannel'
+  'updateChannel',
+  'keepAwakeWhileWorking'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -851,12 +853,20 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.updateChannel = value.updateChannel
   }
 
+  if ('keepAwakeWhileWorking' in value) {
+    if (typeof value.keepAwakeWhileWorking !== 'boolean') {
+      throw new TypeError('keepAwakeWhileWorking must be a boolean')
+    }
+    patch.keepAwakeWhileWorking = value.keepAwakeWhileWorking
+  }
+
   return patch
 }
 
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
+  powerWakeService?: PowerWakeService
 }
 
 export function registerIpcHandlers(
@@ -898,6 +908,7 @@ export function registerIpcHandlers(
     const patch = validateAppConfigPatch(input)
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
+    options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {

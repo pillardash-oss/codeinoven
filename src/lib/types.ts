@@ -2233,6 +2233,8 @@ export interface AppConfig {
   autoInstallUpdates: boolean
   /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
   updateChannel: 'stable' | 'nightly'
+  /** Prevent the display and system from sleeping while any agent is working. */
+  keepAwakeWhileWorking: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2257,6 +2259,7 @@ export type AppConfigPatch = Partial<
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
     | 'updateChannel'
+    | 'keepAwakeWhileWorking'
   >
 >
 
