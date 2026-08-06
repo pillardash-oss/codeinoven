@@ -85,6 +85,14 @@ bun run dev
 
 The development build opens the app from source. See [Development](#development) for the full toolchain and [Packaging](#packaging) to produce installers.
 
+### Remote connection
+
+CodeInOven ships a remote-connection capability so you can keep working from your phone while away from your computer. Connectivity is **LAN-first**: the phone client connects over the local network when the desktop peer is reachable, and only falls back to a cloud relay for remote networks.
+
+All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. Local development works with zero configuration thanks to a localhost-only fallback. **Production deployments must supply real relay values at deploy time** (`RELAY_URL`, `RELAY_TOKEN`, and `MQTT_URL`/`MQTT_USERNAME`/`MQTT_PASSWORD` when MQTT signaling is used); they are never invented. See `agent-out/config.md` for the full variable reference.
+
+The phone client is delivered as a dedicated **Remote** view inside the app (this is an Electron + Svelte app, not a SvelteKit PWA). It authenticates with the shared `PEER_SECRET_AUTH`, shows live route state (LAN vs relay vs disconnected), keep-alive state, and a reconnect control. From the desktop you can enable **Remote Mode** to keep the app alive in the system Tray while you are away (see `agent-out/tray-contract.md`).
+
 ---
 
 ## Quick Start
