@@ -134,6 +134,11 @@
     await gitState.stage(projectId, allPaths)
   }
 
+  async function checkoutBranch(branch: string): Promise<void> {
+    if (!branch || branch === status?.branch) return
+    await gitState.checkout(projectId, branch)
+  }
+
   async function saveIdentity(): Promise<void> {
     await gitState.setIdentity(projectId, identityName, identityEmail)
     if (!gitState.error) showIdentityForm = false
@@ -150,7 +155,18 @@
     })
   })
 
-  onMount(() => gitState.ensureProjectEvents(projectId))
+  onMount(() => {
+    gitState.ensureProjectEvents(projectId)
+    // Lightweight periodic status poll while the panel is open so commits made
+    // outside the app (terminal, IDE) surface within seconds without a raw
+    // `.git` watcher. Never runs when the tab is hidden.
+    const timer = setInterval(() => {
+      if (repoState === 'git' && !gitState.isBusy(['refresh', 'stage', 'commit', 'push', 'pull'])) {
+        void gitState.refresh(projectId)
+      }
+    }, 8_000)
+    return () => clearInterval(timer)
+  })
 
   const identityNeeded = $derived(
     repoState === 'git' && gitState.identity !== null && !gitState.identity.configured
@@ -342,6 +358,27 @@
         >
           {gitState.error}
         </p>
+      {/if}
+
+      {#if gitState.branches.length > 0}
+        <div
+          class="mb-2 flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5"
+        >
+          <GitBranch size={12} class="shrink-0 text-muted" />
+          <select
+            class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[10px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+            value={status?.branch ?? ''}
+            disabled={gitState.isBusy('checkout')}
+            aria-label="Check out a branch"
+            title="Check out a branch"
+            onchange={(event: Event) =>
+              void checkoutBranch((event.currentTarget as HTMLSelectElement).value)}
+          >
+            {#each gitState.branches as branch (branch.name)}
+              <option value={branch.name}>{branch.name}</option>
+            {/each}
+          </select>
+        </div>
       {/if}
 
       {#if identityNeeded}
