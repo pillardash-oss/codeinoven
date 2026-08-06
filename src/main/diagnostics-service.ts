@@ -1,4 +1,4 @@
-import { lstat, realpath, readFile, readdir } from 'fs/promises'
+import { lstat, realpath, readFile } from 'fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'path'
 import type {
   ChangeTrackingMode,

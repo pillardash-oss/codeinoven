@@ -4,11 +4,14 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { ThreadManager } from '../lib/engines/thread-manager'
 import type { ThreadStatus } from '../lib/types'
+import type { Database } from './database/database'
+import { createTestDb, destroyTestDb } from './database/test-helper'
+import { ProjectRepo } from './database/repositories/project-repo'
 import { CheckpointManager } from './checkpoint-manager'
 import { RestartRecoveryService } from './restart-recovery-service'
-import { StorageEngine } from './storage-engine'
 
 const temporaryPaths: string[] = []
+const testDatabases: Database[] = []
 
 async function temporaryDirectory(prefix: string): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), prefix))
@@ -16,20 +19,39 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   return path
 }
 
+async function createDatabase(projectRoot: string): Promise<Database> {
+  const database = await createTestDb()
+  testDatabases.push(database)
+  for (const id of ['project1', 'project2']) {
+    new ProjectRepo(database).upsert({
+      id,
+      name: `Project ${id}`,
+      path: projectRoot,
+      source: 'local',
+      providerId: 'provider1',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    })
+  }
+  return database
+}
+
 afterEach(async () => {
   await Promise.all(
     temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   )
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
 })
 
 describe('RestartRecoveryService', () => {
   it('interrupts active checkpoints and threads while leaving inactive threads unchanged', async () => {
-    const storageRoot = await temporaryDirectory('codeinoven-recovery-storage-')
     const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
-    const storage = new StorageEngine(storageRoot)
-    await storage.initialize()
-    const threads = new ThreadManager(storage)
-    const checkpoints = new CheckpointManager(storage)
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
 
     const planning = await threads.createThread({
       projectId: 'project1',
@@ -53,7 +75,7 @@ describe('RestartRecoveryService', () => {
       false
     )
 
-    const result = await new RestartRecoveryService(storage, threads, checkpoints).recover()
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
 
     expect(result).toMatchObject({
       inspected: 2,
@@ -68,10 +90,9 @@ describe('RestartRecoveryService', () => {
   })
 
   it('recovers an executing thread even when it has no active checkpoint', async () => {
-    const storageRoot = await temporaryDirectory('codeinoven-recovery-storage-')
-    const storage = new StorageEngine(storageRoot)
-    await storage.initialize()
-    const threads = new ThreadManager(storage)
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
     const thread = await threads.createThread({
       projectId: 'project2',
       providerId: 'provider1',
@@ -79,7 +100,7 @@ describe('RestartRecoveryService', () => {
     })
     await threads.setStatus('project2', thread.id, 'executing')
 
-    const result = await new RestartRecoveryService(storage, threads).recover()
+    const result = await new RestartRecoveryService(database).recover()
     const persisted = await threads.getThread('project2', thread.id)
 
     expect(result.failures).toEqual([])

@@ -108,7 +108,7 @@
     class="h-7 min-w-0 flex-1 rounded-lg border border-border bg-app px-2.5 text-xs text-foreground outline-none placeholder:text-dimmed focus:border-primary"
     {placeholder}
     value={draft}
-    oninput={(event: InputEvent & { currentTarget: HTMLInputElement }) =>
+    oninput={(event: Event & { currentTarget: HTMLInputElement }) =>
       scheduleQuery(event.currentTarget.value)}
     onkeydown={(event: KeyboardEvent) => void handleKeydown(event)}
   />

@@ -1868,7 +1868,7 @@
             ? 'Queue — message sends when the agent finishes'
             : 'Send'}
       disabled={disabled || (!working && !hasText)}
-      onclick={submit}
+      onclick={() => submit()}
     >
       {#if pendingStop}
         <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>

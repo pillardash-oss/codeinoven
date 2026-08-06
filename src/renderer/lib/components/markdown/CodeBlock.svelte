@@ -45,8 +45,8 @@
       {/if}
     </button>
   </div>
-  <!-- eslint-disable-next-line svelte/no-at-html-tags -- hljs output is escaped text + spans -->
   <pre class="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground"><code
-      >{@html html}</code
+      ><!-- eslint-disable-next-line svelte/no-at-html-tags -- hljs output is escaped text + spans -->
+      {@html html}</code
     ></pre>
 </div>

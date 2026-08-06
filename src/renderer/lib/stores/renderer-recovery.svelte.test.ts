@@ -82,7 +82,8 @@ describe('RendererRecoveryStore', () => {
       },
       collapsedFolders: [],
       favoriteModels: [],
-      recentModels: []
+      recentModels: [],
+      queuedMessages: {}
     })
 
     const restored = loadRendererRecoveryState(storage)
@@ -134,7 +135,8 @@ describe('RendererRecoveryStore', () => {
       composerDrafts: { [draftKey]: 'Legacy draft' as unknown as ComposerDraftEntry },
       collapsedFolders: [],
       favoriteModels: [],
-      recentModels: []
+      recentModels: [],
+      queuedMessages: {}
     })
 
     const restored = loadRendererRecoveryState(storage)

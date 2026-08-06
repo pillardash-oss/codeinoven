@@ -1,52 +1,68 @@
 import { createHash } from 'crypto'
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { APP_SLUG, ORG_SLUG } from '../lib/brand'
 import type { Project } from '../lib/types'
 import { ProjectManager } from '../lib/engines/project-manager'
-import { StorageEngine } from './storage-engine'
+import type { Database } from './database/database'
+import { createTestDb, destroyTestDb } from './database/test-helper'
 import { SpecContextService } from './spec-context-service'
+
+const temporaryPaths: string[] = []
+const testDatabases: Database[] = []
+const originalHome = process.env.HOME
 
 async function setup(source: Project['source'] = 'local'): Promise<{
   configRoot: string
   projectRoot: string
+  projectId: string
   service: SpecContextService
 }> {
   const root = await mkdtemp(join(tmpdir(), 'codeinoven-spec-context-'))
-  const configRoot = join(root, 'config')
+  temporaryPaths.push(root)
+  process.env.HOME = root
+  const configRoot = join(root, '.config', ORG_SLUG, APP_SLUG)
   const projectRoot = join(root, 'project')
   await mkdir(projectRoot)
 
-  const storage = new StorageEngine(configRoot)
-  await storage.initialize()
-  const projects = new ProjectManager(storage)
+  const database = await createTestDb()
+  testDatabases.push(database)
+  const projects = new ProjectManager(database)
   await projects.createProject({
     name: 'Test',
     path: projectRoot,
     source
   })
   const [project] = await projects.listProjects()
+  if (!project) throw new Error('Test project was not created')
 
   return {
     configRoot,
     projectRoot,
-    service: new SpecContextService(storage, {
+    projectId: project.id,
+    service: new SpecContextService(database, {
       getProject: (projectId) => projects.getProject(projectId)
     })
   }
 }
 
+afterEach(async () => {
+  process.env.HOME = originalHome
+  await Promise.all(
+    temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
+  )
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
+})
+
 describe('SpecContextService', () => {
   it('captures a project file with a POSIX-relative path and sha256 hash', async () => {
-    const { projectRoot, service } = await setup()
+    const { projectRoot, projectId, service } = await setup()
     const source = join(projectRoot, 'src', 'rule.md')
     await mkdir(join(projectRoot, 'src'))
     await writeFile(source, 'explicit context')
 
-    const [projectId] = await new StorageEngine(
-      join(projectRoot, '..', 'config')
-    ).list('projects')
     const reference = await service.capture(projectId, source, 'project_rule')
 
     expect(reference.type).toBe('project_rule')
@@ -58,12 +74,11 @@ describe('SpecContextService', () => {
   })
 
   it('rejects files outside the project and symlinks that escape it', async () => {
-    const { configRoot, projectRoot, service } = await setup()
+    const { projectRoot, projectId, service } = await setup()
     const outside = join(projectRoot, '..', 'outside.txt')
     const escape = join(projectRoot, 'escape.txt')
     await writeFile(outside, 'outside')
     await symlink(outside, escape)
-    const [projectId] = await new StorageEngine(configRoot).list('projects')
 
     await expect(service.capture(projectId, outside, 'project_file')).rejects.toThrow(
       'outside the project root'
@@ -74,10 +89,9 @@ describe('SpecContextService', () => {
   })
 
   it('copies an external attachment under a generated name without exposing its path', async () => {
-    const { configRoot, projectRoot, service } = await setup()
+    const { configRoot, projectRoot, projectId, service } = await setup()
     const source = join(projectRoot, '..', 'design.txt')
     await writeFile(source, 'attachment body')
-    const [projectId] = await new StorageEngine(configRoot).list('projects')
 
     const reference = await service.capture(projectId, source, 'attachment')
     const stored = join(
@@ -96,8 +110,7 @@ describe('SpecContextService', () => {
   })
 
   it('rejects missing files, directories, oversized attachments, and SSH projects', async () => {
-    const { configRoot, projectRoot, service } = await setup()
-    const [projectId] = await new StorageEngine(configRoot).list('projects')
+    const { projectRoot, projectId, service } = await setup()
     const oversized = join(projectRoot, '..', 'oversized.bin')
     await writeFile(oversized, Buffer.alloc(16 * 1024 * 1024 + 1))
 
@@ -107,14 +120,11 @@ describe('SpecContextService', () => {
     await expect(service.capture(projectId, projectRoot, 'project_file')).rejects.toThrow(
       'must be a file'
     )
-    await expect(service.capture(projectId, oversized, 'attachment')).rejects.toThrow(
-      '16 MiB'
-    )
+    await expect(service.capture(projectId, oversized, 'attachment')).rejects.toThrow('16 MiB')
 
     const sshSetup = await setup('ssh')
-    const [sshProjectId] = await new StorageEngine(sshSetup.configRoot).list('projects')
     await expect(
-      sshSetup.service.capture(sshProjectId, oversized, 'attachment')
+      sshSetup.service.capture(sshSetup.projectId, oversized, 'attachment')
     ).rejects.toThrow('SSH projects')
   })
 })

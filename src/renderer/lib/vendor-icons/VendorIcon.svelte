@@ -28,6 +28,7 @@
   aria-hidden="true"
 >
   {#if svg}
+    <!-- eslint-disable-next-line svelte/no-at-html-tags -- vendor icons are trusted bundled SVGs -->
     {@html svg}
   {:else}
     <span

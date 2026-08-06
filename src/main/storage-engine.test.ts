@@ -3,7 +3,6 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
 import { StorageEngine } from './storage-engine'
-import { ProjectManager } from '../lib/engines/project-manager'
 
 async function setup(): Promise<{
   storage: StorageEngine
@@ -73,27 +72,5 @@ describe('StorageEngine project boundary', () => {
     await expect(
       storage.writeProjectSpecRaw('project-1', '../escape', 'spec.md', 'unsafe')
     ).rejects.toThrow('Invalid feature slug')
-  })
-
-  it('removes app runtime state but leaves repository-owned specs on project deletion', async () => {
-    const { storage, configRoot, projectRoot } = await setup()
-    await storage.write('projects/project-1/threads/thread-1/checkpoints/turn-1.json', {
-      status: 'completed'
-    })
-    await storage.writeProjectSpecRaw(
-      'project-1',
-      'durable-feature',
-      'spec.md',
-      '# Durable feature\n'
-    )
-
-    await new ProjectManager(storage).deleteProject('project-1')
-
-    await expect(access(join(configRoot, 'projects', 'project-1'))).rejects.toMatchObject({
-      code: 'ENOENT'
-    })
-    await expect(
-      access(join(projectRoot, '.cio', 'specs', 'durable-feature', 'spec.md'))
-    ).resolves.toBeUndefined()
   })
 })

@@ -154,7 +154,10 @@ describe('PersistentCliDriver', () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const events: string[] = []
-    driver.onEvent((event) => events.push(`${event.type}:${event.sessionId}`))
+    driver.onEvent((event) => {
+      const sessionId = 'sessionId' in event ? (event.sessionId ?? '') : ''
+      events.push(`${event.type}:${sessionId}`)
+    })
 
     const sessionId = await driver.createSession('/project', 'Fixture thread')
     await driver.sendPrompt('/project', { ...prompt, sessionId })

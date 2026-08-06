@@ -16,7 +16,7 @@
   let handledFocusTrigger = -1
   let previousFocus: HTMLElement | null = null
 
-  function handleInput(event: InputEvent & { currentTarget: HTMLInputElement }): void {
+  function handleInput(event: Event & { currentTarget: HTMLInputElement }): void {
     value = event.currentTarget.value.replace(/\D/gu, '')
   }
 

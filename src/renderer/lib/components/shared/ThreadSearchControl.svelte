@@ -146,7 +146,7 @@
         <input
           bind:this={searchInput}
           bind:value={query}
-          oninput={(e: InputEvent) => runFtsSearch(String((e.currentTarget as HTMLInputElement).value))}
+          oninput={(e: Event & { currentTarget: HTMLInputElement }) => runFtsSearch(e.currentTarget.value)}
           type="search"
           class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
           placeholder="Search {contextLabel}..."

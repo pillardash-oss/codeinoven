@@ -21,7 +21,7 @@ import type {
 export class MockOpenCodeAdapter implements ProviderAdapter {
   id = 'opencode-mock'
   name = 'OpenCode (Mock)'
-  type: 'cli' = 'cli'
+  type = 'cli' as const
 
   capabilities: ProviderCapabilities = {
     fileEditing: true,

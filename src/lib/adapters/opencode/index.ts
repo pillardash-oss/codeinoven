@@ -21,7 +21,7 @@ import type {
 export class OpenCodeAdapter implements ProviderAdapter {
   id = 'opencode'
   name = 'OpenCode'
-  type: 'cli' = 'cli'
+  type = 'cli' as const
 
   capabilities: ProviderCapabilities = {
     fileEditing: true,
@@ -55,7 +55,7 @@ export class OpenCodeAdapter implements ProviderAdapter {
     return 'connected'
   }
 
-  async startSession(config: SessionConfig): Promise<AdapterSession> {
+  async startSession(_config: SessionConfig): Promise<AdapterSession> {
     const id = generateId()
     const session: AdapterSession = {
       id,
