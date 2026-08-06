@@ -1,5 +1,3 @@
-import { diffLines } from 'diff'
-
 export interface DiffLine {
   kind: 'context' | 'added' | 'deleted'
   text: string
@@ -36,35 +34,104 @@ export interface SplitRow {
 /** Number of context lines shown around a change block before expanding. */
 export const DEFAULT_CONTEXT_LINES = 3
 
+function sourceLines(source: string | undefined): string[] {
+  if (source === undefined) return []
+  const lines = source.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  return lines
+}
+
+function fallbackDiff(before: string[], after: string[]): DiffLine[] {
+  let prefix = 0
+  while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
+    prefix += 1
+  }
+  let suffix = 0
+  while (
+    suffix < before.length - prefix &&
+    suffix < after.length - prefix &&
+    before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  ) {
+    suffix += 1
+  }
+  return [
+    ...before.slice(0, prefix).map((text, index): DiffLine => ({
+      kind: 'context',
+      text,
+      beforeLine: index + 1,
+      afterLine: index + 1
+    })),
+    ...before.slice(prefix, before.length - suffix).map((text, index): DiffLine => ({
+      kind: 'deleted',
+      text,
+      beforeLine: prefix + index + 1
+    })),
+    ...after.slice(prefix, after.length - suffix).map((text, index): DiffLine => ({
+      kind: 'added',
+      text,
+      afterLine: prefix + index + 1
+    })),
+    ...before.slice(before.length - suffix).map((text, index): DiffLine => ({
+      kind: 'context',
+      text,
+      beforeLine: before.length - suffix + index + 1,
+      afterLine: after.length - suffix + index + 1
+    }))
+  ]
+}
+
 /**
- * Line-by-line diff using the battle-tested Myers algorithm from the `diff`
- * package. Tracks before/after line numbers so hunks can be rendered with
- * accurate headers and expandable context.
+ * Line-by-line diff (longest common subsequence) computed entirely in-house.
+ * Tracks before/after line numbers so hunks can be rendered with accurate
+ * headers and expandable context.
  */
 function lineDiff(before: string | undefined, after: string | undefined): DiffLine[] {
-  const parts = diffLines(before ?? '', after ?? '')
+  const beforeLines = sourceLines(before)
+  const afterLines = sourceLines(after)
+  if (beforeLines.length * afterLines.length > 500_000) {
+    return fallbackDiff(beforeLines, afterLines)
+  }
+
+  const lengths = Array.from(
+    { length: beforeLines.length + 1 },
+    () => new Uint32Array(afterLines.length + 1)
+  )
+  for (let beforeIndex = beforeLines.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
+    for (let afterIndex = afterLines.length - 1; afterIndex >= 0; afterIndex -= 1) {
+      lengths[beforeIndex][afterIndex] =
+        beforeLines[beforeIndex] === afterLines[afterIndex]
+          ? lengths[beforeIndex + 1][afterIndex + 1] + 1
+          : Math.max(lengths[beforeIndex + 1][afterIndex], lengths[beforeIndex][afterIndex + 1])
+    }
+  }
+
   const lines: DiffLine[] = []
-  let beforeLine = 1
-  let afterLine = 1
-  for (const part of parts) {
-    const partLines = part.value.split('\n')
-    if (partLines.at(-1) === '') partLines.pop()
-    if (part.removed) {
-      for (const text of partLines) {
-        lines.push({ kind: 'deleted', text, beforeLine: beforeLine })
-        beforeLine += 1
-      }
-    } else if (part.added) {
-      for (const text of partLines) {
-        lines.push({ kind: 'added', text, afterLine: afterLine })
-        afterLine += 1
-      }
+  let beforeIndex = 0
+  let afterIndex = 0
+  while (beforeIndex < beforeLines.length || afterIndex < afterLines.length) {
+    if (
+      beforeIndex < beforeLines.length &&
+      afterIndex < afterLines.length &&
+      beforeLines[beforeIndex] === afterLines[afterIndex]
+    ) {
+      lines.push({
+        kind: 'context',
+        text: beforeLines[beforeIndex],
+        beforeLine: beforeIndex + 1,
+        afterLine: afterIndex + 1
+      })
+      beforeIndex += 1
+      afterIndex += 1
+    } else if (
+      afterIndex < afterLines.length &&
+      (beforeIndex >= beforeLines.length ||
+        lengths[beforeIndex][afterIndex + 1] >= lengths[beforeIndex + 1][afterIndex])
+    ) {
+      lines.push({ kind: 'added', text: afterLines[afterIndex], afterLine: afterIndex + 1 })
+      afterIndex += 1
     } else {
-      for (const text of partLines) {
-        lines.push({ kind: 'context', text, beforeLine: beforeLine, afterLine: afterLine })
-        beforeLine += 1
-        afterLine += 1
-      }
+      lines.push({ kind: 'deleted', text: beforeLines[beforeIndex], beforeLine: beforeIndex + 1 })
+      beforeIndex += 1
     }
   }
   return lines

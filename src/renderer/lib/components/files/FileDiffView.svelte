@@ -61,10 +61,9 @@
     }
   }
 
-  function expand(hunk: DiffHunk, direction: 'above' | 'below', revealAll: boolean): void {
+  function expand(hunk: DiffHunk, direction: 'above' | 'below'): void {
     const state = reveal[hunk.id] ?? { above: 0, below: 0 }
-    const total = direction === 'above' ? hunk.contextBefore : hunk.contextAfter
-    const amount = revealAll ? total : state[direction] + REVEAL_STEP
+    const amount = state[direction] + REVEAL_STEP
     const next = { ...state }
     if (direction === 'above') next.above = amount
     else next.below = amount
@@ -81,17 +80,9 @@
       type="button"
       class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
       title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
-      onclick={() => expand(hunk, direction, false)}
+      onclick={() => expand(hunk, direction)}
     >
       Show {Math.min(REVEAL_STEP, hidden)} more
-    </button>
-    <button
-      type="button"
-      class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-      title={`Reveal all ${hidden} ${direction === 'above' ? 'lines above' : 'lines below'}`}
-      onclick={() => expand(hunk, direction, true)}
-    >
-      Show all
     </button>
   </div>
 {/snippet}
@@ -102,10 +93,10 @@
   </div>
 {:else}
   <div
-    class="flex h-full min-h-0 flex-col bg-app"
+    class="flex h-full min-h-0 min-w-0 flex-col bg-app"
     style={maxHeight ? `max-height:${maxHeight}` : undefined}
   >
-    <div class="min-h-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-5">
+    <div class="min-h-0 min-w-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-5">
       {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
       {:else}
