@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { Popover } from 'bits-ui'
   import {
     ChevronRight,
     Clock,
@@ -65,6 +66,8 @@
   const searchId = `model-search-${pickerId}`
   const listId = `model-list-${pickerId}`
   let search = $state('')
+  let searchInput: HTMLInputElement
+  let modelList: HTMLDivElement
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
   /**
@@ -313,44 +316,33 @@
     return model ? { provider, model } : null
   }
 
-  $effect(() => {
-    if (open) {
-      void tick().then(() => {
-        document.getElementById(searchId)?.focus()
-        document
-          .getElementById(listId)
-          ?.querySelector(`[data-model-id="${CSS.escape(modelId)}"]`)
-          ?.scrollIntoView({ block: 'nearest' })
-      })
-      // Opening the picker revalidates the catalog in the background. The store
-      // is warmed eagerly at app start for every project, so this almost always
-      // resolves from the fresh cache instantly; a stale or failed hydration is
-      // the only case where it actually contacts the harness drivers.
-      if (projectId) {
-        void providerCatalog.refresh(projectId)
-      }
-    }
-  })
-
   function close(): void {
     open = false
+  }
+
+  function resetPicker(): void {
     search = ''
     harnessFilterOpen = false
     selectedHarnesses.clear()
     showAllHarnesses = false
   }
 
-  function show(): void {
-    if (disabled) return
-    selectedHarnesses.clear()
-    showAllHarnesses = false
-    open = true
-    search = ''
-  }
-
-  function toggle(): void {
-    if (open) close()
-    else show()
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen) {
+      resetPicker()
+      return
+    }
+    resetPicker()
+    void tick().then(() => {
+      searchInput?.focus()
+      modelList
+        ?.querySelector(`[data-model-id="${CSS.escape(modelId)}"]`)
+        ?.scrollIntoView({ block: 'nearest' })
+    })
+    // Revalidate exactly once per open. Keeping this outside a reactive effect
+    // prevents catalog updates from snapping the user's scroll position back
+    // to the selected model.
+    if (projectId) void providerCatalog.refresh(projectId)
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
@@ -364,240 +356,248 @@
   }
 </script>
 
-<div class="relative">
-  <button
-    type="button"
-    class={triggerClasses}
-    aria-label={`Select model, currently ${selectedLabel}`}
-    title={`Select model — ${selectedLabel}`}
-    {disabled}
-    onclick={toggle}
-  >
-    {#if selectedProvider}
-      <span class="flex shrink-0 items-center gap-0.5">
-        {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
-      </span>
-    {:else if selectedHarnessIcon}
-      {@render harnessIcon(harnessId)}
-    {:else}
-      <Cpu size={12} />
-    {/if}
-    <span class="min-w-0 flex-1 truncate text-left" class:responsive-model-label={responsiveLabel}
-      >{selectedLabel}</span
+<div>
+  <Popover.Root bind:open onOpenChange={handleOpenChange}>
+    <Popover.Trigger
+      type="button"
+      class={triggerClasses}
+      aria-label={`Select model, currently ${selectedLabel}`}
+      title={`Select model — ${selectedLabel}`}
+      {disabled}
     >
-    {#if fast}
-      <Zap size={11} class="shrink-0 text-accent" fill="currentColor" aria-label="Fast inference" />
-    {/if}
-  </button>
-
-  {#if open}
-    <button
-      class="fixed inset-0 z-30 cursor-default"
-      aria-label="Close model picker"
-      title="Close model picker"
-      onclick={close}
-    ></button>
-    <div
-      class={`absolute left-0 z-40 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg ${side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'}`}
-      role="dialog"
-      aria-label="Select model"
-      tabindex="-1"
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key === 'Escape') close()
-      }}
-    >
-      <div class="flex items-center gap-2 border-b px-2.5 py-2">
-        <Search size={12} class="shrink-0 text-dimmed" />
-        <input
-          id={searchId}
-          bind:value={search}
-          type="text"
-          class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search models..."
-          aria-label="Search models"
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault()
-              const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-              if (firstBtn instanceof HTMLElement) firstBtn.focus()
-              return
-            }
-            if (event.key === 'Escape') {
-              event.stopPropagation()
-              close()
-            }
-          }}
+      {#if selectedProvider}
+        <span class="flex shrink-0 items-center gap-0.5">
+          {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+        </span>
+      {:else if selectedHarnessIcon}
+        {@render harnessIcon(harnessId)}
+      {:else}
+        <Cpu size={12} />
+      {/if}
+      <span class="min-w-0 flex-1 truncate text-left" class:responsive-model-label={responsiveLabel}
+        >{selectedLabel}</span
+      >
+      {#if fast}
+        <Zap
+          size={11}
+          class="shrink-0 text-accent"
+          fill="currentColor"
+          aria-label="Fast inference"
         />
-        {#if search}
-          <button
-            type="button"
-            class="shrink-0 text-dimmed transition-colors hover:text-foreground"
-            title="Clear model search"
-            aria-label="Clear model search"
-            onclick={() => (search = '')}
-          >
-            <X size={11} />
-          </button>
-        {/if}
-      </div>
+      {/if}
+    </Popover.Trigger>
 
-      {#if harnessOptions.length > 1}
-        <div class="border-b px-2.5 py-1.5">
-          <div class="flex items-center gap-1.5">
+    <Popover.Portal>
+      <Popover.Content
+        {side}
+        align="start"
+        sideOffset={4}
+        collisionPadding={12}
+        class="z-50 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        role="dialog"
+        aria-label="Select model"
+        tabindex={-1}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onkeydown={(event: KeyboardEvent) => {
+          if (event.key === 'Escape') close()
+        }}
+      >
+        <div class="flex items-center gap-2 border-b px-2.5 py-2">
+          <Search size={12} class="shrink-0 text-dimmed" />
+          <input
+            id={searchId}
+            bind:this={searchInput}
+            bind:value={search}
+            type="text"
+            class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            placeholder="Search models..."
+            aria-label="Search models"
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                close()
+              }
+            }}
+          />
+          {#if search}
             <button
               type="button"
-              class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-expanded={harnessFilterOpen}
-              aria-haspopup="true"
-              title={harnessFilterOpen ? 'Hide harness filter options' : 'Filter models by harness'}
-              onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
+              class="shrink-0 text-dimmed transition-colors hover:text-foreground"
+              title="Clear model search"
+              aria-label="Clear model search"
+              onclick={() => (search = '')}
             >
-              <ListFilter size={11} class="shrink-0 text-dimmed" />
-              <span class="truncate">{harnessFilterLabel}</span>
-              {#if harnessFilterActive}
-                <span class="ml-auto shrink-0 text-[9px] text-primary">Filtered</span>
-              {/if}
+              <X size={11} />
             </button>
-            {#if harnessFilterActive}
-              <button
-                type="button"
-                class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
-                title="Clear harness filter"
-                aria-label="Clear harness filter"
-                onclick={clearHarnessFilter}
-              >
-                <X size={11} />
-              </button>
-            {/if}
-          </div>
-          {#if harnessFilterOpen}
-            <div
-              class="mt-1.5 flex flex-wrap gap-1"
-              role="group"
-              aria-label="Filter models by harness"
-            >
-              <button
-                type="button"
-                class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
-                  ? 'border-primary bg-primary text-on-primary'
-                  : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                aria-pressed={!harnessFilterActive}
-                onclick={clearHarnessFilter}
-              >
-                <ListFilter size={11} class="shrink-0" />
-                All
-              </button>
-              {#each harnessOptions as option (option.id)}
-                <button
-                  type="button"
-                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {isHarnessSelected(
-                    option.id
-                  )
-                    ? 'border-primary bg-primary text-on-primary'
-                    : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                  aria-pressed={isHarnessSelected(option.id)}
-                  onclick={() => toggleHarness(option.id)}
-                >
-                  {@render harnessIcon(option.id)}
-                  <span class="truncate">{option.name}</span>
-                </button>
-              {/each}
-            </div>
           {/if}
         </div>
-      {/if}
 
-      <div id={listId} class="max-h-60 overflow-y-auto p-1">
-        {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-          <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
-        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
-          <p class="px-2 py-2 text-[11px] text-dimmed">
-            {search
-              ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
-              : 'No models in the selected harnesses'}
-          </p>
-        {:else}
-          {#if favoriteModelsList.length > 0}
-            {@render groupLabel(Star, 'Favorites', 'text-amber-400')}
-            {#each favoriteModelsList as entry (modelEntryKey(entry))}
-              {@render modelRow(entry)}
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#if recentModelsList.length > 0}
-            {@render groupLabel(Clock, 'Recently used', 'text-muted')}
-            {#each recentModelsList as entry (modelEntryKey(entry))}
-              {@render modelRow(entry)}
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#if unavailableFavoriteModels.length > 0 && !search}
-            {@render groupLabel(Star, 'Unavailable favorites', 'text-dimmed')}
-            {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
-              <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-xs">{favorite.modelId}</span>
-                  {#if favorite.providerId}
-                    <span class="block truncate text-[10px]">{favorite.providerId}</span>
-                  {/if}
-                </span>
-                {#if onToggleFavorite}
+        {#if harnessOptions.length > 1}
+          <div class="border-b px-2.5 py-1.5">
+            <div class="flex items-center gap-1.5">
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                aria-expanded={harnessFilterOpen}
+                aria-haspopup="true"
+                title={harnessFilterOpen
+                  ? 'Hide harness filter options'
+                  : 'Filter models by harness'}
+                onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
+              >
+                <ListFilter size={11} class="shrink-0 text-dimmed" />
+                <span class="truncate">{harnessFilterLabel}</span>
+                {#if harnessFilterActive}
+                  <span class="ml-auto shrink-0 text-[9px] text-primary">Filtered</span>
+                {/if}
+              </button>
+              {#if harnessFilterActive}
+                <button
+                  type="button"
+                  class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
+                  title="Clear harness filter"
+                  aria-label="Clear harness filter"
+                  onclick={clearHarnessFilter}
+                >
+                  <X size={11} />
+                </button>
+              {/if}
+            </div>
+            {#if harnessFilterOpen}
+              <div
+                class="mt-1.5 flex flex-wrap gap-1"
+                role="group"
+                aria-label="Filter models by harness"
+              >
+                <button
+                  type="button"
+                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
+                    ? 'border-primary bg-primary text-on-primary'
+                    : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                  aria-pressed={!harnessFilterActive}
+                  onclick={clearHarnessFilter}
+                >
+                  <ListFilter size={11} class="shrink-0" />
+                  All
+                </button>
+                {#each harnessOptions as option (option.id)}
                   <button
                     type="button"
-                    class="shrink-0 transition-colors hover:text-foreground"
-                    title="Remove unavailable favorite"
-                    aria-label={`Remove ${favorite.modelId} from favorites`}
-                    onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
+                    class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {isHarnessSelected(
+                      option.id
+                    )
+                      ? 'border-primary bg-primary text-on-primary'
+                      : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                    aria-pressed={isHarnessSelected(option.id)}
+                    onclick={() => toggleHarness(option.id)}
                   >
-                    <X size={11} />
+                    {@render harnessIcon(option.id)}
+                    <span class="truncate">{option.name}</span>
                   </button>
-                {/if}
-              </div>
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#each filteredProviders as provider (provider.harnessId + ':' + provider.id)}
-            {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
-            <button
-              type="button"
-              class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-              aria-expanded={!collapsed}
-              title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
-              onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
-            >
-              <ChevronRight
-                size={11}
-                class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
-              />
-              <VendorIcon name={provider.name} size={14} />
-              <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                {provider.name}
-              </span>
-              {#if provider.catalogStatus === 'unavailable'}
-                <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
-              {:else}
-                <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
-              {/if}
-            </button>
-            {#if !collapsed}
-              {#if provider.catalogStatus === 'unavailable'}
-                <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
-                  {provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
-                </p>
-              {:else}
-                {#each provider.models as model (model.id)}
-                  {@render modelRow({ provider, model })}
                 {/each}
-              {/if}
+              </div>
             {/if}
-          {/each}
+          </div>
         {/if}
-      </div>
-    </div>
-  {/if}
+
+        <div id={listId} bind:this={modelList} class="max-h-60 overflow-y-auto p-1">
+          {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
+            <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
+          {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+            <p class="px-2 py-2 text-[11px] text-dimmed">
+              {search
+                ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
+                : 'No models in the selected harnesses'}
+            </p>
+          {:else}
+            {#if favoriteModelsList.length > 0}
+              {@render groupLabel(Star, 'Favorites', 'text-amber-400')}
+              {#each favoriteModelsList as entry (modelEntryKey(entry))}
+                {@render modelRow(entry)}
+              {/each}
+              {@render divider()}
+            {/if}
+
+            {#if recentModelsList.length > 0}
+              {@render groupLabel(Clock, 'Recently used', 'text-muted')}
+              {#each recentModelsList as entry (modelEntryKey(entry))}
+                {@render modelRow(entry)}
+              {/each}
+              {@render divider()}
+            {/if}
+
+            {#if unavailableFavoriteModels.length > 0 && !search}
+              {@render groupLabel(Star, 'Unavailable favorites', 'text-dimmed')}
+              {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
+                <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+                  <span class="min-w-0 flex-1">
+                    <span class="block truncate text-xs">{favorite.modelId}</span>
+                    {#if favorite.providerId}
+                      <span class="block truncate text-[10px]">{favorite.providerId}</span>
+                    {/if}
+                  </span>
+                  {#if onToggleFavorite}
+                    <button
+                      type="button"
+                      class="shrink-0 transition-colors hover:text-foreground"
+                      title="Remove unavailable favorite"
+                      aria-label={`Remove ${favorite.modelId} from favorites`}
+                      onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
+                    >
+                      <X size={11} />
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+              {@render divider()}
+            {/if}
+
+            {#each filteredProviders as provider (provider.harnessId + ':' + provider.id)}
+              {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
+              <button
+                type="button"
+                class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                aria-expanded={!collapsed}
+                title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
+                onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
+              >
+                <ChevronRight
+                  size={11}
+                  class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+                />
+                <VendorIcon name={provider.name} size={14} />
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                  {provider.name}
+                </span>
+                {#if provider.catalogStatus === 'unavailable'}
+                  <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
+                {:else}
+                  <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
+                {/if}
+              </button>
+              {#if !collapsed}
+                {#if provider.catalogStatus === 'unavailable'}
+                  <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
+                    {provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
+                  </p>
+                {:else}
+                  {#each provider.models as model (model.id)}
+                    {@render modelRow({ provider, model })}
+                  {/each}
+                {/if}
+              {/if}
+            {/each}
+          {/if}
+        </div>
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
 </div>
 
 {#snippet harnessIcon(harnessId: string)}
