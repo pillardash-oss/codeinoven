@@ -131,10 +131,10 @@ function attemptMqttSignaling(
       }
       resolvePromise(ok)
     }
-    const timer = setTimeout(
-      () => finish(false, 'signaling-timeout'),
-      timeoutMs
-    ) as unknown as number
+    const timer = setTimeout(() => {
+      socket.close()
+      finish(false, 'signaling-timeout')
+    }, timeoutMs) as unknown as number
 
     socket.onopen = () => {
       clearTimeout(timer)
@@ -144,10 +144,17 @@ function attemptMqttSignaling(
           username: options.mqtt.username ?? 'desktop'
         })
       )
+      socket.close()
       finish(true)
     }
-    socket.onerror = () => finish(false, 'socket-error')
-    socket.onclose = () => finish(false, 'socket-closed')
+    socket.onerror = () => {
+      clearTimeout(timer)
+      socket.close()
+      finish(false, 'socket-error')
+    }
+    socket.onclose = () => {
+      if (!settled) finish(false, 'socket-closed')
+    }
   })
 }
 

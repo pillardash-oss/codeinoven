@@ -46,3 +46,43 @@ export const remoteLog = {
     activeLogger.error(redactLog(message))
   }
 }
+
+export interface RemoteLogEntry {
+  level: 'dev' | 'info' | 'error'
+  message: string
+  at: number
+}
+
+const MAX_LOG_ENTRIES = 60
+let recentEntries: RemoteLogEntry[] = []
+
+/** The most recently recorded remote-connection log entries (newest last). */
+export function recentRemoteLogs(): readonly RemoteLogEntry[] {
+  return recentEntries
+}
+
+/**
+ * An in-memory ring-buffer sink so remote diagnostics are retained (and
+ * inspectable in the Remote view) instead of silently dropped. Wire it at the
+ * app entrypoint with `setRemoteLogger(createRingBufferLogger())`.
+ */
+export function createRingBufferLogger(limit = MAX_LOG_ENTRIES): RemoteLogger {
+  return {
+    dev(message: string): void {
+      record(message, 'dev', limit)
+    },
+    info(message: string): void {
+      record(message, 'info', limit)
+    },
+    error(message: string): void {
+      record(message, 'error', limit)
+    }
+  }
+}
+
+function record(message: string, level: RemoteLogEntry['level'], limit: number): void {
+  recentEntries = [...recentEntries, { level, message, at: Date.now() }]
+  if (recentEntries.length > limit) {
+    recentEntries = recentEntries.slice(recentEntries.length - limit)
+  }
+}
