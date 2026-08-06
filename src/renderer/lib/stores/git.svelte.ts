@@ -11,6 +11,7 @@ import type {
   GitIdentity,
   GitRemoteInfo,
   GitResetMode,
+  GitStashEntry,
   GitStatus,
   MergeSummary,
   PrCreateInput,
@@ -35,6 +36,8 @@ export type GitOperation =
   | 'merge'
   | 'rebase'
   | 'stash'
+  | 'stash-pop'
+  | 'stash-drop'
   | 'abortMerge'
   | 'abortRebase'
   | 'pr-create'
@@ -57,6 +60,7 @@ class GitState {
   remotes: GitRemoteInfo[] = $state([])
   identity: GitIdentity | null = $state(null)
   credentialStatus: GitCredentialStatus | null = $state(null)
+  stashes: GitStashEntry[] = $state([])
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
 
@@ -103,18 +107,22 @@ class GitState {
     this.markBusy('refresh', true)
     this.error = null
     try {
-      const [status, branches, identity, remotes, credentialStatus] = await Promise.all([
+      const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
         invoke('git:status', projectId),
         invoke('git:branches', projectId),
         invoke('git:getIdentity', projectId),
         invoke('git:remotes', projectId).catch(() => [] as GitRemoteInfo[]),
-        invoke('git:getCredentialStatus', projectId).catch(() => null as GitCredentialStatus | null)
+        invoke('git:getCredentialStatus', projectId).catch(
+          () => null as GitCredentialStatus | null
+        ),
+        invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
       this.status = status
       this.branches = branches
       this.identity = identity
       this.remotes = remotes
       this.credentialStatus = credentialStatus
+      this.stashes = stashes
     } catch (reason) {
       this.error = errorMessage(reason, 'Git status could not be loaded')
       this.status = null
@@ -359,10 +367,37 @@ class GitState {
     this.error = null
     try {
       this.status = await invoke('git:stash', projectId, message)
+      this.stashes = await invoke('git:stashList', projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash failed')
     } finally {
       this.markBusy('stash', false)
+    }
+  }
+
+  async popStash(projectId: string, id?: string): Promise<void> {
+    this.markBusy('stash-pop', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:stashPop', projectId, id)
+      this.stashes = await invoke('git:stashList', projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Stash pop failed')
+    } finally {
+      this.markBusy('stash-pop', false)
+    }
+  }
+
+  async dropStash(projectId: string, id?: string): Promise<void> {
+    this.markBusy('stash-drop', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:stashDrop', projectId, id)
+      this.stashes = await invoke('git:stashList', projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Stash drop failed')
+    } finally {
+      this.markBusy('stash-drop', false)
     }
   }
 

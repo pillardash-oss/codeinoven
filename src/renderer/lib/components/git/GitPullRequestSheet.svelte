@@ -19,7 +19,8 @@
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
   let body = $state('')
-  let base = $state('main')
+  let head = $state('')
+  let base = $state('')
   let draft = $state(false)
   let method = $state<PrMergeMethod>('squash')
   let result: PullRequestReference | null = $state(null)
@@ -29,6 +30,7 @@
   let selectedPR = $state<PullRequestReference | null>(null)
 
   const branch = $derived(gitState.status?.branch ?? null)
+  const branches = $derived(gitState.branches.map((b) => b.name))
   const creating = $derived(gitState.isBusy('pr-create'))
   const merging = $derived(gitState.isBusy('pr-merge'))
 
@@ -39,7 +41,6 @@
       const url = await invoke('repository:remoteOrigin', project.path)
       const identity = parseRemoteIdentity(url ?? '')
       originIdentity = identity
-      if (identity && !base.trim()) base = 'main'
     } catch {
       originError = 'Could not resolve the repository remote'
     }
@@ -54,12 +55,12 @@
   }
 
   async function createPullRequest(): Promise<void> {
-    if (!originIdentity || !branch) return
+    if (!originIdentity || !head) return
     const reference = await gitState.createPullRequest(projectId, {
       title: title.trim(),
       body: body.trim() || undefined,
-      head: branch,
-      base: base.trim() || 'main',
+      head,
+      base: base || 'main',
       draft
     })
     if (reference) result = reference
@@ -102,6 +103,13 @@
 
   $effect(() => {
     void loadOrigin()
+  })
+
+  $effect(() => {
+    if (originIdentity && branches.length > 0) {
+      if (!head) head = branch ?? branches[0]
+      if (!base) base = branches.includes('main') ? 'main' : branches[0]
+    }
   })
 
   $effect(() => {
@@ -152,8 +160,8 @@
       <p
         class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[10px] leading-relaxed text-warning"
       >
-        No GitHub remote (origin) is configured for this project. Add one in the Git panel's Sync
-        section first.
+        No GitHub remote (origin) is configured for this project. Add the repository remote in the
+        app's project settings first.
       </p>
     {/if}
 
@@ -204,13 +212,16 @@
             >
               Head (from)
             </label>
-            <input
+            <select
               id="pr-head"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none disabled:opacity-50"
-              value={branch ?? ''}
-              disabled
-              readonly
-            />
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              bind:value={head}
+              disabled={branches.length === 0}
+            >
+              {#each branches as name (name)}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
           </div>
           <div>
             <label
@@ -219,12 +230,16 @@
             >
               Base (into)
             </label>
-            <input
+            <select
               id="pr-base"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-              placeholder="main"
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
               bind:value={base}
-            />
+              disabled={branches.length === 0}
+            >
+              {#each branches as name (name)}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
           </div>
         </div>
         <div>
@@ -329,7 +344,7 @@
           <button
             type="button"
             class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={!originIdentity || !branch || !title.trim() || creating}
+            disabled={!originIdentity || !head || !title.trim() || creating}
             onclick={() => void createPullRequest()}
           >
             {#if creating}

@@ -2,7 +2,13 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { gitState } from '$lib/stores/git.svelte'
-  import type { GitCommitInfo, GitDiff, GitFileChange, GitResetMode } from '$shared/types'
+  import type {
+    GitCommitInfo,
+    GitDiff,
+    GitFileChange,
+    GitResetMode,
+    GitHubUser
+  } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
@@ -11,6 +17,7 @@
   import BranchPicker from './BranchPicker.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { AlertDialog } from 'bits-ui'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import {
@@ -24,6 +31,7 @@
     History,
     Loader2,
     RefreshCw,
+    Trash2,
     TreePine,
     Unplug
   } from '@lucide/svelte'
@@ -49,14 +57,11 @@
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
-  let showSync = $state(false)
-  let showRemoteForm = $state(false)
-  let remoteName = $state('')
-  let remoteUrl = $state('')
-  let showCredentialForm = $state(false)
-  let tokenValue = $state('')
   let pushConfirm = $state(false)
   let showIntegrate = $state(false)
+  let showStashes = $state(false)
+  let stashMessage = $state('')
+  let stashDropTarget = $state<string | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
   let acknowledgeActiveTurn = $state(false)
@@ -70,6 +75,7 @@
   let showGitHubSignIn = $state(false)
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
+  let githubUser = $state<GitHubUser | null>(null)
   let loadingCommitDiff = $state(false)
   let commitDiffs = $state<Record<string, GitDiff>>({})
   let commitExpanded = $state<Record<string, boolean>>({})
@@ -195,12 +201,14 @@
     const status = await gitState.githubAuthStatus()
     githubConnected = status.connected
     githubConfigured = status.configured
+    githubUser = status.user ?? null
   }
 
   async function signOutGitHub(): Promise<void> {
     const status = await gitState.logoutGitHub()
     githubConnected = status.connected
     githubConfigured = status.configured
+    githubUser = status.user ?? null
   }
 
   async function saveIdentity(): Promise<void> {
@@ -358,29 +366,10 @@
   const primaryRemote = $derived(
     remotes.find((remote) => remote.name === 'origin') ?? remotes[0] ?? null
   )
-  const credentialConfigured = $derived(gitState.credentialStatus?.configured ?? false)
-  const secureStorageAvailable = $derived(gitState.credentialStatus?.secureStorageAvailable ?? true)
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
-
-  async function addRemoteAction(): Promise<void> {
-    await gitState.addRemote(projectId, remoteName.trim(), remoteUrl.trim())
-    if (!gitState.error) {
-      showRemoteForm = false
-      remoteName = ''
-      remoteUrl = ''
-    }
-  }
-
-  async function setCredentialAction(): Promise<void> {
-    await gitState.setCredential(projectId, tokenValue)
-    if (!gitState.error) {
-      showCredentialForm = false
-      tokenValue = ''
-    }
-  }
 
   async function pushAction(): Promise<void> {
     const remote = primaryRemote
@@ -399,10 +388,6 @@
     pushConfirm = false
     if (!primaryRemote || !status?.branch) return
     await gitState.push(projectId, true, primaryRemote.name, status.branch)
-  }
-
-  async function removeRemoteAction(name: string): Promise<void> {
-    await gitState.removeRemote(projectId, name)
   }
 
   const conflictState = $derived(gitState.conflictState)
@@ -444,7 +429,32 @@
   }
 
   async function stashChanges(): Promise<void> {
-    await gitState.stash(projectId)
+    await gitState.stash(projectId, stashMessage.trim() || undefined)
+    if (!gitState.error) {
+      stashMessage = ''
+      showStashes = true
+      void refreshStatus()
+    }
+  }
+
+  async function popStash(id?: string): Promise<void> {
+    await gitState.popStash(projectId, id)
+    if (!gitState.error) {
+      void refreshStatus()
+      void reloadHistory()
+    }
+  }
+
+  function requestStashDrop(id: string): void {
+    stashDropTarget = id
+  }
+
+  async function confirmStashDrop(): Promise<void> {
+    const target = stashDropTarget
+    if (!target) return
+    stashDropTarget = null
+    await gitState.dropStash(projectId, target)
+    if (!gitState.error) void refreshStatus()
   }
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
@@ -466,9 +476,13 @@
           branches={gitState.branches}
           currentBranch={status?.branch ?? null}
           isBusy={gitState.isBusy('checkout')}
+          {primaryRemote}
+          github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
           onSelect={(branch) => void checkoutBranch(branch)}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
+          onSignIn={() => (showGitHubSignIn = true)}
+          onSignOut={() => void signOutGitHub()}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
@@ -935,7 +949,7 @@
                 </div>
               {/if}
 
-              <!-- Sync + Integrate + PR -->
+              <!-- Pull request + Stash + Integrate -->
               <div class="space-y-2">
                 <!-- Pull Request -->
                 <div class="overflow-hidden rounded-lg border border-border bg-surface">
@@ -951,241 +965,94 @@
                   </button>
                 </div>
 
-                <!-- Sync -->
+                <!-- Stash -->
                 <div class="overflow-hidden rounded-lg border border-border bg-surface">
                   <button
                     type="button"
                     class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                    aria-expanded={showSync}
-                    onclick={() => (showSync = !showSync)}
+                    aria-expanded={showStashes}
+                    onclick={() => (showStashes = !showStashes)}
                   >
                     <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
-                      >Sync</span
+                      >Stash</span
                     >
-                    <span class="flex-1"></span>
-                    {#if status?.upstream}
-                      <span class="font-mono text-[9px] text-dimmed">{status.upstream}</span>
+                    {#if gitState.stashes.length > 0}
+                      <span
+                        class="rounded-full bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-primary"
+                      >
+                        {gitState.stashes.length}
+                      </span>
                     {/if}
-                    {#if showSync}
+                    <span class="flex-1"></span>
+                    {#if showStashes}
                       <ChevronDown size={12} class="text-dimmed" />
                     {:else}
                       <ChevronRight size={12} class="text-dimmed" />
                     {/if}
                   </button>
-                  {#if showSync}
+                  {#if showStashes}
                     <div class="border-t border-border px-3 py-2">
-                      {#if remotes.length === 0}
-                        <p class="text-[9px] text-dimmed">No remotes configured.</p>
-                      {:else}
-                        <div class="mb-2 space-y-1">
-                          {#each remotes as remote (remote.name)}
-                            <div class="flex items-center gap-2">
-                              <span class="w-14 shrink-0 truncate font-mono text-[10px] text-muted">
-                                {remote.name}
-                              </span>
-                              <span
-                                class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed"
-                              >
-                                {remote.url}
-                              </span>
+                      <div class="flex items-center gap-1.5">
+                        <input
+                          class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                          placeholder="Stash message (optional)"
+                          bind:value={stashMessage}
+                        />
+                        <button
+                          type="button"
+                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
+                          onclick={() => void stashChanges()}
+                        >
+                          {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
+                        </button>
+                      </div>
+                      <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                        Shelves unstaged and staged changes so you can switch work.
+                      </p>
+
+                      {#if gitState.stashes.length > 0}
+                        <div class="mt-2 overflow-hidden rounded-lg border border-border">
+                          {#each gitState.stashes as stash (stash.id)}
+                            <div
+                              class="flex items-center gap-2 border-b border-border px-2.5 py-1.5 last:border-b-0"
+                            >
+                              <div class="min-w-0 flex-1">
+                                <p class="truncate font-mono text-[10px] text-muted">
+                                  {stash.message}
+                                </p>
+                                <p class="text-[8px] text-dimmed">
+                                  {stash.id} · {stash.branch ?? 'unknown'} · {relativeTime(
+                                    stash.date
+                                  )}
+                                </p>
+                              </div>
                               <button
                                 type="button"
-                                class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-danger hover:bg-danger/10"
-                                onclick={() => void removeRemoteAction(remote.name)}
+                                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                                disabled={gitState.isBusy('stash-pop') ||
+                                  gitState.isBusy('stash-drop')}
+                                onclick={() => void popStash(stash.id)}
                               >
-                                ×
+                                {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
+                              </button>
+                              <button
+                                type="button"
+                                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
+                                disabled={gitState.isBusy('stash-pop') ||
+                                  gitState.isBusy('stash-drop')}
+                                title="Discard stash {stash.id}"
+                                aria-label="Discard stash {stash.id}"
+                                onclick={() => requestStashDrop(stash.id)}
+                              >
+                                <Trash2 size={11} />
                               </button>
                             </div>
                           {/each}
                         </div>
-                      {/if}
-
-                      {#if showRemoteForm}
-                        <div class="mb-2 space-y-1.5">
-                          <input
-                            class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                            placeholder="Remote name"
-                            bind:value={remoteName}
-                          />
-                          <input
-                            class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                            placeholder="https://github.com/owner/repo.git"
-                            bind:value={remoteUrl}
-                          />
-                          <div class="flex justify-end gap-1.5">
-                            <button
-                              type="button"
-                              class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                              onclick={() => (showRemoteForm = false)}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                              disabled={!remoteName.trim() || !remoteUrl.trim()}
-                              onclick={() => void addRemoteAction()}
-                            >
-                              Add
-                            </button>
-                          </div>
-                        </div>
                       {:else}
-                        <button
-                          type="button"
-                          class="mb-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-                          onclick={() => (showRemoteForm = true)}
-                        >
-                          Add remote
-                        </button>
+                        <p class="mt-2 text-[9px] text-dimmed">No stashes yet.</p>
                       {/if}
-
-                      {#if pushConfirm}
-                        <div
-                          class="mb-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2"
-                        >
-                          <p class="text-[10px] font-medium text-foreground">Push with upstream?</p>
-                          <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
-                            Set <span class="font-mono text-foreground"
-                              >{primaryRemote?.name}/{status?.branch}</span
-                            > as upstream.
-                          </p>
-                          <div class="mt-1.5 flex justify-end gap-1.5">
-                            <button
-                              type="button"
-                              class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                              onclick={() => (pushConfirm = false)}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                              disabled={syncBusy}
-                              onclick={() => void confirmPushUpstream()}
-                            >
-                              Push
-                            </button>
-                          </div>
-                        </div>
-                      {/if}
-
-                      <div class="flex gap-1.5">
-                        <button
-                          type="button"
-                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={remotes.length === 0 || syncBusy}
-                          onclick={() => void gitState.fetch(projectId)}
-                        >
-                          {#if gitState.isBusy('fetch')}
-                            <Loader2 size={10} class="animate-spin" />
-                          {/if}
-                          Fetch
-                        </button>
-                        <button
-                          type="button"
-                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={remotes.length === 0 || syncBusy}
-                          onclick={() => void gitState.pull(projectId)}
-                        >
-                          {#if gitState.isBusy('pull')}
-                            <Loader2 size={10} class="animate-spin" />
-                          {/if}
-                          Pull
-                        </button>
-                        <button
-                          type="button"
-                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
-                          onclick={() => void pushAction()}
-                        >
-                          {#if gitState.isBusy('push')}
-                            <Loader2 size={10} class="animate-spin" />
-                          {/if}
-                          Push
-                        </button>
-                      </div>
-
-                      <div class="mt-2 border-t border-border pt-2">
-                        <p class="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted">
-                          GitHub account
-                        </p>
-                        {#if githubConnected}
-                          <div class="flex items-center gap-2">
-                            <span class="flex-1 text-[10px] text-success">Signed in to GitHub</span>
-                            <button
-                              type="button"
-                              class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
-                              onclick={() => void signOutGitHub()}
-                            >
-                              Sign out
-                            </button>
-                          </div>
-                        {:else if githubConfigured}
-                          <button
-                            type="button"
-                            class="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[10px] font-medium text-on-primary hover:bg-primary-hover"
-                            onclick={() => (showGitHubSignIn = true)}
-                          >
-                            Sign in with GitHub
-                          </button>
-                        {:else}
-                          <p class="text-[9px] leading-relaxed text-dimmed">
-                            GitHub sign-in needs an app client ID. Until then, you can add a
-                            personal access token below.
-                          </p>
-                          {#if credentialConfigured || showCredentialForm}
-                            {#if credentialConfigured}
-                              <div class="mt-1.5 flex items-center gap-2">
-                                <span class="flex-1 text-[10px] text-success">Token stored</span>
-                                <button
-                                  type="button"
-                                  class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
-                                  onclick={() => void gitState.removeCredential(projectId)}
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            {:else}
-                              <div class="mt-1.5 space-y-1.5">
-                                <input
-                                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-                                  placeholder="GitHub token"
-                                  type="password"
-                                  disabled={!secureStorageAvailable}
-                                  bind:value={tokenValue}
-                                />
-                                <div class="flex justify-end gap-1.5">
-                                  <button
-                                    type="button"
-                                    class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                                    onclick={() => (showCredentialForm = false)}
-                                  >
-                                    Cancel
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                                    disabled={!tokenValue.trim() || !secureStorageAvailable}
-                                    onclick={() => void setCredentialAction()}
-                                  >
-                                    Save
-                                  </button>
-                                </div>
-                              </div>
-                            {/if}
-                          {:else}
-                            <button
-                              type="button"
-                              class="mt-1.5 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                              disabled={!secureStorageAvailable}
-                              onclick={() => (showCredentialForm = true)}
-                            >
-                              Add token
-                            </button>
-                          {/if}
-                        {/if}
-                      </div>
                     </div>
                   {/if}
                 </div>
@@ -1210,42 +1077,45 @@
                   </button>
                   {#if showIntegrate}
                     <div class="border-t border-border px-3 py-2">
-                      <div class="flex items-center gap-1.5">
-                        <input
-                          class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                          placeholder="Branch to merge / rebase onto"
-                          bind:value={mergeTarget}
-                        />
+                      <label
+                        class="mb-1 block text-[9px] font-semibold uppercase tracking-wide text-muted"
+                        for="integrate-target"
+                      >
+                        Bring in changes from
+                      </label>
+                      <select
+                        id="integrate-target"
+                        class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+                        bind:value={mergeTarget}
+                      >
+                        <option value="" disabled>Select a branch…</option>
+                        {#each gitState.branches as branch (branch.name)}
+                          {#if branch.name !== status?.branch}
+                            <option value={branch.name}>{branch.name}</option>
+                          {/if}
+                        {/each}
+                      </select>
+                      <div class="mt-1.5 flex gap-1.5">
                         <button
                           type="button"
-                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={!mergeTarget.trim() || integrateBusy}
+                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={!mergeTarget || integrateBusy}
                           onclick={() => requestMergeOrRebase('merge')}
                         >
                           Merge
                         </button>
                         <button
                           type="button"
-                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={!mergeTarget.trim() || integrateBusy}
+                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                          disabled={!mergeTarget || integrateBusy}
                           onclick={() => requestMergeOrRebase('rebase')}
                         >
                           Rebase
                         </button>
                       </div>
-                      <div class="mt-1.5 flex items-center justify-between gap-2">
-                        <p class="text-[9px] leading-relaxed text-dimmed">
-                          Overwrites local changes.
-                        </p>
-                        <button
-                          type="button"
-                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={(status?.clean ?? true) || integrateBusy}
-                          onclick={() => void stashChanges()}
-                        >
-                          {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
-                        </button>
-                      </div>
+                      <p class="mt-1.5 text-[9px] leading-relaxed text-dimmed">
+                        Merge keeps history; rebase replays your commits on top.
+                      </p>
                     </div>
                   {/if}
                 </div>
@@ -1335,6 +1205,32 @@
   </div>
 
   <!-- Pinned action bar -->
+  {#if pushConfirm}
+    <div class="shrink-0 border-t border-border bg-warning/10 px-3 py-2">
+      <p class="text-[10px] font-medium text-foreground">Push with upstream?</p>
+      <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+        Set <span class="font-mono text-foreground">{primaryRemote?.name}/{status?.branch}</span> as upstream.
+      </p>
+      <div class="mt-1.5 flex justify-end gap-1.5">
+        <button
+          type="button"
+          class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+          onclick={() => (pushConfirm = false)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          disabled={syncBusy}
+          onclick={() => void confirmPushUpstream()}
+        >
+          Push
+        </button>
+      </div>
+    </div>
+  {/if}
+
   {#if repoState === 'git' && status && changes.length > 0}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
@@ -1588,3 +1484,34 @@
     />
   {/if}
 </div>
+
+{#if stashDropTarget}
+  <AlertDialog.Root open onOpenChange={() => (stashDropTarget = null)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Discard stash?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          Stash <strong class="text-foreground">{stashDropTarget}</strong> will be permanently discarded.
+          This cannot be undone.
+        </AlertDialog.Description>
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+            onclick={() => void confirmStashDrop()}
+          >
+            Discard
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}

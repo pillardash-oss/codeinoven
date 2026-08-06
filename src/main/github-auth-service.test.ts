@@ -105,14 +105,29 @@ describe('GitHubAuthService', () => {
     await expect(service.pollAccessToken('device-abc')).resolves.toEqual({ status: 'expired' })
   })
 
-  it('resolves the stored token and reports connected status', async () => {
+  it('resolves the stored token and reports connected status with the user profile', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
     const vault = mockVault()
     vi.mocked(vault.exists).mockResolvedValue(true)
     vi.mocked(vault.resolve).mockResolvedValue('gho_secret')
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        login: 'octocat',
+        name: 'The Octocat',
+        avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
+      })
+    )
     const service = new GitHubAuthService(vault)
 
-    await expect(service.status()).resolves.toEqual({ connected: true, configured: true })
+    await expect(service.status()).resolves.toEqual({
+      connected: true,
+      configured: true,
+      user: {
+        login: 'octocat',
+        name: 'The Octocat',
+        avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4'
+      }
+    })
     await expect(service.resolveToken()).resolves.toBe('gho_secret')
   })
 

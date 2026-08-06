@@ -50,6 +50,7 @@ import {
   validateScopeBoard,
   validateScopeSlice,
   validateStashMessage,
+  validateStashId,
   validateThreadSettings,
   validateThreadStatus,
   validateThreadUpdateInput
@@ -2523,6 +2524,21 @@ export function registerIpcHandlers(
     gitService.stash(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
       validateStashMessage(message)
+    )
+  )
+  ipcMain.handle('git:stashList', async (_, projectId: unknown) =>
+    gitService.listStashes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:stashPop', async (_, projectId: unknown, id?: unknown) =>
+    gitService.popStash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id)
+    )
+  )
+  ipcMain.handle('git:stashDrop', async (_, projectId: unknown, id?: unknown) =>
+    gitService.dropStash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id)
     )
   )
   ipcMain.handle('git:abortMerge', async (_, projectId: unknown) =>
