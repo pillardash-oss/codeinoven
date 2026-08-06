@@ -340,4 +340,27 @@ describe('GitService', () => {
     const pulledStatus = await service.getStatus(working)
     expect(pulledStatus.behind).toBe(0)
   })
+
+  it('serializes concurrent mutations per repository without corruption', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+
+    await writeFile(join(directory, 'a.txt'), 'a\n', 'utf-8')
+    await writeFile(join(directory, 'b.txt'), 'b\n', 'utf-8')
+
+    // Fire overlapping mutations; the per-project queue must keep them strict
+    // FIFO so the index is never left in a torn state.
+    await Promise.all([
+      service.stage(directory, ['a.txt', 'b.txt']),
+      service.commit(directory, 'first-commit'),
+      service.stage(directory, ['a.txt'])
+    ])
+
+    const status = await service.getStatus(directory)
+    expect(status.clean).toBe(true)
+
+    const log = await service.log(directory)
+    expect(log[0]?.message).toBe('first-commit')
+  })
 })
