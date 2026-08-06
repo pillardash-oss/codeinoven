@@ -45,8 +45,7 @@
     Timeline,
     Trash2,
     X,
-    BrainCircuit,
-    Radio
+    BrainCircuit
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
@@ -140,7 +139,6 @@
     projects: 'Projects',
     chats: 'Chats',
     'settings-harnesses': 'Harnesses',
-    'remote-client': 'Remote',
     remote: 'Remote',
     settings: 'Settings',
     scope: 'Scope',
@@ -632,20 +630,6 @@
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
       <span class="header-control-label text-[11px] font-medium">Chats</span>
-    </button>
-
-    <!-- Remote — the phone client (LAN-first, relay fallback). -->
-    <button
-      class="flex h-7 items-center gap-1.5 rounded-md px-2.5 transition-colors duration-150 {activeView ===
-      'remote-client'
-        ? 'bg-foreground text-app'
-        : 'text-muted hover:bg-elevated hover:text-foreground'}"
-      aria-label={activeView === 'remote-client' ? 'Leave remote client' : 'Open remote client'}
-      title="Remote client"
-      onclick={() => navigate('remote-client')}
-    >
-      <Radio size={14} strokeWidth={1.8} />
-      <span class="header-control-label text-[11px] font-medium">Remote</span>
     </button>
   </nav>
 

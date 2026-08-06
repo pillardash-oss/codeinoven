@@ -35,6 +35,7 @@
   import UtilitiesView from './UtilitiesView.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
+  import RemoteSettingsTab from './RemoteSettingsTab.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -480,19 +481,7 @@
     {:else if section === 'utilities'}
       <UtilitiesView />
     {:else if section === 'remote'}
-      <div class="mx-auto max-w-2xl p-6 pb-24">
-        <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">Remote</h1>
-          <p class="mt-0.5 text-sm text-muted">Manage remote connections and SSH workspaces.</p>
-        </div>
-        <div class="rounded-xl border border-dashed p-6 text-center">
-          <Globe size={18} class="mx-auto mb-1 text-dimmed" />
-          <p class="text-xs text-dimmed">
-            Remote configuration is coming soon. SSH projects can already be added from the Projects
-            sidebar.
-          </p>
-        </div>
-      </div>
+      <RemoteSettingsTab />
     {:else if section === 'about'}
       <div class="mx-auto max-w-2xl p-6 pb-24">
         <div class="mb-6">

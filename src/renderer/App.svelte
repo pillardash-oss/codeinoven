@@ -3,7 +3,6 @@
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import ScopeView from '$lib/components/scope/ScopeView.svelte'
   import SettingsView from '$lib/components/settings/SettingsView.svelte'
-  import RemoteClientView from '$lib/components/remote/RemoteClientView.svelte'
   import NotificationPanel from '$lib/components/notifications/NotificationPanel.svelte'
   import PipOverlay from '$lib/components/pip/PipOverlay.svelte'
   import HarnessRunModal from '$lib/components/providers/HarnessRunModal.svelte'
@@ -936,8 +935,6 @@
           onBack={() => navigate(lastViewBeforeSettings)}
         />
       {/key}
-    {:else if activeView === 'remote-client'}
-      <RemoteClientView onBack={() => navigate(lastContentView)} />
     {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
       <div class="flex h-full items-center justify-center">
         <p class="text-sm text-dimmed">Coming soon</p>

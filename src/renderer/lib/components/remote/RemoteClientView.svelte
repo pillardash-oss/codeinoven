@@ -15,12 +15,14 @@
   import type { RemoteModeStatus } from '$shared/ipc-contract'
 
   interface Props {
-    onBack: () => void
+    onBack?: () => void
     /** True when rendered as the installable PWA on a phone (no Electron bridge). */
     pwa?: boolean
+    /** True when embedded in the Settings page — no header bar, no app chrome. */
+    embedded?: boolean
   }
 
-  let { onBack, pwa = false }: Props = $props()
+  let { onBack = () => undefined, pwa = false, embedded = false }: Props = $props()
 
   let desktop = $derived(!pwa && typeof window !== 'undefined' && 'api' in window)
 
@@ -114,9 +116,9 @@
   })
 </script>
 
-<div class="flex h-full flex-col overflow-y-auto bg-app">
-  <header class="flex h-12 shrink-0 items-center gap-2 border-b bg-surface px-4">
-    {#if !pwa}
+<div class={embedded ? 'flex flex-col' : 'flex h-full flex-col overflow-y-auto bg-app'}>
+  {#if !pwa && !embedded}
+    <header class="flex h-12 shrink-0 items-center gap-2 border-b bg-surface px-4">
       <button
         type="button"
         class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
@@ -126,14 +128,14 @@
       >
         <ArrowLeft size={16} />
       </button>
-    {/if}
-    <h1 class="text-[13px] font-semibold tracking-tight text-foreground">Remote</h1>
-    <span class="text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
-      >Phone client</span
-    >
-  </header>
+      <h1 class="text-[13px] font-semibold tracking-tight text-foreground">Remote</h1>
+      <span class="text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+        >Phone client</span
+      >
+    </header>
+  {/if}
 
-  <main class="mx-auto w-full max-w-md flex-1 space-y-6 p-6">
+  <main class={embedded ? 'w-full space-y-6' : 'mx-auto w-full max-w-md flex-1 space-y-6 p-6'}>
     {#if configError}
       <section
         class="rounded-xl border border-danger/30 bg-danger/5 p-4 text-sm text-danger"
