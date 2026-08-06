@@ -253,7 +253,6 @@ When work is complete, deliver a brief report: what was done, what went wrong an
 ### 5.4 Tooling
 
 - Always use the available MCPs/skills for the technology at hand (e.g., the Svelte MCP for Svelte docs, autofixing, and validation).
-- When a needed skill or MCP is not directly available, use the utility search tool to look for it before concluding it does not exist. Only after a search returns no relevant result may the agent treat it as unavailable.
 
 ---
 
