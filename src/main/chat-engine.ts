@@ -697,6 +697,14 @@ interface PendingMemoryDecision {
   settings: ThreadSettings
 }
 
+interface PendingAutoTitle {
+  projectId: string
+  threadId: string
+  driverId: string
+  settings: ThreadSettings
+  text: string
+}
+
 interface PendingInitialSpecGeneration {
   schemaVersion: 1
   generationVersion?: number
@@ -806,7 +814,9 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
-  private providerCatalogRefreshedAfterWork = false
+  /** Model titles use a disposable harness session, but wait for the main turn
+   * to become idle so concurrent Claude processes cannot race OAuth refresh. */
+  private pendingAutoTitles = new Map<string, PendingAutoTitle>()
   /** Latest provider lifecycle state, retained across renderer remounts. */
   private sessionStatuses = new Map<string, AgentSessionStatus>()
   /** Coalesces live-activity repairs of a task's persisted working status. */
@@ -1486,6 +1496,7 @@ export class ChatEngine {
     }
     this.completionWaiters.clear()
     this.pendingMemoryDecisions.clear()
+    this.pendingAutoTitles.clear()
     this.initialSpecTasks.clear()
     this.activeAssignmentDraftRuns.clear()
     this.activeAchievementAuditorEnsures.clear()
@@ -1853,18 +1864,6 @@ export class ChatEngine {
     }
   }
 
-  /** Revalidate once after real harness work begins; never blocks prompt dispatch. */
-  private refreshProviderCatalogAfterWork(projectId: string): void {
-    if (this.providerCatalogRefreshedAfterWork) return
-    this.providerCatalogRefreshedAfterWork = true
-    this.sharedProviderCatalog = null
-    void this.listProviders(projectId, true).catch((error) => {
-      Logger.info('Asynchronous provider catalog refresh skipped', {
-        error: error instanceof Error ? error.message : String(error)
-      })
-    })
-  }
-
   /** Return app tools and every registered harness's discoverable tool catalog. */
   async listTools(
     projectId?: string,
@@ -2182,6 +2181,7 @@ export class ChatEngine {
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
+    this.pendingAutoTitles.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
@@ -2885,10 +2885,9 @@ export class ChatEngine {
       .join('\n\n')
     // First prompt of a fresh thread (forks carry a mirror) — auto-title it
     // in the background so the sidebar never fills with "New Thread" rows.
-    // The fallback is applied immediately; the model-generated title is fired
-    // after the main prompt is dispatched so it never blocks the assistant
-    // response. Every driver owns a disposable title session; OpenCode also
-    // uses a separate server process so it cannot share the main request queue.
+    // The fallback is applied immediately. The model-generated title uses a
+    // disposable session after the main turn becomes idle, keeping it separate
+    // without racing the harness's credential refresh.
     if (shouldAutoTitle) {
       const fallback = deriveTitleFromText(text)
       if (fallback) {
@@ -2901,7 +2900,6 @@ export class ChatEngine {
 
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
-    if (origin === 'user') this.refreshProviderCatalogAfterWork(projectId)
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
     if (targetThread?.workingDirectory) {
@@ -2915,12 +2913,6 @@ export class ChatEngine {
     if (!project) throw new Error(`Project not found: ${projectId}`)
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
-    }
-    // Schedule exactly once after provider resolution. Engineering mode may
-    // return before dispatch while waiting for the Brainstorm/Spec entry
-    // choice, but that must not suppress title generation for the first turn.
-    if (shouldAutoTitle) {
-      void this.autoTitleThread(projectId, threadId, driverId, settings, text)
     }
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
@@ -2979,6 +2971,9 @@ export class ChatEngine {
     } catch (error) {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
+    }
+    if (shouldAutoTitle) {
+      this.pendingAutoTitles.set(sessionId, { projectId, threadId, driverId, settings, text })
     }
     // Renderer callers normally use agent:steerPrompt while a turn is active.
     // Keep sendPrompt safe as a second line of defense: an accidental regular
@@ -3064,16 +3059,33 @@ export class ChatEngine {
           if (!generated) throw new Error('The specification agent did not submit a valid draft.')
           const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
           this.pendingMemoryDecisions.delete(sessionId)
+          const pendingTitle = this.pendingAutoTitles.get(sessionId)
+          this.pendingAutoTitles.delete(sessionId)
+          const titleTask = pendingTitle
+            ? this.autoTitleThread(
+                pendingTitle.projectId,
+                pendingTitle.threadId,
+                pendingTitle.driverId,
+                pendingTitle.settings,
+                pendingTitle.text
+              )
+            : Promise.resolve()
           if (pendingMemory) {
-            void this.proposeMemoryFromCompletedTurn(
-              pendingMemory.userMessage,
-              JSON.stringify(generated.content),
-              projectId,
-              threadId,
-              driver,
-              projectPath,
-              pendingMemory.settings
-            ).catch((error) => Logger.error('Memory signal processing failed:', error))
+            void titleTask
+              .then(() =>
+                this.proposeMemoryFromCompletedTurn(
+                  pendingMemory.userMessage,
+                  JSON.stringify(generated.content),
+                  projectId,
+                  threadId,
+                  driver,
+                  projectPath,
+                  pendingMemory.settings
+                )
+              )
+              .catch((error) => Logger.error('Memory signal processing failed:', error))
+          } else {
+            void titleTask
           }
           return publicUserMessage
         }
@@ -3138,6 +3150,7 @@ export class ChatEngine {
         promptDispatched = true
         this.startSessionWatchdog(sessionId)
       } catch (error) {
+        this.pendingAutoTitles.delete(sessionId)
         this.pendingMemoryDecisions.delete(sessionId)
         await this.cleanupTurnUtilities(sessionId)
         this.clearCompletionWaiter(sessionId)
@@ -3247,6 +3260,7 @@ export class ChatEngine {
       // thread load reads it from disk instead of relying on a live sync.
       this.loadMessages(projectId, threadId).catch(() => {})
     } catch (error) {
+      this.pendingAutoTitles.delete(sessionId)
       this.pendingMemoryDecisions.delete(sessionId)
       await this.cleanupTurnUtilities(sessionId)
       this.preparedImplementationSessions.delete(sessionId)
@@ -8794,7 +8808,10 @@ export class ChatEngine {
     if (info.ephemeral) return
     const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
     this.pendingMemoryDecisions.delete(sessionId)
+    const pendingTitle = this.pendingAutoTitles.get(sessionId)
+    this.pendingAutoTitles.delete(sessionId)
     let assistantResponse = ''
+    let completedSuccessfully = false
     try {
       const driver = this.drivers.get(info.driverId)
       if (!driver) return
@@ -8950,6 +8967,7 @@ export class ChatEngine {
       if (!failure && turnAssistant) {
         assistantResponse = assistantMemoryDecisionContext(turnAssistant)
       }
+      completedSuccessfully = !failure && !awaitingUser
     } catch (error) {
       Logger.error('history mirror failed:', error)
       if (this.userAbortedSessions.has(sessionId)) return
@@ -8962,19 +8980,35 @@ export class ChatEngine {
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
     }
+    const titleTask =
+      pendingTitle && completedSuccessfully
+        ? this.autoTitleThread(
+            pendingTitle.projectId,
+            pendingTitle.threadId,
+            pendingTitle.driverId,
+            pendingTitle.settings,
+            pendingTitle.text
+          )
+        : Promise.resolve()
     if (pendingMemory && assistantResponse) {
       const driver = this.drivers.get(info.driverId)
       if (driver) {
-        void this.proposeMemoryFromCompletedTurn(
-          pendingMemory.userMessage,
-          assistantResponse,
-          info.projectId,
-          info.threadId,
-          driver,
-          info.projectPath,
-          pendingMemory.settings
-        ).catch((error) => Logger.error('Memory signal processing failed:', error))
+        void titleTask
+          .then(() =>
+            this.proposeMemoryFromCompletedTurn(
+              pendingMemory.userMessage,
+              assistantResponse,
+              info.projectId,
+              info.threadId,
+              driver,
+              info.projectPath,
+              pendingMemory.settings
+            )
+          )
+          .catch((error) => Logger.error('Memory signal processing failed:', error))
       }
+    } else {
+      void titleTask
     }
   }
 
@@ -9077,6 +9111,7 @@ export class ChatEngine {
     if (!info) return
     if (info.ephemeral) return
     this.pendingMemoryDecisions.delete(sessionId)
+    this.pendingAutoTitles.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)
     this.pendingBrainstormTurns.delete(sessionId)
     try {
