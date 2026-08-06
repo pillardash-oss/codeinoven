@@ -59,10 +59,10 @@ You deploy the website and a server; leaks there are worse than code leaks.
 - [x] **Inventory every env var** used by the app (`process.env` in `src/`) and the future server deployment; document each in `.env.example` with placeholder values and a comment.
 - [x] **App-side credentials**: confirm provider API keys go through the existing `SecretVault` (`safeStorage`) and **plaintext never crosses IPC** (already the design in `src/main/secret-vault.ts`) — document this behavior in the README's privacy section.
 - [x] **No `console.*` logging** (already forbidden) — make sure the `Logger` never logs token/auth payloads or full request headers.
-- [ ] **Server/site secrets live in Coolify env vars**, not in repo, not in Docker image, not in compose files committed to the repo.
+- [x] **Server/site secrets live in Coolify env vars**, not in repo, not in Docker image, not in compose files committed to the repo.
 - [x] **Never bake secrets into the Docker image** — pass at runtime via environment; use Docker build args only for non-secret, public values.
-- [ ] **Keep separate secret scopes**: GitHub Actions secrets for the release pipeline, Coolify project env for the deployed site, local `.env` for dev — never share one value across all three.
-- [ ] **Rotate anything that ever touched a public repo** (API keys, signing certs, deploy tokens) before/at launch.
+- [x] **Keep separate secret scopes**: GitHub Actions secrets for the release pipeline, Coolify project env for the deployed site, local `.env` for dev — never share one value across all three.
+- [x] **Rotate anything that ever touched a public repo** (API keys, signing certs, deploy tokens) before/at launch.
 - [x] **Add a secrets-rotation runbook**: what to rotate, where it lives, and who owns it (Coolify dashboard, GitHub Secrets, Apple Developer portal, hosting DNS/SSL).
 
 ## 4. Abuse prevention
