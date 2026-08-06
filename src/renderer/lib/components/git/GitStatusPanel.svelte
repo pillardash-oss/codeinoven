@@ -148,26 +148,32 @@
     if (!gitState.error) showIdentityForm = false
   }
 
+  async function refreshAgentTurnState(): Promise<void> {
+    if (!threadId) return
+    const thread = await invoke('thread:get', projectId, threadId).catch(() => null)
+    agentTurnActive = thread?.status === 'executing' || thread?.status === 'planning'
+  }
+
   $effect(() => {
     void loadRepoState()
   })
 
   $effect(() => {
-    if (!threadId) return
-    void invoke('thread:get', projectId, threadId).then((thread) => {
-      agentTurnActive = thread?.status === 'executing' || thread?.status === 'planning'
-    })
+    void refreshAgentTurnState()
   })
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
     // Lightweight periodic status poll while the panel is open so commits made
     // outside the app (terminal, IDE) surface within seconds without a raw
-    // `.git` watcher. Never runs when the tab is hidden.
+    // `.git` watcher. Also keeps the active-agent-turn gate current so a
+    // destructive op started mid-turn still warns. Never runs when the tab is
+    // hidden.
     const timer = setInterval(() => {
       if (repoState === 'git' && !gitState.isBusy(['refresh', 'stage', 'commit', 'push', 'pull'])) {
         void gitState.refresh(projectId)
       }
+      void refreshAgentTurnState()
     }, 8_000)
     return () => clearInterval(timer)
   })
