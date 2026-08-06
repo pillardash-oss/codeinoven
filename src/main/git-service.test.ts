@@ -125,4 +125,66 @@ describe('GitService', () => {
     const service = new GitService()
     await expect(service.getStatus(directory)).rejects.toThrow()
   })
+
+  it('adds a remote, pushes with upstream, and reports ahead/behind', async () => {
+    const working = await temporaryDirectory('codeinoven-git-remote-working')
+    const bare = await temporaryDirectory('codeinoven-git-remote-bare')
+    const service = new GitService()
+
+    await service.initialize(working)
+    await writeFile(join(working, 'feature.txt'), 'feature\n', 'utf-8')
+    await service.stage(working, ['feature.txt'])
+    await service.commit(working, 'feature commit')
+
+    await simpleGit(bare).init(true)
+    const remotes = await service.addRemote(working, 'origin', bare)
+    expect(remotes[0]?.name).toBe('origin')
+
+    const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
+    await service.push(working, { setUpstream: true, remote: 'origin', branch: branchName })
+
+    const status = await service.getStatus(working)
+    expect(status.ahead).toBe(0)
+
+    const clone = await temporaryDirectory('codeinoven-git-remote-clone')
+    await simpleGit().clone(bare, clone)
+    const cloneService = new GitService()
+    const cloneStatus = await cloneService.getStatus(clone)
+    expect(cloneStatus.filesChanged ?? cloneStatus.changes).toHaveLength(0)
+  })
+
+  it('computes ahead/behind after a divergent push', async () => {
+    const working = await temporaryDirectory('codeinoven-git-ahead-working')
+    const bare = await temporaryDirectory('codeinoven-git-ahead-bare')
+    const service = new GitService()
+
+    await service.initialize(working)
+    await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
+    await service.stage(working, ['a.txt'])
+    await service.commit(working, 'first')
+    await simpleGit(bare).init(true)
+    await service.addRemote(working, 'origin', bare)
+    const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
+    await service.push(working, { setUpstream: true, remote: 'origin', branch: branchName })
+
+    await writeFile(join(working, 'b.txt'), 'b\n', 'utf-8')
+    await service.stage(working, ['b.txt'])
+    await service.commit(working, 'second')
+
+    const ahead = await service.getStatus(working)
+    expect(ahead.ahead).toBe(1)
+
+    const summary = await service.syncSummary(working)
+    expect(summary.ahead).toBe(1)
+  })
+
+  it('removes a remote', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await service.addRemote(directory, 'origin', 'https://example.com/repo.git')
+    await service.addRemote(directory, 'upstream', 'https://example.com/upstream.git')
+    const afterRemove = await service.removeRemote(directory, 'upstream')
+    expect(afterRemove.map((remote) => remote.name)).toEqual(['origin'])
+  })
 })
