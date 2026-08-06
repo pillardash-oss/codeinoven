@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick } from 'svelte'
+  import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
   interface ThreadScrollState {
@@ -17,6 +18,7 @@
 
   import {
     Check,
+    ChevronDown,
     Copy,
     Download,
     Ellipsis,
@@ -1408,6 +1410,12 @@
       scrollEl.scrollTop = scrollEl.scrollHeight
     })
   })
+
+  function scrollToLatest(): void {
+    if (!scrollEl) return
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
+    userScrolledAway = false
+  }
 
   function formatTime(ts: number): string {
     if (!ts) return ''
@@ -4727,7 +4735,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-gutter min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-4"
+      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-4"
       onscroll={onScroll}
       onpointerup={captureResponseSelection}
       role="log"
@@ -5158,6 +5166,18 @@
           {/if}
         {/if}
       </div>
+      {#if userScrolledAway}
+        <button
+          type="button"
+          class="absolute right-6 bottom-4 z-20 flex h-9 w-9 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          title="Scroll to latest message"
+          aria-label="Scroll to latest message"
+          onclick={scrollToLatest}
+          transition:fly={{ y: 8, duration: 140 }}
+        >
+          <ChevronDown size={18} />
+        </button>
+      {/if}
     </div>
 
     <!-- Provider status — between messages and composer, always visible -->
