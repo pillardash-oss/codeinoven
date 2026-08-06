@@ -70,17 +70,17 @@
   let modelList: HTMLDivElement
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
-  /**
-   * Catalogs displayed by this picker. When a project is known, the reactive
-   * store cache is preferred so a lazy refresh on open lands immediately;
-   * otherwise the caller-supplied `providers` prop is used as-is.
-   */
-  let displayProviders = $derived(
+  /** Harness catalogs are app-wide. Keep the union available while a newly
+   * opened project's time-budgeted refresh is still returning partial results. */
+  let cachedProviders = $derived(providerCatalog.allCached())
+  let currentProviders = $derived(
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
-  /** Catalogs cached for other projects — lets global favorites/recent models
-   * resolve even when the current thread's project catalog is cold or differs. */
-  let cachedProviders = $derived(providerCatalog.allCached())
+  /** Current-project entries win when present without dropping harnesses that
+   * are still pending from its background catalog enrichment. */
+  let displayProviders = $derived(
+    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders])
+  )
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(false)
   let harnessFilterOpen = $state(false)
@@ -201,6 +201,18 @@
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
+
+  function mergeProviderEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+    const merged: ProviderCatalog[] = []
+    for (const provider of catalogs) {
+      const index = merged.findIndex(
+        (candidate) => candidate.harnessId === provider.harnessId && candidate.id === provider.id
+      )
+      if (index === -1) merged.push(provider)
+      else merged[index] = provider
+    }
+    return merged
+  }
 
   function modelKey(nextProviderId: string, nextModelId: string): string {
     return `${nextProviderId}:${nextModelId}`
