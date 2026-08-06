@@ -2,16 +2,16 @@
   import { agentDebug } from '$lib/stores/agent-debug.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ExchangeCard from './ExchangeCard.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import { Bug, BugOff, Eraser } from '@lucide/svelte'
 
-  let expandedIds = $state<Set<string>>(new Set())
+  const expandedIds = new SvelteSet<string>()
 
   function toggleExpand(id: string): void {
     if (expandedIds.has(id)) {
       expandedIds.delete(id)
-      expandedIds = new Set(expandedIds)
     } else {
-      expandedIds = new Set([...expandedIds, id])
+      expandedIds.add(id)
     }
   }
 </script>
@@ -52,7 +52,7 @@
         disabled={agentDebug.exchangeCount === 0}
         onclick={() => {
           agentDebug.clear()
-          expandedIds = new Set()
+          expandedIds.clear()
         }}
       >
         <Eraser size={13} />
@@ -97,9 +97,12 @@
   <!-- Current thread ID -->
   {#if workspaceState.selectedThread}
     <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-      <span class="text-[10px] font-medium text-muted">Thread ID:</span>
-      <span class="select-all rounded bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-foreground" title={workspaceState.selectedThread.id}>
-        {workspaceState.selectedThread.id.slice(0, 8)}
+      <span class="shrink-0 text-[10px] font-medium text-muted">Thread ID:</span>
+      <span
+        class="min-w-0 flex-1 select-all break-all rounded bg-elevated px-1.5 py-0.5 font-mono text-[10px] leading-relaxed text-foreground"
+        title={workspaceState.selectedThread.id}
+      >
+        {workspaceState.selectedThread.id}
       </span>
     </div>
   {/if}
