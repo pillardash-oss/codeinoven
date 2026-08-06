@@ -398,6 +398,20 @@
           : {})
     })
 
+    // Quick chat is anchored at the last agent turn, so it only makes sense once
+    // the agent has responded. It deliberately stays usable while the agent is
+    // working — no busy/commandExecuting disabledReason.
+    if (messages.some((message) => message.role === 'assistant')) {
+      actions.push({
+        id: 'command:quick-chat',
+        title: '/quick chat',
+        description: 'Open a read-only quick chat from the last agent turn',
+        category: 'command',
+        source: applicationActionSource,
+        keywords: ['quick', 'chat', 'side', 'question', 'temporary', 'read-only']
+      })
+    }
+
     for (const command of commands) {
       actions.push({
         id: actionId(command.id),
@@ -911,6 +925,21 @@
       settings
     )
     closeResponseSelection()
+  }
+
+  /** Open a quick chat anchored at the last agent turn — as if the user had
+   *  selected the latest response, but with no selection attached so it works
+   *  even while the agent is still working. */
+  function openQuickChatFromLastTurn(): void {
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      'quick',
+      '',
+      temporaryConversationContext(),
+      settings,
+      false
+    )
   }
 
   let spec = $state<EngineeringSpec | null>(null)
@@ -2335,6 +2364,11 @@
 
     if (action.id === 'command:compact') {
       await compactWork()
+      return
+    }
+
+    if (action.id === 'command:quick-chat') {
+      openQuickChatFromLastTurn()
       return
     }
 
