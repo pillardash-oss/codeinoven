@@ -955,6 +955,8 @@
       // Still add an entry so the iconUrl check resolves correctly
       projectIcons.delete(project.id)
     }
+    // Land the user in a fresh thread with the new project selected.
+    await createThreadInProject(project)
   }
 
   function handleExistingProject(project: Project): void {
