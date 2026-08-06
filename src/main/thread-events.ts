@@ -1,6 +1,7 @@
 import { BrowserWindow } from 'electron'
 import type { Thread } from '../lib/types'
 import type { NotificationService } from './notification-service'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 
 let _notificationService: NotificationService | null = null
 
@@ -30,6 +31,7 @@ export function broadcastThreadUpdate(thread: Thread): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('thread:updated', thread)
   }
+  forwardRemoteEvent('thread:updated', thread)
   if (thread.read) {
     dismissThreadNotifications(thread.projectId, thread.id)
   }

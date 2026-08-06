@@ -96,6 +96,8 @@ CodeInOven ships a remote-connection capability so you can keep working from you
 2. Point your phone camera at the code — your phone just needs to be on the same Wi-Fi network.
 3. The phone opens the app already configured and connects automatically. No account, no typing, nothing to install by hand.
 
+Once connected, the phone shows a **full chat client**: a hideable sidebar with a Projects/Threads switcher and threads grouped by status, a composer with model/permission/thinking/fast-mode controls and attachments, and live context usage (context %, tokens, cost) in the chat header. Messages stream in real time over the encrypted connection. For now this is LAN-first — the cloud relay stays a documented deployment-time option.
+
 The phone client is an **installable PWA** served by the desktop's LAN gateway over HTTPS. The desktop starts a gateway on `LAN_PORT` that serves the phone client at `https://<your-desktop-ip>:<LAN_PORT>/remote.html` using a self-signed certificate. The gateway's certificate is available at `https://<your-desktop-ip>:<LAN_PORT>/cert.pem` for downloading and installing as a trust profile. The gateway and the renderer both use the same authenticated, AES-GCM-encrypted WebSocket protocol, so the phone reaches the desktop over the LAN — with the cloud relay as an automatic fallback for remote networks.
 
 **Self-signed certificate trust.** For the service worker to register and install to be offered, the client must run in a secure context:

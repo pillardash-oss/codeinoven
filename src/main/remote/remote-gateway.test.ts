@@ -442,4 +442,108 @@ describe('RemoteGateway', () => {
     expect(gateway.info().pairingUrl).toBeNull()
     expect(gateway.info().url).toBeNull()
   })
+
+  it('routes RPC invokes to the handler and delivers results back to the peer', async () => {
+    const received: string[] = []
+    const { gateway, localPort } = await makeGateway(SECRET, {
+      handlers: {
+        onSessionChange: () => undefined,
+        onRpc: async (channel, args) => {
+          received.push(`${channel}:${args.join(',')}`)
+          return { ok: true, result: { echo: channel } }
+        }
+      }
+    })
+    try {
+      const events: TransportEvent[] = []
+      const transport = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        onEvent: (event) => events.push(event)
+      })
+      await expect(transport.connect()).resolves.toBe('open')
+      await transport.send(
+        JSON.stringify({ rpc: 'invoke', id: 7, channel: 'thread:listAll', args: [] })
+      )
+
+      await new Promise<void>((resolve, reject) => {
+        const started = Date.now()
+        const poll = (): void => {
+          const frame = events.find(
+            (event) => event.kind === 'message' && event.data.includes('"rpc":"result"')
+          )
+          if (frame && frame.kind === 'message') {
+            const parsed = JSON.parse(frame.data) as {
+              rpc: string
+              id: number
+              result: { echo: string }
+            }
+            expect(parsed.rpc).toBe('result')
+            expect(parsed.id).toBe(7)
+            expect(parsed.result.echo).toBe('thread:listAll')
+            resolve()
+            return
+          }
+          if (Date.now() - started > 3_000) {
+            reject(new Error('Timed out waiting for the RPC result'))
+            return
+          }
+          setTimeout(poll, 10)
+        }
+        poll()
+      })
+      expect(received).toEqual(['thread:listAll:'])
+      transport.close()
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('delivers forwarded events to the live peer via sendToPeer', async () => {
+    const { gateway, localPort } = await makeGateway(SECRET, {
+      handlers: { onSessionChange: () => undefined }
+    })
+    try {
+      const events: TransportEvent[] = []
+      const transport = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        onEvent: (event) => events.push(event)
+      })
+      await expect(transport.connect()).resolves.toBe('open')
+
+      gateway.sendToPeer({ rpc: 'event', channel: 'thread:updated', payload: { id: 't1' } })
+
+      await new Promise<void>((resolve, reject) => {
+        const started = Date.now()
+        const poll = (): void => {
+          const frame = events.find(
+            (event) => event.kind === 'message' && event.data.includes('"rpc":"event"')
+          )
+          if (frame && frame.kind === 'message') {
+            const parsed = JSON.parse(frame.data) as {
+              rpc: string
+              channel: string
+              payload: { id: string }
+            }
+            expect(parsed.channel).toBe('thread:updated')
+            expect(parsed.payload.id).toBe('t1')
+            resolve()
+            return
+          }
+          if (Date.now() - started > 3_000) {
+            reject(new Error('Timed out waiting for the forwarded event'))
+            return
+          }
+          setTimeout(poll, 10)
+        }
+        poll()
+      })
+      transport.close()
+    } finally {
+      await gateway.stop()
+    }
+  })
 })

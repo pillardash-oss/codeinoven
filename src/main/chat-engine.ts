@@ -30,6 +30,7 @@ import { MemoryService } from './memory-service'
 import { PromptAssembler } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from './permissions/permission-policy'
 import { validateBoundedString, validateEntityId, validateThreadSettings } from './ipc-validation'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { HarnessDriver, SendPromptOptions } from './drivers/driver.interface'
 import type { PreparedUtilityRuntime } from './drivers/driver.interface'
 import type { Database } from './database/database'
@@ -8524,11 +8525,12 @@ export class ChatEngine {
     }
   }
 
-  /** Broadcast an agent event to every renderer window. */
+  /** Broadcast an agent event to every renderer window and the remote peer. */
   private broadcast(event: AgentEvent): void {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('agent:event', event)
     }
+    forwardRemoteEvent('agent:event', event)
   }
 
   /** Surface a transcript failure to every known session binding for the thread. */

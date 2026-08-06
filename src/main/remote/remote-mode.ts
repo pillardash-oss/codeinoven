@@ -16,6 +16,8 @@ import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { loadOrCreatePeerSecret } from './peer-secret'
+import { RemoteRpcDispatcher } from './remote-rpc'
+import { setRemoteEventForwarder } from './remote-event-forwarder'
 
 export interface RemoteModeOptions {
   lanPort: number
@@ -23,6 +25,8 @@ export interface RemoteModeOptions {
   peerSecret: string | null
   staticRoot: string
   iconPath: string
+  /** Optional remote RPC dispatcher that serves the phone chat client. */
+  rpc?: RemoteRpcDispatcher | null
 }
 
 export const DEFAULT_LAN_PORT = 4455
@@ -50,6 +54,7 @@ export class RemoteModeController {
   private resolvedPeerSecret: string | null = null
   private readonly staticRoot: string
   private readonly iconPath: string
+  private readonly rpc: RemoteRpcDispatcher | null
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -57,6 +62,7 @@ export class RemoteModeController {
     this.peerSecret = options.peerSecret
     this.staticRoot = options.staticRoot
     this.iconPath = options.iconPath
+    this.rpc = options.rpc ?? null
   }
 
   /**
@@ -139,12 +145,21 @@ export class RemoteModeController {
     if (live) {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
+      this.installEventForwarder()
     } else {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
+      setRemoteEventForwarder(null)
     }
     this.syncTray()
     this.broadcast()
+  }
+
+  /** Forward live desktop events to the connected phone peer. */
+  private installEventForwarder(): void {
+    setRemoteEventForwarder((channel, payload) => {
+      this.gateway?.sendToPeer({ rpc: 'event', channel, payload })
+    })
   }
 
   /** Intercept a window close while remote mode is on — hide to tray instead. */
@@ -190,7 +205,16 @@ export class RemoteModeController {
       peerSecret,
       certificateDir: join(app.getPath('userData'), 'remote-gateway'),
       staticRoot: this.staticRoot,
-      handlers: { onSessionChange: (live) => this.onSessionChange(live) }
+      handlers: {
+        onSessionChange: (live) => this.onSessionChange(live),
+        onRpc: this.rpc
+          ? async (channel, args) =>
+              this.rpc?.dispatch({ id: 0, channel, args }) ?? {
+                ok: false,
+                message: 'RPC unavailable'
+              }
+          : undefined
+      }
     })
     this.gateway = gateway
     try {

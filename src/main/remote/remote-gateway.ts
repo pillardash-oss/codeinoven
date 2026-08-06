@@ -50,6 +50,11 @@ export interface GatewayHandlers {
   onSessionChange: (live: boolean) => void
   /** Called with the decrypted plaintext of a `remote:data` frame. */
   onData?: (plaintext: string) => void
+  /** Called with a decrypted remote RPC invoke; returns the result to reply. */
+  onRpc?: (
+    channel: string,
+    args: unknown[]
+  ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
 }
 
 export interface RemoteGatewayOptions {
@@ -429,6 +434,24 @@ export class RemoteGateway {
     }
   }
 
+  /** Whether a live authenticated phone peer is currently attached. */
+  get hasLivePeer(): boolean {
+    return this.livePeer !== null && !this.livePeer.closing
+  }
+
+  /**
+   * Send a JSON payload to the live peer (if any) inside an encrypted
+   * `remote:data` frame. Used by the RPC bridge to deliver invoke results and
+   * forwarded live events to the phone.
+   */
+  sendToPeer(payload: unknown): void {
+    const peer = this.livePeer
+    if (!peer || peer.closing || peer.socket.destroyed) return
+    void encryptPayload(this.options.peerSecret ?? '', JSON.stringify(payload)).then((encrypted) =>
+      socketSend(peer, { type: 'remote:data', payload: encrypted })
+    )
+  }
+
   private handleData(peer: PeerConnection, plaintext: string): void {
     let message: unknown
     try {
@@ -442,7 +465,25 @@ export class RemoteGateway {
       void encryptPayload(this.options.peerSecret ?? '', JSON.stringify({ type: 'pong' })).then(
         (payload) => socketSend(peer, { type: 'remote:data', payload })
       )
+      return
     }
+    if (record.rpc === 'invoke') {
+      void this.handleRpc(peer, record)
+    }
+  }
+
+  private async handleRpc(peer: PeerConnection, record: Record<string, unknown>): Promise<void> {
+    if (!this.options.handlers.onRpc) return
+    const id = typeof record.id === 'number' ? record.id : -1
+    const channel = typeof record.channel === 'string' ? record.channel : ''
+    const args = Array.isArray(record.args) ? record.args : []
+    const outcome = await this.options.handlers.onRpc(channel, args)
+    if (this.stopped || !this.peers.has(peer)) return
+    this.sendToPeer(
+      outcome.ok
+        ? { rpc: 'result', id, result: outcome.result }
+        : { rpc: 'error', id, message: outcome.message }
+    )
   }
 }
 
