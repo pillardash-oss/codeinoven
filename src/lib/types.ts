@@ -2231,6 +2231,8 @@ export interface AppConfig {
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
   autoInstallUpdates: boolean
+  /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
+  updateChannel: 'stable' | 'nightly'
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2254,5 +2256,6 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
+    | 'updateChannel'
   >
 >

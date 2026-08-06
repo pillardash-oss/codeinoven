@@ -71,7 +71,8 @@
     memory: { enabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
     autoDownloadUpdates: true,
-    autoInstallUpdates: true
+    autoInstallUpdates: true,
+    updateChannel: 'stable'
   }
 
   let config = $state<AppConfig>(defaultConfig)

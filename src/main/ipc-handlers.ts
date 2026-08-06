@@ -120,7 +120,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'memory',
   'agentDefaults',
   'autoDownloadUpdates',
-  'autoInstallUpdates'
+  'autoInstallUpdates',
+  'updateChannel'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -823,6 +824,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('autoInstallUpdates must be a boolean')
     }
     patch.autoInstallUpdates = value.autoInstallUpdates
+  }
+
+  if ('updateChannel' in value) {
+    if (value.updateChannel !== 'stable' && value.updateChannel !== 'nightly') {
+      throw new TypeError('updateChannel must be either "stable" or "nightly"')
+    }
+    patch.updateChannel = value.updateChannel
   }
 
   return patch
