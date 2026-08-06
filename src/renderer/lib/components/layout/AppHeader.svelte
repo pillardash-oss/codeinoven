@@ -390,7 +390,8 @@
     const thread = workspaceState.selectedThread
     if (!thread) return
     gitState.ensureProjectEvents(thread.projectId)
-    void gitState.refresh(thread.projectId)
+    const projectId = thread.projectId
+    queueMicrotask(() => void gitState.refresh(projectId))
   })
 
   function openGitPanel(): void {
