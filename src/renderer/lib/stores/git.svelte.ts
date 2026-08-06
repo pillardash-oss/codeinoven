@@ -1,6 +1,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import type {
   GitBranchInfo,
+  GitCommitInfo,
   GitCredentialStatus,
   GitDiff,
   GitIdentity,
@@ -375,6 +376,14 @@ class GitState {
   ): Promise<PullRequestReference[]> {
     try {
       return await invoke('pr:list', projectId, owner, repo, state)
+    } catch {
+      return []
+    }
+  }
+
+  async getLog(projectId: string, limit = 30): Promise<GitCommitInfo[]> {
+    try {
+      return await invoke('git:log', projectId, limit)
     } catch {
       return []
     }
