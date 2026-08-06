@@ -1,7 +1,13 @@
 <script lang="ts">
-  import { AlertTriangle, Clock3, Code2, RotateCcw, Square, X } from '@lucide/svelte'
-  import type { AgentProviderIssueKind, AgentSessionStatus } from '$shared/types'
+  import { AlertTriangle, Clock3, Code2, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
+  import type {
+    AgentProviderIssueKind,
+    AgentSessionStatus,
+    ProviderAccountLoginHandoff
+  } from '$shared/types'
+  import { invoke } from '$lib/ipc.svelte'
   import Modal from '../ui/Modal.svelte'
+  import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
   interface Props {
     status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
@@ -14,6 +20,10 @@
   let { status, providerName, onStop, onRetry, onDismiss }: Props = $props()
   let now = $state(Date.now())
   let showRawError = $state(false)
+  let loginOpen = $state(false)
+  let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
+  let loginError = $state('')
+  let loginTerminalId = $state('')
   const issue = $derived(status.issue)
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   const waiting = $derived(status.state === 'waiting')
@@ -67,6 +77,35 @@
       minute: '2-digit'
     })
   }
+
+  async function beginSignIn(): Promise<void> {
+    loginError = ''
+    loginHandoff = null
+    loginTerminalId = `provider-login-${crypto.randomUUID()}`
+    loginOpen = true
+    try {
+      loginHandoff = await invoke('providerAccounts:beginLogin', issue.harnessId, {
+        mode: 'default'
+      })
+    } catch (error) {
+      loginError = error instanceof Error ? error.message : 'Sign-in could not be started.'
+    }
+  }
+
+  function closeSignIn(): void {
+    loginOpen = false
+    loginHandoff = null
+    loginError = ''
+  }
+
+  function finishSignIn(exitCode: number): void {
+    if (exitCode !== 0) {
+      loginError = `Sign-in exited with code ${exitCode}.`
+      return
+    }
+    closeSignIn()
+    onRetry?.()
+  }
 </script>
 
 <div
@@ -112,6 +151,15 @@
       {/if}
 
       <div class="mt-3 flex flex-wrap items-center gap-2">
+        {#if !waiting && issue.kind === 'authentication'}
+          <button
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+            onclick={() => void beginSignIn()}
+          >
+            <LogIn size={13} />
+            Sign in
+          </button>
+        {/if}
         {#if waiting && onStop}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
@@ -120,7 +168,7 @@
             <Square size={12} />
             Stop request
           </button>
-        {:else if !waiting && onRetry}
+        {:else if !waiting && issue.kind !== 'authentication' && onRetry}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
             onclick={onRetry}
@@ -166,3 +214,24 @@
       ></pre>
   </Modal>
 {/if}
+
+<Modal open={loginOpen} title={`Sign in to ${providerName}`} onClose={closeSignIn}>
+  <div class="h-[28rem] overflow-hidden rounded-lg border border-border bg-app">
+    {#if loginHandoff}
+      <ProviderLoginTerminal
+        terminalId={loginTerminalId}
+        command={loginHandoff.command}
+        args={loginHandoff.args}
+        onExit={finishSignIn}
+      />
+    {:else if loginError}
+      <div class="flex h-full items-center justify-center p-6">
+        <p class="max-w-md text-center text-sm text-danger">{loginError}</p>
+      </div>
+    {:else}
+      <div class="flex h-full items-center justify-center text-sm text-muted">
+        Preparing sign-in…
+      </div>
+    {/if}
+  </div>
+</Modal>

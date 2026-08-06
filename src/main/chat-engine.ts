@@ -8446,11 +8446,16 @@ export class ChatEngine {
   }
 
   private fallbackProviderIssue(harnessId: string, message: string): AgentProviderIssue {
+    const kind = classifyProviderIssue(message)
     return {
-      kind: 'unknown',
-      message,
+      kind,
+      message:
+        kind === 'authentication'
+          ? `${this.drivers.get(harnessId)?.name ?? harnessId} sign-in expired. Sign in again, then retry this message.`
+          : message,
+      rawError: message,
       harnessId,
-      retryable: false
+      retryable: kind !== 'billing'
     }
   }
 
