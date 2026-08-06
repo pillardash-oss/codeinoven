@@ -331,6 +331,33 @@ export function threadSort(
   return b.lastActivity - a.lastActivity
 }
 
+/** Sort modes for the Threads view. */
+export type ThreadSortMode = 'default' | 'status' | 'time'
+
+export function threadStatusSortKey(
+  t: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  if (draftThreadKeys?.has(threadVisitKey(t))) return -1
+  // Todo first, then unread, then anything that still needs attention, then done.
+  if (t.status === 'created') return 0
+  if (!t.read) return 1
+  if (t.status !== 'completed') return 2
+  return 3
+}
+
+/** Threads view sort grouped by attention status, most recent activity first within each group. */
+export function threadStatusSort(
+  a: Thread,
+  b: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  const ka = threadStatusSortKey(a, draftThreadKeys)
+  const kb = threadStatusSortKey(b, draftThreadKeys)
+  if (ka !== kb) return ka - kb
+  return b.lastActivity - a.lastActivity
+}
+
 /**
  * Find a thread that is still in 'created' status and has no draft content
  * in the given project + scope bucket. Returns undefined if none exists.
