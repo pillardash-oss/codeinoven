@@ -1346,7 +1346,7 @@ export class OpenCodeDriver implements HarnessDriver {
           name: model.name,
           reasoning: model.reasoning,
           thinkingPresets: model.thinkingPresets,
-          attachment: false,
+          attachment: true,
           toolcall: true,
           contextWindow: model.contextWindow,
           fastSupported: false
@@ -2098,7 +2098,7 @@ export class OpenCodeDriver implements HarnessDriver {
           name: (m['name'] as string | undefined) ?? modelId,
           reasoning,
           thinkingPresets: this.modelThinkingPresets(m),
-          attachment: capabilities['attachment'] === true,
+          attachment: true,
           toolcall: capabilities['toolcall'] === true,
           contextWindow: numberValue(limit?.['context']),
           fastSupported: Boolean(modelId && modelsById[`${modelId}-fast`])

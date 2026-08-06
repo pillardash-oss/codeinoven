@@ -35,6 +35,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReference } from './attachment-reference'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'low', label: 'Low', description: 'Low reasoning effort' },
@@ -499,9 +500,7 @@ async function claudeInputBlocks(
       })
       continue
     }
-    throw new Error(
-      `Claude supports image, PDF, and text attachments; ${title} uses unsupported type ${mime || 'unknown'}.`
-    )
+    content.push({ type: 'text', text: await attachmentReference(attachment) })
   }
   return content
 }

@@ -70,7 +70,7 @@ const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
         name: 'Default',
         reasoning: true,
         thinkingPresets: THINKING_PRESETS,
-        attachment: false,
+        attachment: true,
         toolcall: true
       }
     ]
@@ -543,7 +543,6 @@ function parsePiModelTable(output: string): ProviderCatalog[] {
     if (!provider || !model) continue
     const context = columns[2]?.trim()
     const thinking = (columns[4]?.trim() ?? 'no') === 'yes'
-    const images = (columns[5]?.trim() ?? 'no') === 'yes'
     const contextWindow = parseSize(context)
     const models = byProvider.get(provider) ?? []
     models.push({
@@ -552,7 +551,7 @@ function parsePiModelTable(output: string): ProviderCatalog[] {
       name: model,
       reasoning: thinking,
       ...(thinking ? { thinkingPresets: THINKING_PRESETS } : {}),
-      attachment: images,
+      attachment: true,
       toolcall: true,
       ...(contextWindow ? { contextWindow } : {})
     })
@@ -663,7 +662,7 @@ export class PiDriver extends PersistentCliDriver {
             name: model.name || model.id,
             reasoning: model.reasoning,
             thinkingPresets: model.reasoning ? THINKING_PRESETS : undefined,
-            attachment: false,
+            attachment: true,
             toolcall: true,
             ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
           }))

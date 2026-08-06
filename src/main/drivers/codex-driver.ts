@@ -23,6 +23,7 @@ import { Logger } from '../logger'
 import { SecretVault } from '../secret-vault'
 import type { StorageEngine } from '../storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
   HarnessCapabilities,
@@ -110,7 +111,6 @@ function mapCodexModel(value: unknown): ProviderModel | null {
   const model = record(value)
   const id = stringValue(model?.['id'])
   if (!id || model?.['hidden'] === true) return null
-  const inputModalities = Array.isArray(model?.['inputModalities']) ? model['inputModalities'] : []
   const serviceTiers = Array.isArray(model?.['serviceTiers']) ? model['serviceTiers'] : []
   const additionalSpeedTiers = Array.isArray(model?.['additionalSpeedTiers'])
     ? model['additionalSpeedTiers']
@@ -126,7 +126,7 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     name: stringValue(model?.['displayName']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment: inputModalities.includes('image'),
+    attachment: true,
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:
@@ -355,7 +355,7 @@ export class CodexDriver extends PersistentCliDriver {
           name: model.name || model.id,
           reasoning: model.reasoning,
           thinkingPresets: model.reasoning ? THINKING_PRESETS : undefined,
-          attachment: false,
+          attachment: true,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))
@@ -782,15 +782,20 @@ export class CodexDriver extends PersistentCliDriver {
     const input: Array<Record<string, unknown>> = [
       { type: 'text', text: composePrompt(systemPrompt, text), text_elements: [] }
     ]
+    const references: string[] = []
     for (const attachment of attachments) {
       if (isSvgAttachment(attachment)) continue
-      input.push({ type: 'localImage', path: await localAttachmentPath(attachment) })
+      if (attachment.mime.toLowerCase().startsWith('image/')) {
+        input.push({ type: 'localImage', path: await localAttachmentPath(attachment) })
+      } else {
+        references.push(await attachmentReference(attachment))
+      }
     }
     const inlineSvg = await inlineSvgAttachments(attachments)
-    if (inlineSvg) {
+    if (inlineSvg || references.length > 0) {
       input[0] = {
         type: 'text',
-        text: `${inlineSvg}\n\n${input[0]?.['text'] ?? ''}`,
+        text: [inlineSvg, ...references, input[0]?.['text'] ?? ''].filter(Boolean).join('\n\n'),
         text_elements: []
       }
     }
@@ -879,11 +884,20 @@ export class CodexDriver extends PersistentCliDriver {
     const { env, args: providerArgs } = await this.customProviderOverlay()
     args.push(...providerArgs)
     const inlineSvg = await inlineSvgAttachments(options.attachments)
+    const attachmentPrompts: string[] = []
     for (const attachment of options.attachments) {
       if (isSvgAttachment(attachment)) continue
-      args.push('--image', await localAttachmentPath(attachment))
+      if (attachment.mime.toLowerCase().startsWith('image/')) {
+        args.push('--image', await localAttachmentPath(attachment))
+      } else {
+        attachmentPrompts.push(await attachmentReference(attachment))
+      }
     }
-    const promptBody = [inlineSvg, composePrompt(options.systemPrompt, options.text)]
+    const promptBody = [
+      inlineSvg,
+      ...attachmentPrompts,
+      composePrompt(options.systemPrompt, options.text)
+    ]
       .filter(Boolean)
       .join('\n\n')
     args.push(promptBody)
