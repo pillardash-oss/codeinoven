@@ -10,6 +10,7 @@ import type {
   GitFileStatus,
   GitIdentity,
   GitRemoteInfo,
+  GitResetMode,
   GitStatus,
   GitSyncSummary,
   MergeSummary
@@ -324,12 +325,107 @@ export class GitService {
           if (match) {
             const path = match[1]?.trim() ?? ''
             const statusChar = match[3]?.[0] ?? 'M'
-            const status: GitFileStatus = statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
+            const status: GitFileStatus =
+              statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
             changes.push({ path, status, staged: false })
           }
         }
         return changes
       })
+    })
+  }
+
+  /** Full per-file diff of one file within a commit, compared against its parent. */
+  async commitFileDiff(projectPath: string, hash: string, relativePath: string): Promise<GitDiff> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const safeHash = hash.trim()
+        const safePath = this.assertRelativePath(directory, relativePath)
+        const git = this.client(directory)
+        const parentRef = `${safeHash}^`
+        const parentExists = await this.refExists(git, parentRef)
+        if (!parentExists) {
+          // Root commit: the whole file is new, reuse the untracked/added shape.
+          const blob = await this.readBlob(git, `${safeHash}:${safePath}`)
+          if (!blob) return this.emptyDiff(safePath, false)
+          const additions = blob.content.length === 0 ? 0 : blob.content.split('\n').length
+          return {
+            path: safePath,
+            staged: false,
+            content: blob.content
+              .split('\n')
+              .map((line) => `+${line}`)
+              .join('\n'),
+            before: '',
+            after: blob.content,
+            binary: blob.content.includes('\0'),
+            additions,
+            deletions: 0,
+            truncated: blob.truncated
+          }
+        }
+        const content = await git.diff([parentRef, safeHash, '--', safePath])
+        const summary = await git.diffSummary([parentRef, safeHash, '--', safePath])
+        const file = summary.files[0]
+        const additions =
+          file && 'insertions' in file && typeof file.insertions === 'number' ? file.insertions : 0
+        const deletions =
+          file && 'deletions' in file && typeof file.deletions === 'number' ? file.deletions : 0
+        const binary = file?.binary ?? false
+        const truncated = Buffer.byteLength(content, 'utf-8') > MAX_DIFF_BYTES
+        const boundedContent = truncated
+          ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
+          : content
+
+        let before: string | undefined
+        let after: string | undefined
+        let sideTruncated = false
+        if (!binary) {
+          const beforeBlob = await this.readBlob(git, `${parentRef}:${safePath}`)
+          const afterBlob = await this.readBlob(git, `${safeHash}:${safePath}`)
+          before = beforeBlob?.content
+          after = afterBlob?.content
+          sideTruncated = (beforeBlob?.truncated ?? false) || (afterBlob?.truncated ?? false)
+        }
+
+        return {
+          path: safePath,
+          staged: false,
+          content: boundedContent,
+          binary,
+          additions,
+          deletions,
+          truncated: truncated || sideTruncated,
+          before,
+          after
+        }
+      })
+    })
+  }
+
+  /** Amend the most recent commit, folding staged changes into the new commit. */
+  async amend(projectPath: string, message: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        const cleanMessage = message.replace(/\r\n/gu, '\n')
+        await this.client(directory).raw(['commit', '--amend', '-m', cleanMessage])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** Reset the current branch to a target commit (defaults to HEAD). */
+  async reset(projectPath: string, mode: GitResetMode, target?: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        const args = ['reset', `--${mode}`]
+        if (target) args.push(target)
+        await this.client(directory).raw(args)
+      })
+      return this.readStatus(directory)
     })
   }
 
@@ -541,6 +637,16 @@ export class GitService {
   private async isUntracked(git: SimpleGit, path: string): Promise<boolean> {
     const status = await git.status()
     return status.not_added.includes(path)
+  }
+
+  /** True when a rev (e.g. `abc123^`) resolves to an existing commit. */
+  private async refExists(git: SimpleGit, rev: string): Promise<boolean> {
+    try {
+      await git.raw(['rev-parse', '--verify', '--quiet', `${rev}^{commit}`])
+      return true
+    } catch {
+      return false
+    }
   }
 
   private async mapStatus(directory: string, status: StatusResult): Promise<GitStatus> {

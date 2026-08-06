@@ -10,6 +10,7 @@ import type {
   GitHubPollResult,
   GitIdentity,
   GitRemoteInfo,
+  GitResetMode,
   GitStatus,
   MergeSummary,
   PrCreateInput,
@@ -24,6 +25,8 @@ export type GitOperation =
   | 'stage'
   | 'unstage'
   | 'commit'
+  | 'amend'
+  | 'reset'
   | 'init'
   | 'checkout'
   | 'fetch'
@@ -424,6 +427,34 @@ class GitState {
       return await invoke('git:commitDiff', projectId, hash)
     } catch {
       return []
+    }
+  }
+
+  async getCommitFileDiff(projectId: string, hash: string, path: string): Promise<GitDiff> {
+    return invoke('git:commitFileDiff', projectId, hash, path)
+  }
+
+  async amend(projectId: string, message: string): Promise<void> {
+    this.markBusy('amend', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:amend', projectId, message)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Amend failed')
+    } finally {
+      this.markBusy('amend', false)
+    }
+  }
+
+  async reset(projectId: string, mode: GitResetMode, target?: string): Promise<void> {
+    this.markBusy('reset', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:reset', projectId, mode, target)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Reset failed')
+    } finally {
+      this.markBusy('reset', false)
     }
   }
 

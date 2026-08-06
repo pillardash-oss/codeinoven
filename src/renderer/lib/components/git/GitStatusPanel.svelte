@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { gitState } from '$lib/stores/git.svelte'
-  import type { GitCommitInfo, GitDiff, GitFileChange } from '$shared/types'
+  import type { GitCommitInfo, GitDiff, GitFileChange, GitResetMode } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
@@ -71,8 +71,23 @@
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let loadingCommitDiff = $state(false)
+  let commitDiffs = $state<Record<string, GitDiff>>({})
+  let commitExpanded = $state<Record<string, boolean>>({})
+  let loadingCommitDiffFile = $state<Record<string, boolean>>({})
+  let commitDiffErrors = $state<Record<string, string | null>>({})
+  let amendMode = $state(false)
+  let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
+
+  const resetOptions: Array<{ mode: GitResetMode; label: string; hint: string }> = [
+    { mode: 'soft', label: 'Soft', hint: 'keep index + worktree' },
+    { mode: 'mixed', label: 'Mixed', hint: 'reset index, keep worktree' },
+    { mode: 'hard', label: 'Hard', hint: 'discard all local changes' }
+  ]
 
   const status = $derived(gitState.status)
+  const isHeadCommit = $derived(
+    selectedCommit !== null && commitHistory[0]?.hash === selectedCommit.hash
+  )
   const changes = $derived(status?.changes ?? [])
   const staged = $derived(
     changes.filter((change) => change.staged && change.status !== 'conflicted')
@@ -85,7 +100,7 @@
   const untracked = $derived(changes.filter((change) => change.status === 'untracked'))
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
 
-  const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit']))
+  const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
 
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
@@ -211,12 +226,90 @@
     activeTab = 'changes'
     loadingCommitDiff = true
     commitDiffChanges = await gitState.getCommitDiff(projectId, commit.hash)
+    commitDiffs = {}
+    commitExpanded = {}
+    loadingCommitDiffFile = {}
+    commitDiffErrors = {}
     loadingCommitDiff = false
   }
 
   function clearSelectedCommit(): void {
     selectedCommit = null
     commitDiffChanges = []
+    commitDiffs = {}
+    commitExpanded = {}
+    loadingCommitDiffFile = {}
+    commitDiffErrors = {}
+  }
+
+  async function toggleCommitDiff(change: GitFileChange): Promise<void> {
+    const commit = selectedCommit
+    if (!commit) return
+    if (commitExpanded[change.path]) {
+      commitExpanded = { ...commitExpanded, [change.path]: false }
+      return
+    }
+    commitExpanded = { ...commitExpanded, [change.path]: true }
+    commitDiffErrors = { ...commitDiffErrors, [change.path]: null }
+    if (commitDiffs[change.path]) return
+    loadingCommitDiffFile = { ...loadingCommitDiffFile, [change.path]: true }
+    try {
+      const diff = await gitState.getCommitFileDiff(projectId, commit.hash, change.path)
+      commitDiffs = { ...commitDiffs, [change.path]: diff }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'The diff could not be loaded'
+      commitDiffErrors = { ...commitDiffErrors, [change.path]: message }
+    } finally {
+      loadingCommitDiffFile = { ...loadingCommitDiffFile, [change.path]: false }
+    }
+  }
+
+  function startAmend(): void {
+    const commit = selectedCommit
+    if (!commit) return
+    commitMessage = commit.message.split('\n')[0]
+    amendMode = true
+    clearSelectedCommit()
+    activeTab = 'changes'
+  }
+
+  function requestReset(mode: GitResetMode, target: string): void {
+    resetConfirm = { mode, target }
+    acknowledgeActiveTurn = false
+  }
+
+  async function confirmReset(): Promise<void> {
+    const pending = resetConfirm
+    if (!pending) return
+    resetConfirm = null
+    await gitState.reset(projectId, pending.mode, pending.target)
+    if (!gitState.error) {
+      clearSelectedCommit()
+      commitHistory = []
+      void loadHistory()
+      void refreshStatus()
+    }
+  }
+
+  async function commitInline(): Promise<void> {
+    if (!commitMessage.trim()) return
+    if (amendMode) {
+      await gitState.amend(projectId, commitMessage)
+    } else {
+      if (staged.length === 0) return
+      await gitState.commit(projectId, commitMessage)
+    }
+    if (!gitState.error) {
+      commitMessage = ''
+      amendMode = false
+      void refreshStatus()
+      void reloadHistory()
+    }
+  }
+
+  async function reloadHistory(): Promise<void> {
+    commitHistory = []
+    await loadHistory()
   }
 
   function relativeTime(timestamp: number): string {
@@ -352,15 +445,6 @@
 
   async function stashChanges(): Promise<void> {
     await gitState.stash(projectId)
-  }
-
-  async function commitInline(): Promise<void> {
-    if (!commitMessage.trim() || staged.length === 0) return
-    await gitState.commit(projectId, commitMessage)
-    if (!gitState.error) {
-      commitMessage = ''
-      void refreshStatus()
-    }
   }
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
@@ -602,6 +686,7 @@
 
       {#if activeTab === 'changes'}
         {#if selectedCommit}
+          {@const commit = selectedCommit}
           <!-- Commit diff view -->
           <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
             <div class="flex items-center gap-2">
@@ -616,16 +701,34 @@
               </button>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-[11px] font-medium text-foreground">
-                  {selectedCommit.message.split('\n')[0]}
+                  {commit.message.split('\n')[0]}
                 </p>
                 <div class="flex items-center gap-1.5 text-[9px] text-dimmed">
-                  <span class="font-mono">{selectedCommit.shortHash}</span>
+                  <span class="font-mono">{commit.shortHash}</span>
                   <span>·</span>
-                  <span>{selectedCommit.author}</span>
+                  <span>{commit.author}</span>
                   <span>·</span>
-                  <span>{relativeTime(selectedCommit.date)}</span>
+                  <span>{relativeTime(commit.date)}</span>
                 </div>
               </div>
+              {#if isHeadCommit}
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                  disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
+                  onclick={startAmend}
+                >
+                  Amend
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                  disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
+                  onclick={() => requestReset('soft', commit.hash)}
+                >
+                  Reset
+                </button>
+              {/if}
             </div>
           </div>
           <div class="p-2">
@@ -653,11 +756,12 @@
                 {#each commitDiffChanges as change (change.path)}
                   <GitFileRow
                     {change}
-                    diff={null}
-                    loadingDiff={false}
-                    error={null}
-                    expanded={false}
-                    onToggleDiff={() => {}}
+                    diff={commitDiffs[change.path] ?? null}
+                    loadingDiff={loadingCommitDiffFile[change.path] ?? false}
+                    error={commitDiffErrors[change.path] ?? null}
+                    expanded={commitExpanded[change.path] ?? false}
+                    readonly
+                    onToggleDiff={() => void toggleCommitDiff(change)}
                     onToggleStage={() => {}}
                   />
                 {/each}
@@ -749,8 +853,25 @@
               {/if}
 
               <!-- Commit input -->
-              {#if staged.length > 0}
+              {#if staged.length > 0 || amendMode}
                 <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+                  {#if amendMode}
+                    <div
+                      class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5"
+                    >
+                      <GitCommit size={11} class="shrink-0 text-warning" />
+                      <p class="min-w-0 flex-1 text-[9px] leading-relaxed text-warning">
+                        Amending the most recent commit — no new commit will be created.
+                      </p>
+                      <button
+                        type="button"
+                        class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted hover:bg-elevated"
+                        onclick={() => (amendMode = false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  {/if}
                   <div class="px-3 pt-2 pb-1">
                     <textarea
                       class="min-h-12 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
@@ -766,19 +887,38 @@
                     >
                       Stage all
                     </button>
+                    {#if !amendMode}
+                      <button
+                        type="button"
+                        class={[
+                          'rounded-md border px-2 py-1 text-[10px] font-medium transition-colors',
+                          amendMode
+                            ? 'border-warning/40 bg-warning/10 text-warning'
+                            : 'border-border text-muted hover:bg-elevated hover:text-foreground'
+                        ]}
+                        title="Amend the most recent commit instead of creating a new one"
+                        aria-label="Amend the most recent commit instead of creating a new one"
+                        onclick={() => (amendMode = true)}
+                      >
+                        Amend
+                      </button>
+                    {/if}
                     <span class="flex-1"></span>
                     <button
                       type="button"
                       class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-                      disabled={!commitMessage.trim() || gitState.isBusy('commit')}
+                      disabled={!commitMessage.trim() ||
+                        gitState.isBusy('commit') ||
+                        gitState.isBusy('amend') ||
+                        (!amendMode && staged.length === 0)}
                       onclick={() => void commitInline()}
                     >
-                      {#if gitState.isBusy('commit')}
+                      {#if gitState.isBusy('commit') || gitState.isBusy('amend')}
                         <Loader2 size={11} class="animate-spin" />
                       {:else}
                         <GitCommit size={11} />
                       {/if}
-                      Commit ({staged.length})
+                      {amendMode ? 'Amend commit' : `Commit (${staged.length})`}
                     </button>
                   </div>
                 </div>
@@ -1320,6 +1460,119 @@
               <Loader2 size={12} class="animate-spin" />
             {/if}
             {operation.kind === 'merge' ? 'Merge' : 'Rebase'}
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
+  {#if resetConfirm}
+    {@const pendingReset = resetConfirm}
+    <Modal open title="Reset branch" onClose={() => (resetConfirm = null)}>
+      <div class="space-y-3">
+        <p class="text-[11px] leading-relaxed text-muted">
+          Reset <span class="font-mono text-foreground">{status?.branch ?? 'HEAD'}</span> to commit
+          <span class="font-mono text-foreground"> {pendingReset.target.slice(0, 7)}</span>.
+        </p>
+
+        <div>
+          <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Mode</p>
+          <div class="grid grid-cols-3 gap-1.5">
+            {#each resetOptions as option (option.mode)}
+              <button
+                type="button"
+                class={[
+                  'rounded-md border px-2 py-1.5 text-left transition-colors',
+                  pendingReset.mode === option.mode
+                    ? 'border-primary/50 bg-primary/10'
+                    : 'border-border hover:bg-elevated'
+                ]}
+                onclick={() => (resetConfirm = { mode: option.mode, target: pendingReset.target })}
+              >
+                <span
+                  class={[
+                    'block text-[10px] font-semibold',
+                    pendingReset.mode === option.mode ? 'text-primary' : 'text-foreground'
+                  ]}
+                >
+                  {option.label}
+                </span>
+                <span class="block text-[8px] leading-snug text-dimmed">{option.hint}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        {#if pendingReset.mode === 'hard'}
+          <div class="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
+            <p class="text-[10px] font-semibold text-danger">Hard reset discards changes</p>
+            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+              Staged and unstaged changes since this commit will be permanently lost. This cannot be
+              undone.
+            </p>
+          </div>
+        {/if}
+
+        {#if atRiskFiles.length > 0}
+          <div>
+            <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Affected files
+            </p>
+            <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
+              {#each atRiskFiles as path (path)}
+                <div
+                  class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
+                >
+                  <FileTypeIcon {path} size={12} class="shrink-0" />
+                  <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+                    >{path}</span
+                  >
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#if agentTurnActive}
+          <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+            <p class="text-[10px] font-semibold text-warning">Agent turn in progress</p>
+            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+              Acknowledge to continue anyway.
+            </p>
+            <div class="mt-1.5 flex items-center justify-between gap-2">
+              <span class="text-[10px] text-muted">I understand the risk</span>
+              <Switch
+                checked={acknowledgeActiveTurn}
+                onchange={(value) => (acknowledgeActiveTurn = value)}
+                aria-label="Acknowledge risk"
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (resetConfirm = null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class={[
+              'flex h-8 items-center gap-1.5 rounded-lg px-3 text-[11px] font-medium text-on-primary transition-colors disabled:opacity-50',
+              pendingReset.mode === 'hard'
+                ? 'bg-danger hover:bg-danger/90'
+                : 'bg-primary hover:bg-primary-hover'
+            ]}
+            disabled={gitState.isBusy('reset') || (agentTurnActive && !acknowledgeActiveTurn)}
+            onclick={() => void confirmReset()}
+          >
+            {#if gitState.isBusy('reset')}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            {pendingReset.mode === 'hard' ? 'Reset hard' : 'Reset'}
           </button>
         </div>
       {/snippet}

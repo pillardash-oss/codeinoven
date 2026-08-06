@@ -12,9 +12,19 @@
     expanded: boolean
     onToggleDiff: () => void
     onToggleStage: () => void
+    readonly?: boolean
   }
 
-  let { change, diff, loadingDiff, error, expanded, onToggleDiff, onToggleStage }: Props = $props()
+  let {
+    change,
+    diff,
+    loadingDiff,
+    error,
+    expanded,
+    onToggleDiff,
+    onToggleStage,
+    readonly = false
+  }: Props = $props()
 
   const letter = $derived(
     change.status === 'added'
@@ -92,21 +102,23 @@
         <ChevronRight size={12} class="shrink-0 text-dimmed" />
       {/if}
     </button>
-    <button
-      type="button"
-      class={[
-        'shrink-0 rounded px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40',
-        change.staged
-          ? 'text-danger hover:bg-danger/10'
-          : 'text-muted hover:bg-elevated hover:text-foreground'
-      ]}
-      disabled={change.status === 'conflicted'}
-      aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
-      title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
-      onclick={onToggleStage}
-    >
-      {change.staged ? 'Unstage' : 'Stage'}
-    </button>
+    {#if !readonly}
+      <button
+        type="button"
+        class={[
+          'shrink-0 rounded px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40',
+          change.staged
+            ? 'text-danger hover:bg-danger/10'
+            : 'text-muted hover:bg-elevated hover:text-foreground'
+        ]}
+        disabled={change.status === 'conflicted'}
+        aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
+        title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
+        onclick={onToggleStage}
+      >
+        {change.staged ? 'Unstage' : 'Stage'}
+      </button>
+    {/if}
   </div>
   {#if expanded}
     <div class="border-t border-border bg-app/50">

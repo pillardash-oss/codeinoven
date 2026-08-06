@@ -97,6 +97,7 @@ const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
 const GIT_REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
 const GIT_URL_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file'])
 const GIT_COMMIT_MESSAGE_MAX = 4096
+const GIT_RESET_MODES = new Set(['soft', 'mixed', 'hard'])
 
 /**
  * Validate a project-relative git path: must be non-empty, bounded, free of
@@ -138,6 +139,14 @@ export function validateCommitMessage(value: unknown): string {
     throw new TypeError(`Commit message must be between 1 and ${GIT_COMMIT_MESSAGE_MAX} characters`)
   }
   return value.replace(/\r\n/gu, '\n')
+}
+
+/** Validate a git reset severity mode (soft / mixed / hard). */
+export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' {
+  if (typeof value !== 'string' || !GIT_RESET_MODES.has(value)) {
+    throw new TypeError('Reset mode must be one of: soft, mixed, hard')
+  }
+  return value as 'soft' | 'mixed' | 'hard'
 }
 
 /** Validate a git identity name/email pair. */

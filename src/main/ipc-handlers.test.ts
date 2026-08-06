@@ -530,11 +530,12 @@ describe('git IPC', () => {
     await rm(gitDir, { recursive: true, force: true })
   })
 
-  it('exposes git channels without a git:reset mutation channel', async () => {
+  it('exposes git mutation channels incl. amend and reset', async () => {
     const storage = new StorageEngine()
     registerIpcHandlers(storage, database)
     expect(handlers.has('git:status')).toBe(true)
-    expect(handlers.has('git:reset')).toBe(false)
+    expect(handlers.has('git:reset')).toBe(true)
+    expect(handlers.has('git:amend')).toBe(true)
     expect(handlers.has('git:checkout')).toBe(true)
   })
 
