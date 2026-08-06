@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, readFile, writeFile } from 'fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
+import { simpleGit } from 'simple-git'
 
 const { handlers, showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -462,5 +463,69 @@ describe('specification IPC', () => {
     await expect(readFile(exportPath, 'utf-8')).resolves.toContain('## Success Criteria')
     expect(showOpenDialog).toHaveBeenCalledOnce()
     expect(showSaveDialog).toHaveBeenCalledOnce()
+  })
+})
+
+describe('git IPC', () => {
+  it('keeps thread.branch coherent when the app drives a checkout', async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), 'codeinoven-git-ipc-'))
+    const repo = simpleGit(gitDir)
+    await repo.init()
+    await writeFile(join(gitDir, 'file.txt'), 'hello\n', 'utf-8')
+    await repo.add('.')
+    await repo.commit('initial')
+    await repo.checkoutLocalBranch('feature/git')
+
+    const now = Date.now()
+    new ProjectRepo(database).upsert({
+      id: 'git-project',
+      name: 'Git project',
+      path: gitDir,
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'git',
+      createdAt: now,
+      updatedAt: now
+    })
+    new ThreadRepo(database).upsert({
+      id: 'git-thread',
+      projectId: 'git-project',
+      providerId: 'openai',
+      title: 'Git thread',
+      titleSource: 'manual',
+      status: 'created',
+      pinned: false,
+      archived: false,
+      read: false,
+      createdAt: now,
+      updatedAt: now,
+      lastActivity: now,
+      workingDirectory: gitDir,
+      branch: 'main'
+    })
+
+    const storage = new StorageEngine()
+    registerIpcHandlers(storage, database)
+
+    const checkoutHandler = handlers.get('git:checkout')
+    expect(checkoutHandler).toBeDefined()
+    await expect(checkoutHandler?.({}, 'git-project', 'feature/git')).resolves.toMatchObject({
+      branch: 'feature/git'
+    })
+
+    const thread = new ThreadRepo(database).get('git-thread')
+    expect(thread?.branch).toBe('feature/git')
+
+    await rm(gitDir, { recursive: true, force: true })
+  })
+
+  it('exposes git channels without a git:reset mutation channel', async () => {
+    const storage = new StorageEngine()
+    registerIpcHandlers(storage, database)
+    expect(handlers.has('git:status')).toBe(true)
+    expect(handlers.has('git:reset')).toBe(false)
+    expect(handlers.has('git:checkout')).toBe(true)
   })
 })

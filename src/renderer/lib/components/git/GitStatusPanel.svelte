@@ -3,9 +3,12 @@
   import { invoke } from '$lib/ipc.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type { GitDiff, GitFileChange } from '$shared/types'
+  import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
   import {
     Check,
     ChevronDown,
@@ -23,7 +26,7 @@
     threadId: string
   }
 
-  let { projectId, threadId: _threadId }: Props = $props()
+  let { projectId, threadId }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
 
@@ -44,6 +47,11 @@
   let showCredentialForm = $state(false)
   let tokenValue = $state('')
   let pushConfirm = $state(false)
+  let showIntegrate = $state(true)
+  let mergeTarget = $state('')
+  let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
+  let acknowledgeActiveTurn = $state(false)
+  let agentTurnActive = $state(false)
 
   const status = $derived(gitState.status)
   const changes = $derived(status?.changes ?? [])
@@ -135,6 +143,13 @@
     void loadRepoState()
   })
 
+  $effect(() => {
+    if (!threadId) return
+    void invoke('thread:get', projectId, threadId).then((thread) => {
+      agentTurnActive = thread?.status === 'executing' || thread?.status === 'planning'
+    })
+  })
+
   onMount(() => gitState.ensureProjectEvents(projectId))
 
   const identityNeeded = $derived(
@@ -190,6 +205,48 @@
 
   async function removeRemoteAction(name: string): Promise<void> {
     await gitState.removeRemote(projectId, name)
+  }
+
+  const conflictState = $derived(gitState.conflictState)
+  const integrateBusy = $derived(
+    gitState.isBusy(['merge', 'rebase', 'stash', 'abortMerge', 'abortRebase'])
+  )
+  const atRiskFiles = $derived(changes.length > 0 ? changes.map((change) => change.path) : [])
+
+  function requestMergeOrRebase(kind: 'merge' | 'rebase'): void {
+    const target = mergeTarget.trim()
+    if (!target) return
+    pendingOperation = { kind, target }
+    acknowledgeActiveTurn = false
+  }
+
+  async function confirmPendingOperation(): Promise<void> {
+    const operation = pendingOperation
+    if (!operation) return
+    pendingOperation = null
+    const summary =
+      operation.kind === 'merge'
+        ? await gitState.merge(projectId, operation.target)
+        : await gitState.rebase(projectId, operation.target)
+    if (summary && summary.conflicted.length > 0) {
+      mergeTarget = ''
+    }
+  }
+
+  async function abortConflict(): Promise<void> {
+    if (conflictState === 'merge') {
+      await gitState.abortMerge(projectId)
+    } else if (conflictState === 'rebase') {
+      await gitState.abortRebase(projectId)
+    }
+  }
+
+  async function openInEditor(path: string): Promise<void> {
+    await invoke('projectFiles:openInEditor', projectId, path)
+  }
+
+  async function stashChanges(): Promise<void> {
+    await gitState.stash(projectId)
   }
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
@@ -338,15 +395,110 @@
       {/if}
 
       {#if conflicted.length > 0}
-        <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-          <p class="text-[10px] font-semibold text-warning">
-            {conflicted.length} conflicted {conflicted.length === 1 ? 'file' : 'files'}
-          </p>
-          <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
-            Resolve conflicts in your editor, then stage the files and commit.
-          </p>
+        <div class="mb-2 overflow-hidden rounded-lg border border-warning/30 bg-warning/10">
+          <div class="flex items-center gap-2 px-3 py-2">
+            <p class="text-[10px] font-semibold text-warning">
+              {conflicted.length} conflicted {conflicted.length === 1 ? 'file' : 'files'}
+            </p>
+            <span class="flex-1"></span>
+            <button
+              type="button"
+              class="shrink-0 rounded-md border border-warning/40 px-2 py-1 text-[10px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40"
+              disabled={integrateBusy || conflictState === 'none'}
+              title={conflictState === 'merge'
+                ? 'Abort the current merge'
+                : 'Abort the current rebase'}
+              onclick={() => void abortConflict()}
+            >
+              {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+                Aborting…
+              {:else}
+                Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+              {/if}
+            </button>
+          </div>
+          <div class="border-t border-warning/20">
+            {#each conflicted as change (change.path)}
+              <div class="flex h-8 items-center gap-2 px-3">
+                <FileTypeIcon path={change.path} size={13} class="shrink-0" />
+                <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                  {change.path}
+                </span>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                  title={`Open ${change.path} in your editor to resolve the conflict`}
+                  onclick={() => void openInEditor(change.path)}
+                >
+                  Open in editor
+                </button>
+              </div>
+            {/each}
+          </div>
         </div>
       {/if}
+
+      <!-- Integrate (merge, rebase, stash) -->
+      <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+        <button
+          type="button"
+          class="flex h-8 w-full items-center gap-2 px-3 text-left"
+          aria-expanded={showIntegrate}
+          onclick={() => (showIntegrate = !showIntegrate)}
+        >
+          <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">Integrate</span
+          >
+          <span class="flex-1"></span>
+          {#if showIntegrate}
+            <ChevronDown size={12} class="text-dimmed" />
+          {:else}
+            <ChevronRight size={12} class="text-dimmed" />
+          {/if}
+        </button>
+        {#if showIntegrate}
+          <div class="border-t border-border px-3 py-2">
+            <div class="flex items-center gap-1.5">
+              <input
+                class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                placeholder="Branch to merge / rebase onto"
+                bind:value={mergeTarget}
+              />
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                disabled={!mergeTarget.trim() || integrateBusy}
+                title="Merge the target branch into the current branch"
+                onclick={() => requestMergeOrRebase('merge')}
+              >
+                Merge
+              </button>
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                disabled={!mergeTarget.trim() || integrateBusy}
+                title="Rebase the current branch onto the target"
+                onclick={() => requestMergeOrRebase('rebase')}
+              >
+                Rebase
+              </button>
+            </div>
+            <div class="mt-1.5 flex items-center justify-between gap-2">
+              <p class="text-[9px] leading-relaxed text-dimmed">
+                Merge/rebase can overwrite local changes. You will confirm the affected files first.
+              </p>
+              <button
+                type="button"
+                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                disabled={(status?.clean ?? true) || integrateBusy}
+                title="Stash uncommitted changes"
+                onclick={() => void stashChanges()}
+              >
+                {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
 
       <!-- Sync (remotes, fetch/pull/push, credentials) -->
       <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
@@ -620,6 +772,85 @@
 
   {#if showPullRequestSheet}
     <GitPullRequestSheet {projectId} onClose={() => (showPullRequestSheet = false)} />
+  {/if}
+
+  {#if pendingOperation}
+    {@const operation = pendingOperation}
+    <Modal
+      open
+      title={operation.kind === 'merge' ? 'Merge branch' : 'Rebase onto branch'}
+      onClose={() => (pendingOperation = null)}
+    >
+      <div class="space-y-3">
+        <p class="text-[11px] leading-relaxed text-muted">
+          {operation.kind === 'merge'
+            ? `Merge the branch into the current branch (${status?.branch ?? 'HEAD'}).`
+            : `Rebase the current branch (${status?.branch ?? 'HEAD'}) onto the branch.`}
+        </p>
+        {#if atRiskFiles.length > 0}
+          <div>
+            <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Local changes that may be affected
+            </p>
+            <div class="max-h-40 overflow-auto rounded-lg border border-border bg-surface">
+              {#each atRiskFiles as path (path)}
+                <div
+                  class="flex h-7 items-center gap-2 border-b border-border px-3 last:border-b-0"
+                >
+                  <FileTypeIcon {path} size={12} class="shrink-0" />
+                  <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+                    >{path}</span
+                  >
+                </div>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <p class="rounded-lg border border-border bg-surface px-3 py-1.5 text-[10px] text-muted">
+            No uncommitted local changes — this operation should apply cleanly.
+          </p>
+        {/if}
+        {#if agentTurnActive}
+          <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+            <p class="text-[10px] font-semibold text-warning">Agent turn in progress</p>
+            <p class="mt-0.5 text-[9px] leading-relaxed text-muted">
+              An agent is actively working in this project. Running a destructive git operation now
+              can interfere with its checkpoint snapshots. Acknowledge to continue anyway.
+            </p>
+            <div class="mt-1.5 flex items-center justify-between gap-2">
+              <span class="text-[10px] text-muted">I understand the risk</span>
+              <Switch
+                checked={acknowledgeActiveTurn}
+                onchange={(value) => (acknowledgeActiveTurn = value)}
+                aria-label="Acknowledge active agent turn risk"
+              />
+            </div>
+          </div>
+        {/if}
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (pendingOperation = null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="flex h-8 items-center rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={integrateBusy || (agentTurnActive && !acknowledgeActiveTurn)}
+            onclick={() => void confirmPendingOperation()}
+          >
+            {#if gitState.isBusy('merge') || gitState.isBusy('rebase')}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            {operation.kind === 'merge' ? 'Merge' : 'Rebase'}
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
   {/if}
 
   {#if showCommitSheet}

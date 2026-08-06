@@ -1,4 +1,4 @@
-import { stat, readFile } from 'fs/promises'
+import { stat, readFile, access } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep } from 'path'
 import { simpleGit } from 'simple-git'
 import type { SimpleGit, StatusResult } from 'simple-git'
@@ -486,7 +486,8 @@ export class GitService {
     return status.not_added.includes(path)
   }
 
-  private mapStatus(directory: string, status: StatusResult): GitStatus {
+  private async mapStatus(directory: string, status: StatusResult): Promise<GitStatus> {
+    const conflictState = await this.detectConflictState(directory)
     const conflicted = status.conflicted
     const changes: GitFileChange[] = status.files.map((file): GitFileChange => {
       const path = file.path.split(sep).join('/')
@@ -524,6 +525,7 @@ export class GitService {
       branch: status.current ? status.current : null,
       detached: Boolean(status.current && status.current === 'HEAD'),
       upstream: status.tracking ?? null,
+      conflictState,
       clean: status.isClean(),
       changes,
       stagedChanges,
@@ -570,6 +572,27 @@ export class GitService {
       deletions: 0,
       truncated: false
     }
+  }
+
+  /** Detect an in-progress merge or rebase from git's control files. */
+  private async detectConflictState(directory: string): Promise<'merge' | 'rebase' | 'none'> {
+    const gitDir = resolve(directory, '.git')
+    const probe = async (candidate: string): Promise<boolean> => {
+      try {
+        await access(candidate)
+        return true
+      } catch {
+        return false
+      }
+    }
+    if (await probe(resolve(gitDir, 'MERGE_HEAD'))) return 'merge'
+    if (
+      (await probe(resolve(gitDir, 'rebase-merge'))) ||
+      (await probe(resolve(gitDir, 'rebase-apply')))
+    ) {
+      return 'rebase'
+    }
+    return 'none'
   }
 
   private mapMergeResult(result: {

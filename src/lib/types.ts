@@ -2298,6 +2298,8 @@ export interface GitStatus {
   detached: boolean
   /** Upstream tracking ref (e.g. `origin/main`), when set. */
   upstream: string | null
+  /** Active merge/rebase state, used to offer the correct abort action. */
+  conflictState: 'merge' | 'rebase' | 'none'
   clean: boolean
   changes: GitFileChange[]
   /** Count of staged changes (including staged deletions). */
