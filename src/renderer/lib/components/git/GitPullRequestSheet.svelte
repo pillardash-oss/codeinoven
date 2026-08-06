@@ -77,6 +77,8 @@
   }
 
   async function openInBrowser(url: string): Promise<void> {
+    // Only ever hand off https URLs from the provider to the system browser.
+    if (!/^https:\/\//u.test(url)) return
     await invoke('shell:openExternal', url)
     onClose()
   }

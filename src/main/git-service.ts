@@ -1,4 +1,4 @@
-import { stat, readFile, access } from 'fs/promises'
+import { stat, open, access } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep } from 'path'
 import { simpleGit } from 'simple-git'
 import type { SimpleGit, StatusResult } from 'simple-git'
@@ -145,21 +145,7 @@ export class GitService {
         const git = this.client(directory)
         const isUntracked = await this.isUntracked(git, safePath)
         if (isUntracked && !staged) {
-          const content = await readFile(resolve(directory, safePath), 'utf-8').catch(() => null)
-          if (content === null) {
-            return this.emptyDiff(safePath, staged)
-          }
-          const lines = content.split('\n')
-          const additions = lines.length
-          return {
-            path: safePath,
-            staged: false,
-            content: lines.map((line) => `+${line}`).join('\n'),
-            binary: false,
-            additions,
-            deletions: 0,
-            truncated: false
-          }
+          return this.untrackedDiff(directory, safePath)
         }
         const args = staged ? ['--staged', '--', safePath] : ['--', safePath]
         const [content, summary] = await Promise.all([git.diff(args), git.diffSummary(args)])
@@ -188,10 +174,12 @@ export class GitService {
   async stage(projectPath: string, paths: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(projectPath, 'mutation', async () => {
-        const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
-        await this.client(directory).add(safePaths)
-      })
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length > 0) {
+        await this.wrapError(directory, 'mutation', async () => {
+          await this.client(directory).add(safePaths)
+        })
+      }
       return this.readStatus(directory)
     })
   }
@@ -199,10 +187,12 @@ export class GitService {
   async unstage(projectPath: string, paths: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      await this.wrapError(directory, 'mutation', async () => {
-        const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
-        await this.client(directory).raw(['reset', '--', ...safePaths])
-      })
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length > 0) {
+        await this.wrapError(directory, 'mutation', async () => {
+          await this.client(directory).raw(['reset', '--', ...safePaths])
+        })
+      }
       return this.readStatus(directory)
     })
   }
@@ -574,6 +564,50 @@ export class GitService {
     }
   }
 
+  /** Build a bounded `+` diff for an untracked file, detecting binary content. */
+  private async untrackedDiff(directory: string, path: string): Promise<GitDiff> {
+    const filePath = resolve(directory, path)
+    const metadata = await stat(filePath).catch(() => null)
+    if (!metadata) return this.emptyDiff(path, false)
+
+    const readHead = async (): Promise<string | null> => {
+      const size = Math.min(metadata.size, MAX_DIFF_BYTES + 1)
+      const buffer = Buffer.alloc(size)
+      try {
+        const handle = await open(filePath, 'r')
+        try {
+          await handle.read(buffer, 0, size, 0)
+        } finally {
+          await handle.close()
+        }
+      } catch {
+        return null
+      }
+      return buffer.toString('utf-8')
+    }
+
+    const head = await readHead()
+    if (head === null) return this.emptyDiff(path, false)
+    if (head.includes('\0')) {
+      return { ...this.emptyDiff(path, false), binary: true }
+    }
+    const truncated = metadata.size > MAX_DIFF_BYTES
+    const bounded = truncated ? head.slice(0, MAX_DIFF_BYTES) : head
+    const additions = bounded.split('\n').length
+    return {
+      path,
+      staged: false,
+      content: bounded
+        .split('\n')
+        .map((line) => `+${line}`)
+        .join('\n'),
+      binary: false,
+      additions,
+      deletions: 0,
+      truncated
+    }
+  }
+
   /** Detect an in-progress merge or rebase from git's control files. */
   private async detectConflictState(directory: string): Promise<'merge' | 'rebase' | 'none'> {
     const gitDir = resolve(directory, '.git')
@@ -621,14 +655,11 @@ export class GitService {
     return { conflicted: [], merged: [], result, aborted: false }
   }
 
-  /** Transient auth header via git env config — never persisted, never logged. */
+  /** Transient auth header via per-command `-c` config — never persisted, never logged. */
   private withAuthHeader(directory: string, token: string): SimpleGit {
     return simpleGit(directory, {
-      maxConcurrentProcesses: 1
+      maxConcurrentProcesses: 1,
+      config: [`http.extraheader=Authorization: Bearer ${token}`]
     })
-      .env('GIT_CONFIG_COUNT', '1')
-      .env('GIT_CONFIG_KEY_0', 'http.extraheader')
-      .env('GIT_CONFIG_VALUE_0', `Authorization: Bearer ${token}`)
-      .env('GIT_TERMINAL_PROMPT', '0')
   }
 }

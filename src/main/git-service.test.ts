@@ -266,4 +266,45 @@ describe('GitService', () => {
     const status = await service.getStatus(directory)
     expect(status.clean).toBe(true)
   })
+
+  it('pushes with a transient auth token without persisting it', async () => {
+    const working = await temporaryDirectory('codeinoven-git-token-working')
+    const bare = await temporaryDirectory('codeinoven-git-token-bare')
+    const service = new GitService()
+
+    await service.initialize(working)
+    await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
+    await service.stage(working, ['a.txt'])
+    await service.commit(working, 'initial')
+
+    await simpleGit(bare).init(true)
+    await service.addRemote(working, 'origin', bare)
+
+    const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
+    await expect(
+      service.push(working, {
+        setUpstream: true,
+        remote: 'origin',
+        branch: branchName,
+        token: 'dummy-pat-token'
+      })
+    ).resolves.toMatchObject({ ahead: 0 })
+
+    // The token must never leak into the repository's persisted config.
+    const config = await simpleGit(working).raw(['config', '--local', '--list'])
+    expect(config).not.toContain('dummy-pat-token')
+    expect(config).not.toContain('extraheader')
+  })
+
+  it('no-ops on empty stage/unstage without invoking git', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    const status = await service.getStatus(directory)
+
+    const staged = await service.stage(directory, [])
+    expect(staged.clean).toBe(status.clean)
+    const unstaged = await service.unstage(directory, [])
+    expect(unstaged.clean).toBe(status.clean)
+  })
 })
