@@ -3,6 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connect as netConnect, type Socket } from 'node:net'
+import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import { request as httpsRequest } from 'node:https'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
@@ -82,10 +83,22 @@ function httpsGet(port: number, path: string): Promise<{ status: number; body: s
 
 function rawHandshake(
   port: number,
-  headers: Record<string, string>
-): Promise<{ status: string; socket: Socket }> {
+  headers: Record<string, string>,
+  secure = false
+): Promise<{ status: string; socket: Socket | TLSSocket }> {
   return new Promise((resolve, reject) => {
-    const socket = netConnect({ host: '127.0.0.1', port }, () => {
+    const attachResponseReader = (socket: Socket | TLSSocket): void => {
+      let buffer = ''
+      socket.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString('latin1')
+        const headerEnd = buffer.indexOf('\r\n\r\n')
+        if (headerEnd !== -1) {
+          resolve({ status: buffer.slice(0, buffer.indexOf('\r\n')), socket })
+        }
+      })
+      socket.on('error', reject)
+    }
+    const sendUpgrade = (socket: Socket | TLSSocket): void => {
       const lines = [
         'GET / HTTP/1.1',
         `Host: 127.0.0.1:${port}`,
@@ -94,17 +107,16 @@ function rawHandshake(
       ]
       for (const [name, value] of Object.entries(headers)) lines.push(`${name}: ${value}`)
       socket.write(`${lines.join('\r\n')}\r\n\r\n`)
-    })
-    let buffer = ''
-    socket.on('data', (chunk: Buffer) => {
-      buffer += chunk.toString('latin1')
-      const headerEnd = buffer.indexOf('\r\n\r\n')
-      if (headerEnd !== -1) {
-        const statusLine = buffer.slice(0, buffer.indexOf('\r\n'))
-        resolve({ status: statusLine, socket })
-      }
-    })
-    socket.on('error', reject)
+    }
+    if (secure) {
+      const socket = tlsConnect({ host: '127.0.0.1', port, rejectUnauthorized: false }, () =>
+        sendUpgrade(socket)
+      )
+      attachResponseReader(socket)
+    } else {
+      const socket = netConnect({ host: '127.0.0.1', port }, () => sendUpgrade(socket))
+      attachResponseReader(socket)
+    }
   })
 }
 
@@ -292,5 +304,62 @@ describe('RemoteGateway', () => {
     })
     await expect(transport.connect()).resolves.toBe('rejected')
     await expect(gateway.stop()).resolves.toBeUndefined()
+  })
+
+  it('accepts the production file:// origin on the loopback listener', async () => {
+    const { gateway, localPort } = await makeGateway()
+    try {
+      const { status } = await rawHandshake(localPort, {
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version': '13',
+        Origin: 'file://'
+      })
+      expect(status).toContain('101 Switching Protocols')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('accepts the dev-server http://localhost origin on the loopback listener', async () => {
+    const { gateway, localPort } = await makeGateway()
+    try {
+      const { status } = await rawHandshake(localPort, {
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version': '13',
+        Origin: 'http://localhost:5173'
+      })
+      expect(status).toContain('101 Switching Protocols')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('keeps the LAN-exposed HTTPS listener strict against file:// origins', async () => {
+    const { gateway, port } = await makeGateway()
+    try {
+      const { status } = await rawHandshake(
+        port,
+        {
+          'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'Sec-WebSocket-Version': '13',
+          Origin: 'file://'
+        },
+        true
+      )
+      expect(status).toContain('403 Forbidden')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves the self-signed certificate at /cert.pem for iOS trust profiles', async () => {
+    const { gateway, port } = await makeGateway()
+    try {
+      const cert = await httpsGet(port, '/cert.pem')
+      expect(cert.status).toBe(200)
+      expect(cert.body).toContain('BEGIN CERTIFICATE')
+    } finally {
+      await gateway.stop()
+    }
   })
 })

@@ -126,11 +126,11 @@ export class RemoteGateway {
     const httpsServer = createHttpsServer({ key, cert }, (request, response) =>
       this.handleHttp(request, response)
     )
-    httpsServer.on('upgrade', (request, socket) => this.handleUpgrade(request, socket))
+    httpsServer.on('upgrade', (request, socket) => this.handleUpgrade(request, socket, 'strict'))
     this.httpsServer = httpsServer
 
     const httpServer = createServer((request, response) => this.handleLoopbackHttp(response))
-    httpServer.on('upgrade', (request, socket) => this.handleUpgrade(request, socket))
+    httpServer.on('upgrade', (request, socket) => this.handleUpgrade(request, socket, 'local'))
     this.httpServer = httpServer
 
     await Promise.all([
@@ -225,6 +225,12 @@ export class RemoteGateway {
 
   /** Resolve a request path to a PWA asset — allow-list enforced. */
   private resolvePwaPath(pathOnly: string): string | null {
+    // The self-signed certificate is served so phones (iOS in particular) can
+    // download and install it as a trust profile.
+    if (pathOnly === '/cert.pem') {
+      const certPath = join(this.options.certificateDir, 'cert.pem')
+      return existsSync(certPath) ? certPath : null
+    }
     const root = resolve(this.options.staticRoot)
     const path = pathOnly === '/' ? '/remote.html' : pathOnly
     if (!ALLOWED_STATIC.has(path) && !path.startsWith(PWA_ASSET_PREFIX)) return null
@@ -248,12 +254,16 @@ export class RemoteGateway {
     return 'localhost'
   }
 
-  private handleUpgrade(request: IncomingMessage, socket: Duplex): void {
+  private handleUpgrade(
+    request: IncomingMessage,
+    socket: Duplex,
+    originPolicy: 'strict' | 'local'
+  ): void {
     if (request.headers['sec-websocket-version'] !== '13') {
       socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')
       return
     }
-    if (!this.originAllowed(request)) {
+    if (!this.originAllowed(request, originPolicy)) {
       socket.end('HTTP/1.1 403 Forbidden\r\n\r\n')
       return
     }
@@ -319,12 +329,25 @@ export class RemoteGateway {
     })
   }
 
-  private originAllowed(request: IncomingMessage): boolean {
+  /**
+   * Origin check for WebSocket upgrades.
+   *
+   * - `strict` (LAN-exposed HTTPS listener): only same-host origins, plus the
+   *   missing/`null` origins produced by non-browser clients.
+   * - `local` (loopback-only listener for the desktop's own renderer): also
+   *   accepts same-machine origins — `file://` (production renderer loaded via
+   *   `loadFile`) and `localhost`/`127.0.0.1`/`::1` (the Vite dev server).
+   */
+  private originAllowed(request: IncomingMessage, originPolicy: 'strict' | 'local'): boolean {
     const origin = request.headers['origin']
     if (!origin || origin === 'null') return true
     try {
       const stripPort = (host: string): string => host.split(':')[0]
       const originHost = stripPort(new URL(origin).host)
+      if (originPolicy === 'local') {
+        const localHosts = new Set(['', 'localhost', '127.0.0.1', '::1', '[::1]'])
+        if (localHosts.has(originHost)) return true
+      }
       const requestHost = stripPort(request.headers['host'] ?? '')
       return originHost === requestHost
     } catch {
