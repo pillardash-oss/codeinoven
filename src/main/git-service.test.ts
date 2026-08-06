@@ -307,4 +307,37 @@ describe('GitService', () => {
     const unstaged = await service.unstage(directory, [])
     expect(unstaged.clean).toBe(status.clean)
   })
+
+  it('pulls back commits pushed from another clone and clears behind', async () => {
+    const working = await temporaryDirectory('codeinoven-git-pull-working')
+    const bare = await temporaryDirectory('codeinoven-git-pull-bare')
+    const service = new GitService()
+
+    await service.initialize(working)
+    await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
+    await service.stage(working, ['a.txt'])
+    await service.commit(working, 'first')
+    await simpleGit(bare).init(true)
+    await service.addRemote(working, 'origin', bare)
+    const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
+    await service.push(working, { setUpstream: true, remote: 'origin', branch: branchName })
+
+    // A peer clone advances the shared remote.
+    const clone = await temporaryDirectory('codeinoven-git-pull-clone')
+    await simpleGit().clone(bare, clone)
+    const cloneRepo = simpleGit(clone)
+    await writeFile(join(clone, 'b.txt'), 'b\n', 'utf-8')
+    await cloneRepo.add('.')
+    await cloneRepo.commit('peer change')
+    await cloneRepo.push(['origin', branchName])
+
+    // The original repo is now behind and pull brings it forward.
+    const fetched = await service.fetch(working)
+    expect(fetched.behind).toBe(1)
+
+    const pulled = await service.pull(working)
+    expect(pulled.behind).toBe(0)
+    const pulledStatus = await service.getStatus(working)
+    expect(pulledStatus.behind).toBe(0)
+  })
 })
