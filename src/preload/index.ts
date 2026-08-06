@@ -250,6 +250,8 @@ const INVOKE_CHANNELS = [
   'updater:getStatus',
   'updater:download',
   'updater:install',
+  'remote:getStatus',
+  'remote:toggle',
   'app:confirmClose'
 ] as const satisfies readonly InvokeChannel[]
 
@@ -272,7 +274,8 @@ const EVENT_CHANNELS = [
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
-  'computerUse:pipState'
+  'computerUse:pipState',
+  'remote:status'
 ] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]

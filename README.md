@@ -89,9 +89,11 @@ The development build opens the app from source. See [Development](#development)
 
 CodeInOven ships a remote-connection capability so you can keep working from your phone while away from your computer. Connectivity is **LAN-first**: the phone client connects over the local network when the desktop peer is reachable, and only falls back to a cloud relay for remote networks.
 
-All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. Local development works with zero configuration thanks to a localhost-only fallback. **Production deployments must supply real relay values at deploy time** (`RELAY_URL`, `RELAY_TOKEN`, and `MQTT_URL`/`MQTT_USERNAME`/`MQTT_PASSWORD` when MQTT signaling is used); they are never invented. See `agent-out/config.md` for the full variable reference.
+The phone client is an **installable PWA** served by the desktop's LAN gateway. Enable **Remote Mode** (Tray or the in-app **Remote** view) and the desktop starts a gateway on `LAN_PORT` that serves the phone client at `http://<your-desktop-ip>:<LAN_PORT>/remote.html`. Open that URL on your phone, install the PWA (manifest + service worker), and connect with the same `PEER_SECRET_AUTH` configured on the desktop. The gateway and the renderer both use the same authenticated, AES-GCM-encrypted WebSocket protocol, so the phone reaches the desktop over the LAN — with the cloud relay as an automatic fallback for remote networks.
 
-The phone client is delivered as a dedicated **Remote** view inside the app (this is an Electron + Svelte app, not a SvelteKit PWA). It authenticates with the shared `PEER_SECRET_AUTH`, shows live route state (LAN vs relay vs disconnected), keep-alive state, and a reconnect control. From the desktop you can enable **Remote Mode** to keep the app alive in the system Tray while you are away (see `agent-out/tray-contract.md`).
+While remote mode is on, the desktop lives in the system Tray: closing the window hides it instead of quitting, it accepts incoming phone sessions, and a full quit is refused while a session is live (see `agent-out/tray-contract.md`).
+
+All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. Local development works with zero configuration thanks to a localhost-only fallback. **Production deployments must supply real values at deploy time** (`RELAY_URL`, `RELAY_TOKEN`, `MQTT_URL`/`MQTT_USERNAME`/`MQTT_PASSWORD` when MQTT signaling is used, and `PEER_SECRET_AUTH`); they are never invented. See `agent-out/config.md` for the full variable reference.
 
 ---
 

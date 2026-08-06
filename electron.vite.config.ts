@@ -49,7 +49,10 @@ export default defineConfig({
       outDir: resolve(__dirname, 'out/renderer'),
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/renderer/index.html')
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          // Installable phone client (PWA): served by the LAN gateway in
+          // production, or by the Vite dev server in development.
+          remote: resolve(__dirname, 'src/renderer/remote.html')
         }
       }
     }

@@ -994,6 +994,8 @@ export interface IpcInvokeContract {
   'updater:getStatus': Contract<[], UpdaterStatus>
   'updater:download': Contract<[], void>
   'updater:install': Contract<[], void>
+  'remote:getStatus': Contract<[], RemoteModeStatus>
+  'remote:toggle': Contract<[enabled: boolean], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
 }
 
@@ -1035,6 +1037,24 @@ export type SystemNotificationTestResult =
 export type SystemNotificationPermissionStatus =
   { platform: 'darwin'; status: 'granted' | 'denied' | 'prompt' } | { platform: 'other' }
 
+/** Remote-mode keep-alive phase, mirroring the renderer's `KeepAlivePhase`. */
+export type RemoteModePhase =
+  'IDLE' | 'KEEP_ALIVE_ARMED' | 'KEEP_ALIVE_ACTIVE' | 'REMOTE_SESSION_LIVE'
+
+export interface RemoteGatewayInfo {
+  listening: boolean
+  port: number
+  /** The URL a phone can open to reach the installable PWA. */
+  url: string | null
+}
+
+export interface RemoteModeStatus {
+  remoteMode: boolean
+  phase: RemoteModePhase
+  blockedQuit: boolean
+  gateway: RemoteGatewayInfo
+}
+
 export interface IpcEventContract {
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'notification:playSound': []
@@ -1049,6 +1069,8 @@ export interface IpcEventContract {
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
+  /** Remote-mode status changes from the main process. */
+  'remote:status': [status: RemoteModeStatus]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract
