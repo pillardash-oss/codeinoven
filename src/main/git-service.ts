@@ -523,6 +523,7 @@ export class GitService {
       repositoryRoot: directory,
       branch: status.current ? status.current : null,
       detached: Boolean(status.current && status.current === 'HEAD'),
+      upstream: status.tracking ?? null,
       clean: status.isClean(),
       changes,
       stagedChanges,

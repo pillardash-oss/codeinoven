@@ -2296,6 +2296,8 @@ export interface GitStatus {
   branch: string | null
   /** True when HEAD is detached (no branch checked out). */
   detached: boolean
+  /** Upstream tracking ref (e.g. `origin/main`), when set. */
+  upstream: string | null
   clean: boolean
   changes: GitFileChange[]
   /** Count of staged changes (including staged deletions). */
