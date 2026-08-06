@@ -12,7 +12,8 @@ const SECRET = 'shared-peer-secret'
 
 async function makeGateway(
   secret: string | null = SECRET,
-  overrides: Partial<ConstructorParameters<typeof RemoteGateway>[0]> = {}
+  overrides: Partial<ConstructorParameters<typeof RemoteGateway>[0]> = {},
+  beforeStart?: (staticRoot: string) => Promise<void> | void
 ): Promise<{
   gateway: RemoteGateway
   port: number
@@ -28,6 +29,7 @@ async function makeGateway(
   await writeFile(join(staticRoot, 'remote.html'), '<h1>phone client</h1>', 'utf8')
   await writeFile(join(staticRoot, 'manifest.webmanifest'), '{"name":"test"}', 'utf8')
   await writeFile(join(staticRoot, 'service-worker.js'), 'self.onfetch=()=>{}', 'utf8')
+  if (beforeStart) await beforeStart(staticRoot)
 
   const sessions: boolean[] = []
   const handlers: GatewayHandlers = {
@@ -64,7 +66,14 @@ function waitForMessage(events: TransportEvent[], data: string, timeoutMs = 3_00
   })
 }
 
-function httpsGet(port: number, path: string): Promise<{ status: number; body: string }> {
+function httpsGet(
+  port: number,
+  path: string
+): Promise<{
+  status: number
+  body: string
+  headers?: Record<string, string | string[] | undefined>
+}> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
       { host: '127.0.0.1', port, path, rejectUnauthorized: false },
@@ -73,7 +82,9 @@ function httpsGet(port: number, path: string): Promise<{ status: number; body: s
         response.on('data', (chunk: Buffer) => {
           body += chunk.toString('utf8')
         })
-        response.on('end', () => resolve({ status: response.statusCode ?? 0, body }))
+        response.on('end', () =>
+          resolve({ status: response.statusCode ?? 0, body, headers: response.headers })
+        )
       }
     )
     request.on('error', reject)
@@ -150,11 +161,54 @@ describe('RemoteGateway', () => {
       const secret = await httpsGet(port, '/secrets.txt')
       expect(secret.status).toBe(404)
 
+      // A Vite-shared chunk that the PWA does not reference is never served.
       const assets = await httpsGet(port, '/assets/app-something.js')
       expect(assets.status).toBe(404)
+    } finally {
+      await gateway.stop()
+    }
+  })
 
-      const pwaAsset = await httpsGet(port, '/assets/remote-abc123.js')
-      expect(pwaAsset.status).toBe(404) // not present in the fixture tree
+  it('serves the PWA asset closure from remote.html (code-split shared chunks)', async () => {
+    const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
+      // Mimic a Vite build: remote.html references an entry chunk that imports
+      // a shared chunk plus a stylesheet — all hashed, unrelated names.
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>' +
+          '<link rel="stylesheet" href="./assets/app-shared123.css">',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(
+        join(root, 'assets', 'remote-abc123.js'),
+        'import { mount } from "./app-shared123.js"; void mount;',
+        'utf8'
+      )
+      await writeFile(
+        join(root, 'assets', 'app-shared123.js'),
+        'export const mount = () => undefined;',
+        'utf8'
+      )
+      await writeFile(join(root, 'assets', 'app-shared123.css'), 'body { color: black; }', 'utf8')
+    })
+    try {
+      const entry = await httpsGet(port, '/assets/remote-abc123.js')
+      expect(entry.status).toBe(200)
+      expect(entry.body).toContain('import')
+
+      const shared = await httpsGet(port, '/assets/app-shared123.js')
+      expect(shared.status).toBe(200)
+      expect(shared.body).toContain('export const mount')
+
+      const css = await httpsGet(port, '/assets/app-shared123.css')
+      expect(css.status).toBe(200)
+      expect(css.headers?.['content-type']).toContain('text/css')
+
+      // A chunk never referenced by the PWA stays blocked.
+      const other = await httpsGet(port, '/assets/other-unrelated.js')
+      expect(other.status).toBe(404)
     } finally {
       await gateway.stop()
     }
