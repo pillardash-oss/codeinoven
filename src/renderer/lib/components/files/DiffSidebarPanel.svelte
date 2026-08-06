@@ -40,7 +40,7 @@
   let fileDiffs = $state<TurnCheckpointFileDiff[]>([])
   let loadingDiffs = $state(false)
   let expandedDiffs = $state<Record<string, boolean>>({})
-  let loadedDiffKey = $state<string | null>(null)
+  let loadedDiffKey: string | null = null
   const turns = $derived(checkpoints.filter((checkpoint) => checkpoint.status !== 'active'))
   const selectedIndex = $derived(
     Math.max(
@@ -147,7 +147,6 @@
       loadedDiffKey = null
       return
     }
-    if (mode !== 'diffs') return
     const key = checkpoint.id
     if (loadedDiffKey === key) return
     loadedDiffKey = key
