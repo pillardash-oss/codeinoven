@@ -129,7 +129,11 @@
   }
 
   async function stageAll(): Promise<void> {
-    const allPaths = [...new Set(changes.map((change) => change.path))]
+    // Never stage unresolved conflict files — `git add` on a conflicted path
+    // marks it resolved and commits the conflict markers as-is.
+    const allPaths = [...new Set(changes.map((change) => change.path))].filter(
+      (path) => !(gitState.status?.conflicted ?? []).includes(path)
+    )
     if (allPaths.length === 0) return
     await gitState.stage(projectId, allPaths)
   }
@@ -350,6 +354,10 @@
           {/if}
           Initialize repository
         </button>
+        <p class="mt-3 max-w-[28ch] text-[9px] leading-relaxed text-dimmed">
+          Next: add a <span class="font-mono text-muted">.gitignore</span>, then stage and commit
+          your first changes from the Git panel.
+        </p>
       </div>
     {:else}
       {#if gitState.error}

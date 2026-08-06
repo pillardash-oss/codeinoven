@@ -4,10 +4,15 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { simpleGit } from 'simple-git'
 
-const { handlers, showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
+const { handlers, showOpenDialog, showSaveDialog, safeStorage } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   showOpenDialog: vi.fn(),
-  showSaveDialog: vi.fn()
+  showSaveDialog: vi.fn(),
+  safeStorage: {
+    isEncryptionAvailable: vi.fn(() => true),
+    encryptString: vi.fn((value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
+    decryptString: vi.fn((buffer: Buffer) => buffer.toString('utf-8').replace(/^enc:/u, ''))
+  }
 }))
 
 vi.mock('electron', () => ({
@@ -23,6 +28,7 @@ vi.mock('electron', () => ({
     showOpenDialog,
     showSaveDialog
   },
+  safeStorage,
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       handlers.set(channel, handler)
@@ -67,6 +73,8 @@ beforeEach(async () => {
   vi.restoreAllMocks()
   showOpenDialog.mockReset()
   showSaveDialog.mockReset()
+  safeStorage.isEncryptionAvailable.mockReset()
+  safeStorage.isEncryptionAvailable.mockReturnValue(true)
   database = await createTestDb()
 })
 
@@ -527,5 +535,55 @@ describe('git IPC', () => {
     expect(handlers.has('git:status')).toBe(true)
     expect(handlers.has('git:reset')).toBe(false)
     expect(handlers.has('git:checkout')).toBe(true)
+  })
+
+  it('vaults a git token and returns presence-only over IPC', async () => {
+    const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-git-cred-'))
+    const storage = new StorageEngine(storageRoot)
+    registerIpcHandlers(storage, database)
+
+    const setHandler = handlers.get('git:setCredential')
+    await expect(setHandler?.({}, 'cred-project', 'ghp_plaintext_secret')).resolves.toMatchObject({
+      configured: true,
+      secureStorageAvailable: true
+    })
+
+    const statusHandler = handlers.get('git:getCredentialStatus')
+    await expect(statusHandler?.({}, 'cred-project')).resolves.toEqual({
+      configured: true,
+      secureStorageAvailable: true
+    })
+
+    const removeHandler = handlers.get('git:removeCredential')
+    await expect(removeHandler?.({}, 'cred-project')).resolves.toEqual({
+      configured: false,
+      secureStorageAvailable: true
+    })
+
+    // The vault store must contain only ciphertext — never the plaintext token.
+    const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).not.toContain('ghp_plaintext_secret')
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('surfaces a clear fallback when secure credential storage is unavailable', async () => {
+    const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-git-cred2-'))
+    const storage = new StorageEngine(storageRoot)
+    safeStorage.isEncryptionAvailable.mockReturnValue(false)
+    registerIpcHandlers(storage, database)
+
+    const statusHandler = handlers.get('git:getCredentialStatus')
+    await expect(statusHandler?.({}, 'cred-project')).resolves.toEqual({
+      configured: false,
+      secureStorageAvailable: false
+    })
+
+    const setHandler = handlers.get('git:setCredential')
+    await expect(setHandler?.({}, 'cred-project', 'token')).rejects.toThrow(
+      'Secure credential storage is unavailable'
+    )
+
+    await rm(storageRoot, { recursive: true, force: true })
   })
 })
