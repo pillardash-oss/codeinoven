@@ -20,6 +20,8 @@ export const DEFAULT_PWA_BASE_URL = 'http://localhost:5173'
 export interface LanSettings {
   enabled: boolean
   port: number
+  /** Loopback-only ws port for the desktop renderer's in-app connection. */
+  localPort: number
   useMdns: boolean
   hosts: string[]
 }
@@ -163,8 +165,9 @@ export function buildRemoteConfig(
 
   return {
     lan: {
-      enabled: envBool(source, 'LAN_ENABLED', true),
+      enabled: lanEnabled,
       port: envInt(source, 'LAN_PORT', DEFAULT_LAN_PORT),
+      localPort: envInt(source, 'LAN_LOCAL_PORT', envInt(source, 'LAN_PORT', DEFAULT_LAN_PORT) + 1),
       useMdns: envBool(source, 'LAN_USE_MDNS', false),
       hosts: envList(source, 'LAN_HOSTS', ['localhost'])
     },

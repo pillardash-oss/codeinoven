@@ -26,6 +26,7 @@ describe('buildRemoteConfig', () => {
     expect(config.production).toBe(false)
     expect(config.lan.enabled).toBe(true)
     expect(config.lan.port).toBe(DEFAULT_LAN_PORT)
+    expect(config.lan.localPort).toBe(DEFAULT_LAN_PORT + 1)
     expect(config.lan.useMdns).toBe(false)
     expect(config.lan.hosts).toEqual(['localhost'])
     expect(config.relay.enabled).toBe(true)
@@ -56,6 +57,7 @@ describe('buildRemoteConfig', () => {
 
     expect(config.lan.enabled).toBe(false)
     expect(config.lan.port).toBe(5566)
+    expect(config.lan.localPort).toBe(5567)
     expect(config.lan.useMdns).toBe(true)
     expect(config.lan.hosts).toEqual(['192.168.1.10', '192.168.1.11'])
     expect(config.relay.url).toBe('wss://relay.example.test')

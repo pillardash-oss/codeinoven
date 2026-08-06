@@ -42,6 +42,8 @@ export type SocketFactory = (url: string) => TransportSocket
 export interface LanTransportOptions {
   peer: PeerRef
   authSecret: string | null
+  /** Wire scheme: the PWA connects over `wss`, the desktop renderer over `ws`. */
+  scheme?: 'ws' | 'wss'
   socketFactory?: SocketFactory
   handshakeTimeoutMs?: number
   onEvent: (event: TransportEvent) => void
@@ -104,7 +106,7 @@ function parseDataEnvelope(data: string): DataEnvelope | null {
 
 export function createLanTransport(options: LanTransportOptions): LanTransport {
   const peer = options.peer
-  const url = `ws://${peer.host}:${peer.port}`
+  const url = `${options.scheme ?? 'ws'}://${peer.host}:${peer.port}`
   const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000
   const socketFactory =
     options.socketFactory ??

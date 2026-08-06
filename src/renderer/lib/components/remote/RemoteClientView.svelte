@@ -3,7 +3,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import RemoteStatus from '$lib/components/remote/RemoteStatus.svelte'
   import PeerConnect from '$lib/components/remote/PeerConnect.svelte'
-  import { remoteSession } from '$lib/remote/session-store.svelte'
+  import { remoteSession, type RemoteConnectionTarget } from '$lib/remote/session-store.svelte'
   import { buildRemoteConfig, loadRemoteConfig, type RemoteConfig } from '$lib/remote/config'
   import {
     recentRemoteLogs,
@@ -62,9 +62,17 @@
     if (busy || effective.trim().length === 0) return
     busy = true
     try {
-      const hostOverride =
-        pwa && typeof window !== 'undefined' ? window.location.hostname || undefined : undefined
-      await remoteSession.connect(effective.trim(), hostOverride)
+      let target: RemoteConnectionTarget | undefined
+      if (pwa && typeof window !== 'undefined') {
+        target = {
+          host: window.location.hostname || 'localhost',
+          port: Number(window.location.port) || config.lan.port,
+          scheme: 'wss'
+        }
+      } else {
+        target = { host: '127.0.0.1', port: config.lan.localPort, scheme: 'ws' }
+      }
+      await remoteSession.connect(effective.trim(), target)
     } finally {
       busy = false
     }

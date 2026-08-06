@@ -42,7 +42,8 @@
     "better-sqlite3": "^13.0.2",
     "electron-updater": "^6.8.9",
     "jsonc-parser": "^3.3.1",
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "@baybreezy/file-extension-icon": "^0.0.5",

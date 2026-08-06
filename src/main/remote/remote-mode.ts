@@ -8,7 +8,8 @@
  * via `src/renderer/lib/remote/keep-alive.ts`.
  */
 
-import { BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { join } from 'node:path'
 import { Logger } from '../logger'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
@@ -17,6 +18,7 @@ import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/li
 
 export interface RemoteModeOptions {
   lanPort: number
+  localPort: number
   peerSecret: string | null
   staticRoot: string
   iconPath: string
@@ -42,12 +44,14 @@ export class RemoteModeController {
   private gateway: RemoteGateway | null = null
   private tray: RemoteTray | null = null
   private readonly lanPort: number
+  private readonly localPort: number
   private readonly peerSecret: string | null
   private readonly staticRoot: string
   private readonly iconPath: string
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
+    this.localPort = options.localPort
     this.peerSecret = options.peerSecret
     this.staticRoot = options.staticRoot
     this.iconPath = options.iconPath
@@ -131,12 +135,14 @@ export class RemoteModeController {
 
   private startGateway(): void {
     if (!this.staticRoot) {
-      Logger.error('Remote gateway not started: REMOTE_STATIC_ROOT is not set')
+      Logger.error('Remote gateway not started: renderer static root is not set')
       return
     }
     const gateway = new RemoteGateway({
       port: this.lanPort,
+      localPort: this.localPort,
       peerSecret: this.peerSecret,
+      certificateDir: join(app.getPath('userData'), 'remote-gateway'),
       staticRoot: this.staticRoot,
       handlers: { onSessionChange: (live) => this.onSessionChange(live) }
     })

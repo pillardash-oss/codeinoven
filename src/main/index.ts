@@ -154,6 +154,7 @@ const updaterService = new UpdaterService(storage)
 /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
 const remoteMode = new RemoteModeController({
   lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
+  localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
   peerSecret: remotePeerSecret(),
   staticRoot: join(mainBundleDirectory, '../renderer'),
   iconPath: getAppIconPath()
