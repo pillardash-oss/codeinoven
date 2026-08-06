@@ -1389,7 +1389,7 @@
               {#if previewKind}
                 <button
                   type="button"
-                  class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2 text-left transition-colors hover:text-foreground"
+                  class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
                   title="Click to preview"
                   aria-label="Preview {file.filename ?? 'file'}"
                   onclick={() => (previewFile = file)}
@@ -1403,17 +1403,17 @@
                   {:else}
                     <FileText size={11} class="shrink-0" />
                   {/if}
-                  <span class="max-w-24 truncate">{file.filename ?? 'file'}</span>
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
                 </button>
               {:else}
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2">
+                <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
                   <FileText size={11} class="shrink-0" />
-                  <span class="max-w-24 truncate">{file.filename ?? 'file'}</span>
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
                 </span>
               {/if}
               <button
                 type="button"
-                class="flex flex-1 shrink-0 items-center justify-center border-l border-border text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                 title="Remove attachment"
                 aria-label="Remove attachment"
                 onclick={() => removeAttachment(i)}

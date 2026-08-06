@@ -614,13 +614,13 @@
               <div
                 class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted"
               >
-                <span class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2">
+                <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
                   <Paperclip size={11} class="shrink-0 text-dimmed" />
-                  <span class="max-w-24 truncate">{attachment.filename ?? 'attachment'}</span>
+                  <span class="max-w-32 truncate">{attachment.filename ?? 'attachment'}</span>
                 </span>
                 <button
                   type="button"
-                  class="flex flex-1 shrink-0 items-center justify-center border-l border-border text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                  class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                   aria-label="Remove attachment"
                   title="Remove attachment"
                   onclick={() => removeAttachment(index)}
