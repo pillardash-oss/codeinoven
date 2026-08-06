@@ -26,7 +26,8 @@ import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-pr
 import { RestartRecoveryService } from './restart-recovery-service'
 import { WindowStateService } from './window-state'
 import { NotificationService } from './notification-service'
-import { setNotificationService } from './thread-events'
+import { setNotificationService, setPowerWakeService } from './thread-events'
+import { PowerWakeService } from './power-wake-service'
 import {
   RemoteModeController,
   DEFAULT_LAN_PORT,
@@ -151,6 +152,7 @@ const computerUsePipService = new ComputerUsePipService(storage)
 const chatEngine = new ChatEngine(storage, database, computerUsePipService)
 const notificationService = new NotificationService(storage, database, openThreadFromNotification)
 const updaterService = new UpdaterService(storage)
+const powerWakeService = new PowerWakeService(storage, database)
 
 /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
 const remoteMode = new RemoteModeController({
@@ -360,6 +362,8 @@ void app
     await windowStateService.load()
     Logger.initialize(storage.resolve('logs/main.jsonl'))
     Logger.info(`${APP_NAME} main process initialized`)
+    await powerWakeService.start()
+    setPowerWakeService(powerWakeService)
     try {
       const recovery = await new RestartRecoveryService(database).recover()
       if (recovery.recovered.length > 0) {
@@ -383,7 +387,8 @@ void app
     installFilePreviewProtocol(projectFilesService)
     registerIpcHandlers(storage, database, updaterService, chatEngine, {
       projectManager,
-      projectFilesService
+      projectFilesService,
+      powerWakeService
     })
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
@@ -477,6 +482,8 @@ async function runShutdownPipeline(): Promise<void> {
     Logger.error('Notification service cleanup failed during shutdown:', error)
   }
   setNotificationService(null)
+  setPowerWakeService(null)
+  powerWakeService.stop()
 
   try {
     await computerUsePipService.dispose()

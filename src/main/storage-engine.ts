@@ -36,7 +36,8 @@ const DEFAULT_CONFIG: AppConfig = {
   agentDefaults: { syncFromThreadChanges: false },
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
-  updateChannel: 'stable'
+  updateChannel: 'stable',
+  keepAwakeWhileWorking: false
 }
 
 /**
