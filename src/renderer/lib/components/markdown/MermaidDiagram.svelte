@@ -41,42 +41,40 @@
     }
   }
 
-  const renderDiagram: Attachment<HTMLElement> = () => {
-    let currentRender = 0
-    let disposed = false
-
-    async function update(): Promise<void> {
-      const renderNumber = ++currentRender
-      rendering = true
-      error = undefined
-
-      try {
-        const nextSvg = await renderMermaid(
-          `${diagramId}-${renderNumber}`,
-          code.trim(),
-          readTheme()
-        )
-        if (disposed || renderNumber !== currentRender) return
-        svg = nextSvg
-      } catch {
-        if (disposed || renderNumber !== currentRender) return
-        error = 'This Mermaid diagram could not be rendered.'
-      } finally {
-        if (!disposed && renderNumber === currentRender) rendering = false
-      }
-    }
-
-    void update()
-    const themeObserver = new MutationObserver(() => void update())
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class']
-    })
-
+  function renderDiagram(source: string): Attachment<HTMLElement> {
     return () => {
-      disposed = true
-      themeObserver.disconnect()
-      clearTimeout(copyResetTimer)
+      let currentRender = 0
+      let disposed = false
+
+      async function update(): Promise<void> {
+        const renderNumber = ++currentRender
+        rendering = true
+        error = undefined
+
+        try {
+          const nextSvg = await renderMermaid(`${diagramId}-${renderNumber}`, source, readTheme())
+          if (disposed || renderNumber !== currentRender) return
+          svg = nextSvg
+        } catch {
+          if (disposed || renderNumber !== currentRender) return
+          error = 'This Mermaid diagram could not be rendered.'
+        } finally {
+          if (!disposed && renderNumber === currentRender) rendering = false
+        }
+      }
+
+      void update()
+      const themeObserver = new MutationObserver(() => void update())
+      themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class']
+      })
+
+      return () => {
+        disposed = true
+        themeObserver.disconnect()
+        clearTimeout(copyResetTimer)
+      }
     }
   }
 
@@ -119,7 +117,7 @@
   </div>
 {/snippet}
 
-<div class="overflow-hidden rounded-lg border bg-elevated" {@attach renderDiagram}>
+<div class="overflow-hidden rounded-lg border bg-elevated" {@attach renderDiagram(code.trim())}>
   <div class="flex h-8 items-center justify-between border-b px-2">
     <span class="px-1 font-mono text-[10px] uppercase tracking-wide text-dimmed">Mermaid</span>
     <div class="flex items-center gap-0.5">
