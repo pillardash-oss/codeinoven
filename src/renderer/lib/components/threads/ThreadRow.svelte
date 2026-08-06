@@ -460,11 +460,13 @@
     </span>
     <span class="min-w-0 flex-1">
       <span
-        class="block truncate text-[13px] {threadState === 'approval' || threadState === 'unread'
-          ? 'font-medium text-foreground'
-          : 'text-foreground'}"
+        class="block truncate text-[13px] {threadState === 'approval'
+          ? 'font-medium text-warning'
+          : threadState === 'unread'
+            ? 'font-medium text-foreground'
+            : 'text-foreground'}"
       >
-        {threadState === 'approval' ? 'Needs Attention' : thread.title}
+        {thread.title}
       </span>
       {#if thread.branch}
         <span class="mt-0.5 block truncate font-mono text-[10px] text-dimmed">
@@ -586,7 +588,7 @@
           ? 'font-medium text-foreground'
           : 'text-foreground'}"
     >
-      {threadState === 'approval' ? 'Needs Attention' : thread.title}
+      {thread.title}
     </span>
 
     <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
