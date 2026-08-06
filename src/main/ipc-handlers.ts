@@ -2356,6 +2356,27 @@ export function registerIpcHandlers(
     }
     return status
   })
+  ipcMain.handle('git:createBranch', async (_, projectId: unknown, name: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.createBranch(
+      await resolveProjectPath(safeProjectId),
+      validateBranchName(name)
+    )
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:deleteBranch', async (_, projectId: unknown, name: unknown) => {
+    return gitService.deleteBranch(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateBranchName(name)
+    )
+  })
   ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown) => {
     const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
     return gitService.log(
