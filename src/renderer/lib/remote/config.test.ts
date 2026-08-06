@@ -92,14 +92,26 @@ describe('buildRemoteConfig', () => {
     ).toThrowError(/RELAY_TOKEN/)
   })
 
-  it('does not throw in production when the relay is disabled', () => {
+  it('does not throw in production when all routes are disabled', () => {
     const config = buildRemoteConfig({
       ...PROD,
-      RELAY_ENABLED: 'false'
+      RELAY_ENABLED: 'false',
+      LAN_ENABLED: 'false'
     })
 
     expect(config.relay.enabled).toBe(false)
+    expect(config.lan.enabled).toBe(false)
     expect(config.production).toBe(true)
+  })
+
+  it('throws in production when the peer secret is missing and a route is enabled', () => {
+    expect(() =>
+      buildRemoteConfig({
+        ...PROD,
+        RELAY_ENABLED: 'false'
+      })
+    ).toThrowError(/PEER_SECRET_AUTH/)
+    expect(() => buildRemoteConfig(PROD)).toThrowError(/PEER_SECRET_AUTH/)
   })
 
   it('throws when production enables MQTT signaling without credentials', () => {
@@ -129,11 +141,13 @@ describe('buildRemoteConfig', () => {
       RELAY_TOKEN: 'token',
       MQTT_URL: 'wss://mqtt.example.test',
       MQTT_USERNAME: 'user',
-      MQTT_PASSWORD: 'pass'
+      MQTT_PASSWORD: 'pass',
+      PEER_SECRET_AUTH: 'peer-secret'
     })
 
     expect(config.relay.token).toBe('token')
     expect(config.relay.mqtt.username).toBe('user')
+    expect(config.peer.authSecret).toBe('peer-secret')
   })
 
   it('exposes an explicit production override regardless of env flags', () => {

@@ -124,6 +124,7 @@ export function buildRemoteConfig(
   const production = options.production ?? isProductionSource(source)
 
   const relayEnabled = envBool(source, 'RELAY_ENABLED', true)
+  const lanEnabled = envBool(source, 'LAN_ENABLED', true)
   const relayUrl = envString(source, 'RELAY_URL') ?? (production ? null : DEFAULT_RELAY_URL)
   const relayToken = envString(source, 'RELAY_TOKEN')
 
@@ -142,6 +143,14 @@ export function buildRemoteConfig(
   ) {
     if (mqttUsername === null) missing.push('MQTT_USERNAME')
     if (mqttPassword === null) missing.push('MQTT_PASSWORD')
+  }
+  // Every handshake on both routes requires the shared peer secret.
+  if (
+    production &&
+    (lanEnabled || relayEnabled) &&
+    envString(source, 'PEER_SECRET_AUTH') === null
+  ) {
+    missing.push('PEER_SECRET_AUTH')
   }
   if (missing.length > 0) {
     const names = missing.join(', ')

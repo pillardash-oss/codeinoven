@@ -1,6 +1,11 @@
 import { mount } from 'svelte'
 import App from './App.svelte'
 import './app.css'
+import { createRingBufferLogger, setRemoteLogger } from './lib/remote/logger'
+
+// Retain remote-connection diagnostics in memory so they are observable (the
+// Remote view exposes them) without using console.*.
+setRemoteLogger(createRingBufferLogger())
 
 const notificationSound = new Audio(new URL('./alert.wav', document.baseURI).href)
 notificationSound.preload = 'auto'

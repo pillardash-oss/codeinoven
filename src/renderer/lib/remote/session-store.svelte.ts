@@ -15,7 +15,7 @@ import {
   type SessionSnapshot
 } from './session-state'
 import { loadRemoteConfig } from './config'
-import { discoverPeers } from './discovery'
+import { discoverPeers, type DiscoveredPeer } from './discovery'
 import { createLanTransport, type LanTransport } from './transport'
 import { createRelayClient, type RelayClient } from './relay'
 import { remoteLog } from './logger'
@@ -35,14 +35,18 @@ export class RemoteSessionStore {
   }
 
   /** Connect through the shared modules: LAN first, relay fallback. */
-  async connect(secret: string): Promise<void> {
+  async connect(secret: string, hostOverride?: string): Promise<void> {
     this.secret = secret
+    this.closeChannels()
     const config = loadRemoteConfig()
     this.dispatch({ type: 'lanProbeStart' })
 
+    // Probe reachability without keeping the probe sockets: every probe is
+    // closed as soon as it resolves, so no channels are orphaned.
+    const manualHosts = hostOverride && hostOverride.length > 0 ? [hostOverride] : config.lan.hosts
     const peers = await discoverPeers({
       port: config.lan.port,
-      manualHosts: config.lan.hosts,
+      manualHosts,
       useMdns: config.lan.useMdns,
       timeoutMs: 0,
       reachable: async (peer) => {
@@ -53,20 +57,20 @@ export class RemoteSessionStore {
           onEvent: () => undefined
         })
         const outcome = await probe.connect()
-        if (outcome === 'open') {
-          this.lanTransport = probe
-          return true
-        }
-        return false
+        probe.close()
+        return outcome === 'open'
       }
     })
 
     const peer = peers[0]
     if (peer) {
-      remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
-      this.dispatch({ type: 'lanConnected', peer: { host: peer.host, port: peer.port } })
-      this.dispatch({ type: 'peerReachableChanged', reachable: true })
-      return
+      const accepted = await this.openLanSession(peer, secret)
+      if (accepted) {
+        remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
+        this.dispatch({ type: 'lanConnected', peer: { host: peer.host, port: peer.port } })
+        this.dispatch({ type: 'peerReachableChanged', reachable: true })
+        return
+      }
     }
 
     if (!config.relay.enabled) {
@@ -98,13 +102,39 @@ export class RemoteSessionStore {
     }
   }
 
+  /** Open the kept LAN session channel against the first reachable peer. */
+  private async openLanSession(peer: DiscoveredPeer, secret: string): Promise<boolean> {
+    const session = createLanTransport({
+      peer,
+      authSecret: secret,
+      handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
+      onEvent: (event) => {
+        if (event.kind === 'disconnected' && this.lanTransport === session) {
+          this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
+          this.lanTransport = null
+        }
+      }
+    })
+    const outcome = await session.connect()
+    if (outcome === 'open') {
+      this.lanTransport = session
+      return true
+    }
+    session.close()
+    return false
+  }
+
   /** Tear down any open channel and return to DISCONNECTED. */
   disconnect(): void {
+    this.closeChannels()
+    this.dispatch({ type: 'disconnected' })
+  }
+
+  private closeChannels(): void {
     this.lanTransport?.close()
     this.lanTransport = null
     this.relayClient?.close()
     this.relayClient = null
-    this.dispatch({ type: 'disconnected' })
   }
 
   /** Update the desktop keep-alive phase surfaced to the phone client. */
