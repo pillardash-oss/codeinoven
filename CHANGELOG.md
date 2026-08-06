@@ -3,6 +3,25 @@
 All notable changes to CodeInOven are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-08-06
+
+### Added
+
+- Streamed Mermaid diagram rendering with strict-mode sanitization.
+- Command-menu navigation preservation, inline-block arrow-key handling, and
+  subagent recovery lifecycle fixes.
+- Header project-info dropdown, full thread ID in the debugger sidebar, and
+  Mermaid render fixes.
+- Open source release-readiness: security policy, code of conduct, issue/PR
+  templates, dependency automation, environment branches (`dev`/`nightly`),
+  and a nightly prerelease build pipeline.
+
+### Fixed
+
+- Restored the storage-to-Database migration in the test suite (tests now use
+  the `Database` class); repaired pre-existing type-check, lint, and test
+  failures that were blocking CI.
+
 ## [Unreleased]
 
 ### Added
