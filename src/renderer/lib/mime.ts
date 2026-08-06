@@ -98,6 +98,32 @@ export function isPdfMime(mime: string): boolean {
   return mime === 'application/pdf'
 }
 
+export function isMarkdownMime(mime: string): boolean {
+  return mime === 'text/markdown' || mime === 'text/x-markdown'
+}
+
+export function isPlainTextMime(mime: string): boolean {
+  return mime === 'text/plain'
+}
+
+/** The kind of inline preview a chat attachment supports, or `null` when the
+ *  file type has no renderer (images render as `<img>`, pdf as an iframe via
+ *  the Chromium PDF viewer, markdown via `MarkdownView`, plain text raw).
+ *  Filename extensions provide a fallback for files whose reported mime is
+ *  `application/octet-stream` or empty. */
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'markdown' | 'text'
+
+export function attachmentPreviewKind(
+  mime: string,
+  filename: string
+): AttachmentPreviewKind | null {
+  if (isImageMime(mime)) return 'image'
+  if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
+  if (isMarkdownMime(mime) || /\.(?:md|mdown|markdown)$/iu.test(filename)) return 'markdown'
+  if (isPlainTextMime(mime) || /\.(?:txt|text)$/iu.test(filename)) return 'text'
+  return null
+}
+
 export function isDocMime(mime: string): boolean {
   return (
     mime.startsWith('application/vnd.openxmlformats-officedocument') ||
