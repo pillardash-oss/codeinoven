@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  createAuthToken,
-  createLanTransport,
-  createNonce,
-  type TransportEvent,
-  type TransportSocket
-} from './transport'
+import { createLanTransport, type TransportEvent, type TransportSocket } from './transport'
+import { createHandshakeToken, decryptPayload, generateNonce } from './session-security'
 
 class FakeSocket implements TransportSocket {
   sent: string[] = []
@@ -76,8 +71,14 @@ describe('createLanTransport', () => {
     expect(events.some((event) => event.kind === 'handshaking')).toBe(true)
     expect(events.some((event) => event.kind === 'handshake:ok')).toBe(true)
 
-    transport.send('ping')
-    expect(socket.sent).toContain('ping')
+    await transport.send('ping')
+    const envelope = JSON.parse(socket.sent[socket.sent.length - 1]) as {
+      type: string
+      payload: string
+    }
+    expect(envelope.type).toBe('remote:data')
+    expect(envelope.payload).not.toContain('ping')
+    await expect(decryptPayload('secret', envelope.payload)).resolves.toBe('ping')
   })
 
   it('rejects the handshake when the peer rejects the auth token', async () => {
@@ -137,24 +138,24 @@ describe('createLanTransport', () => {
   })
 
   it('derives a different token per nonce', async () => {
-    const first = await createAuthToken('secret', 'nonce-a')
-    const second = await createAuthToken('secret', 'nonce-b')
+    const first = await createHandshakeToken('secret', 'nonce-a')
+    const second = await createHandshakeToken('secret', 'nonce-b')
     expect(first).not.toBe(second)
   })
 
   it('produces unique nonces', () => {
     const seen = new Set<string>()
     for (let i = 0; i < 32; i += 1) {
-      const nonce = createNonce()
+      const nonce = generateNonce()
       expect(seen.has(nonce)).toBe(false)
       seen.add(nonce)
     }
   })
 })
 
-describe('createAuthToken', () => {
+describe('createHandshakeToken', () => {
   it('signs the nonce without leaking the secret', async () => {
-    const token = await createAuthToken('secret-value', 'nonce')
+    const token = await createHandshakeToken('secret-value', 'nonce')
     expect(token).not.toContain('secret-value')
     expect(token.length).toBeGreaterThan(10)
   })

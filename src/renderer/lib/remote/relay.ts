@@ -15,7 +15,13 @@
 
 import type { RelayRef } from './routes'
 import { remoteLog } from './logger'
-import { createAuthToken, createNonce, type SocketFactory, type TransportSocket } from './transport'
+import type { SocketFactory, TransportSocket } from './transport'
+import {
+  createHandshakeToken,
+  decryptPayload,
+  encryptPayload,
+  generateNonce
+} from './session-security'
 
 export type RelayEvent =
   | { kind: 'signaling:mqtt-failed'; reason: string }
@@ -41,7 +47,7 @@ export interface RelayClientOptions {
 
 export interface RelayClient {
   connect(): Promise<RelayConnectResult>
-  send(data: string): void
+  send(data: string): Promise<void>
   close(): void
 }
 
@@ -60,6 +66,11 @@ interface RelayReply {
   reason?: string
 }
 
+interface DataEnvelope {
+  type: 'remote:data'
+  payload: string
+}
+
 function parseReply(data: string): RelayReply | null {
   try {
     const parsed: unknown = JSON.parse(data)
@@ -69,6 +80,21 @@ function parseReply(data: string): RelayReply | null {
     return {
       type: record.type,
       reason: typeof record.reason === 'string' ? record.reason : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function parseDataEnvelope(data: string): DataEnvelope | null {
+  try {
+    const parsed: unknown = JSON.parse(data)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    if (record.type !== 'remote:data') return null
+    return {
+      type: 'remote:data',
+      payload: typeof record.payload === 'string' ? record.payload : ''
     }
   } catch {
     return null
@@ -159,8 +185,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       socket.onopen = () => {
         if (settled) return
         remoteLog.dev(`Relay handshaking with ${options.url}`)
-        const nonce = createNonce()
-        void createAuthToken(options.authSecret ?? '', nonce).then((auth) => {
+        const nonce = generateNonce()
+        void createHandshakeToken(options.authSecret ?? '', nonce).then((auth) => {
           if (settled) return
           const hello: RelayHello = {
             type: 'relay:hello',
@@ -180,23 +206,38 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
 
       socket.onmessage = (event) => {
         const reply = parseReply(event.data)
-        if (!reply) {
-          options.onEvent({ kind: 'message', data: event.data })
+        if (reply) {
+          if (reply.type === 'relay:hello:ok') {
+            open = true
+            remoteLog.dev(`Relay handshake accepted for ${options.url}`)
+            finish('open', { kind: 'handshake:ok', relay })
+            return
+          }
+          remoteLog.error(
+            `Relay handshake rejected for ${options.url}: ${reply.reason ?? 'unknown'}`
+          )
+          finish('rejected', {
+            kind: 'handshake:rejected',
+            relay,
+            reason: reply.reason ?? 'auth-failed'
+          })
+          socket.close()
           return
         }
-        if (reply.type === 'relay:hello:ok') {
-          open = true
-          remoteLog.dev(`Relay handshake accepted for ${options.url}`)
-          finish('open', { kind: 'handshake:ok', relay })
+
+        const envelope = parseDataEnvelope(event.data)
+        if (envelope) {
+          void decryptPayload(options.authSecret ?? '', envelope.payload)
+            .then((plaintext) => options.onEvent({ kind: 'message', data: plaintext }))
+            .catch(() => {
+              remoteLog.error(`Relay payload decryption failed for ${options.url}`)
+              finish('failed', { kind: 'disconnected', relay, reason: 'decrypt-failed' })
+              socket.close()
+            })
           return
         }
-        remoteLog.error(`Relay handshake rejected for ${options.url}: ${reply.reason ?? 'unknown'}`)
-        finish('rejected', {
-          kind: 'handshake:rejected',
-          relay,
-          reason: reply.reason ?? 'auth-failed'
-        })
-        socket.close()
+
+        options.onEvent({ kind: 'message', data: event.data })
       }
 
       socket.onclose = () => {
@@ -219,12 +260,13 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       })
     },
 
-    send(data: string): void {
+    async send(data: string): Promise<void> {
       if (!open || !socket) {
         remoteLog.error('Relay send attempted before the channel was open')
         return
       }
-      socket.send(data)
+      const payload = await encryptPayload(options.authSecret ?? '', data)
+      socket.send(JSON.stringify({ type: 'remote:data', payload } satisfies DataEnvelope))
     },
 
     close(): void {

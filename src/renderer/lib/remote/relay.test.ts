@@ -7,6 +7,7 @@ import {
   type RelayClient
 } from './relay'
 import type { TransportSocket } from './transport'
+import { decryptPayload } from './session-security'
 
 const RELAY_URL = 'wss://relay.example.test'
 
@@ -95,8 +96,13 @@ describe('createRelayClient', () => {
     expect(hello.auth).not.toBe('peer-secret')
     expect(hello.nonce.length).toBeGreaterThan(0)
 
-    client.send('payload')
-    expect(relaySocket.sent).toContain('payload')
+    await client.send('payload')
+    const envelope = JSON.parse(relaySocket.sent[relaySocket.sent.length - 1]) as {
+      type: string
+      payload: string
+    }
+    expect(envelope.type).toBe('remote:data')
+    await expect(decryptPayload('peer-secret', envelope.payload)).resolves.toBe('payload')
   })
 
   it('rejects the handshake when the relay rejects the token', async () => {
