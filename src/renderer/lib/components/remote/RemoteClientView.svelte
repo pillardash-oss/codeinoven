@@ -3,6 +3,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import RemoteStatus from '$lib/components/remote/RemoteStatus.svelte'
   import PeerConnect from '$lib/components/remote/PeerConnect.svelte'
+  import PairingQr from '$lib/components/remote/PairingQr.svelte'
   import { remoteSession, type RemoteConnectionTarget } from '$lib/remote/session-store.svelte'
   import { buildRemoteConfig, loadRemoteConfig, type RemoteConfig } from '$lib/remote/config'
   import {
@@ -106,13 +107,34 @@
   $effect(() => {
     if (!desktop) return
     setRemoteLogger(createRingBufferLogger())
-    void syncRemoteStatus()
+    // Start the LAN gateway (if not already listening) so the QR pairing code
+    // is immediately scannable — no manual "remote mode" toggle required.
+    void invoke('remote:ensureGateway')
+      .then((status) => {
+        remoteStatus = status
+        remoteSession.setKeepAlive(status.phase)
+      })
+      .catch(() => void syncRemoteStatus())
     refreshDiagnostics()
     const unsubscribe = subscribe('remote:status', (status) => {
       remoteStatus = status
       remoteSession.setKeepAlive(status.phase)
     })
     return unsubscribe
+  })
+
+  // The phone client reads `?pair=<secret>` from the QR code and connects
+  // automatically — the human never types anything.
+  let pwaPairHandled = $state(false)
+  $effect(() => {
+    if (!pwa || pwaPairHandled || typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const pair = params.get('pair')
+    if (pair && pair.length > 0) {
+      pwaPairHandled = true
+      secret = pair
+      void handleConnect(pair)
+    }
   })
 </script>
 
@@ -146,19 +168,25 @@
       </section>
     {/if}
 
+    {#if !pwa && remoteStatus?.gateway?.pairingUrl}
+      <PairingQr pairingUrl={remoteStatus.gateway.pairingUrl} phoneUrl={remoteStatus.gateway.url} />
+    {/if}
+
     <RemoteStatus
       snapshot={remoteSession.snapshot}
       {busy}
       onReconnect={() => void handleConnect()}
     />
 
-    <PeerConnect
-      bind:secret
-      {connected}
-      {busy}
-      onConnect={(value) => void handleConnect(value)}
-      onDisconnect={handleDisconnect}
-    />
+    {#if !embedded}
+      <PeerConnect
+        bind:secret
+        {connected}
+        {busy}
+        onConnect={(value) => void handleConnect(value)}
+        onDisconnect={handleDisconnect}
+      />
+    {/if}
 
     {#if !pwa}
       <section class="rounded-xl border bg-surface p-4" aria-label="Remote mode">

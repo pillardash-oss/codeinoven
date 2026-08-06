@@ -15,6 +15,7 @@ import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
+import { loadOrCreatePeerSecret } from './peer-secret'
 
 export interface RemoteModeOptions {
   lanPort: number
@@ -46,6 +47,7 @@ export class RemoteModeController {
   private readonly lanPort: number
   private readonly localPort: number
   private readonly peerSecret: string | null
+  private resolvedPeerSecret: string | null = null
   private readonly staticRoot: string
   private readonly iconPath: string
 
@@ -57,12 +59,39 @@ export class RemoteModeController {
     this.iconPath = options.iconPath
   }
 
+  /**
+   * Resolve the peer auth secret used by the gateway.
+   *
+   * A `PEER_SECRET_AUTH` environment value always wins. When none is supplied
+   * (the human-friendly LAN case), a random secret is generated once and
+   * persisted under the app user-data dir so pairing stays stable across
+   * restarts. The QR pairing URL embeds this secret.
+   */
+  private async resolvePeerSecret(): Promise<string | null> {
+    if (this.peerSecret) return this.peerSecret
+    if (this.resolvedPeerSecret !== null) return this.resolvedPeerSecret
+    try {
+      this.resolvedPeerSecret = await loadOrCreatePeerSecret(
+        join(app.getPath('userData'), 'remote-gateway')
+      )
+      return this.resolvedPeerSecret
+    } catch (error) {
+      Logger.error('Could not load or create the remote peer secret:', error)
+      return null
+    }
+  }
+
   get status(): RemoteModeStatus {
     return {
       remoteMode: this.keepAlive.phase !== 'IDLE',
       phase: this.keepAlive.phase,
       blockedQuit: this.keepAlive.blockedQuit,
-      gateway: this.gateway?.info() ?? { listening: false, port: this.lanPort, url: null }
+      gateway: this.gateway?.info() ?? {
+        listening: false,
+        port: this.lanPort,
+        url: null,
+        pairingUrl: null
+      }
     }
   }
 
@@ -74,7 +103,7 @@ export class RemoteModeController {
   toggleRemoteMode(enabled: boolean): RemoteModeStatus {
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
-      this.startGateway()
+      void this.startGateway()
       this.ensureTray()
       this.hideWindowToTray()
       Logger.info('Remote mode enabled')
@@ -85,6 +114,20 @@ export class RemoteModeController {
       this.tray?.destroy()
       this.tray = null
       Logger.info('Remote mode disabled')
+    }
+    this.syncTray()
+    this.broadcast()
+    return this.status
+  }
+
+  /**
+   * Ensure the LAN gateway is listening, without toggling the keep-alive/Tray
+   * remote-mode behavior. Called when the user opens Settings → Remote so the
+   * QR pairing code is immediately scannable. Idempotent.
+   */
+  async ensureGateway(): Promise<RemoteModeStatus> {
+    if (!this.gateway && this.staticRoot) {
+      await this.startGateway()
     }
     this.syncTray()
     this.broadcast()
@@ -125,6 +168,7 @@ export class RemoteModeController {
 
   registerIpc(): void {
     ipcMain.handle('remote:getStatus', (): RemoteModeStatus => this.status)
+    ipcMain.handle('remote:ensureGateway', (): Promise<RemoteModeStatus> => this.ensureGateway())
     ipcMain.handle(
       'remote:toggle',
       (_event: IpcMainInvokeEvent, enabled: boolean): RemoteModeStatus => {
@@ -133,31 +177,31 @@ export class RemoteModeController {
     )
   }
 
-  private startGateway(): void {
+  private async startGateway(): Promise<void> {
+    if (this.gateway) return
     if (!this.staticRoot) {
       Logger.error('Remote gateway not started: renderer static root is not set')
       return
     }
+    const peerSecret = await this.resolvePeerSecret()
     const gateway = new RemoteGateway({
       port: this.lanPort,
       localPort: this.localPort,
-      peerSecret: this.peerSecret,
+      peerSecret,
       certificateDir: join(app.getPath('userData'), 'remote-gateway'),
       staticRoot: this.staticRoot,
       handlers: { onSessionChange: (live) => this.onSessionChange(live) }
     })
     this.gateway = gateway
-    void gateway
-      .start()
-      .then(() => {
-        this.syncTray()
-        this.broadcast()
-      })
-      .catch((error: unknown) => {
-        Logger.error('Remote gateway failed to start:', error)
-        this.gateway = null
-        this.broadcast()
-      })
+    try {
+      await gateway.start()
+      this.syncTray()
+      this.broadcast()
+    } catch (error: unknown) {
+      Logger.error('Remote gateway failed to start:', error)
+      this.gateway = null
+      this.broadcast()
+    }
   }
 
   private ensureTray(): void {

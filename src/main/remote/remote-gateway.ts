@@ -113,10 +113,15 @@ export class RemoteGateway {
 
   info() {
     const listening = this.httpsServer !== null && this.httpsServer.listening
+    const secret = this.options.peerSecret
     return {
       listening,
       port: this.port,
-      url: listening ? `https://${this.advertisedHost()}:${this.port}/remote.html` : null
+      url: listening ? `https://${this.advertisedHost()}:${this.port}/remote.html` : null,
+      pairingUrl:
+        listening && secret
+          ? `https://${this.advertisedHost()}:${this.port}/remote.html?pair=${encodeURIComponent(secret)}`
+          : null
     }
   }
 

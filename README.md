@@ -89,7 +89,13 @@ The development build opens the app from source. See [Development](#development)
 
 CodeInOven ships a remote-connection capability so you can keep working from your phone while away from your computer. Connectivity is **LAN-first**: the phone client connects over the local network when the desktop peer is reachable, and only falls back to a cloud relay for remote networks.
 
-The phone client is an **installable PWA** served by the desktop's LAN gateway over HTTPS. Enable **Remote Mode** (Tray or the in-app **Remote** view) and the desktop starts a gateway on `LAN_PORT` that serves the phone client at `https://<your-desktop-ip>:<LAN_PORT>/remote.html` using a self-signed certificate. Open that URL on your phone, accept the certificate once, and install the PWA (manifest + service worker) — the gateway's certificate is also available at `https://<your-desktop-ip>:<LAN_PORT>/cert.pem` for downloading. The gateway and the renderer both use the same authenticated, AES-GCM-encrypted WebSocket protocol, so the phone reaches the desktop over the LAN — with the cloud relay as an automatic fallback for remote networks.
+**Connecting is designed for humans — it's one QR scan.**
+
+1. Open **Settings → Remote** on your desktop. A QR code appears (the LAN gateway starts automatically).
+2. Point your phone camera at the code — your phone just needs to be on the same Wi-Fi network.
+3. The phone opens the app already configured and connects automatically. No account, no typing, nothing to install by hand.
+
+The phone client is an **installable PWA** served by the desktop's LAN gateway over HTTPS. The desktop starts a gateway on `LAN_PORT` that serves the phone client at `https://<your-desktop-ip>:<LAN_PORT>/remote.html` using a self-signed certificate. The gateway's certificate is available at `https://<your-desktop-ip>:<LAN_PORT>/cert.pem` for downloading and installing as a trust profile. The gateway and the renderer both use the same authenticated, AES-GCM-encrypted WebSocket protocol, so the phone reaches the desktop over the LAN — with the cloud relay as an automatic fallback for remote networks.
 
 **Self-signed certificate trust.** For the service worker to register and install to be offered, the client must run in a secure context:
 - **Android (Chrome):** open the URL, tap through the certificate warning, and the install prompt appears after the page loads. You can also download `cert.pem` and install it as a CA so the warning goes away.
@@ -97,7 +103,7 @@ The phone client is an **installable PWA** served by the desktop's LAN gateway o
 
 While remote mode is on, the desktop lives in the system Tray: closing the window hides it instead of quitting, it accepts incoming phone sessions, and a full quit is refused while a session is live (see `agent-out/tray-contract.md`).
 
-All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. Local development works with zero configuration thanks to a localhost-only fallback. **Production deployments must supply real values at deploy time** (`RELAY_URL`, `RELAY_TOKEN`, `MQTT_URL`/`MQTT_USERNAME`/`MQTT_PASSWORD` when MQTT signaling is used, and `PEER_SECRET_AUTH`); they are never invented. See `agent-out/config.md` for the full variable reference.
+All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. **On the LAN nothing needs to be configured**: when `PEER_SECRET_AUTH` is unset, the desktop generates one and delivers it to your phone through the QR pairing URL. The **cloud relay is a deployment-time option** — in production it only activates when `RELAY_URL`/`RELAY_TOKEN` (and MQTT credentials, when used) are provisioned; otherwise the client stays LAN-only and never invents a domain. See `agent-out/config.md` for the full variable reference.
 
 ---
 
