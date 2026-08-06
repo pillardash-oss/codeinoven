@@ -103,20 +103,26 @@
     if (gitState.status) repoState = 'git'
   }
 
+  /** Key a file's diff cache by path AND staged-ness so an "MM" file can show
+   *  both its staged snapshot and its further unstaged changes independently. */
+  function fileDiffKey(change: GitFileChange): string {
+    return `${change.staged ? 's:' : 'w:'}${change.path}`
+  }
+
   async function toggleDiff(change: GitFileChange): Promise<void> {
-    const path = change.path
-    if (expanded[path]) {
-      expanded = { ...expanded, [path]: false }
+    const key = fileDiffKey(change)
+    if (expanded[key]) {
+      expanded = { ...expanded, [key]: false }
       return
     }
-    expanded = { ...expanded, [path]: true }
-    if (diffs[path]) return
-    loadingDiff = { ...loadingDiff, [path]: true }
+    expanded = { ...expanded, [key]: true }
+    if (diffs[key]) return
+    loadingDiff = { ...loadingDiff, [key]: true }
     try {
-      const diff = await gitState.getDiff(projectId, path, change.staged)
-      diffs = { ...diffs, [path]: diff }
+      const diff = await gitState.getDiff(projectId, change.path, change.staged)
+      diffs = { ...diffs, [key]: diff }
     } finally {
-      loadingDiff = { ...loadingDiff, [path]: false }
+      loadingDiff = { ...loadingDiff, [key]: false }
     }
   }
 
@@ -775,9 +781,9 @@
             {#each section.files as change (change.path)}
               <GitFileRow
                 {change}
-                diff={diffs[change.path] ?? null}
-                loadingDiff={loadingDiff[change.path] ?? false}
-                expanded={expanded[change.path] ?? false}
+                diff={diffs[fileDiffKey(change)] ?? null}
+                loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                expanded={expanded[fileDiffKey(change)] ?? false}
                 onToggleDiff={() => void toggleDiff(change)}
                 onToggleStage={() => void toggleStage(change)}
               />

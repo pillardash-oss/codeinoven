@@ -479,28 +479,52 @@ export class GitService {
   private async mapStatus(directory: string, status: StatusResult): Promise<GitStatus> {
     const conflictState = await this.detectConflictState(directory)
     const conflicted = status.conflicted
-    const changes: GitFileChange[] = status.files.map((file): GitFileChange => {
+    const changes: GitFileChange[] = []
+    for (const file of status.files) {
       const path = file.path.split(sep).join('/')
       const indexMarker = file.index?.trim() ?? ''
+      const workMarker = file.working_dir?.trim() ?? ''
       const staged = indexMarker.length > 0 && indexMarker !== '?'
-      const statusKind: GitFileStatus = conflicted.includes(path)
-        ? 'conflicted'
-        : file.working_dir === '?' || status.not_added.includes(path)
-          ? 'untracked'
-          : file.from
-            ? 'renamed'
-            : file.index === 'D' || file.working_dir === 'D'
-              ? 'deleted'
-              : staged
-                ? 'added'
-                : 'modified'
-      return {
+      const untracked = workMarker === '?' || status.not_added.includes(path)
+
+      const push = (entry: GitFileChange): void => {
+        changes.push(entry)
+      }
+
+      if (conflicted.includes(path)) {
+        push({
+          path,
+          ...(file.from ? { oldPath: file.from.split(sep).join('/') } : {}),
+          status: 'conflicted',
+          staged
+        })
+        continue
+      }
+      if (untracked) {
+        push({ path, status: 'untracked', staged: false })
+        continue
+      }
+
+      const statusKind: GitFileStatus = file.from
+        ? 'renamed'
+        : file.index === 'D' || file.working_dir === 'D'
+          ? 'deleted'
+          : staged
+            ? 'added'
+            : 'modified'
+      push({
         path,
         ...(file.from ? { oldPath: file.from.split(sep).join('/') } : {}),
         status: statusKind,
         staged
+      })
+      // git reports a file staged AND modified again as one entry with both
+      // index and worktree markers ("MM"). Surface the unstaged half too so the
+      // panel shows both the staged snapshot and the further modifications.
+      if (staged && workMarker.length > 0 && workMarker !== '?' && workMarker !== 'D') {
+        push({ path, status: 'modified', staged: false })
       }
-    })
+    }
 
     const stagedChanges = changes.filter(
       (change) => change.staged && change.status !== 'conflicted'

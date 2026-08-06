@@ -363,4 +363,25 @@ describe('GitService', () => {
     const log = await service.log(directory)
     expect(log[0]?.message).toBe('first-commit')
   })
+
+  it('surfaces both halves of a staged-and-modified (MM) file', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'mm.txt'), 'v1\n', 'utf-8')
+    await service.stage(directory, ['mm.txt'])
+
+    // Modify after staging: git reports index=M and working_dir=M.
+    await writeFile(join(directory, 'mm.txt'), 'v2\n', 'utf-8')
+
+    const status = await service.getStatus(directory)
+    const staged = status.changes.filter((change) => change.path === 'mm.txt' && change.staged)
+    const unstaged = status.changes.filter((change) => change.path === 'mm.txt' && !change.staged)
+    expect(staged).toHaveLength(1)
+    expect(staged[0]?.status).toBe('added')
+    expect(unstaged).toHaveLength(1)
+    expect(unstaged[0]?.status).toBe('modified')
+    expect(status.stagedChanges).toBe(1)
+    expect(status.unstagedChanges).toBe(1)
+  })
 })
