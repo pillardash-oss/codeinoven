@@ -389,6 +389,18 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentSessionStatus | null
   >
+  'agent:getChildSessionStatus': Contract<
+    [projectId: string, threadId: string, sessionId: string],
+    AgentSessionStatus | null
+  >
+  'agent:retryChildSession': Contract<
+    [projectId: string, threadId: string, sessionId: string],
+    void
+  >
+  'agent:abortChildSession': Contract<
+    [projectId: string, threadId: string, sessionId: string],
+    void
+  >
   'agent:generateSpec': Contract<
     [projectId: string, threadId: string, request: SpecGenerationRequest],
     EngineeringSpecContent
