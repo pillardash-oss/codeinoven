@@ -23,6 +23,13 @@ import { remoteLog } from './logger'
 const LAN_HANDSHAKE_TIMEOUT_MS = 3_000
 const RELAY_HANDSHAKE_TIMEOUT_MS = 3_000
 
+/** An explicit endpoint to connect to (the LAN gateway, LAN-first). */
+export interface RemoteConnectionTarget {
+  host: string
+  port: number
+  scheme: 'ws' | 'wss'
+}
+
 export class RemoteSessionStore {
   snapshot = $state<SessionSnapshot>(initialSession())
 
@@ -35,17 +42,20 @@ export class RemoteSessionStore {
   }
 
   /** Connect through the shared modules: LAN first, relay fallback. */
-  async connect(secret: string, hostOverride?: string): Promise<void> {
+  async connect(secret: string, target?: RemoteConnectionTarget): Promise<void> {
     this.secret = secret
     this.closeChannels()
     const config = loadRemoteConfig()
     this.dispatch({ type: 'lanProbeStart' })
 
+    const port = target?.port ?? config.lan.localPort
+    const scheme = target?.scheme ?? 'ws'
+    const manualHosts = target && target.host.length > 0 ? [target.host] : config.lan.hosts
+
     // Probe reachability without keeping the probe sockets: every probe is
     // closed as soon as it resolves, so no channels are orphaned.
-    const manualHosts = hostOverride && hostOverride.length > 0 ? [hostOverride] : config.lan.hosts
     const peers = await discoverPeers({
-      port: config.lan.port,
+      port,
       manualHosts,
       useMdns: config.lan.useMdns,
       timeoutMs: 0,
@@ -53,6 +63,7 @@ export class RemoteSessionStore {
         const probe = createLanTransport({
           peer,
           authSecret: secret,
+          scheme,
           handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
           onEvent: () => undefined
         })
@@ -64,7 +75,7 @@ export class RemoteSessionStore {
 
     const peer = peers[0]
     if (peer) {
-      const accepted = await this.openLanSession(peer, secret)
+      const accepted = await this.openLanSession(peer, secret, scheme)
       if (accepted) {
         remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
         this.dispatch({ type: 'lanConnected', peer: { host: peer.host, port: peer.port } })
@@ -103,10 +114,15 @@ export class RemoteSessionStore {
   }
 
   /** Open the kept LAN session channel against the first reachable peer. */
-  private async openLanSession(peer: DiscoveredPeer, secret: string): Promise<boolean> {
+  private async openLanSession(
+    peer: DiscoveredPeer,
+    secret: string,
+    scheme: 'ws' | 'wss'
+  ): Promise<boolean> {
     const session = createLanTransport({
       peer,
       authSecret: secret,
+      scheme,
       handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
       onEvent: (event) => {
         if (event.kind === 'disconnected' && this.lanTransport === session) {
