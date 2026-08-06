@@ -56,6 +56,9 @@ import type {
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
+  GitHubAuthStatus,
+  GitHubDeviceCode,
+  GitHubPollResult,
   GitIdentity,
   GitIdentityInput,
   GitRemoteInfo,
@@ -674,6 +677,10 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number, method: PrMergeMethod],
     PullRequestReference
   >
+  'github:authStatus': Contract<[], GitHubAuthStatus>
+  'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
+  'github:poll': Contract<[deviceCode: string], GitHubPollResult>
+  'github:logout': Contract<[], GitHubAuthStatus>
   'history:search': Contract<[query: string, projectId?: string, limit?: number], HistoryEntry[]>
   'project:search': Contract<[query: string, limit?: number], Project[]>
   'threads:search': Contract<

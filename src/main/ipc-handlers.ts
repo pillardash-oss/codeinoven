@@ -11,6 +11,7 @@ import { EditorService } from './editor-service'
 import { RepositoryService } from './repository-service'
 import { GitService } from './git-service'
 import { SecretVault } from './secret-vault'
+import { GitHubAuthService } from './github-auth-service'
 import { GitHubProvider } from './providers/github-provider'
 import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
@@ -898,6 +899,7 @@ export function registerIpcHandlers(
   const repositoryService = new RepositoryService()
   const gitService = new GitService()
   const vault = new SecretVault(storage)
+  const githubAuthService = new GitHubAuthService(vault)
   const checkpointManager = new CheckpointManager(database)
   const diagnosticsService = new DiagnosticsService(database)
   const memoryService = new MemoryService(storage)
@@ -2499,6 +2501,8 @@ export function registerIpcHandlers(
 
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────
   const providerForProject = async (projectId: string): Promise<GitProvider | null> => {
+    const oauthToken = await githubAuthService.resolveToken()
+    if (oauthToken) return new GitHubProvider(oauthToken)
     const tokenRef = gitCredentialRef(projectId)
     if (!(await vault.exists(tokenRef))) return null
     const token = await vault.resolve(tokenRef)
@@ -2561,6 +2565,13 @@ export function registerIpcHandlers(
       })
     }
   )
+
+  ipcMain.handle('github:authStatus', () => githubAuthService.status())
+  ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
+  ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
+    githubAuthService.pollAccessToken(validateBoundedString(deviceCode, 'Device code', 1, 256))
+  )
+  ipcMain.handle('github:logout', () => githubAuthService.logout())
 
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)

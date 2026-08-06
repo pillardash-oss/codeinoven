@@ -2419,3 +2419,26 @@ export interface GitCredentialStatus {
   configured: boolean
   secureStorageAvailable: boolean
 }
+
+/** Device-code request payload returned by the GitHub device flow. */
+export interface GitHubDeviceCode {
+  deviceCode: string
+  userCode: string
+  verificationUri: string
+  expiresIn: number
+  interval: number
+}
+
+/** Result of one poll of the GitHub device flow token endpoint. */
+export type GitHubPollResult =
+  | { status: 'pending' }
+  | { status: 'authorized' }
+  | { status: 'expired' }
+  | { status: 'error'; message: string }
+
+/** Presence-only status of the GitHub OAuth connection. Never carries plaintext. */
+export interface GitHubAuthStatus {
+  connected: boolean
+  /** Whether the app has a GitHub App client ID configured to sign in with. */
+  configured: boolean
+}

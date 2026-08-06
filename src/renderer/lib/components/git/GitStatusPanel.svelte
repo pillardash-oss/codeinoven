@@ -7,6 +7,7 @@
   import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
+  import GitHubSignInModal from './GitHubSignInModal.svelte'
   import BranchPicker from './BranchPicker.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -66,6 +67,9 @@
   let commitMessage = $state('')
   let selectedCommit = $state<GitCommitInfo | null>(null)
   let commitDiffChanges = $state<GitFileChange[]>([])
+  let showGitHubSignIn = $state(false)
+  let githubConnected = $state(false)
+  let githubConfigured = $state(false)
   let loadingCommitDiff = $state(false)
 
   const status = $derived(gitState.status)
@@ -172,6 +176,18 @@
     await gitState.deleteBranch(projectId, name)
   }
 
+  async function loadGitHubAuth(): Promise<void> {
+    const status = await gitState.githubAuthStatus()
+    githubConnected = status.connected
+    githubConfigured = status.configured
+  }
+
+  async function signOutGitHub(): Promise<void> {
+    const status = await gitState.logoutGitHub()
+    githubConnected = status.connected
+    githubConfigured = status.configured
+  }
+
   async function saveIdentity(): Promise<void> {
     await gitState.setIdentity(projectId, identityName, identityEmail)
     if (!gitState.error) showIdentityForm = false
@@ -224,6 +240,10 @@
 
   $effect(() => {
     if (activeTab === 'history') void loadHistory()
+  })
+
+  $effect(() => {
+    void loadGitHubAuth()
   })
 
   onMount(() => {
@@ -946,63 +966,86 @@
                         </button>
                       </div>
 
-                      {#if credentialConfigured || showCredentialForm}
-                        <div class="mt-2 border-t border-border pt-2">
-                          <p
-                            class="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                      <div class="mt-2 border-t border-border pt-2">
+                        <p class="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted">
+                          GitHub account
+                        </p>
+                        {#if githubConnected}
+                          <div class="flex items-center gap-2">
+                            <span class="flex-1 text-[10px] text-success">Signed in to GitHub</span>
+                            <button
+                              type="button"
+                              class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
+                              onclick={() => void signOutGitHub()}
+                            >
+                              Sign out
+                            </button>
+                          </div>
+                        {:else if githubConfigured}
+                          <button
+                            type="button"
+                            class="flex h-7 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[10px] font-medium text-on-primary hover:bg-primary-hover"
+                            onclick={() => (showGitHubSignIn = true)}
                           >
-                            Credentials
+                            Sign in with GitHub
+                          </button>
+                        {:else}
+                          <p class="text-[9px] leading-relaxed text-dimmed">
+                            GitHub sign-in needs an app client ID. Until then, you can add a
+                            personal access token below.
                           </p>
-                          {#if credentialConfigured}
-                            <div class="flex items-center gap-2">
-                              <span class="flex-1 text-[10px] text-success">Token stored</span>
-                              <button
-                                type="button"
-                                class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
-                                onclick={() => void gitState.removeCredential(projectId)}
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          {:else}
-                            <div class="space-y-1.5">
-                              <input
-                                class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-                                placeholder="GitHub token"
-                                type="password"
-                                disabled={!secureStorageAvailable}
-                                bind:value={tokenValue}
-                              />
-                              <div class="flex justify-end gap-1.5">
+                          {#if credentialConfigured || showCredentialForm}
+                            {#if credentialConfigured}
+                              <div class="mt-1.5 flex items-center gap-2">
+                                <span class="flex-1 text-[10px] text-success">Token stored</span>
                                 <button
                                   type="button"
-                                  class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-                                  onclick={() => (showCredentialForm = false)}
+                                  class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10"
+                                  onclick={() => void gitState.removeCredential(projectId)}
                                 >
-                                  Cancel
-                                </button>
-                                <button
-                                  type="button"
-                                  class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                                  disabled={!tokenValue.trim() || !secureStorageAvailable}
-                                  onclick={() => void setCredentialAction()}
-                                >
-                                  Save
+                                  Remove
                                 </button>
                               </div>
-                            </div>
+                            {:else}
+                              <div class="mt-1.5 space-y-1.5">
+                                <input
+                                  class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+                                  placeholder="GitHub token"
+                                  type="password"
+                                  disabled={!secureStorageAvailable}
+                                  bind:value={tokenValue}
+                                />
+                                <div class="flex justify-end gap-1.5">
+                                  <button
+                                    type="button"
+                                    class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+                                    onclick={() => (showCredentialForm = false)}
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                                    disabled={!tokenValue.trim() || !secureStorageAvailable}
+                                    onclick={() => void setCredentialAction()}
+                                  >
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            {/if}
+                          {:else}
+                            <button
+                              type="button"
+                              class="mt-1.5 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                              disabled={!secureStorageAvailable}
+                              onclick={() => (showCredentialForm = true)}
+                            >
+                              Add token
+                            </button>
                           {/if}
-                        </div>
-                      {:else}
-                        <button
-                          type="button"
-                          class="mt-2 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                          disabled={!secureStorageAvailable}
-                          onclick={() => (showCredentialForm = true)}
-                        >
-                          Add token
-                        </button>
-                      {/if}
+                        {/if}
+                      </div>
                     </div>
                   {/if}
                 </div>
@@ -1191,6 +1234,16 @@
   {/if}
 
   <!-- Modals -->
+  {#if showGitHubSignIn}
+    <GitHubSignInModal
+      onClose={() => (showGitHubSignIn = false)}
+      onConnected={() => {
+        githubConnected = true
+        showGitHubSignIn = false
+      }}
+    />
+  {/if}
+
   {#if showPullRequestSheet}
     <GitPullRequestSheet {projectId} onClose={() => (showPullRequestSheet = false)} />
   {/if}

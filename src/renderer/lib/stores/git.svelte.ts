@@ -5,6 +5,9 @@ import type {
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
+  GitHubAuthStatus,
+  GitHubDeviceCode,
+  GitHubPollResult,
   GitIdentity,
   GitRemoteInfo,
   GitStatus,
@@ -421,6 +424,41 @@ class GitState {
       return await invoke('git:commitDiff', projectId, hash)
     } catch {
       return []
+    }
+  }
+
+  async githubAuthStatus(): Promise<GitHubAuthStatus> {
+    try {
+      return await invoke('github:authStatus')
+    } catch {
+      return { connected: false, configured: false }
+    }
+  }
+
+  async startGitHubDeviceFlow(): Promise<GitHubDeviceCode | null> {
+    try {
+      return await invoke('github:startDeviceFlow')
+    } catch (reason) {
+      this.error = errorMessage(reason, 'GitHub sign-in could not be started')
+      return null
+    }
+  }
+
+  async pollGitHubDeviceCode(deviceCode: string): Promise<GitHubPollResult> {
+    try {
+      return await invoke('github:poll', deviceCode)
+    } catch (reason) {
+      const message = errorMessage(reason, 'GitHub sign-in check failed')
+      return { status: 'error', message }
+    }
+  }
+
+  async logoutGitHub(): Promise<GitHubAuthStatus> {
+    try {
+      return await invoke('github:logout')
+    } catch (reason) {
+      this.error = errorMessage(reason, 'GitHub sign-out failed')
+      return { connected: false, configured: false }
     }
   }
 }
