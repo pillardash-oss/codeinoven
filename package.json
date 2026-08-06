@@ -10,7 +10,10 @@
   },
   "main": "out/main/index.js",
   "type": "module",
-  "author": "Pillardash Solutions Limited",
+  "author": {
+    "name": "Pillardash Solutions Limited",
+    "email": "hey@pillardash.com"
+  },
   "trustedDependencies": [
     "electron"
   ],
