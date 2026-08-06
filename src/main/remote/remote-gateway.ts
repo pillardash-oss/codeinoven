@@ -26,7 +26,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -115,6 +115,8 @@ export class RemoteGateway {
   private stopped = false
   /** Asset paths the PWA actually references (computed from the build output). */
   private allowedAssets = new Set<string>()
+  /** Fingerprint of the `remote.html` the closure was computed from. */
+  private closureStamp: string | null = null
 
   constructor(private readonly options: RemoteGatewayOptions) {
     this.port = options.port
@@ -138,10 +140,7 @@ export class RemoteGateway {
   async start(): Promise<{ port: number; localPort: number }> {
     const { key, cert } = await loadOrCreateSelfSignedCertificate(this.options.certificateDir)
 
-    this.allowedAssets = await computePwaAssetClosure(this.options.staticRoot)
-    if (this.allowedAssets.size > 0) {
-      Logger.info('PWA asset closure (allow-list):', [...this.allowedAssets])
-    }
+    await this.refreshAssetClosure()
 
     const httpsServer = createHttpsServer({ key, cert }, (request, response) =>
       this.handleHttp(request, response)
@@ -220,7 +219,34 @@ export class RemoteGateway {
     response.end('Not found')
   }
 
+  /**
+   * Recompute the allow-list when the build output changed.
+   *
+   * Every rebuild rewrites `remote.html` with freshly hashed chunk names, so a
+   * closure captured at startup would 404 exactly the assets the newly served
+   * HTML asks for — the phone would load a blank page until the app restarted.
+   * Fingerprinting `remote.html` keeps the allow-list in step with whatever is
+   * actually on disk.
+   */
+  private async refreshAssetClosure(): Promise<void> {
+    let stamp: string
+    try {
+      const info = await stat(join(this.options.staticRoot, 'remote.html'))
+      stamp = `${info.mtimeMs}:${info.size}`
+    } catch {
+      return
+    }
+    if (stamp === this.closureStamp) return
+    this.allowedAssets = await computePwaAssetClosure(this.options.staticRoot)
+    this.closureStamp = stamp
+    Logger.info(`PWA asset closure (${this.allowedAssets.size}):`, [...this.allowedAssets])
+  }
+
   private handleHttp(request: IncomingMessage, response: ServerResponse): void {
+    void this.refreshAssetClosure().then(() => this.serveHttp(request, response))
+  }
+
+  private serveHttp(request: IncomingMessage, response: ServerResponse): void {
     const urlPath = request.url ?? '/'
     const pathOnly = urlPath.split('?')[0]
     const filePath = this.resolvePwaPath(pathOnly)
