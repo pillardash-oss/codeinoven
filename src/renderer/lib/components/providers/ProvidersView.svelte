@@ -176,128 +176,125 @@
 
   <div class="space-y-3">
     {#each providerStore.providers as provider (provider.id)}
-      <div class="relative flex items-center justify-between rounded-xl border bg-surface p-4">
-        {#if harnessLifecycleStore.updateAvailableFor(provider.id)}
-          <span
-            class="absolute -top-2.5 left-3 z-10 flex items-center gap-1 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[10px] font-semibold text-warning"
-            title="A newer version of {provider.name} is available"
-          >
-            <Download size={10} /> Update available
-          </span>
-        {/if}
-        <div class="flex items-center gap-3">
-          <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-elevated">
-            <AgentIcon agentId={provider.id} label={provider.name} size={20} />
-          </div>
-          <div>
-            <p class="text-sm font-medium">{provider.name}</p>
-            <p class="text-xs text-dimmed">
-              <span class="rounded bg-elevated px-1 py-0.5 font-mono text-[10px]"
-                >{provider.command}</span
-              >
-              {#if provider.version}
-                <span class="ml-1.5 font-mono text-[10px] text-dimmed">{provider.version}</span>
-              {/if}
-            </p>
-            {#if provider.status === 'available'}
-              <p class="mt-0.5 text-[10px] text-dimmed">
-                {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
-                  ? ''
-                  : 's'}{#if authStatuses[provider.id] !== undefined}
-                  · {customCountFor(provider.id)} custom · {authCountFor(provider.id)} signed in
+      <div class="rounded-xl border bg-surface p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-elevated">
+              <AgentIcon agentId={provider.id} label={provider.name} size={20} />
+            </div>
+            <div>
+              <p class="text-sm font-medium">{provider.name}</p>
+              <p class="text-xs text-dimmed">
+                <span class="rounded bg-elevated px-1 py-0.5 font-mono text-[10px]"
+                  >{provider.command}</span
+                >
+                {#if provider.version}
+                  <span class="ml-1.5 font-mono text-[10px] text-dimmed">{provider.version}</span>
                 {/if}
               </p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            {#if provider.status === 'not_found'}
+              <button
+                class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                title="Open the {provider.name} install page for your operating system"
+                onclick={() => void openInstallPage(provider)}
+              >
+                <Download size={13} />
+                Install
+              </button>
             {/if}
+            {#if harnessLifecycleStore.updateAvailableFor(provider.id)}
+              <button
+                class="flex items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
+                  provider.id
+                )?.latestVersion}"
+                disabled={harnessLifecycleStore.isRunning(provider.id)}
+                onclick={() => void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
+              >
+                {#if harnessLifecycleStore.isRunning(provider.id)}
+                  <Loader2 size={13} class="animate-spin" />
+                {:else}
+                  <Download size={13} />
+                {/if}
+                Update
+              </button>
+            {/if}
+            <button
+              class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              title="Check whether {provider.name} is installed"
+              onclick={() => void checkOne(provider.id)}
+              disabled={provider.status === 'checking'}
+            >
+              Check
+            </button>
+            {#if provider.status === 'available'}
+              <button
+                class="flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                title="Uninstall {provider.name} from this machine"
+                disabled={harnessLifecycleStore.isRunning(provider.id)}
+                onclick={() => void requestUninstall(provider)}
+              >
+                <Trash2 size={13} />
+                Uninstall
+              </button>
+            {/if}
+            <button
+              class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+              title={canAddProvider(provider)
+                ? `Add a provider to ${provider.name}`
+                : 'Install the harness first, then re-check to add providers'}
+              disabled={!canAddProvider(provider)}
+              onclick={() => (addTarget = provider)}
+            >
+              <Plus size={13} /> Add provider
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="mt-3 flex items-center gap-2 border-t border-border pt-2">
           {#key provider.status}
-            <div class="flex items-center gap-1.5" in:fade={{ duration: 180 }}>
+            <div class="flex min-w-0 flex-1 items-center gap-1.5" in:fade={{ duration: 180 }}>
               {#if provider.status === 'available' && provider.integration === 'ready'}
-                <CheckCircle2 size={16} class="shrink-0 text-success" />
+                <CheckCircle2 size={14} class="shrink-0 text-success" />
                 <span
-                  class="max-w-40 truncate text-xs font-medium text-success"
+                  class="min-w-0 break-words text-xs font-medium text-success"
                   title={provider.resolvedPath}
                 >
                   {provider.resolvedPath ?? 'Ready'}
                 </span>
               {:else if provider.status === 'available'}
-                <Circle size={16} class="shrink-0 text-warning" />
+                <Circle size={14} class="shrink-0 text-warning" />
                 <span class="text-xs text-warning">Detected · integration planned</span>
               {:else if provider.status === 'checking'}
-                <Loader2 size={16} class="shrink-0 animate-spin text-info" />
+                <Loader2 size={14} class="shrink-0 animate-spin text-info" />
                 <span class="text-xs text-info">Checking...</span>
               {:else if provider.status === 'not_found'}
-                <Circle size={16} class="shrink-0 text-dimmed" />
+                <Circle size={14} class="shrink-0 text-dimmed" />
                 <span class="text-xs text-dimmed">Not installed</span>
               {:else if provider.status === 'error'}
-                <AlertTriangle size={16} class="shrink-0 text-danger" />
-                <span class="max-w-40 truncate text-xs text-danger" title={provider.detail}>
+                <AlertTriangle size={14} class="shrink-0 text-danger" />
+                <span class="min-w-0 break-words text-xs text-danger" title={provider.detail}>
                   {provider.detail ?? 'Error'}
                 </span>
               {:else}
-                <Circle size={16} class="shrink-0 text-dimmed" />
+                <Circle size={14} class="shrink-0 text-dimmed" />
                 <span class="text-xs text-dimmed">Not checked</span>
               {/if}
             </div>
           {/key}
-          {#if provider.status === 'not_found'}
-            <button
-              class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
-              title="Open the {provider.name} install page for your operating system"
-              onclick={() => void openInstallPage(provider)}
-            >
-              <Download size={13} />
-              Install
-            </button>
-          {/if}
-          {#if harnessLifecycleStore.updateAvailableFor(provider.id)}
-            <button
-              class="flex items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-              title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
-                provider.id
-              )?.latestVersion}"
-              disabled={harnessLifecycleStore.isRunning(provider.id)}
-              onclick={() => void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
-            >
-              {#if harnessLifecycleStore.isRunning(provider.id)}
-                <Loader2 size={13} class="animate-spin" />
-              {:else}
-                <Download size={13} />
-              {/if}
-              Update
-            </button>
-          {/if}
-          <button
-            class="rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-            title="Check whether {provider.name} is installed"
-            onclick={() => void checkOne(provider.id)}
-            disabled={provider.status === 'checking'}
-          >
-            Check
-          </button>
           {#if provider.status === 'available'}
-            <button
-              class="flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
-              title="Uninstall {provider.name} from this machine"
-              disabled={harnessLifecycleStore.isRunning(provider.id)}
-              onclick={() => void requestUninstall(provider)}
-            >
-              <Trash2 size={13} />
-              Uninstall
-            </button>
+            <span class="ml-1 shrink-0 text-[10px] text-dimmed">
+              {totalProviderCount(provider)} provider{totalProviderCount(provider) === 1
+                ? ''
+                : 's'}{#if authStatuses[provider.id] !== undefined}
+                · {customCountFor(provider.id)} custom · {authCountFor(provider.id)} signed in
+              {/if}
+            </span>
           {/if}
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            title={canAddProvider(provider)
-              ? `Add a provider to ${provider.name}`
-              : 'Install the harness first, then re-check to add providers'}
-            disabled={!canAddProvider(provider)}
-            onclick={() => (addTarget = provider)}
-          >
-            <Plus size={13} /> Add provider
-          </button>
         </div>
       </div>
     {/each}
