@@ -611,21 +611,23 @@
         {#if attachments.length > 0}
           <div class="mb-2 flex flex-wrap gap-1.5">
             {#each attachments as attachment, index (attachment.url)}
-              <span
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
+              <div
+                class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted"
               >
-                <Paperclip size={11} class="text-dimmed" />
-                <span class="max-w-32 truncate">{attachment.filename ?? 'attachment'}</span>
+                <span class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-2">
+                  <Paperclip size={11} class="shrink-0 text-dimmed" />
+                  <span class="max-w-24 truncate">{attachment.filename ?? 'attachment'}</span>
+                </span>
                 <button
                   type="button"
-                  class="flex h-4 w-4 items-center justify-center rounded text-dimmed transition-colors hover:text-danger"
+                  class="flex flex-1 shrink-0 items-center justify-center border-l border-border text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                   aria-label="Remove attachment"
                   title="Remove attachment"
                   onclick={() => removeAttachment(index)}
                 >
                   <X size={11} />
                 </button>
-              </span>
+              </div>
             {/each}
           </div>
         {/if}
