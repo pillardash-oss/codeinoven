@@ -58,6 +58,10 @@ class GitState {
     return this.status?.conflicted ?? []
   }
 
+  get conflictState(): 'merge' | 'rebase' | 'none' {
+    return this.status?.conflictState ?? 'none'
+  }
+
   get clean(): boolean {
     return this.status?.clean ?? true
   }

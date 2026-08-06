@@ -187,4 +187,83 @@ describe('GitService', () => {
     const afterRemove = await service.removeRemote(directory, 'upstream')
     expect(afterRemove.map((remote) => remote.name)).toEqual(['origin'])
   })
+
+  it('surfaces merge conflicts and aborts the merge back to a clean tree', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'base')
+
+    await simpleGit(directory).checkoutLocalBranch('feature')
+    await writeFile(join(directory, 'conflict.txt'), 'feature\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'feature change')
+
+    await simpleGit(directory).checkout('main')
+    await writeFile(join(directory, 'conflict.txt'), 'main\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'main change')
+
+    const summary = await service.merge(directory, 'feature')
+    expect(summary.conflicted.some((entry) => entry.path === 'conflict.txt')).toBe(true)
+
+    const statusAfterConflict = await service.getStatus(directory)
+    expect(statusAfterConflict.conflicted).toContain('conflict.txt')
+    expect(statusAfterConflict.conflictState).toBe('merge')
+
+    await service.abortMerge(directory)
+    const statusAfterAbort = await service.getStatus(directory)
+    expect(statusAfterAbort.conflicted).toHaveLength(0)
+    expect(statusAfterAbort.conflictState).toBe('none')
+  })
+
+  it('surfaces rebase conflicts and aborts the rebase', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'rebase.txt'), 'base\n', 'utf-8')
+    await service.stage(directory, ['rebase.txt'])
+    await service.commit(directory, 'base')
+
+    await simpleGit(directory).checkoutLocalBranch('topic')
+    await writeFile(join(directory, 'rebase.txt'), 'topic\n', 'utf-8')
+    await service.stage(directory, ['rebase.txt'])
+    await service.commit(directory, 'topic change')
+
+    await simpleGit(directory).checkout('main')
+    await writeFile(join(directory, 'rebase.txt'), 'main\n', 'utf-8')
+    await service.stage(directory, ['rebase.txt'])
+    await service.commit(directory, 'main change')
+
+    const summary = await service.rebase(directory, 'topic')
+    expect(summary.conflicted.some((entry) => entry.path === 'rebase.txt')).toBe(true)
+
+    const statusAfterConflict = await service.getStatus(directory)
+    expect(statusAfterConflict.conflictState).toBe('rebase')
+
+    await service.abortRebase(directory)
+    const statusAfterAbort = await service.getStatus(directory)
+    expect(statusAfterAbort.conflictState).toBe('none')
+    expect(statusAfterAbort.conflicted).toHaveLength(0)
+  })
+
+  it('stashes dirty changes and restores a clean tree', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'keep.txt'), 'keep\n', 'utf-8')
+    await service.stage(directory, ['keep.txt'])
+    await service.commit(directory, 'keep')
+
+    await writeFile(join(directory, 'dirty.txt'), 'dirty\n', 'utf-8')
+    await service.stage(directory, ['dirty.txt'])
+
+    const afterStash = await service.stash(directory, 'wip dirty')
+    expect(afterStash.clean).toBe(true)
+
+    const status = await service.getStatus(directory)
+    expect(status.clean).toBe(true)
+  })
 })
