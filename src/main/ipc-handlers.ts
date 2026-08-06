@@ -37,6 +37,7 @@ import {
   validateGitIdentity,
   validateGitPathArray,
   validateGitRelativePath,
+  validateGitResetMode,
   validateHistoryRole,
   validateMergeMethod,
   validateMergeTarget,
@@ -2403,6 +2404,38 @@ export function registerIpcHandlers(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
       safeHash
     )
+  })
+  ipcMain.handle(
+    'git:commitFileDiff',
+    async (_, projectId: unknown, hash: unknown, relativePath: unknown) =>
+      gitService.commitFileDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateEntityId(hash, 'Commit hash'),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle('git:amend', async (_, projectId: unknown, message: unknown) =>
+    gitService.amend(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateCommitMessage(message)
+    )
+  )
+  ipcMain.handle('git:reset', async (_, projectId: unknown, mode: unknown, target?: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.reset(
+      await resolveProjectPath(safeProjectId),
+      validateGitResetMode(mode),
+      target === undefined ? undefined : validateEntityId(target, 'Reset target')
+    )
+    // A reset moves the branch, so keep thread.branch coherent like checkout.
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
   })
   ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
     gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))

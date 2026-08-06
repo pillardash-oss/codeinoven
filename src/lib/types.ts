@@ -2360,6 +2360,16 @@ export interface GitCommitInfo {
   message: string
 }
 
+/** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
+export type GitResetMode = 'soft' | 'mixed' | 'hard'
+
+/** Renderer-safe git reset request. */
+export interface GitResetInput {
+  mode: GitResetMode
+  /** Commit hash to reset the current branch to. Defaults to HEAD. */
+  target?: string
+}
+
 /** Result of a push/pull that reports upstream drift. */
 export interface GitSyncSummary {
   ahead: number

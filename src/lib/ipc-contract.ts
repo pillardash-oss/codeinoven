@@ -649,6 +649,12 @@ export interface IpcInvokeContract {
   'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:log': Contract<[projectId: string, limit?: number], GitCommitInfo[]>
   'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
+  'git:commitFileDiff': Contract<[projectId: string, hash: string, path: string], GitDiff>
+  'git:amend': Contract<[projectId: string, message: string], GitStatus>
+  'git:reset': Contract<
+    [projectId: string, mode: import('./types').GitResetMode, target?: string],
+    GitStatus
+  >
   'git:getIdentity': Contract<[projectId: string], GitIdentity>
   'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
   'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>
