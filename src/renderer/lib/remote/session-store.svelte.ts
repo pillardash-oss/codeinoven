@@ -19,6 +19,7 @@ import { discoverPeers, type DiscoveredPeer } from './discovery'
 import { createLanTransport, type LanTransport } from './transport'
 import { createRelayClient, type RelayClient } from './relay'
 import { remoteLog } from './logger'
+import { SvelteSet } from 'svelte/reactivity'
 
 const LAN_HANDSHAKE_TIMEOUT_MS = 3_000
 const RELAY_HANDSHAKE_TIMEOUT_MS = 3_000
@@ -36,9 +37,36 @@ export class RemoteSessionStore {
   private secret = ''
   private lanTransport: LanTransport | null = null
   private relayClient: RelayClient | null = null
+  private messageListeners = new SvelteSet<(plaintext: string) => void>()
 
   dispatch(action: SessionAction): void {
     this.snapshot = applySessionAction(this.snapshot, action)
+  }
+
+  /** Register a listener for every decrypted `remote:data` message received. */
+  onMessage(listener: (plaintext: string) => void): () => void {
+    this.messageListeners.add(listener)
+    return () => this.messageListeners.delete(listener)
+  }
+
+  /** Send a plaintext JSON payload to the desktop, encrypted at the transport. */
+  async sendPayload(payload: unknown): Promise<void> {
+    const data = JSON.stringify(payload)
+    if (this.lanTransport) {
+      await this.lanTransport.send(data)
+      return
+    }
+    if (this.relayClient) {
+      await this.relayClient.send(data)
+      return
+    }
+    remoteLog.error('Remote session payload send attempted before the channel was open')
+  }
+
+  private routeMessage(plaintext: string): void {
+    for (const listener of this.messageListeners) {
+      listener(plaintext)
+    }
   }
 
   /** Connect through the shared modules: LAN first, relay fallback. */
@@ -97,6 +125,10 @@ export class RemoteSessionStore {
       mqtt: config.relay.mqtt,
       handshakeTimeoutMs: RELAY_HANDSHAKE_TIMEOUT_MS,
       onEvent: (event) => {
+        if (event.kind === 'message') {
+          this.routeMessage(event.data)
+          return
+        }
         if (event.kind === 'handshake:ok') {
           remoteLog.info('Remote session connected through the cloud relay')
         }
@@ -125,6 +157,10 @@ export class RemoteSessionStore {
       scheme,
       handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
       onEvent: (event) => {
+        if (event.kind === 'message') {
+          this.routeMessage(event.data)
+          return
+        }
         if (event.kind === 'disconnected' && this.lanTransport === session) {
           this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           this.lanTransport = null

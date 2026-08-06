@@ -33,6 +33,7 @@ import {
   remoteEnvInt,
   remotePeerSecret
 } from './remote/remote-mode'
+import { RemoteRpcDispatcher } from './remote/remote-rpc'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -157,7 +158,11 @@ const remoteMode = new RemoteModeController({
   localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
   peerSecret: remotePeerSecret(),
   staticRoot: join(mainBundleDirectory, '../renderer'),
-  iconPath: getAppIconPath()
+  iconPath: getAppIconPath(),
+  rpc: new RemoteRpcDispatcher({
+    database,
+    chatEngine
+  })
 })
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */

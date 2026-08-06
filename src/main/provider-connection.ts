@@ -3,6 +3,7 @@ import { execFile, spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../lib/types'
 import { buildHarnessEnvironment } from './drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from './harness-registry'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 
 /** Probe timeout — harnesses that hang longer than this are marked as error. */
 const PROBE_TIMEOUT_MS = 8000
@@ -92,6 +93,7 @@ export class ProviderConnectionService {
     for (const win of BrowserWindow.getAllWindows()) {
       win.webContents.send('providers:status', payload)
     }
+    forwardRemoteEvent('providers:status', payload)
   }
 
   /** Resolve the binary, then verify it actually responds to a version probe. */
