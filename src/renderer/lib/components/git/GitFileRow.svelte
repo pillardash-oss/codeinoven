@@ -1,18 +1,20 @@
 <script lang="ts">
-  import type { GitDiff, GitFileChange } from '$shared/types'
+  import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import FileDiffView from '../files/FileDiffView.svelte'
   import { ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
 
   interface Props {
     change: GitFileChange
     diff: GitDiff | null
     loadingDiff: boolean
+    error: string | null
     expanded: boolean
     onToggleDiff: () => void
     onToggleStage: () => void
   }
 
-  let { change, diff, loadingDiff, expanded, onToggleDiff, onToggleStage }: Props = $props()
+  let { change, diff, loadingDiff, error, expanded, onToggleDiff, onToggleStage }: Props = $props()
 
   const letter = $derived(
     change.status === 'added'
@@ -36,7 +38,24 @@
         : 'text-warning'
   )
 
-  const diffLines = $derived((diff?.content ?? '').split('\n'))
+  /** Map the git diff onto the shared checkpoint-diff shape used by FileDiffView. */
+  const viewDiff = $derived(
+    diff
+      ? ({
+          path: diff.path,
+          kind:
+            change.status === 'added' || change.status === 'untracked'
+              ? 'created'
+              : change.status === 'deleted'
+                ? 'deleted'
+                : 'modified',
+          binary: diff.binary,
+          before: diff.before,
+          after: diff.after,
+          truncated: diff.truncated
+        } satisfies TurnCheckpointFileDiff)
+      : null
+  )
 </script>
 
 <div class="border-b border-border last:border-b-0">
@@ -80,21 +99,24 @@
       {change.staged ? 'Unstage' : 'Stage'}
     </button>
   </div>
-  {#if expanded && diff}
-    <div class="max-h-72 overflow-auto border-t border-border bg-app/50">
-      <pre class="px-3 py-2 font-mono text-[10px] leading-relaxed">
-        {#each diffLines as line (line)}
-          {#if line.startsWith('+') && !line.startsWith('+++')}
-            <span class="block text-success">{line}</span>
-          {:else if line.startsWith('-') && !line.startsWith('---')}
-            <span class="block text-danger">{line}</span>
-          {:else}
-            <span class="block text-muted">{line}</span>
-          {/if}
-        {/each}
-      </pre>
-      {#if diff.truncated}
-        <p class="border-t border-border px-3 py-1 text-[9px] text-dimmed">Diff truncated</p>
+  {#if expanded}
+    <div class="border-t border-border bg-app/50">
+      {#if loadingDiff}
+        <div class="flex items-center gap-2 px-3 py-4 text-dimmed">
+          <Loader2 size={12} class="animate-spin" />
+          <span class="text-[10px]">Loading diff…</span>
+        </div>
+      {:else if error}
+        <p class="px-3 py-4 text-[10px] text-danger" role="alert">{error}</p>
+      {:else if viewDiff}
+        <FileDiffView diff={viewDiff} maxHeight="18rem" />
+        {#if viewDiff.truncated}
+          <p class="border-t border-border px-3 py-1 text-[9px] text-dimmed">
+            Diff truncated to a bounded preview
+          </p>
+        {/if}
+      {:else}
+        <p class="px-3 py-4 text-[10px] text-dimmed">No diff available.</p>
       {/if}
     </div>
   {/if}

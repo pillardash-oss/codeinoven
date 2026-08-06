@@ -2288,6 +2288,10 @@ export interface GitDiff {
   deletions: number
   /** True when the diff was cut at the payload bound. */
   truncated: boolean
+  /** Full before (left) side content, for reuse of the unified diff viewer. */
+  before?: string
+  /** Full after (right) side content, for reuse of the unified diff viewer. */
+  after?: string
 }
 
 /** Snapshot of the repository working tree and branch state. */
