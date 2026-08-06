@@ -18,8 +18,11 @@
     GitFork,
     GitPullRequest,
     Loader2,
-    RefreshCw
+    RefreshCw,
+    Unplug
   } from '@lucide/svelte'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
 
   interface Props {
     projectId: string
@@ -303,10 +306,21 @@
     </span>
     {#if repoState === 'git' && status}
       {#if status.ahead > 0 || status.behind > 0}
-        <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
-          {status.ahead > 0 ? `↑${status.ahead}` : ''}
-          {status.ahead > 0 && status.behind > 0 ? ' ' : ''}
-          {status.behind > 0 ? `↓${status.behind}` : ''}
+        <span class="flex shrink-0 items-center gap-1">
+          {#if status.ahead > 0}
+            <span
+              class="rounded bg-success/10 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-success"
+            >
+              ↑{status.ahead}
+            </span>
+          {/if}
+          {#if status.behind > 0}
+            <span
+              class="rounded bg-danger/10 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-danger"
+            >
+              ↓{status.behind}
+            </span>
+          {/if}
         </span>
       {/if}
       <span
@@ -319,6 +333,7 @@
       </span>
     {/if}
     <span class="flex-1"></span>
+    <DiffLayoutToggle title={diffLayoutToggleLabel('vertical')} size={13} />
     <button
       type="button"
       class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
@@ -339,9 +354,11 @@
       </div>
     {:else if repoState === 'git_unavailable'}
       <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-        <GitBranch size={22} class="mx-auto mb-2 text-dimmed" />
+        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
+          <Unplug size={18} class="text-dimmed" />
+        </div>
         <p class="text-xs font-medium text-muted">Git is not available</p>
-        <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-1 max-w-[28ch] text-[10px] leading-relaxed text-dimmed">
           Install Git for your operating system, then restart CodeInOven to manage repositories
           in-app.
         </p>
@@ -353,14 +370,16 @@
       </div>
     {:else if repoState === 'not_git'}
       <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-        <GitFork size={22} class="mx-auto mb-2 text-dimmed" />
+        <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-elevated">
+          <GitFork size={18} class="text-dimmed" />
+        </div>
         <p class="text-xs font-medium text-muted">This project is not a Git repository</p>
-        <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
+        <p class="mt-1 max-w-[28ch] text-[10px] leading-relaxed text-dimmed">
           Initialize a repository to track changes, commit, and open pull requests from the app.
         </p>
         <button
           type="button"
-          class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          class="mt-3 flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-50"
           disabled={gitState.isBusy('init')}
           onclick={() => void initializeRepository()}
         >
@@ -371,7 +390,7 @@
           {/if}
           Initialize repository
         </button>
-        <p class="mt-3 max-w-[28ch] text-[9px] leading-relaxed text-dimmed">
+        <p class="mt-3 max-w-[30ch] text-[9px] leading-relaxed text-dimmed">
           Next: add a <span class="font-mono text-muted">.gitignore</span>, then stage and commit
           your first changes from the Git panel.
         </p>
@@ -391,7 +410,7 @@
         >
           <GitBranch size={12} class="shrink-0 text-muted" />
           <select
-            class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-1.5 font-mono text-[10px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+            class="h-7 min-w-0 flex-1 cursor-pointer rounded-md border border-border bg-elevated px-2 font-mono text-[10px] text-foreground outline-none transition-colors hover:border-primary/40 focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
             value={status?.branch ?? ''}
             disabled={gitState.isBusy('checkout')}
             aria-label="Check out a branch"
@@ -682,26 +701,35 @@
             <div class="flex items-center gap-1.5">
               <button
                 type="button"
-                class="flex-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                 disabled={remotes.length === 0 || syncBusy}
                 onclick={() => void gitState.fetch(projectId)}
               >
+                {#if gitState.isBusy('fetch')}
+                  <Loader2 size={10} class="animate-spin" />
+                {/if}
                 {gitState.isBusy('fetch') ? 'Fetching…' : 'Fetch'}
               </button>
               <button
                 type="button"
-                class="flex-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                 disabled={remotes.length === 0 || syncBusy}
                 onclick={() => void gitState.pull(projectId)}
               >
+                {#if gitState.isBusy('pull')}
+                  <Loader2 size={10} class="animate-spin" />
+                {/if}
                 {gitState.isBusy('pull') ? 'Pulling…' : 'Pull'}
               </button>
               <button
                 type="button"
-                class="flex-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border px-2 py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
                 disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
                 onclick={() => void pushAction()}
               >
+                {#if gitState.isBusy('push')}
+                  <Loader2 size={10} class="animate-spin" />
+                {/if}
                 {gitState.isBusy('push') ? 'Pushing…' : 'Push'}
               </button>
             </div>
@@ -771,16 +799,23 @@
 
       {#if status && changes.length === 0 && status.clean}
         <div class="flex h-full flex-col items-center justify-center px-6 text-center">
-          <Check size={20} class="mx-auto mb-2 text-success" />
+          <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10">
+            <Check size={18} class="text-success" />
+          </div>
           <p class="text-xs font-medium text-muted">Working tree is clean</p>
-          <p class="mt-1 max-w-[26ch] text-[10px] text-dimmed">
-            Stage and commit changes, then push.
+          <p class="mt-1 max-w-[26ch] text-[10px] leading-relaxed text-dimmed">
+            No staged, unstaged, or untracked changes.
           </p>
         </div>
       {:else if status}
         {#each fileSections as section (section.title)}
-          <p class="mb-1 px-1 text-[9px] font-semibold uppercase tracking-wide text-muted">
+          <p
+            class="mb-1 flex items-center gap-1.5 px-1 text-[9px] font-semibold uppercase tracking-wide text-muted"
+          >
             {section.title}
+            <span class="rounded bg-elevated px-1 py-0.5 text-[8px] tabular-nums text-dimmed">
+              {section.files.length}
+            </span>
           </p>
           <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
             {#each section.files as change (change.path)}
@@ -797,11 +832,11 @@
           </div>
         {/each}
 
-        <div class="flex items-center gap-2 px-1 pb-1">
+        <div class="flex items-center gap-2 border-t border-border px-1 pt-2 pb-1">
           {#if changes.length > 0}
             <button
               type="button"
-              class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+              class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
               disabled={gitState.isBusy('stage')}
               onclick={() => void stageAll()}
             >
@@ -821,12 +856,12 @@
           </button>
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
+            class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
             disabled={staged.length === 0 || gitState.isBusy('commit')}
             onclick={() => (showCommitSheet = true)}
           >
             <GitCommit size={12} />
-            Commit {staged.length > 0 ? `${staged.length}` : ''}
+            Commit {staged.length > 0 ? `(${staged.length})` : ''}
           </button>
         </div>
       {/if}
