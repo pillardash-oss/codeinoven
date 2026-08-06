@@ -528,6 +528,7 @@ export class AntigravityDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, AntigravityTurnState>()
   private modelVariants = new Map<string, Map<ThinkingLevel, string>>()
+  private modelVariantsAttempted = false
 
   constructor(storage: StorageEngine) {
     super(storage)
@@ -585,6 +586,21 @@ export class AntigravityDriver extends PersistentCliDriver {
     return closest?.[1] ?? modelId
   }
 
+  /**
+   * Populate the effort-variant map on first use so bare effort model ids
+   * (`gemini-3.6-flash`) resolve to an effort-suffixed slug before being sent
+   * to agy. Discovery may serve the catalog from the persisted snapshot without
+   * ever running `listProviders` on this instance, which would otherwise leak
+   * the bare id into the turn command and make agy reject it. The probe runs at
+   * most once per driver instance even when it fails.
+   */
+  private async ensureModelVariants(): Promise<void> {
+    if (this.modelVariantsAttempted || this.modelVariants.size > 0) return
+    this.modelVariantsAttempted = true
+    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS)
+    if (result.succeeded) this.modelVariants = parseAntigravityModels(result.stdout).variants
+  }
+
   protected async buildTurnCommand(
     _projectPath: string,
     session: PersistentCliSession,
@@ -599,6 +615,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     const args: string[] = ['-p', prompt, '--output-format', 'stream-json']
     if (session.nativeSessionId) args.push('--conversation', session.nativeSessionId)
     if (options.settings.modelId && options.settings.modelId !== 'default') {
+      await this.ensureModelVariants()
       args.push(
         '--model',
         this.resolveModelId(options.settings.modelId, options.settings.thinkingLevel)
