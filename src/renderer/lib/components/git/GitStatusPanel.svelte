@@ -5,6 +5,7 @@
   import type { GitDiff, GitFileChange } from '$shared/types'
   import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
+  import GitPullRequestSheet from './GitPullRequestSheet.svelte'
   import {
     Check,
     ChevronDown,
@@ -12,6 +13,7 @@
     GitBranch,
     GitCommit,
     GitFork,
+    GitPullRequest,
     Loader2,
     RefreshCw
   } from '@lucide/svelte'
@@ -31,6 +33,7 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let showCommitSheet = $state(false)
+  let showPullRequestSheet = $state(false)
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
@@ -593,6 +596,16 @@
           <span class="flex-1"></span>
           <button
             type="button"
+            class="flex h-7 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+            disabled={!status?.branch || gitState.isBusy('pr-create')}
+            title="Create or merge a pull request"
+            onclick={() => (showPullRequestSheet = true)}
+          >
+            <GitPullRequest size={12} />
+            Pull request
+          </button>
+          <button
+            type="button"
             class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
             disabled={staged.length === 0 || gitState.isBusy('commit')}
             onclick={() => (showCommitSheet = true)}
@@ -604,6 +617,10 @@
       {/if}
     {/if}
   </div>
+
+  {#if showPullRequestSheet}
+    <GitPullRequestSheet {projectId} onClose={() => (showPullRequestSheet = false)} />
+  {/if}
 
   {#if showCommitSheet}
     <GitCommitSheet
