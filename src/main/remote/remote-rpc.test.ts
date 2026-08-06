@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { RemoteRpcDispatcher, type RemoteRpcServices } from './remote-rpc'
 import type { Database } from '../database/database'
+import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 
-const allowed = new Set([
+const coreAllowed = new Set([
   'project:list',
   'project:get',
   'thread:listAll',
@@ -50,19 +51,24 @@ function makeDispatcher(overrides: Partial<RemoteRpcServices> = {}): RemoteRpcDi
 }
 
 describe('RemoteRpcDispatcher', () => {
-  it('only allows the phone chat surface channels', () => {
+  it('allows the desktop-reuse surface and nothing else', () => {
     const dispatcher = makeDispatcher()
-    for (const channel of allowed) {
+    for (const channel of coreAllowed) {
+      expect(dispatcher.isAllowed(channel)).toBe(true)
+    }
+    // The expanded surface — every channel the reused desktop components call.
+    for (const channel of REMOTE_ALLOWED_CHANNELS) {
       expect(dispatcher.isAllowed(channel)).toBe(true)
     }
     expect(dispatcher.isAllowed('ipcMain:any')).toBe(false)
-    expect(dispatcher.isAllowed('dialog:pickFile')).toBe(false)
     expect(dispatcher.isAllowed('git:status')).toBe(false)
+    expect(dispatcher.isAllowed('editors:detect')).toBe(false)
+    expect(dispatcher.isAllowed('providerAccounts:beginLogin')).toBe(false)
   })
 
   it('rejects disallowed channels before touching any service', async () => {
     const dispatcher = makeDispatcher()
-    const outcome = await dispatcher.dispatch({ id: 1, channel: 'config:get', args: [] })
+    const outcome = await dispatcher.dispatch({ id: 1, channel: 'git:status', args: [] })
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.message).toContain('not allowed')
   })

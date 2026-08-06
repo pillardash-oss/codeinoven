@@ -16,7 +16,7 @@
  */
 
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
@@ -26,6 +26,31 @@ import { join } from 'node:path'
  * from incidental strings such as `".css"` or `".js"`.
  */
 const ASSET_REFERENCE = /\.\/([A-Za-z0-9._-]+\.(?:js|mjs|css))/g
+
+/**
+ * Runtime-resolved public assets the shared renderer components fetch directly
+ * (never via a static import), so they are invisible to the chunk-walk above.
+ * The agent icon SVGs are loaded by `AgentIcon` from `publicAssetUrl`; the
+ * phone reuses those components (ThreadView, ThreadRow), so the gateway must
+ * serve them too. The set is a fixed public directory — no desktop assets leak.
+ */
+async function collectPublicAssetDir(staticRoot: string, relativeDir: string): Promise<string[]> {
+  const dir = join(staticRoot, relativeDir)
+  if (!existsSync(dir)) return []
+  const entries = await readdir(dir, { withFileTypes: true })
+  const paths: string[] = []
+  for (const entry of entries) {
+    // Skip macOS/editor metadata (`.DS_Store`, hidden files) — never served.
+    if (entry.name.startsWith('.')) continue
+    const relative = `${relativeDir}/${entry.name}`
+    if (entry.isDirectory()) {
+      paths.push(...(await collectPublicAssetDir(staticRoot, relative)))
+    } else if (entry.isFile()) {
+      paths.push(`/assets/${relative.replace(/^assets\//, '')}`)
+    }
+  }
+  return paths
+}
 
 /**
  * Compute the set of `/assets/...` paths the PWA references, transitively.
@@ -55,6 +80,11 @@ export async function computePwaAssetClosure(staticRoot: string): Promise<Set<st
       allowed.add(path)
       queue.push(path)
     }
+  }
+
+  // Public agent icons the shared components load at runtime.
+  for (const path of await collectPublicAssetDir(staticRoot, 'assets/agents')) {
+    if (!allowed.has(path)) allowed.add(path)
   }
 
   while (queue.length > 0) {
