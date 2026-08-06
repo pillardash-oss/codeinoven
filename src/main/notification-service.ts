@@ -9,6 +9,7 @@ import type { Thread, ThreadStatus } from '../lib/types'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
+  SystemNotificationPermissionStatus,
   SystemNotificationTestResult,
   ThreadClickedPayload
 } from '../lib/ipc-contract'
@@ -39,6 +40,15 @@ export class NotificationService {
   private readonly badgeThreads = new Set<string>()
   private started = false
   private unsupportedLogged = false
+  /**
+   * Last observed macOS notification delivery outcome, used to surface a
+   * permission warning in Settings. Electron exposes no native notification
+   * authorization query, so this is inferred from the OS delivery events:
+   * 'show' means permission granted; 'failed' or a test timeout means the OS
+   * refused delivery (permission denied or an unsigned/ad-hoc build that
+   * macOS silently blocks).
+   */
+  private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
 
   constructor(storage: StorageEngine, db: Database, onThreadClicked: ThreadClickedHandler) {
     this.storage = storage
@@ -52,6 +62,7 @@ export class NotificationService {
     this.started = true
     void this.hydrateBadge()
     ipcMain.handle('notification:test', () => this.sendTestNotification())
+    ipcMain.handle('notification:getPermissionStatus', () => this.getPermissionStatus())
   }
 
   stop(): void {
@@ -62,6 +73,35 @@ export class NotificationService {
     this.badgeThreads.clear()
     this.updateBadge()
     ipcMain.removeHandler('notification:test')
+    ipcMain.removeHandler('notification:getPermissionStatus')
+  }
+
+  /**
+   * Record the outcome of a native notification delivery. Electron has no
+   * notification-permission query API on macOS, so the OS delivery events are
+   * the authoritative signal: a shown notification implies permission, a
+   * refused one implies the app is blocked (permission denied or unsigned).
+   */
+  private recordNotificationOutcome(outcome: 'shown' | 'failed'): void {
+    if (process.platform !== 'darwin') return
+    if (outcome === 'shown') {
+      this.macosNotificationPermission = 'granted'
+    } else if (this.macosNotificationPermission !== 'granted') {
+      this.macosNotificationPermission = 'denied'
+    }
+  }
+
+  /**
+   * macOS notification authorization, inferred from OS delivery outcomes.
+   * 'prompt' means the OS has not delivered nor refused yet — the first
+   * notification (or the Settings test) will decide it. Exposed so the UI can
+   * warn when notifications are blocked and deep-link into System Settings.
+   */
+  getPermissionStatus(): SystemNotificationPermissionStatus {
+    if (process.platform !== 'darwin') {
+      return { platform: 'other' }
+    }
+    return { platform: 'darwin', status: this.macosNotificationPermission }
   }
 
   markAborting(projectId: string, threadId: string): void {
@@ -227,6 +267,7 @@ export class NotificationService {
         })
       })
       notification.on('show', (): void => {
+        this.recordNotificationOutcome('shown')
         Logger.info('System notification shown', {
           kind: payload.kind,
           projectId: thread.projectId,
@@ -234,6 +275,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
+        this.recordNotificationOutcome('failed')
         Logger.error('System notification failed:', error)
       })
 
@@ -309,6 +351,7 @@ export class NotificationService {
         })
       })
       notification.on('show', (): void => {
+        this.recordNotificationOutcome('shown')
         Logger.info('Temporary chat system notification shown', {
           kind: payload.kind,
           projectId: thread.projectId,
@@ -317,6 +360,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
+        this.recordNotificationOutcome('failed')
         Logger.error('Temporary chat system notification failed:', error)
       })
 
@@ -328,6 +372,15 @@ export class NotificationService {
   }
 
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
+    const permission = this.getPermissionStatus()
+    if (permission.platform === 'darwin' && permission.status === 'denied') {
+      return {
+        status: 'failed',
+        message:
+          'macOS is blocking notifications for this app. Allow notifications in System Settings > Notifications.'
+      }
+    }
+
     const soundDispatched = this.dispatchNotificationSound()
     if (!Notification.isSupported()) {
       return {
@@ -352,24 +405,28 @@ export class NotificationService {
         resolve(result)
       }
       const timeout = setTimeout(() => {
+        this.recordNotificationOutcome('failed')
         finish({
           status: 'failed',
           message:
-            'The operating system did not confirm delivery. Check notification permissions and app signing.'
+            'macOS did not confirm delivery. Notifications are likely blocked — allow them in System Settings > Notifications (unsigned builds also require app signing).'
         })
       }, 5_000)
 
       notification.once('show', () => {
+        this.recordNotificationOutcome('shown')
         finish({
           status: 'shown',
           message: 'Test notification sent. System notifications are ready.'
         })
       })
       notification.once('failed', (_event, error) => {
+        this.recordNotificationOutcome('failed')
         Logger.error('System notification test failed:', error)
         finish({
           status: 'failed',
-          message: `The system rejected the notification: ${error}`
+          message:
+            'macOS rejected the notification. Allow notifications in System Settings > Notifications.'
         })
       })
 

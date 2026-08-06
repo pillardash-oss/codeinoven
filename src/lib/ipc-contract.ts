@@ -641,6 +641,7 @@ export interface IpcInvokeContract {
   'scope:save': Contract<[projectId: string, board: ScopeBoard], ScopeBoard>
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
+  'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>
   'plan:approve': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:get': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:save': Contract<[projectId: string, threadId: string, content: string], Plan>
@@ -1026,6 +1027,13 @@ export type SystemNotificationTestResult =
   | { status: 'shown'; message: string }
   | { status: 'unsupported'; message: string }
   | { status: 'failed'; message: string }
+
+/**
+ * macOS notification authorization, queried on demand. On non-macOS platforms the
+ * permission concept does not apply, so `platform` is `'other'`.
+ */
+export type SystemNotificationPermissionStatus =
+  { platform: 'darwin'; status: 'granted' | 'denied' | 'prompt' } | { platform: 'other' }
 
 export interface IpcEventContract {
   'agent:temporaryChatExpired': [temporaryChatId: string]

@@ -1,11 +1,15 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { AppConfig, AppConfigPatch, SlashCommandMode, ThemePreference } from '$shared/types'
+  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG } from '$shared/brand'
   import {
+    AlertCircle,
+    AlertTriangle,
     ArrowLeft,
     Bell,
     BrainCircuit,
@@ -22,8 +26,7 @@
     RefreshCw,
     SlidersHorizontal,
     Sun,
-    UsersRound,
-    AlertCircle
+    UsersRound
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -64,6 +67,7 @@
   let notificationTestBusy = $state(false)
   let notificationTestResult = $state('')
   let notificationTestFailed = $state(false)
+  let notificationPermission = $state<SystemNotificationPermissionStatus | null>(null)
   let nightlyModalOpen = $state(false)
   let channelBusy = $state(false)
 
@@ -168,6 +172,7 @@
       const result = await invoke('notification:test')
       notificationTestResult = result.message
       notificationTestFailed = result.status !== 'shown'
+      await refreshNotificationPermission()
     } catch (notificationError) {
       notificationTestFailed = true
       notificationTestResult =
@@ -178,6 +183,25 @@
       notificationTestBusy = false
     }
   }
+
+  async function refreshNotificationPermission(): Promise<void> {
+    try {
+      notificationPermission = await invoke('notification:getPermissionStatus')
+    } catch {
+      notificationPermission = null
+    }
+  }
+
+  function openNotificationSettings(): void {
+    void invoke(
+      'shell:openExternal',
+      'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+    )
+  }
+
+  onMount(() => {
+    void refreshNotificationPermission()
+  })
 
   const isNightlyChannel = $derived(config.updateChannel === 'nightly')
 
@@ -314,6 +338,37 @@
                   On macOS, the first test requests permission. Native delivery requires a signed
                   app.
                 </p>
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
+                  <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
+                    <CheckCircle2 size={13} />
+                    Notifications are allowed
+                  </p>
+                {/if}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
+                  <div
+                    class="mt-3 flex items-start justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2"
+                    role="alert"
+                  >
+                    <div class="flex items-start gap-2">
+                      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+                      <div>
+                        <p class="text-xs font-medium text-warning">Notifications are blocked</p>
+                        <p class="mt-0.5 text-[11px] leading-relaxed text-muted">
+                          macOS is not showing {APP_NAME} notification cards because notifications are
+                          disabled in System Settings. This is why you may hear the alert or see the badge
+                          without a card.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
+                      title="Open System Settings to allow notifications for {APP_NAME}"
+                      onclick={openNotificationSettings}
+                    >
+                      Open settings
+                    </button>
+                  </div>
+                {/if}
                 {#if notificationTestResult}
                   <p
                     class={[
@@ -678,18 +733,22 @@
     <div class="space-y-3 text-sm text-muted">
       <p>
         Nightly builds are bleeding-edge prereleases generated from the
-        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground">nightly</code>
+        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
+          >nightly</code
+        >
         branch. They ship continuously so you can try the latest changes early.
       </p>
       <ul class="list-disc space-y-1 pl-5">
         <li>You may hit <strong class="text-foreground">unfinished features and bugs</strong>.</li>
-        <li>Updates arrive <strong class="text-foreground">more frequently</strong> than stable releases.</li>
+        <li>
+          Updates arrive <strong class="text-foreground">more frequently</strong> than stable releases.
+        </li>
         <li>Downgrading to stable later is supported by the updater.</li>
         <li>Opt out any time from this same setting.</li>
       </ul>
       <p class="text-xs text-dimmed">
-        Enabling this switches your over-the-air update feed to the nightly channel and checks
-        for updates immediately.
+        Enabling this switches your over-the-air update feed to the nightly channel and checks for
+        updates immediately.
       </p>
     </div>
     {#snippet footer()}
