@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain } from 'electron'
-import { isAbsolute, relative, resolve } from 'path'
+import { isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from './logger'
@@ -117,6 +117,7 @@ import {
 import { deriveTitleFromText } from './title-generator'
 import { classifyProviderIssue } from '../lib/provider-issue'
 import { generateId } from '../lib/utils'
+import { ensureFeatureSlug, featureArtifactDirectory } from '../lib/project-artifacts'
 import { messageId as createMessageId } from '../lib/id'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseAuditReportContent, validateAuditReportContent } from '../lib/audit/audit-validation'
@@ -385,6 +386,9 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
 
 const AUDIT_ALLOWED_TOOLS = SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool !== 'question')
 
+/** Read-only research tools for disposable generation sessions that read artifact files. */
+const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
+
 const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   `You are answering inside a temporary, read-only ${APP_NAME} chat.`,
   'Answer questions and explain findings using the supplied conversation context.',
@@ -457,7 +461,7 @@ ${DEPLOYMENT_URL_SPEC_INSTRUCTION}
 ${MERMAID_OUTPUT_INSTRUCTION} In a specification, place any Mermaid block inside an appropriate string field and still submit the complete result through the specification contract; never return it outside the contract or JSON object.`
 
 const SPEC_JSON_FALLBACK_SYSTEM_PROMPT = `You are a JSON serialization worker. Convert the supplied engineering discussion into one complete implementation-ready specification object.
-No tools are available. Do not inspect files, call tools, ask questions, explain your work, or use Markdown fences. Resolve minor omissions with concrete best judgment from the supplied discussion.
+Read-only project research tools are available; use them to read any project file the instructions reference. Do not call mutating tools, ask questions, explain your work, or use Markdown fences. Resolve minor omissions with concrete best judgment from the supplied discussion.
 Your entire response must be one valid JSON object with these required fields:
 {"problem":"string","resolutionSummary":"string","phases":[{"id":"string","title":"string","objective":"string","checkpoints":[{"id":"string","description":"string","evidence":"string"}],"fileOperations":[{"path":"project/relative/path","operation":"create|edit|delete","reason":"string"}],"commit":"string"}],"successCriteria":["string"],"testStrategy":"string","documentationRequirements":["string"],"commitPattern":"string","constraints":["string"],"risks":["string"]}
 Every required string must be concrete. Use project-relative paths only. Include at least one phase, checkpoint with evidence, success criterion, test strategy, documentation requirement, and commit pattern. You may add an \`additionalInfo\` string containing free-form Markdown, including Mermaid diagrams, only when important task information does not fit the required sections; otherwise omit it.
@@ -556,30 +560,31 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
 
-function buildSpecRevisionSystemPrompt(spec: EngineeringSpec): string {
+function buildSpecRevisionSystemPrompt(
+  specPath: string,
+  annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
+): string {
   return [
     `An active engineering specification already exists. Revise it through the ${ENGINEERING_SPEC_TOOL_NAME} contract whenever this discussion changes its scope or implementation details.`,
     'A revision must be the complete replacement specification, including every unchanged field. Never return a partial phase, patch, summary, or prose version of the update.',
     'If clarification is required, call the question tool first. After the answer, submit the complete revised specification through the contract.',
     'The app will validate the submission and create the next version automatically. Do not edit the app-owned specification file.',
-    'Active specification:',
-    JSON.stringify(
-      {
-        id: spec.id,
-        version: spec.version,
-        status: spec.status,
-        content: spec.content,
-        annotations: spec.annotations,
-        context: spec.context.map((reference) => ({
-          type: reference.type,
-          label: reference.label,
-          ...(reference.path ? { path: reference.path } : {})
-        }))
-      },
-      null,
-      2
-    )
+    `Active specification (read it before revising): ${specPath}`,
+    `Open annotations: ${formatOpenAnnotations(annotations)}`
   ].join('\n\n')
+}
+
+function formatOpenAnnotations(
+  annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
+): string {
+  const open = annotations.filter((annotation) => annotation.status === 'open')
+  if (open.length === 0) return 'None'
+  return open
+    .map(
+      (annotation) =>
+        `- [${annotation.section}] ${annotation.body}${annotation.quote ? ` — "${annotation.quote}"` : ''}`
+    )
+    .join('\n')
 }
 
 interface SessionInfo {
@@ -3112,7 +3117,16 @@ export class ChatEngine {
             note: origin === 'user' ? text : ''
           })
         }
-        const revisionPrompt = activeSpec ? buildSpecRevisionSystemPrompt(activeSpec) : ''
+        const revisionPrompt = activeSpec
+          ? buildSpecRevisionSystemPrompt(
+              await this.artifactRef(
+                projectId,
+                threadId,
+                join('versions', `${activeSpec.id}-v${activeSpec.version}.md`)
+              ),
+              activeSpec.annotations
+            )
+          : ''
         const behaviorPrompt = await this.getBehaviorPrompt(
           projectId,
           threadId,
@@ -5158,25 +5172,29 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
       await this.threadManager.setStatus(projectId, threadId, 'planning')
+      const brainstormPath = await this.artifactRef(
+        projectId,
+        threadId,
+        join('versions', `${current.id}-v${current.version}-brainstorm.md`)
+      )
+      const reviewNotes = [
+        ...current.decisionComments
+          .filter((comment) => comment.action === 'review')
+          .map((comment) => `- ${comment.body}`),
+        ...(note.trim() ? [`- ${note.trim()}`] : [])
+      ].join('\n')
       const content = await this.generateBrainstormContent(
         projectId,
         threadId,
         thread.settings,
         [
-          'Revise the complete Brainstorm document from the user review. Incorporate every open annotation and review note. Preserve useful unchanged content.',
-          JSON.stringify(
-            {
-              brainstorm: current.content,
-              annotations: current.annotations.filter((annotation) => annotation.status === 'open'),
-              reviewNotes: [
-                ...current.decisionComments.filter((comment) => comment.action === 'review'),
-                ...(note.trim() ? [{ body: note.trim(), actor: 'user' }] : [])
-              ]
-            },
-            null,
-            2
-          )
-        ].join('\n\n')
+          'Revise the complete Brainstorm document from the user review. Read the Brainstorm document at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
+          `Brainstorm document: ${brainstormPath}`,
+          `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
+          reviewNotes ? `Review notes:\n${reviewNotes}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       )
       let revised = await this.brainstormEngine.createVersion({
         projectId,
@@ -5256,14 +5274,26 @@ export class ChatEngine {
       }
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+      const brainstormPath = await this.artifactRef(
+        projectId,
+        threadId,
+        join('versions', `${finalized.id}-v${finalized.version}-brainstorm.md`)
+      )
+      const finalizeNotes = finalized.decisionComments
+        .map((comment) => `- ${comment.action}: ${comment.body}`)
+        .join('\n')
       await this.queuePendingInitialSpec({
         projectId,
         threadId,
         sessionId: thread.sessionId ?? '',
         source: [
-          'Generate the engineering specification from this finalized Brainstorm. Incorporate every open annotation and finalize note.',
-          JSON.stringify(finalized, null, 2)
-        ].join('\n\n'),
+          'Generate the engineering specification from this finalized Brainstorm. Read the Brainstorm document at the referenced path and incorporate every open annotation and finalize note.',
+          `Brainstorm document: ${brainstormPath}`,
+          `Open annotations:\n${formatOpenAnnotations(finalized.annotations)}`,
+          finalizeNotes ? `Finalize notes:\n${finalizeNotes}` : ''
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
         settings: thread.settings,
         brainstorm: finalized
       })
@@ -5778,7 +5808,7 @@ export class ChatEngine {
           text: source,
           attachments: [],
           systemPrompt: useStructuredOutput ? generationSystemPrompt : fallbackSystemPrompt,
-          allowedTools: [],
+          allowedTools: PROMPT_READ_ONLY_TOOLS,
           ...(useStructuredOutput
             ? {
                 structuredOutput: {
@@ -5966,20 +5996,14 @@ export class ChatEngine {
       .filter((message) => !message.endsWith(': '))
       .join('\n\n')
       .slice(-80_000)
+    const specPath = await this.artifactRef(
+      projectId,
+      coordinatorThreadId,
+      join('versions', `${spec.id}-v${spec.version}.md`)
+    )
     const prompt = [
-      'Create an Assignment graph for this exact specification:',
-      JSON.stringify(
-        {
-          id: spec.id,
-          version: spec.version,
-          status: spec.status,
-          content: spec.content,
-          annotations: spec.annotations,
-          context: spec.context
-        },
-        null,
-        2
-      ),
+      `Create an Assignment graph for the specification at this project-relative path (read it first): ${specPath}`,
+      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`,
       transcript ? `Conversation context:\n${transcript}` : ''
     ]
       .filter(Boolean)
@@ -6031,7 +6055,7 @@ export class ChatEngine {
           text: prompt,
           attachments: [],
           systemPrompt: EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
-          allowedTools: [],
+          allowedTools: PROMPT_READ_ONLY_TOOLS,
           ...(useStructuredOutput
             ? { structuredOutput: { schema: ASSIGNMENT_PLAN_SCHEMA, retryCount: 2 } }
             : {})
@@ -6121,18 +6145,14 @@ export class ChatEngine {
     }
     const driver = this.drivers.get(temporary.driverId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
+    const specPath = await this.artifactRef(
+      projectId,
+      threadId,
+      join('versions', `${spec.id}-v${spec.version}.md`)
+    )
     const prompt = [
-      'Audit the current project implementation against this approved specification:',
-      JSON.stringify(
-        {
-          id: spec.id,
-          version: spec.version,
-          content: spec.content,
-          annotations: spec.annotations
-        },
-        null,
-        2
-      )
+      `Audit the current project implementation against the approved specification at this project-relative path: ${specPath}`,
+      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     const isZenFreeModel =
       temporary.driverId === 'opencode' &&
@@ -6525,6 +6545,11 @@ export class ChatEngine {
       version: report.version
     })
     if (!alreadyNotified) {
+      const auditPath = await this.artifactRef(
+        report.projectId,
+        report.threadId,
+        join('versions', `${report.id}-audit-v${report.version}.md`)
+      )
       await this.sendPrompt(
         projectId,
         coordinatorThreadId,
@@ -6534,7 +6559,9 @@ export class ChatEngine {
           'The Achievement Auditor and user review require implementation corrections.',
           'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.',
           ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
-          JSON.stringify({ sourceAudit: report, userFeedback: feedback }, null, 2)
+          `Audit report: ${auditPath}`,
+          `User feedback:\n${feedback.trim()}`,
+          `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
         ].join('\n\n'),
         [],
         'implement',
@@ -6641,6 +6668,11 @@ export class ChatEngine {
         assignmentId: updated.id,
         threadId: coordinatorThreadId
       })
+      const auditPath = await this.artifactRef(
+        report.projectId,
+        report.threadId,
+        join('versions', `${report.id}-audit-v${report.version}.md`)
+      )
       await this.sendPrompt(
         projectId,
         coordinatorThreadId,
@@ -6651,16 +6683,10 @@ export class ChatEngine {
           'You are the Sr. Engineer. First digest the audit findings, open annotations, and user feedback below, then explain your proposed response in this coordinator conversation.',
           'If you can correct the work yourself, do so here and call request-reaudit only after the corrections and checks are complete. If coordinated worker tasks are needed, call propose-rework-assignment with a focused corrective graph, then stop. That creates a draft Assignment for the user to review and sign off; do not dispatch or begin its tasks before approval.',
           this.assignmentApiInstructions(coordinatorToken),
-          JSON.stringify(
-            {
-              assignmentId: updated.id,
-              assignmentVersion: updated.version,
-              sourceAudit: report,
-              userFeedback: feedback
-            },
-            null,
-            2
-          )
+          `Assignment ${updated.id} v${updated.version}`,
+          `Audit report: ${auditPath}`,
+          `User feedback:\n${feedback.trim()}`,
+          `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
         ].join('\n\n'),
         [],
         undefined,
@@ -6704,25 +6730,18 @@ export class ChatEngine {
     // JSON-schema request but cannot decode that persisted message later, so
     // enforce the same contract through JSON-only prompts and validation.
     const formatModes = [false, false, false]
+    const specPath = await this.artifactRef(
+      projectId,
+      coordinatorThreadId,
+      join('versions', `${spec.id}-v${spec.version}.md`)
+    )
+    const assignmentPath = await this.artifactRef(projectId, coordinatorThreadId, 'assignment.md')
     const basePrompt = [
-      'Audit the current project implementation against this approved specification:',
-      JSON.stringify(
-        {
-          assignment: {
-            id: assignment.id,
-            version: assignment.version,
-            title: assignment.content.title
-          },
-          specification: {
-            id: spec.id,
-            version: spec.version,
-            content: spec.content,
-            annotations: spec.annotations
-          }
-        },
-        null,
-        2
-      )
+      'Audit the current project implementation against the approved specification and completed Assignment:',
+      `Specification: ${specPath}`,
+      `Assignment: ${assignmentPath}`,
+      `Assignment ${assignment.id} v${assignment.version} — ${assignment.content.title}`,
+      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     let lastError: Error | null = null
 
@@ -6884,20 +6903,14 @@ export class ChatEngine {
     const driverId = auditorSettings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
     const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
+    const specPath = await this.artifactRef(
+      projectId,
+      coordinatorThreadId,
+      join('versions', `${spec.id}-v${spec.version}.md`)
+    )
     const basePrompt = [
-      'Independently audit the current project implementation against this approved Achievement specification:',
-      JSON.stringify(
-        {
-          specification: {
-            id: spec.id,
-            version: spec.version,
-            content: spec.content,
-            annotations: spec.annotations
-          }
-        },
-        null,
-        2
-      )
+      `Independently audit the current project implementation against the approved Achievement specification at this project-relative path: ${specPath}`,
+      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     let lastError: Error | null = null
 
@@ -7048,23 +7061,19 @@ export class ChatEngine {
     )
   }
 
-  private loopReworkPrompt(report: AuditReport, iteration: number): string {
+  private async loopReworkPrompt(report: AuditReport, iteration: number): Promise<string> {
+    const auditPath = await this.artifactRef(
+      report.projectId,
+      report.threadId,
+      join('versions', `${report.id}-audit-v${report.version}.md`)
+    )
     return [
       `Achievement audit ${iteration} found required corrections.`,
       'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
       ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
-      JSON.stringify(
-        {
-          audit: {
-            id: report.id,
-            version: report.version,
-            content: report.content
-          }
-        },
-        null,
-        2
-      )
+      `Audit report: ${auditPath}`,
+      `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
     ].join('\n\n')
   }
 
@@ -7136,7 +7145,7 @@ export class ChatEngine {
         projectId,
         threadId,
         current.settings,
-        this.loopReworkPrompt(report, iteration),
+        await this.loopReworkPrompt(report, iteration),
         [],
         'implement',
         undefined,
@@ -7305,6 +7314,11 @@ export class ChatEngine {
 
   private initialSpecPath(projectId: string, threadId: string): string {
     return `projects/${projectId}/threads/${threadId}/spec-generation.json`
+  }
+
+  private async artifactRef(projectId: string, threadId: string, file: string): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+    return join(featureArtifactDirectory(featureSlug), file)
   }
 
   private initialSpecKey(projectId: string, threadId: string): string {
