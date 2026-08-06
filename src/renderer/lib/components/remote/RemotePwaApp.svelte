@@ -1,6 +1,6 @@
 <script lang="ts">
   import RemoteClientView from '$lib/components/remote/RemoteClientView.svelte'
-  import RemoteChatApp from '$lib/components/remote/RemoteChatApp.svelte'
+  import RemoteMobileShell from '$lib/components/remote/RemoteMobileShell.svelte'
   import { remoteSession } from '$lib/remote/session-store.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
@@ -38,7 +38,7 @@
 </script>
 
 {#if connected}
-  <RemoteChatApp onDisconnect={() => remoteSession.disconnect()} />
+  <RemoteMobileShell onDisconnect={() => remoteSession.disconnect()} />
 {:else}
   <!-- RemoteClientView handles the QR pairing `?pair=` auto-connect on the
        phone, and falls back to a manual secret entry screen. -->

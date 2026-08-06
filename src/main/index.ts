@@ -163,7 +163,8 @@ const remoteMode = new RemoteModeController({
   iconPath: getAppIconPath(),
   rpc: new RemoteRpcDispatcher({
     database,
-    chatEngine
+    chatEngine,
+    storage
   }),
   storage
 })

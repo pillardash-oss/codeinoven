@@ -32,10 +32,21 @@ export type RemoteRpcEvent = { rpc: 'event'; channel: string; payload: unknown }
 
 export type RemoteRpcFrame = RemoteRpcRequest | RemoteRpcResult | RemoteRpcError | RemoteRpcEvent
 
-/** Channels a phone client is allowed to invoke (a focused chat surface). */
+/**
+ * Channels a phone client is allowed to invoke.
+ *
+ * This is the full desktop workspace surface the reused components need:
+ * sidebar rows (FolderRow/ThreadRow), search, the conversation screen
+ * (ThreadView, which embeds ChatComposer), the notification/memory/spec
+ * panels, and the scope ("charts") board. Electron-only helpers the phone
+ * cannot use (native dialogs, clipboard, "reveal in finder") are allowed but
+ * dispatched to no-op handlers so the shared renderer never errors.
+ */
 export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
+  // Projects + threads
   'project:list',
   'project:get',
+  'project:getIcon',
   'thread:listAll',
   'thread:list',
   'thread:get',
@@ -46,8 +57,23 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:setStatus',
   'thread:updateSettings',
   'thread:setContextUsage',
+  'thread:loadMessages',
+  'thread:update',
+  'thread:delete',
+  'thread:fork',
+  'thread:reorderScope',
+  'threads:search',
+  // Config + scope board ("charts")
+  'config:get',
+  'config:update',
+  'config:syncAgentRole',
+  'scope:get',
+  'scope:save',
+  // Agent chat surface
   'agent:loadMessages',
+  'agent:loadSessionMessages',
   'agent:listProviderSnapshot',
+  'agent:refreshProviderCatalog',
   'agent:getSessionStatus',
   'agent:ensureSession',
   'agent:sendPrompt',
@@ -57,7 +83,90 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:replyPermission',
   'agent:listQuestions',
   'agent:answerQuestion',
+  'agent:dismissQuestion',
+  'agent:updateQuestion',
+  'agent:listCommands',
+  'agent:runCommand',
+  'agent:compact',
+  'agent:truncateMessages',
+  'agent:listContextCapabilities',
+  'agent:closeTemporaryChat',
+  'agent:getChildSessionStatus',
+  'agent:retryChildSession',
+  'agent:abortChildSession',
+  // Engineering workflow (spec/assignment/audit/brainstorm studios)
+  'agent:chooseBrainstormEntry',
+  'agent:reviewBrainstorm',
+  'agent:finalizeBrainstorm',
+  'agent:ensureAuditSession',
+  'agent:startAssignment',
+  'agent:generateAudit',
+  'agent:ensureAssignmentAuditorThread',
+  'agent:generateAssignmentAudit',
+  'agent:generateAssignmentDraft',
+  'agent:ensureAchievementScope',
+  'agent:ensureAchievementAuditorThread',
+  'agent:generateAchievementAudit',
+  'agent:submitAchievementAuditFeedback',
+  'agent:returnAchievementAuditToOffer',
+  'agent:submitAssignmentAuditFeedback',
+  'spec:getActive',
+  'spec:listVersions',
+  'spec:saveDraft',
+  'spec:createVersion',
+  'spec:dismissValidationIssue',
+  'spec:setReview',
+  'spec:approve',
+  'spec:validate',
+  'spec:addAnnotation',
+  'spec:addDecisionComment',
+  'spec:resolveAnnotation',
+  'spec:updateAnnotation',
+  'spec:setContext',
+  'spec:captureContext',
+  'spec:getContextAttachments',
+  'assignment:getActive',
+  'assignment:listVersions',
+  'assignment:saveDraft',
+  'assignment:addAnnotation',
+  'assignment:updateAnnotation',
+  'assignment:resolveAnnotation',
+  'assignment:updateUnlinkedWorkerModel',
+  'audit:getActive',
+  'audit:listVersions',
+  'audit:save',
+  'audit:addAnnotation',
+  'audit:updateAnnotation',
+  'audit:resolveAnnotation',
+  'audit:complete',
+  'audit:returnToOffer',
+  'brainstorm:getActive',
+  'brainstorm:getWorkflow',
+  'brainstorm:listVersions',
+  'brainstorm:saveDraft',
+  'brainstorm:addAnnotation',
+  'brainstorm:updateAnnotation',
+  'brainstorm:resolveAnnotation',
+  // Checkpoints
+  'checkpoint:list',
+  'checkpoint:diff',
+  'checkpoint:rollbackPaths',
+  // Memory (proposal panel + memory sidebar)
+  'memory:getPendingProposals',
+  'memory:approveProposal',
+  'memory:rejectProposal',
+  'memory:getEntries',
+  'memory:saveEntries',
+  // Files (composer @-file tags + citation paths)
   'projectFiles:resolveCitationPaths',
+  'projectFiles:search',
+  // Repo metadata (thread hover popover)
+  'repository:remoteOrigin',
+  // Electron-only helpers — allowed so the shared components never error,
+  // but dispatched to no-op handlers on the phone.
+  'dialog:pickFile',
+  'clipboard:saveImage',
+  'shell:revealPath',
   'shell:openExternal'
 ]
 
