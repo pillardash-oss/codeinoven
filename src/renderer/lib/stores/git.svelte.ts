@@ -4,6 +4,7 @@ import type {
   GitCommitInfo,
   GitCredentialStatus,
   GitDiff,
+  GitFileChange,
   GitIdentity,
   GitRemoteInfo,
   GitStatus,
@@ -410,6 +411,14 @@ class GitState {
   async getLog(projectId: string, limit = 30): Promise<GitCommitInfo[]> {
     try {
       return await invoke('git:log', projectId, limit)
+    } catch {
+      return []
+    }
+  }
+
+  async getCommitDiff(projectId: string, hash: string): Promise<GitFileChange[]> {
+    try {
+      return await invoke('git:commitDiff', projectId, hash)
     } catch {
       return []
     }

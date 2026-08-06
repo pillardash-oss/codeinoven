@@ -55,6 +55,7 @@ import type {
   GitCommitInfo,
   GitCredentialStatus,
   GitDiff,
+  GitFileChange,
   GitIdentity,
   GitIdentityInput,
   GitRemoteInfo,
@@ -644,6 +645,7 @@ export interface IpcInvokeContract {
   'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:log': Contract<[projectId: string, limit?: number], GitCommitInfo[]>
+  'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
   'git:getIdentity': Contract<[projectId: string], GitIdentity>
   'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
   'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>

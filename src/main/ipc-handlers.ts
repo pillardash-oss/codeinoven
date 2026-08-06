@@ -2395,6 +2395,13 @@ export function registerIpcHandlers(
       bounded
     )
   })
+  ipcMain.handle('git:commitDiff', async (_, projectId: unknown, hash: unknown) => {
+    const safeHash = validateEntityId(hash, 'Commit hash')
+    return gitService.commitDiff(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      safeHash
+    )
+  })
   ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
     gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )

@@ -311,6 +311,28 @@ export class GitService {
     })
   }
 
+  async commitDiff(projectPath: string, hash: string): Promise<GitFileChange[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        const result = await git.show([`${hash}^!`, '--stat', '--format='])
+        const lines = result.split('\n').filter((line) => line.trim())
+        const changes: GitFileChange[] = []
+        for (const line of lines) {
+          const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+)/u.exec(line)
+          if (match) {
+            const path = match[1]?.trim() ?? ''
+            const statusChar = match[3]?.[0] ?? 'M'
+            const status: GitFileStatus = statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
+            changes.push({ path, status, staged: false })
+          }
+        }
+        return changes
+      })
+    })
+  }
+
   async getIdentity(projectPath: string): Promise<GitIdentity> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
