@@ -88,6 +88,45 @@ describe('AntigravityDriver', () => {
     expect(turn).not.toContain('gemini-3.6-flash')
   })
 
+  it('maps a model with only high/low variants to the closest effort slug', async () => {
+    const calls: string[][] = []
+    spawnMock.mockImplementation((_command: string, args: string[]) => {
+      calls.push(args)
+      const child = new FakeChild()
+      const isProbe = args.includes('models')
+      queueMicrotask(() => {
+        if (isProbe) {
+          child.stdout.emit('data', Buffer.from('gemini-3.1-pro-high\ngemini-3.1-pro-low\n'))
+          child.emit('exit', 0, null)
+        }
+      })
+      return child as unknown as ChildProcess
+    })
+
+    const driver = new AntigravityDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Antigravity thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Read the project',
+      attachments: [],
+      settings: {
+        harnessId: 'antigravity',
+        providerId: 'google',
+        modelId: 'gemini-3.1-pro',
+        thinkingLevel: 'medium',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+
+    const turn = calls.find((args) => args.includes('-p'))
+    expect(turn).toBeDefined()
+    expect(turn).toContain('--model')
+    const modelIndex = turn?.indexOf('--model') ?? -1
+    expect(['gemini-3.1-pro-high', 'gemini-3.1-pro-low']).toContain(turn?.[modelIndex + 1])
+    expect(turn?.[modelIndex + 1]).not.toBe('gemini-3.1-pro')
+  })
+
   it('resolves a standalone model id unchanged when no effort variants exist', async () => {
     const calls: string[][] = []
     spawnMock.mockImplementation((_command: string, args: string[]) => {
