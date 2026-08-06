@@ -16,7 +16,9 @@
     SquarePen,
     Pencil,
     Copy,
-    FolderKanban
+    FolderKanban,
+    ArrowUpDown,
+    Check
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -63,7 +65,14 @@
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { threadSort, findEmptyNewThread, threadVisitKey } from '$lib/stores/workspace.svelte'
+  import {
+    threadSort,
+    threadStatusSort,
+    findEmptyNewThread,
+    threadVisitKey
+  } from '$lib/stores/workspace.svelte'
+  import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
+  import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { timelinePins } from '$lib/stores/timeline-pins.svelte'
   import { INBOX_PROJECT_ID, DEFAULT_THREAD_TITLE, DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
@@ -621,17 +630,21 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: all non-archived threads sorted by lastActivity descending, timeline-pinned first. */
-  let allThreadsFlat = $derived(
-    allThreads
-      .filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
-      .sort((a, b) => {
+  /** Threads mode: all non-archived threads sorted by the active sort mode, timeline-pinned first by default. */
+  let allThreadsFlat = $derived.by(() => {
+    const list = allThreads.filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
+    if (threadSortState.mode === 'status') {
+      return list.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+    }
+    return list.sort((a, b) => {
+      if (threadSortState.mode === 'default') {
         const aPinned = timelinePins.isPinned(a.id)
         const bPinned = timelinePins.isPinned(b.id)
         if (aPinned !== bPinned) return aPinned ? -1 : 1
-        return b.lastActivity - a.lastActivity
-      })
-  )
+      }
+      return b.lastActivity - a.lastActivity
+    })
+  })
 
   let recentThreads = $derived.by(() => {
     const availableThreads = allThreads.filter((thread) => !thread.archived)
@@ -674,6 +687,24 @@
     const project = projects.find((p) => p.id === thread.projectId)
     if (!project) return null
     return getProjectIcon(project, projectIcons.get(project.id))
+  }
+
+  const THREAD_SORT_OPTIONS: { id: ThreadSortMode; label: string }[] = [
+    { id: 'default', label: 'Default' },
+    { id: 'status', label: 'Status' },
+    { id: 'time', label: 'Time' }
+  ]
+
+  const threadSortLabel = $derived(
+    threadSortState.mode === 'status'
+      ? 'Sort by status'
+      : threadSortState.mode === 'time'
+        ? 'Sort by time'
+        : 'Default order'
+  )
+
+  function setThreadSortMode(id: ThreadSortMode): void {
+    threadSortState.setMode(id)
   }
 
   // ─── Data loading ────────────────────────────────────────────────────────
@@ -1400,6 +1431,45 @@
           </div>
         {:else if mode === 'threads'}
           <div class="flex items-center gap-0.5">
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {threadSortState.mode ===
+                'default'
+                  ? 'text-muted'
+                  : 'text-primary'}"
+                aria-label="Sort threads"
+                title="Sort threads — {threadSortLabel}"
+              >
+                <ArrowUpDown size={14} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={6}
+                  collisionPadding={8}
+                  class="z-50 w-44 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
+                >
+                  {#each THREAD_SORT_OPTIONS as option (option.id)}
+                    {@const isSelected = threadSortState.mode === option.id}
+                    <DropdownMenu.Item
+                      class={[
+                        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+                        isSelected
+                          ? 'text-foreground'
+                          : 'text-muted hover:bg-elevated focus:bg-elevated'
+                      ]}
+                      onSelect={() => setThreadSortMode(option.id)}
+                    >
+                      <span class="flex-1 truncate">{option.label}</span>
+                      {#if isSelected}
+                        <Check size={14} class="text-primary" />
+                      {/if}
+                    </DropdownMenu.Item>
+                  {/each}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
             {#if activeProject}
               <button
                 class="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
