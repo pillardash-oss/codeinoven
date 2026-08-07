@@ -1,6 +1,7 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
 import { attachMouseTracking } from './mouse-tracking'
+import { FileLinkProvider } from './path-links'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 
 export interface TerminalSession {
@@ -10,6 +11,8 @@ export interface TerminalSession {
   host: HTMLDivElement
   exited: boolean
   ptySpawned: boolean
+  /** Owning project, resolved once the terminal attaches to a panel. */
+  projectId: string | null
 }
 
 function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
@@ -108,6 +111,7 @@ class TerminalSessionManager {
   /** Spawn the shell PTY after the terminal has been attached and sized. */
   private async ensurePty(session: TerminalSession, projectId: string): Promise<void> {
     if (session.ptySpawned) return
+    session.projectId = projectId
     session.ptySpawned = true
     try {
       await invoke('pty:create', session.id, projectId, session.term.cols, session.term.rows)
@@ -144,9 +148,15 @@ class TerminalSessionManager {
       fitAddon,
       host,
       exited: false,
-      ptySpawned: false
+      ptySpawned: false,
+      projectId: null
     }
     this.sessions.set(id, session)
+
+    // File/directory paths echoed by tooling are clickable links only once they
+    // are confirmed to exist in the owning project; cmd/ctrl+click reveals them
+    // in the OS file manager. (ghostty-web ships no file-path provider.)
+    term.registerLinkProvider(new FileLinkProvider(term, { getProjectId: () => session.projectId }))
 
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
