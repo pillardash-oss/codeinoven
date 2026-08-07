@@ -334,7 +334,11 @@ export class RemoteRpcDispatcher {
       case 'agent:getSessionStatus':
         return chatEngine.getSessionStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:ensureSession':
-        return chatEngine.ensureSession(this.string(args[0]), this.string(args[1]))
+        return chatEngine.ensureSession(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.optionalString(args[2])
+        )
       case 'agent:sendPrompt':
         return chatEngine.sendPrompt(
           this.string(args[0]),
