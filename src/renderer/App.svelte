@@ -925,6 +925,8 @@
         mode={lastContentView}
         active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
         {navigate}
+        {config}
+        {updateConfig}
       />
     </div>
     {#if activeView === 'scope'}
