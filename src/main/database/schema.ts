@@ -407,4 +407,33 @@ CREATE TABLE IF NOT EXISTS harness_usage_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
-  ON harness_usage_messages(thread_id);`
+  ON harness_usage_messages(thread_id);
+
+-- Per-model cost breakdown for each (thread, harness, provider). One row per
+-- model a harness used on a thread, with cumulative cost/tokens/duration so the
+-- battery popover (and a future usage settings page) can show what each model
+-- consumed. Rows cascade-delete with their thread.
+CREATE TABLE IF NOT EXISTS harness_usage_models (
+  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  message_count        INTEGER NOT NULL DEFAULT 0,
+  cost_usd             REAL NOT NULL DEFAULT 0,
+  tokens_in            INTEGER NOT NULL DEFAULT 0,
+  tokens_out           INTEGER NOT NULL DEFAULT 0,
+  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
+  tokens_total         INTEGER NOT NULL DEFAULT 0,
+  duration_ms          INTEGER NOT NULL DEFAULT 0,
+  first_used_at        INTEGER NOT NULL,
+  last_used_at         INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
+  ON harness_usage_models(thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
+  ON harness_usage_models(harness_id);`
