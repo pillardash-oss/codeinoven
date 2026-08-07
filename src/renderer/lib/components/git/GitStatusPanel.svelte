@@ -10,26 +10,28 @@
     GitHubUser
   } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import GitCommitSheet from './GitCommitSheet.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
   import BranchPicker from './BranchPicker.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
-  import { AlertDialog } from 'bits-ui'
+  import { AlertDialog, DropdownMenu } from 'bits-ui'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import {
+    Archive,
+    ArrowLeft,
     Check,
-    ChevronDown,
-    ChevronRight,
+    FileDiff,
     GitBranch,
     GitCommit,
     GitFork,
+    GitMerge,
     GitPullRequest,
     History,
     Loader2,
+    MoreHorizontal,
     RefreshCw,
     Trash2,
     TreePine,
@@ -44,7 +46,7 @@
   let { projectId, threadId }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches'
+  type TabId = 'changes' | 'history' | 'branches' | 'stashes'
 
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
@@ -52,14 +54,13 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  let showCommitSheet = $state(false)
   let showPullRequestSheet = $state(false)
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
-  let showIntegrate = $state(false)
-  let showStashes = $state(false)
+  let showIntegrateModal = $state(false)
+  let showStashModal = $state(false)
   let stashMessage = $state('')
   let stashDropTarget = $state<string | null>(null)
   let mergeTarget = $state('')
@@ -399,6 +400,7 @@
   function requestMergeOrRebase(kind: 'merge' | 'rebase'): void {
     const target = mergeTarget.trim()
     if (!target) return
+    showIntegrateModal = false
     pendingOperation = { kind, target }
     acknowledgeActiveTurn = false
   }
@@ -432,7 +434,8 @@
     await gitState.stash(projectId, stashMessage.trim() || undefined)
     if (!gitState.error) {
       stashMessage = ''
-      showStashes = true
+      showStashModal = false
+      activeTab = 'stashes'
       void refreshStatus()
     }
   }
@@ -440,9 +443,15 @@
   async function popStash(id?: string): Promise<void> {
     await gitState.popStash(projectId, id)
     if (!gitState.error) {
+      leaveStashesTabIfEmpty()
       void refreshStatus()
       void reloadHistory()
     }
+  }
+
+  /** The Stashes tab only exists while stashes do — fall back to Changes when the last one goes. */
+  function leaveStashesTabIfEmpty(): void {
+    if (activeTab === 'stashes' && gitState.stashes.length === 0) activeTab = 'changes'
   }
 
   function requestStashDrop(id: string): void {
@@ -454,8 +463,40 @@
     if (!target) return
     stashDropTarget = null
     await gitState.dropStash(projectId, target)
-    if (!gitState.error) void refreshStatus()
+    if (!gitState.error) {
+      leaveStashesTabIfEmpty()
+      void refreshStatus()
+    }
   }
+
+  const tabs: Array<{ id: TabId; label: string; icon: typeof GitBranch; count: number | null }> =
+    $derived.by(() => {
+      const list: Array<{
+        id: TabId
+        label: string
+        icon: typeof GitBranch
+        count: number | null
+      }> = [
+        {
+          id: 'changes',
+          label: 'Changes',
+          icon: FileDiff,
+          count: changes.length > 0 ? changes.length : null
+        },
+        { id: 'history', label: 'History', icon: History, count: null },
+        { id: 'branches', label: 'Branches', icon: TreePine, count: null }
+      ]
+      // Stash is just shelved work — it earns a tab only once something is shelved.
+      if (gitState.stashes.length > 0) {
+        list.push({
+          id: 'stashes',
+          label: 'Stashes',
+          icon: Archive,
+          count: gitState.stashes.length
+        })
+      }
+      return list
+    })
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
@@ -492,61 +533,6 @@
           </span>
         </div>
       {/if}
-
-      <span class="flex-1"></span>
-
-      <!-- Tab bar -->
-      <div class="flex items-center gap-0.5 rounded-lg bg-elevated/50 p-0.5">
-        <button
-          type="button"
-          class={[
-            'flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
-            activeTab === 'changes'
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'
-          ]}
-          onclick={() => (activeTab = 'changes')}
-        >
-          <GitBranch size={10} />
-          Changes
-          {#if changes.length > 0}
-            <span
-              class="rounded-full bg-primary/15 px-1 py-0.5 text-[8px] font-semibold tabular-nums text-primary leading-none"
-            >
-              {changes.length}
-            </span>
-          {/if}
-        </button>
-        <button
-          type="button"
-          class={[
-            'flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
-            activeTab === 'history'
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'
-          ]}
-          onclick={() => {
-            activeTab = 'history'
-            void loadHistory()
-          }}
-        >
-          <History size={10} />
-          History
-        </button>
-        <button
-          type="button"
-          class={[
-            'flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors',
-            activeTab === 'branches'
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'
-          ]}
-          onclick={() => (activeTab = 'branches')}
-        >
-          <TreePine size={10} />
-          Branches
-        </button>
-      </div>
 
       <span class="flex-1"></span>
 
@@ -589,7 +575,88 @@
       >
         <RefreshCw size={12} class={gitState.isBusy('refresh') ? 'animate-spin' : ''} />
       </button>
+
+      {#if repoState === 'git'}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+            aria-label="More git actions"
+            title="More git actions"
+          >
+            <MoreHorizontal size={13} />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+            >
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => (showPullRequestSheet = true)}
+              >
+                <GitPullRequest size={12} class="shrink-0 text-dimmed" />
+                Create pull request…
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                disabled={gitState.branches.length < 2}
+                onSelect={() => (showIntegrateModal = true)}
+              >
+                <GitMerge size={12} class="shrink-0 text-dimmed" />
+                Merge or rebase…
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                disabled={status?.clean ?? true}
+                onSelect={() => (showStashModal = true)}
+              >
+                <Archive size={12} class="shrink-0 text-dimmed" />
+                Stash changes…
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {/if}
     </div>
+
+    {#if repoState === 'git'}
+      <!-- Tab row -->
+      <div class="flex items-center gap-4 px-3">
+        {#each tabs as tab (tab.id)}
+          {@const TabIcon = tab.icon}
+          <button
+            type="button"
+            class={[
+              'flex items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[11px] font-medium transition-colors',
+              activeTab === tab.id
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-dimmed hover:text-muted'
+            ]}
+            onclick={() => {
+              activeTab = tab.id
+              if (tab.id === 'history') void loadHistory()
+            }}
+          >
+            <TabIcon size={11} class="shrink-0" />
+            {tab.label}
+            {#if tab.count !== null}
+              <span
+                class={[
+                  'rounded-full px-1.5 text-[9px] font-semibold tabular-nums leading-[1.15rem]',
+                  activeTab === tab.id ? 'bg-primary/15 text-primary' : 'bg-elevated text-dimmed'
+                ]}
+              >
+                {tab.count}
+              </span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <!-- Content (scrollable) -->
@@ -711,7 +778,7 @@
                 aria-label="Back to working changes"
                 onclick={clearSelectedCommit}
               >
-                <GitBranch size={12} />
+                <ArrowLeft size={12} />
               </button>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-[11px] font-medium text-foreground">
@@ -865,261 +932,6 @@
                   {/each}
                 </div>
               {/if}
-
-              <!-- Commit input -->
-              {#if staged.length > 0 || amendMode}
-                <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
-                  {#if amendMode}
-                    <div
-                      class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5"
-                    >
-                      <GitCommit size={11} class="shrink-0 text-warning" />
-                      <p class="min-w-0 flex-1 text-[9px] leading-relaxed text-warning">
-                        Amending the most recent commit — no new commit will be created.
-                      </p>
-                      <button
-                        type="button"
-                        class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted hover:bg-elevated"
-                        onclick={() => (amendMode = false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  {/if}
-                  <div class="px-3 pt-2 pb-1">
-                    <textarea
-                      class="min-h-12 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                      placeholder="Commit message…"
-                      bind:value={commitMessage}></textarea>
-                  </div>
-                  <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
-                    <button
-                      type="button"
-                      class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                      disabled={gitState.isBusy('stage')}
-                      onclick={() => void stageAll()}
-                    >
-                      Stage all
-                    </button>
-                    {#if !amendMode}
-                      <button
-                        type="button"
-                        class={[
-                          'rounded-md border px-2 py-1 text-[10px] font-medium transition-colors',
-                          amendMode
-                            ? 'border-warning/40 bg-warning/10 text-warning'
-                            : 'border-border text-muted hover:bg-elevated hover:text-foreground'
-                        ]}
-                        title="Amend the most recent commit instead of creating a new one"
-                        aria-label="Amend the most recent commit instead of creating a new one"
-                        onclick={() => (amendMode = true)}
-                      >
-                        Amend
-                      </button>
-                    {/if}
-                    <span class="flex-1"></span>
-                    <button
-                      type="button"
-                      class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-                      disabled={!commitMessage.trim() ||
-                        gitState.isBusy('commit') ||
-                        gitState.isBusy('amend') ||
-                        (!amendMode && staged.length === 0)}
-                      onclick={() => void commitInline()}
-                    >
-                      {#if gitState.isBusy('commit') || gitState.isBusy('amend')}
-                        <Loader2 size={11} class="animate-spin" />
-                      {:else}
-                        <GitCommit size={11} />
-                      {/if}
-                      {amendMode ? 'Amend commit' : `Commit (${staged.length})`}
-                    </button>
-                  </div>
-                </div>
-              {:else if changes.length > 0}
-                <div class="mb-2 flex items-center gap-2">
-                  <button
-                    type="button"
-                    class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy('stage')}
-                    onclick={() => void stageAll()}
-                  >
-                    Stage all
-                  </button>
-                </div>
-              {/if}
-
-              <!-- Pull request + Stash + Integrate -->
-              <div class="space-y-2">
-                <!-- Pull Request -->
-                <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                  <button
-                    type="button"
-                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                    onclick={() => (showPullRequestSheet = true)}
-                  >
-                    <GitPullRequest size={12} class="shrink-0 text-muted" />
-                    <span class="text-[10px] font-medium text-foreground">Pull request</span>
-                    <span class="flex-1"></span>
-                    <ChevronRight size={12} class="text-dimmed" />
-                  </button>
-                </div>
-
-                <!-- Stash -->
-                <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                  <button
-                    type="button"
-                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                    aria-expanded={showStashes}
-                    onclick={() => (showStashes = !showStashes)}
-                  >
-                    <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
-                      >Stash</span
-                    >
-                    {#if gitState.stashes.length > 0}
-                      <span
-                        class="rounded-full bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-primary"
-                      >
-                        {gitState.stashes.length}
-                      </span>
-                    {/if}
-                    <span class="flex-1"></span>
-                    {#if showStashes}
-                      <ChevronDown size={12} class="text-dimmed" />
-                    {:else}
-                      <ChevronRight size={12} class="text-dimmed" />
-                    {/if}
-                  </button>
-                  {#if showStashes}
-                    <div class="border-t border-border px-3 py-2">
-                      <div class="flex items-center gap-1.5">
-                        <input
-                          class="h-7 min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                          placeholder="Stash message (optional)"
-                          bind:value={stashMessage}
-                        />
-                        <button
-                          type="button"
-                          class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
-                          onclick={() => void stashChanges()}
-                        >
-                          {gitState.isBusy('stash') ? 'Stashing…' : 'Stash'}
-                        </button>
-                      </div>
-                      <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
-                        Shelves unstaged and staged changes so you can switch work.
-                      </p>
-
-                      {#if gitState.stashes.length > 0}
-                        <div class="mt-2 overflow-hidden rounded-lg border border-border">
-                          {#each gitState.stashes as stash (stash.id)}
-                            <div
-                              class="flex items-center gap-2 border-b border-border px-2.5 py-1.5 last:border-b-0"
-                            >
-                              <div class="min-w-0 flex-1">
-                                <p class="truncate font-mono text-[10px] text-muted">
-                                  {stash.message}
-                                </p>
-                                <p class="text-[8px] text-dimmed">
-                                  {stash.id} · {stash.branch ?? 'unknown'} · {relativeTime(
-                                    stash.date
-                                  )}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                                disabled={gitState.isBusy('stash-pop') ||
-                                  gitState.isBusy('stash-drop')}
-                                onclick={() => void popStash(stash.id)}
-                              >
-                                {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
-                              </button>
-                              <button
-                                type="button"
-                                class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
-                                disabled={gitState.isBusy('stash-pop') ||
-                                  gitState.isBusy('stash-drop')}
-                                title="Discard stash {stash.id}"
-                                aria-label="Discard stash {stash.id}"
-                                onclick={() => requestStashDrop(stash.id)}
-                              >
-                                <Trash2 size={11} />
-                              </button>
-                            </div>
-                          {/each}
-                        </div>
-                      {:else}
-                        <p class="mt-2 text-[9px] text-dimmed">No stashes yet.</p>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-
-                <!-- Integrate -->
-                <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                  <button
-                    type="button"
-                    class="flex h-8 w-full items-center gap-2 px-3 text-left"
-                    aria-expanded={showIntegrate}
-                    onclick={() => (showIntegrate = !showIntegrate)}
-                  >
-                    <span class="text-[10px] font-semibold uppercase tracking-wide text-muted"
-                      >Integrate</span
-                    >
-                    <span class="flex-1"></span>
-                    {#if showIntegrate}
-                      <ChevronDown size={12} class="text-dimmed" />
-                    {:else}
-                      <ChevronRight size={12} class="text-dimmed" />
-                    {/if}
-                  </button>
-                  {#if showIntegrate}
-                    <div class="border-t border-border px-3 py-2">
-                      <label
-                        class="mb-1 block text-[9px] font-semibold uppercase tracking-wide text-muted"
-                        for="integrate-target"
-                      >
-                        Bring in changes from
-                      </label>
-                      <select
-                        id="integrate-target"
-                        class="h-7 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-                        bind:value={mergeTarget}
-                      >
-                        <option value="" disabled>Select a branch…</option>
-                        {#each gitState.branches as branch (branch.name)}
-                          {#if branch.name !== status?.branch}
-                            <option value={branch.name}>{branch.name}</option>
-                          {/if}
-                        {/each}
-                      </select>
-                      <div class="mt-1.5 flex gap-1.5">
-                        <button
-                          type="button"
-                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={!mergeTarget || integrateBusy}
-                          onclick={() => requestMergeOrRebase('merge')}
-                        >
-                          Merge
-                        </button>
-                        <button
-                          type="button"
-                          class="flex flex-1 items-center justify-center gap-1 rounded-md border border-border py-1.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                          disabled={!mergeTarget || integrateBusy}
-                          onclick={() => requestMergeOrRebase('rebase')}
-                        >
-                          Rebase
-                        </button>
-                      </div>
-                      <p class="mt-1.5 text-[9px] leading-relaxed text-dimmed">
-                        Merge keeps history; rebase replays your commits on top.
-                      </p>
-                    </div>
-                  {/if}
-                </div>
-              </div>
             {/if}
           </div>
         {/if}
@@ -1200,9 +1012,119 @@
             {/each}
           </div>
         </div>
+      {:else if activeTab === 'stashes'}
+        <div class="p-2">
+          <div class="overflow-hidden rounded-lg border border-border bg-surface">
+            {#each gitState.stashes as stash (stash.id)}
+              <div
+                class="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-elevated/40"
+              >
+                <Archive size={12} class="shrink-0 text-dimmed" />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[11px] leading-snug text-foreground">{stash.message}</p>
+                  <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                    <span class="font-mono">{stash.id}</span>
+                    {#if stash.branch}
+                      <span>·</span>
+                      <span class="truncate">{stash.branch}</span>
+                    {/if}
+                    <span>·</span>
+                    <span>{relativeTime(stash.date)}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                  disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                  title="Restore stash {stash.id} into the working tree"
+                  onclick={() => void popStash(stash.id)}
+                >
+                  {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
+                </button>
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                  disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                  title="Discard stash {stash.id}"
+                  aria-label="Discard stash {stash.id}"
+                  onclick={() => requestStashDrop(stash.id)}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            {/each}
+          </div>
+          <p class="mt-2 px-1 text-[9px] leading-relaxed text-dimmed">
+            Popping restores a stash into your working tree and removes it from this list.
+          </p>
+        </div>
       {/if}
     {/if}
   </div>
+
+  <!-- Pinned composer: only while looking at working changes -->
+  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (changes.length > 0 || amendMode)}
+    <div class="shrink-0 border-t border-border bg-surface">
+      {#if amendMode}
+        <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
+          <GitCommit size={11} class="shrink-0 text-warning" />
+          <p class="min-w-0 flex-1 text-[9px] leading-relaxed text-warning">
+            Amending the most recent commit — no new commit will be created.
+          </p>
+          <button
+            type="button"
+            class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted hover:bg-elevated"
+            onclick={() => (amendMode = false)}
+          >
+            Cancel
+          </button>
+        </div>
+      {/if}
+      <div class="px-2 pt-2">
+        <textarea
+          class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
+          bind:value={commitMessage}></textarea>
+      </div>
+      <div class="flex items-center gap-1.5 px-2 py-2">
+        <button
+          type="button"
+          class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+          disabled={gitState.isBusy('stage') || unstaged.length + untracked.length === 0}
+          onclick={() => void stageAll()}
+        >
+          Stage all
+        </button>
+        {#if !amendMode}
+          <button
+            type="button"
+            class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Amend the most recent commit instead of creating a new one"
+            aria-label="Amend the most recent commit instead of creating a new one"
+            onclick={() => (amendMode = true)}
+          >
+            Amend
+          </button>
+        {/if}
+        <span class="flex-1"></span>
+        <button
+          type="button"
+          class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
+          disabled={!commitMessage.trim() ||
+            gitState.isBusy(['commit', 'amend']) ||
+            (!amendMode && staged.length === 0)}
+          onclick={() => void commitInline()}
+        >
+          {#if gitState.isBusy(['commit', 'amend'])}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <GitCommit size={11} />
+          {/if}
+          {amendMode ? 'Amend commit' : `Commit${staged.length > 0 ? ` (${staged.length})` : ''}`}
+        </button>
+      </div>
+    </div>
+  {/if}
 
   <!-- Pinned action bar -->
   {#if pushConfirm}
@@ -1231,7 +1153,7 @@
     </div>
   {/if}
 
-  {#if repoState === 'git' && status && changes.length > 0}
+  {#if repoState === 'git' && status && remotes.length > 0}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
@@ -1253,7 +1175,7 @@
         {#if gitState.isBusy('pull')}
           <Loader2 size={10} class="animate-spin" />
         {/if}
-        Pull
+        Pull{status.behind > 0 ? ` ${status.behind}` : ''}
       </button>
       <button
         type="button"
@@ -1264,7 +1186,7 @@
         {#if gitState.isBusy('push')}
           <Loader2 size={10} class="animate-spin" />
         {/if}
-        Push
+        Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
       </button>
     </div>
   {/if}
@@ -1282,6 +1204,100 @@
 
   {#if showPullRequestSheet}
     <GitPullRequestSheet {projectId} onClose={() => (showPullRequestSheet = false)} />
+  {/if}
+
+  {#if showStashModal}
+    <Modal open title="Stash changes" onClose={() => (showStashModal = false)}>
+      <div class="space-y-2">
+        <p class="text-[11px] leading-relaxed text-muted">
+          Shelves your staged and unstaged changes so you can switch work. Restore them any time
+          from the Stashes tab.
+        </p>
+        <input
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Describe this stash (optional)"
+          bind:value={stashMessage}
+        />
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (showStashModal = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={(status?.clean ?? true) || gitState.isBusy('stash')}
+            onclick={() => void stashChanges()}
+          >
+            {#if gitState.isBusy('stash')}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            Stash changes
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
+  {#if showIntegrateModal}
+    <Modal open title="Merge or rebase" onClose={() => (showIntegrateModal = false)}>
+      <div class="space-y-2">
+        <label
+          class="block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          for="integrate-target"
+        >
+          Bring changes into {status?.branch ?? 'HEAD'} from
+        </label>
+        <select
+          id="integrate-target"
+          class="h-8 w-full rounded-md border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
+          bind:value={mergeTarget}
+        >
+          <option value="" disabled>Select a branch…</option>
+          {#each gitState.branches as branch (branch.name)}
+            {#if branch.name !== status?.branch}
+              <option value={branch.name}>{branch.name}</option>
+            {/if}
+          {/each}
+        </select>
+        <p class="text-[10px] leading-relaxed text-dimmed">
+          Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
+          the selected branch for a straight history.
+        </p>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (showIntegrateModal = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+            disabled={!mergeTarget || integrateBusy}
+            onclick={() => requestMergeOrRebase('rebase')}
+          >
+            Rebase
+          </button>
+          <button
+            type="button"
+            class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={!mergeTarget || integrateBusy}
+            onclick={() => requestMergeOrRebase('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
   {/if}
 
   {#if pendingOperation}
@@ -1473,15 +1489,6 @@
         </div>
       {/snippet}
     </Modal>
-  {/if}
-
-  {#if showCommitSheet}
-    <GitCommitSheet
-      {projectId}
-      stagedCount={staged.length}
-      onClose={() => (showCommitSheet = false)}
-      onCommitted={() => (showCommitSheet = false)}
-    />
   {/if}
 </div>
 
