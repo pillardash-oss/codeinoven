@@ -1,13 +1,25 @@
 <script lang="ts">
-  import { Archive, Bot, Cog, FileText, Loader2, Zap } from '@lucide/svelte'
+  import {
+    Archive,
+    Bot,
+    CheckCircle2,
+    Clock,
+    Cog,
+    FileText,
+    Layers3,
+    Loader2,
+    XCircle,
+    Zap
+  } from '@lucide/svelte'
   import { onDestroy } from 'svelte'
+  import { DropdownMenu } from 'bits-ui'
   import ToolCard from './ToolCard.svelte'
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { AgentPart } from '$shared/types'
+  import type { AgentPart, AgentToolStatus } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
 
@@ -182,13 +194,45 @@
     }
     return null
   })
-  const subagentCount = $derived(parts.filter((part) => part.type === 'subagent').length)
+  type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
+  const subagentParts = $derived(
+    parts.filter((part): part is SubagentPart => part.type === 'subagent')
+  )
+  const subagentCount = $derived(subagentParts.length)
   const activeSubagentCount = $derived(
-    parts.filter((part) => part.type === 'subagent' && part.activity.status === 'running').length
+    subagentParts.filter((part) => part.activity.status === 'running').length
   )
   const hasCompaction = $derived(
     parts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
+
+  // Live clock for the sub-agent dropdown list — ticks only while any sub-agent is running.
+  let listNow = $state(0)
+  $effect(() => {
+    if (subagentParts.every((part) => part.activity.status !== 'running')) {
+      listNow = 0
+      return
+    }
+    listNow = Date.now()
+    const interval = setInterval(() => {
+      listNow = Date.now()
+    }, 1000)
+    return () => clearInterval(interval)
+  })
+
+  function subagentElapsed(part: SubagentPart): number {
+    const start = part.activity.time?.start
+    if (!start) return 0
+    const end = part.activity.time?.end
+    return Math.max(0, Math.floor(((end ?? (listNow || Date.now())) - start) / 1000))
+  }
+
+  function subagentStatusLabel(status: AgentToolStatus): string {
+    if (status === 'running') return 'Working'
+    if (status === 'completed') return 'Completed'
+    if (status === 'error') return 'Failed'
+    return 'Starting'
+  }
 </script>
 
 <details class="rounded-xl border border-border bg-surface" open={isOpen}>
@@ -216,16 +260,94 @@
           </span>
         {/if}
         {#if subagentCount > 0}
-          <span
-            class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info"
-          >
-            <Bot size={10} />
-            {#if activeSubagentCount > 0}
-              {activeSubagentCount} active · {subagentCount} total
-            {:else}
-              {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-            {/if}
-          </span>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
+              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+              onclick={(e: MouseEvent) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+            >
+              <Bot size={10} />
+              {#if activeSubagentCount > 0}
+                {activeSubagentCount} active · {subagentCount} total
+              {:else}
+                {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
+              {/if}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={6}
+                collisionPadding={8}
+                class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+              >
+                <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                  <Bot size={12} class="shrink-0 text-info" />
+                  <span class="text-[11px] font-semibold text-foreground">
+                    {subagentCount}
+                    {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
+                  </span>
+                  {#if activeSubagentCount > 0}
+                    <span class="text-[10px] text-dimmed">
+                      · {activeSubagentCount} running
+                    </span>
+                  {/if}
+                </div>
+                <DropdownMenu.Separator class="mx-1 my-1 h-px bg-border" />
+                <div class="max-h-60 overflow-y-auto p-0.5">
+                  {#each subagentParts as part (part.id)}
+                    {@const status = part.activity.status}
+                    <DropdownMenu.Item
+                      class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                      onSelect={() => onOpenSubagent?.(part)}
+                    >
+                      {#if status === 'running'}
+                        <Loader2 size={13} class="shrink-0 animate-spin text-info" />
+                      {:else if status === 'completed'}
+                        <CheckCircle2 size={13} class="shrink-0 text-success" />
+                      {:else if status === 'error'}
+                        <XCircle size={13} class="shrink-0 text-danger" />
+                      {:else}
+                        <Clock size={13} class="shrink-0 text-dimmed" />
+                      {/if}
+                      <span class="shrink-0 text-[11px] font-semibold text-foreground">
+                        {part.activity.agent || 'Sub-agent'}
+                      </span>
+                      <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
+                        {part.activity.description}
+                      </span>
+                      {#if part.activity.background}
+                        <span
+                          class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
+                        >
+                          <Layers3 size={9} />
+                          Background
+                        </span>
+                      {/if}
+                      {#if part.activity.time?.start}
+                        <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
+                          {formatDuration(subagentElapsed(part))}
+                        </span>
+                      {/if}
+                      <span
+                        class="shrink-0 text-[10px] {status === 'error'
+                          ? 'text-danger'
+                          : status === 'running'
+                            ? 'text-info'
+                            : 'text-dimmed'}"
+                      >
+                        {subagentStatusLabel(status)}
+                      </span>
+                    </DropdownMenu.Item>
+                  {/each}
+                </div>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         {/if}
       </span>
     {/if}
