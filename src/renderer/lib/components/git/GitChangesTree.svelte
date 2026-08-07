@@ -157,7 +157,7 @@
     onSelect={() => onOpenInEditor(change.path)}
   >
     <span class="inline-block w-3 text-center text-[10px]">✎</span>
-    Open in editor
+    Open
   </ContextMenu.Item>
 {/snippet}
 

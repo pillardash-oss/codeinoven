@@ -32,6 +32,7 @@
   import { AlertDialog, DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -555,7 +556,7 @@
   }
 
   async function openInEditor(path: string): Promise<void> {
-    await invoke('projectFiles:openInEditor', projectId, path)
+    await projectFilesWorkspace.openFile(projectId, path)
   }
 
   async function stashChanges(): Promise<void> {
