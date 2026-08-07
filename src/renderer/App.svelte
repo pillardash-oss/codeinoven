@@ -22,7 +22,7 @@
     type MainView,
     type SettingsSection
   } from '$lib/stores/renderer-recovery.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
     navigationHistoryState,
     type NavigationLocation
@@ -359,11 +359,70 @@
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
     }
+    const previousContentView = rendererRecovery.lastContentView
     activeView = view
     // Persists the view and tracks the last content / non-settings views, so
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
+    reconcileThreadForContentView(view, previousContentView)
+  }
+
+  /** The most recently opened thread of the given kind that still exists. */
+  function lastThreadOfKind(isChat: boolean): Thread | null {
+    for (const key of workspaceState.recentThreadVisits) {
+      const thread = scopeState.allScopeThreads.find(
+        (candidate) => threadVisitKey(candidate) === key
+      )
+      if (!thread || thread.archived) continue
+      if ((thread.projectId === INBOX_PROJECT_ID) === isChat) return thread
+    }
+    return null
+  }
+
+  /**
+   * Switching between Chats and the project views must never leave a thread of
+   * the wrong kind selected (a chat shown as a project thread, or vice versa).
+   * Restores the last opened thread of the target view, or falls back to the
+   * empty state when nothing of that kind exists. Covers every navigation path
+   * (nav buttons, command palette, programmatic navigation like "continue in a
+   * project"), not just the header buttons.
+   */
+  function reconcileThreadForContentView(
+    view: View,
+    previousContentView: 'projects' | 'chats' | 'threads'
+  ): void {
+    if (view !== 'chats' && view !== 'projects' && view !== 'threads') return
+    if (view === previousContentView) return
+    const goingToChats = view === 'chats'
+    const leavingChats = previousContentView === 'chats'
+    if (goingToChats === leavingChats) return
+
+    const thread = workspaceState.selectedThread
+    const threadIsChat = thread ? thread.projectId === INBOX_PROJECT_ID : false
+
+    if (goingToChats) {
+      // Entering chats: keep a chat selected, otherwise restore the last chat.
+      if (thread && threadIsChat) return
+      const lastChat = lastThreadOfKind(true)
+      if (!lastChat) return
+      const project =
+        scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ?? null
+      workspaceState.openThread(lastChat, project)
+      return
+    }
+
+    // Leaving chats for a project view: never keep the chat selected.
+    if (!thread || !threadIsChat) return
+    const lastProjectThread = lastThreadOfKind(false)
+    if (!lastProjectThread) {
+      workspaceState.clearThread()
+      return
+    }
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === lastProjectThread.projectId) ??
+      null
+    workspaceState.openThread(lastProjectThread, project)
   }
 
   /** Re-open the thread captured in a history entry, if it still exists. */
