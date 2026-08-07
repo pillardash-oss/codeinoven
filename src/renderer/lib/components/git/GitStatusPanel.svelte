@@ -63,7 +63,7 @@
   let showIntegrateModal = $state(false)
   let showStashModal = $state(false)
   let stashMessage = $state('')
-  let stashDropTarget = $state<string | null>(null)
+  let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
   let acknowledgeActiveTurn = $state(false)
@@ -505,15 +505,15 @@
     if (activeTab === 'stashes' && gitState.stashes.length === 0) activeTab = 'changes'
   }
 
-  function requestStashDrop(id: string): void {
-    stashDropTarget = id
+  function requestStashDrop(stash: GitStashEntry): void {
+    stashDropTarget = stash
   }
 
   async function confirmStashDrop(): Promise<void> {
     const target = stashDropTarget
     if (!target) return
     stashDropTarget = null
-    await gitState.dropStash(projectId, target)
+    await gitState.dropStash(projectId, target.id)
     if (!gitState.error) {
       clearSelectedStash()
       leaveStashesTabIfEmpty()
@@ -1175,7 +1175,7 @@
                     disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
                     title="Discard stash {stash.id}"
                     aria-label="Discard stash {stash.id}"
-                    onclick={() => requestStashDrop(stash.id)}
+                    onclick={() => requestStashDrop(stash)}
                   >
                     <Trash2 size={12} />
                   </button>
@@ -1623,6 +1623,7 @@
 </div>
 
 {#if stashDropTarget}
+  {@const dropTarget = stashDropTarget}
   <AlertDialog.Root open onOpenChange={() => (stashDropTarget = null)}>
     <AlertDialog.Portal>
       <AlertDialog.Content
@@ -1632,8 +1633,11 @@
           Discard stash?
         </AlertDialog.Title>
         <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-          Stash <strong class="text-foreground">{stashDropTarget}</strong> will be permanently discarded.
-          This cannot be undone.
+          Stash
+          <strong class="font-medium text-foreground">
+            “{dropTarget.message}”
+          </strong>
+          ({dropTarget.id}) will be permanently discarded. This cannot be undone.
         </AlertDialog.Description>
         <div class="mt-5 flex justify-end gap-2">
           <AlertDialog.Cancel
