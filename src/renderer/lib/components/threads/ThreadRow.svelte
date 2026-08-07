@@ -519,33 +519,37 @@
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full items-center gap-2 border-l-2 px-2.5 py-2 text-left transition-colors {selected
+    class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
       ? 'border-foreground bg-elevated'
       : isWorking
         ? 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
     title={thread.title}
   >
-    {#if projectIconUrl}
-      <img src={projectIconUrl} alt="" class="h-4 w-4 shrink-0 rounded object-contain" />
-    {/if}
-    <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
-      {#if badgeProps}
-        <StatusBadge
-          stage={badgeProps.stage}
-          kind={badgeProps.kind}
-          variant={badgeProps.variant ?? 'dot'}
-          animated={badgeProps.animated}
-          size="md"
-          title={isWorking ? stageLabel : threadState}
-        />
-      {:else}
-        <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
+    <span class="flex w-full min-w-0 items-center gap-2">
+      {#if projectIconUrl}
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
       {/if}
-    </span>
-    <span class="min-w-0 flex-1">
+      <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+        {#if badgeProps}
+          <StatusBadge
+            stage={badgeProps.stage}
+            kind={badgeProps.kind}
+            variant={badgeProps.variant ?? 'dot'}
+            animated={badgeProps.animated}
+            size="md"
+            title={isWorking ? stageLabel : threadState}
+          />
+        {:else}
+          <span
+            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+            aria-label={threadState}
+            title={threadState}
+          ></span>
+        {/if}
+      </span>
       <span
-        class="block truncate text-[13px] {threadState === 'approval'
+        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
           ? 'font-medium text-warning'
           : threadState === 'unread'
             ? 'font-medium text-foreground'
@@ -553,17 +557,59 @@
       >
         {thread.title}
       </span>
-      {#if thread.branch}
-        <span class="mt-0.5 block truncate font-mono text-[10px] text-dimmed">
-          {thread.branch}
+      {#if !showBottomRow}
+        <span class="whitespace-nowrap text-[10px] text-dimmed">
+          {relativeTime(thread.createdAt)}
+        </span>
+      {:else if currentModelProviderName}
+        <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+          <VendorIcon name={currentModelProviderName} size={13} />
         </span>
       {/if}
+      {#if selected}
+        <Check size={13} class="shrink-0 text-primary" />
+      {/if}
     </span>
-    <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
-      {relativeTime(thread.createdAt)}
-    </span>
-    {#if selected}
-      <Check size={13} class="shrink-0 text-primary" />
+
+    {#if showBottomRow}
+      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+        {#if harnessIds.length > 0}
+          <span class="flex min-w-0 items-center gap-1 overflow-hidden">
+            {#each harnessIds.slice(0, 3) as harnessId (harnessId)}
+              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+            {/each}
+            {#if harnessIds.length > 3}
+              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+                +{harnessIds.length - 3}
+              </span>
+            {/if}
+          </span>
+        {/if}
+
+        {#if scopeBucket}
+          <span
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            title={scopeBucket.name}
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
+          >
+            {#if scopeIconUrl}
+              <img
+                src={scopeIconUrl}
+                alt=""
+                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
+                draggable="false"
+              />
+            {/if}
+            <span class="truncate">{scopeBucket.name}</span>
+          </span>
+        {/if}
+
+        <span class="flex min-w-0 justify-end">
+          <span class="whitespace-nowrap text-[10px] text-dimmed">
+            {relativeTime(thread.createdAt)}
+          </span>
+        </span>
+      </span>
     {/if}
   </div>
 {/if}
