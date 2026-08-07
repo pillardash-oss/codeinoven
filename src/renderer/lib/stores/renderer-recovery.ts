@@ -75,6 +75,11 @@ export interface RendererRecoverySnapshot {
   favoriteModels: string[]
   /** Model keys (providerId:modelId) the user has recently used, most recent first. */
   recentModels: string[]
+  /** Chats-tab favorites — kept separate from project favorites so chatting with
+   *  a cheap model never reshapes the project model list. */
+  chatFavoriteModels: string[]
+  /** Chats-tab recently used models, most recent first. */
+  chatRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
 }
@@ -123,6 +128,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     collapsedFolders: [],
     favoriteModels: [],
     recentModels: [],
+    chatFavoriteModels: [],
+    chatRecentModels: [],
     auditModelKey: undefined
   }
 }
@@ -375,6 +382,8 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       collapsedFolders: parseCollapsedFolders(parsed.collapsedFolders),
       favoriteModels: parseFavoriteModels(parsed.favoriteModels),
       recentModels: parseFavoriteModels(parsed.recentModels),
+      chatFavoriteModels: parseFavoriteModels(parsed.chatFavoriteModels),
+      chatRecentModels: parseFavoriteModels(parsed.chatRecentModels),
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey

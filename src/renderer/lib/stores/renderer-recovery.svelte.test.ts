@@ -83,6 +83,8 @@ describe('RendererRecoveryStore', () => {
       collapsedFolders: [],
       favoriteModels: [],
       recentModels: [],
+      chatFavoriteModels: [],
+      chatRecentModels: [],
       queuedMessages: {}
     })
 
@@ -136,6 +138,8 @@ describe('RendererRecoveryStore', () => {
       collapsedFolders: [],
       favoriteModels: [],
       recentModels: [],
+      chatFavoriteModels: [],
+      chatRecentModels: [],
       queuedMessages: {}
     })
 
