@@ -57,7 +57,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'assignmentMode',
   'loopMode',
   'fileSystemMode',
-  'loopAuditor'
+  'loopAuditor',
+  'imageDescriptor'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set(['harnessId', 'providerId', 'modelId'])
 const CREATE_PROJECT_FIELDS = new Set([
@@ -465,6 +466,20 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256)
+    }
+  }
+  if (input.imageDescriptor !== undefined) {
+    const descriptor = assertRecord(input.imageDescriptor, 'Image descriptor')
+    rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor')
+    settings.imageDescriptor = {
+      harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor harness ID'),
+      providerId: validateBoundedString(
+        descriptor.providerId,
+        'Image descriptor provider ID',
+        1,
+        128
+      ),
+      modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256)
     }
   }
   return settings

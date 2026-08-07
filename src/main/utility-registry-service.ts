@@ -24,7 +24,8 @@ const UTILITY_KINDS = new Set<UtilityKind>([
   'web_search',
   'web_fetch',
   'computer_use',
-  'provider'
+  'provider',
+  'image_descriptor'
 ])
 const ACTIVATIONS = new Set<UtilityActivation>(['on_demand', 'always'])
 const BINDING_STRATEGIES = new Set<HarnessUtilityBinding['strategy']>([
@@ -354,6 +355,12 @@ function parseConfig(kind: UtilityKind, value: unknown): UtilityConfigMap[Utilit
         ...(optionalString(value['defaultModel'], 'Default model', 256)
           ? { defaultModel: optionalString(value['defaultModel'], 'Default model', 256) }
           : {})
+      }
+    case 'image_descriptor':
+      return {
+        harnessId: identifier(value['harnessId'], 'Image descriptor harness ID'),
+        providerId: identifier(value['providerId'], 'Image descriptor provider ID'),
+        modelId: boundedString(value['modelId'], 'Image descriptor model ID', 1, 256)
       }
   }
 }

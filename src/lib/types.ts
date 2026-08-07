@@ -656,6 +656,8 @@ export interface AgentDefaultsConfig {
   seniorEngineer?: AgentModelSelection
   worker?: AgentModelSelection
   auditor?: AgentModelSelection
+  /** Vision model used to describe images for text-only models. */
+  imageDescriptor?: AgentModelSelection
   /** When enabled, role changes made inside a thread replace the matching global default. */
   syncFromThreadChanges: boolean
 }
@@ -681,6 +683,8 @@ export interface ThreadSettings {
   fileSystemMode?: boolean
   /** Independent model selected for Achievement audits. */
   loopAuditor?: AgentModelSelection
+  /** Vision model used to describe images for this thread's text-only model. */
+  imageDescriptor?: AgentModelSelection
 }
 
 /** A model exposed by a harness provider. */
@@ -845,7 +849,14 @@ export interface AgentToolCatalog {
 // ─── Utility registry ────────────────────────────────────────────────────────
 
 /** Additional capabilities CodeInOven can expose when a harness lacks them. */
-export type UtilityKind = 'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider'
+export type UtilityKind =
+  | 'mcp'
+  | 'skill'
+  | 'web_search'
+  | 'web_fetch'
+  | 'computer_use'
+  | 'provider'
+  | 'image_descriptor'
 
 export type UtilityActivation = 'on_demand' | 'always'
 
@@ -900,6 +911,16 @@ export interface ProviderUtilityConfig {
   defaultModel?: string
 }
 
+/** Vision model (from the harness catalog) used to describe images for text-only models. */
+export interface ImageDescriptorUtilityConfig {
+  /** Harness whose catalog exposes the vision model (e.g. 'opencode'). */
+  harnessId: string
+  /** Provider id that exposes the vision model. */
+  providerId: string
+  /** Model id that can see images (`attachment: true`). */
+  modelId: string
+}
+
 export interface UtilityConfigMap {
   mcp: McpUtilityConfig
   skill: SkillUtilityConfig
@@ -907,6 +928,7 @@ export interface UtilityConfigMap {
   web_fetch: WebUtilityConfig
   computer_use: ComputerUseUtilityConfig
   provider: ProviderUtilityConfig
+  image_descriptor: ImageDescriptorUtilityConfig
 }
 
 /** How one harness receives a resolved utility without writing into the project. */
@@ -2332,6 +2354,9 @@ export interface AppConfig {
   updateChannel: 'stable' | 'nightly'
   /** Prevent the display and system from sleeping while any agent is working. */
   keepAwakeWhileWorking: boolean
+  /** When true, sending an image to a text-only model auto-uses the configured
+   *  image descriptor model instead of showing the vision-model picker card. */
+  imageDescriptorAskAgain: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2357,6 +2382,7 @@ export type AppConfigPatch = Partial<
     | 'autoInstallUpdates'
     | 'updateChannel'
     | 'keepAwakeWhileWorking'
+    | 'imageDescriptorAskAgain'
   >
 >
 
