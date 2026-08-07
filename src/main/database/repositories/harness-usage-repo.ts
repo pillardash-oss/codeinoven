@@ -1,5 +1,5 @@
 import type { Database } from '../database'
-import type { HarnessUsage } from '../../../lib/types'
+import type { AgentMessage, HarnessUsage } from '../../../lib/types'
 
 interface HarnessUsageRow {
   project_id: string
@@ -70,6 +70,15 @@ function parseTokens(raw: string | null): {
   }
 }
 
+/** Sum of step-finish cost parts on an assistant message, mirroring the renderer. */
+function messageCost(message: AgentMessage): number {
+  let stepCost = 0
+  for (const part of message.parts) {
+    if (part.type === 'step-finish' && typeof part.cost === 'number') stepCost += part.cost
+  }
+  return message.cost ?? stepCost
+}
+
 export class HarnessUsageRepo {
   constructor(private db: Database) {}
 
@@ -104,11 +113,93 @@ export class HarnessUsageRepo {
     return rows.map(rowToHarnessUsage)
   }
 
+  /** Whether a message has already been accumulated into harness_usage. */
+  private isCounted(threadId: string, messageId: string): boolean {
+    const row = this.db.get<{ one: number }>(
+      'SELECT 1 as one FROM harness_usage_messages WHERE thread_id = ? AND message_id = ?',
+      threadId,
+      messageId
+    )
+    return row !== undefined
+  }
+
+  private markCounted(threadId: string, messageId: string): void {
+    this.db.run(
+      'INSERT OR IGNORE INTO harness_usage_messages(thread_id, message_id) VALUES(?, ?)',
+      threadId,
+      messageId
+    )
+  }
+
   /**
-   * Rebuild a thread's usage rows from its persisted agent_messages. Idempotent:
-   * the thread's rows are replaced wholesale, so repeated reconciles never double
-   * count regardless of how many times messages are saved or upserted. Reading
-   * from the DB (not the just-written batch) keeps incremental upserts correct.
+   * Accumulate one completed turn into the snapshot table. Called at the end of
+   * each agent turn (success or failure). Each assistant message is counted once
+   * (guarded by the harness_usage_messages ledger), so cost/tokens/duration are
+   * added to whatever the thread's harness row already holds — never double
+   * counted across retries, compaction, or restart.
+   */
+  accumulateTurn(projectId: string, threadId: string, messages: AgentMessage[]): void {
+    this.db.transaction(() => {
+      for (const message of messages) {
+        if (message.role !== 'assistant') continue
+        const harnessId = message.harnessId
+        if (!harnessId) continue
+        if (this.isCounted(threadId, message.id)) continue
+
+        const providerId = message.providerId ?? ''
+        const modelId = message.modelId
+        const cost = messageCost(message)
+        const tokens = message.tokens
+        const createdAt = message.createdAt
+        const completedAt = message.completedAt ?? createdAt
+        const duration = completedAt > createdAt ? completedAt - createdAt : 0
+
+        this.db.run(
+          `INSERT INTO harness_usage(
+            project_id, thread_id, harness_id, provider_id, model_id,
+            message_count, cost_usd,
+            tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
+            duration_ms, first_used_at, last_used_at
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(project_id, thread_id, harness_id, provider_id) DO UPDATE SET
+            model_id = COALESCE(excluded.model_id, harness_usage.model_id),
+            message_count = harness_usage.message_count + excluded.message_count,
+            cost_usd = harness_usage.cost_usd + excluded.cost_usd,
+            tokens_in = harness_usage.tokens_in + excluded.tokens_in,
+            tokens_out = harness_usage.tokens_out + excluded.tokens_out,
+            tokens_reasoning = harness_usage.tokens_reasoning + excluded.tokens_reasoning,
+            tokens_cache_read = harness_usage.tokens_cache_read + excluded.tokens_cache_read,
+            tokens_cache_write = harness_usage.tokens_cache_write + excluded.tokens_cache_write,
+            tokens_total = harness_usage.tokens_total + excluded.tokens_total,
+            duration_ms = harness_usage.duration_ms + excluded.duration_ms,
+            first_used_at = MIN(harness_usage.first_used_at, excluded.first_used_at),
+            last_used_at = MAX(harness_usage.last_used_at, excluded.last_used_at)`,
+          projectId,
+          threadId,
+          harnessId,
+          providerId,
+          modelId ?? null,
+          1,
+          cost,
+          tokens?.input ?? 0,
+          tokens?.output ?? 0,
+          tokens?.reasoning ?? 0,
+          tokens?.cacheRead ?? 0,
+          tokens?.cacheWrite ?? 0,
+          tokens?.total ?? 0,
+          duration,
+          createdAt,
+          completedAt
+        )
+        this.markCounted(threadId, message.id)
+      }
+    })
+  }
+
+  /**
+   * Rebuild a thread's usage rows from its persisted agent_messages and reset
+   * its ledger. Used only by the one-time startup backfill for threads that
+   * predate incremental accumulation.
    */
   reconcile(projectId: string, threadId: string): void {
     this.db.transaction(() => {
@@ -117,6 +208,7 @@ export class HarnessUsageRepo {
         projectId,
         threadId
       )
+      this.db.run('DELETE FROM harness_usage_messages WHERE thread_id = ?', threadId)
       const messageRows = this.db.all<{
         id: string
         role: string
@@ -137,7 +229,6 @@ export class HarnessUsageRepo {
         Required<Omit<HarnessUsage, 'projectId' | 'threadId' | 'modelId'>> & { modelId?: string }
       >()
       for (const row of messageRows) {
-        if (row.role !== 'assistant') continue
         const harnessId = row.harness_id
         if (!harnessId) continue
         const providerId = row.provider_id ?? ''
@@ -211,11 +302,17 @@ export class HarnessUsageRepo {
           entry.lastUsedAt
         )
       }
+      for (const row of messageRows) {
+        if (row.harness_id) this.markCounted(threadId, row.id)
+      }
     })
   }
 
   deleteByThread(threadId: string): void {
-    this.db.run('DELETE FROM harness_usage WHERE thread_id = ?', threadId)
+    this.db.transaction(() => {
+      this.db.run('DELETE FROM harness_usage WHERE thread_id = ?', threadId)
+      this.db.run('DELETE FROM harness_usage_messages WHERE thread_id = ?', threadId)
+    })
   }
 
   deleteByProject(projectId: string): void {
