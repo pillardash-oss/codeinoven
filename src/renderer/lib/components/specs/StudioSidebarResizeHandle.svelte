@@ -76,7 +76,7 @@
 <button
   bind:this={handle}
   type="button"
-  class="absolute inset-y-0 right-0 z-20 w-1.5 translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+  class="absolute inset-y-0 right-0 z-20 w-1.5 translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors max-md:hidden hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
   title={`Resize ${sidebarLabel}`}
   aria-label={`Resize ${sidebarLabel}`}
   onpointerdown={startResize}

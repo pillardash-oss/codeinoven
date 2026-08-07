@@ -6,12 +6,14 @@
     History,
     MessageSquare,
     MessageSquarePlus,
+    PanelLeft,
     Pencil,
     Save,
     X
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, onMount, tick } from 'svelte'
+  import { compactViewport } from '$lib/compact-viewport.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
@@ -116,6 +118,8 @@
   // svelte-ignore state_referenced_locally
   let loadedKey = $state(`${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`)
   let selectedSection = $state<BrainstormSectionId>('context')
+  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  let sectionsOpen = $state(false)
   let dirty = $state(false)
   let savePending = $state(false)
   let pendingAction = $state<BrainstormDecisionAction | null>(null)
@@ -145,6 +149,11 @@
       ({ id }) => id !== 'additional_info' || Boolean(sectionFor(id)?.markdown.trim())
     )
   )
+
+  const selectedSectionLabel = $derived(
+    visibleSections.find((section) => section.id === selectedSection)?.title ?? 'Sections'
+  )
+
   const openAnnotationCount = $derived(
     draft.annotations.filter((annotation) => annotation.status === 'open').length
   )
@@ -245,6 +254,7 @@
   }
 
   async function selectAndScroll(sectionId: BrainstormSectionId): Promise<void> {
+    sectionsOpen = false
     selectedSection = sectionId
     await tick()
     const target = document.getElementById(`brainstorm-section-${sectionId}`)
@@ -506,23 +516,40 @@
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Brainstorm studio">
   <header class="shrink-0 border-b bg-surface">
-    <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3">
-      <StudioDocumentNavigation
-        active="brainstorm"
-        brainstormAvailable
-        {specAvailable}
-        {assignmentAvailable}
-        {auditAvailable}
-        {agentMessagesOpen}
-        {onBack}
-        {onToggleAgentMessages}
-        onOpenBrainstorm={() => undefined}
-        onOpenSpec={specAvailable ? onOpenSpec : undefined}
-        {onOpenAssignment}
-        {onOpenAudit}
-      />
+    <div
+      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <StudioDocumentNavigation
+          active="brainstorm"
+          brainstormAvailable
+          {specAvailable}
+          {assignmentAvailable}
+          {auditAvailable}
+          {agentMessagesOpen}
+          {onBack}
+          {onToggleAgentMessages}
+          onOpenBrainstorm={() => undefined}
+          onOpenSpec={specAvailable ? onOpenSpec : undefined}
+          {onOpenAssignment}
+          {onOpenAudit}
+        />
+        <!-- The section rail is a drawer on a phone; this is its handle. -->
+        <button
+          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
+          aria-label="Open the section list"
+          title="Open the section list"
+          aria-expanded={sectionsOpen}
+          onclick={() => (sectionsOpen = true)}
+        >
+          <PanelLeft size={13} class="shrink-0" />
+          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
+        </button>
+      </div>
 
-      <div class="flex items-center justify-center gap-2 text-[11px] text-muted">
+      <div
+        class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center"
+      >
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
             class="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-elevated hover:text-foreground"
@@ -576,7 +603,7 @@
         {/if}
       </div>
 
-      <div class="flex items-center justify-end gap-1.5">
+      <div class="flex items-center gap-1.5 max-md:*:h-10 max-md:*:flex-1 md:justify-end">
         {#if canEdit}
           <button
             class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
@@ -601,7 +628,7 @@
     </div>
 
     {#if pendingAction && canEdit}
-      <div class="flex items-end gap-2 border-t px-4 py-2.5">
+      <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
@@ -634,18 +661,40 @@
     {/if}
   </header>
 
-  <div class="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden">
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
+  >
+    {#if sectionsOpen}
+      <div
+        class="fixed inset-0 z-40 bg-black/50 md:hidden"
+        role="presentation"
+        onclick={() => (sectionsOpen = false)}
+      ></div>
+    {/if}
     <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface"
+      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
+        ? ''
+        : 'max-md:hidden'}"
       aria-label="Brainstorm sections"
     >
       <StudioSidebarResizeHandle sidebarLabel="Brainstorm sections" />
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">Brainstorm</p>
+        <button
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
+          aria-label="Close sections"
+          title="Close sections"
+          onclick={() => (sectionsOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div class="space-y-0.5 p-2" role="tablist" aria-orientation="vertical">
           {#each visibleSections as section (section.id)}
             {@const annotationCount = annotationsFor(section.id).length}
             <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors {selectedSection ===
+              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
               section.id
                 ? 'bg-elevated font-semibold text-foreground'
                 : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
@@ -704,7 +753,7 @@
       aria-label="Rendered brainstorm"
       onmouseup={captureDocumentSelection}
     >
-      <article class="mx-auto max-w-4xl space-y-12 px-8 py-8 text-sm leading-7">
+      <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
         <header class="space-y-3 border-b pb-8">
           <EditableMarkdown
             text={draft.content.title}
@@ -746,7 +795,7 @@
                   <span class="text-xl font-semibold tracking-tight">{section.title}</span>
                   <MessageSquarePlus
                     size={14}
-                    class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                    class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
                   />
                 </button>
               {:else}
@@ -787,7 +836,9 @@
         <button
           data-brainstorm-annotation-marker={marker.annotation.id}
           class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
-          style:left={`${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
+          style:left={compactViewport.matches
+            ? undefined
+            : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
           style:top={`${marker.y}px`}
           title={`Open annotation: ${marker.annotation.body}`}
           aria-label={`Open annotation: ${marker.annotation.body}`}
@@ -800,9 +851,9 @@
 
 {#if pendingAnnotation}
   <div
-    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl"
-    style:left={`${pendingAnnotation.x}px`}
-    style:top={`${pendingAnnotation.y}px`}
+    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
+    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label={pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
   >
@@ -839,9 +890,9 @@
 
 {#if editingAnnotation && editingAnnotationPosition}
   <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl"
-    style:left={`${editingAnnotationPosition.x}px`}
-    style:top={`${editingAnnotationPosition.y}px`}
+    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
+    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Brainstorm annotation"
   >

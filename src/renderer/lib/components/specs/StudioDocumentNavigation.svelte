@@ -36,15 +36,18 @@
 
 <div class="flex min-w-0 items-center gap-2">
   <button
-    class="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+    class="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted max-md:h-9 max-md:w-9 max-md:justify-center max-md:px-0 hover:bg-elevated hover:text-foreground"
     title="Back to the conversation"
+    aria-label="Back to the conversation"
     onclick={onBack}
   >
-    <ArrowLeft size={13} />
-    Conversation
+    <ArrowLeft size={13} class="shrink-0" />
+    <span class="max-md:hidden">Conversation</span>
   </button>
+  <!-- The agent-message rail lives in the desktop sidebar, which the phone
+       shell never mounts — so the toggle would be a dead control there. -->
   <button
-    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md {agentMessagesOpen
+    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md max-md:hidden {agentMessagesOpen
       ? 'bg-elevated text-foreground'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     aria-pressed={agentMessagesOpen}
@@ -54,10 +57,11 @@
   >
     <MessageSquareText size={13} />
   </button>
-  <div class="flex rounded-lg bg-raised p-0.5" aria-label="Studio document">
+  <div class="flex min-w-0 overflow-x-auto rounded-lg bg-raised p-0.5" aria-label="Studio document">
     {#if brainstormAvailable && onOpenBrainstorm}
       <button
-        class="rounded-md px-2 py-1 text-xs {active === 'brainstorm'
+        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
+        'brainstorm'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'brainstorm'}
@@ -67,7 +71,7 @@
       </button>
     {/if}
     <button
-      class="rounded-md px-2 py-1 text-xs {active === 'spec'
+      class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
         ? 'bg-surface font-semibold text-foreground shadow-sm'
         : specAvailable
           ? 'text-muted hover:bg-overlay hover:text-foreground'
@@ -84,7 +88,8 @@
     </button>
     {#if assignmentAvailable && onOpenAssignment}
       <button
-        class="rounded-md px-2 py-1 text-xs {active === 'assignment'
+        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
+        'assignment'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'assignment'}
@@ -95,7 +100,7 @@
     {/if}
     {#if auditAvailable && onOpenAudit}
       <button
-        class="rounded-md px-2 py-1 text-xs {active === 'audit'
+        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'audit'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'audit'}
