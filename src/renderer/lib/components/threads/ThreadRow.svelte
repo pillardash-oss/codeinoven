@@ -665,6 +665,43 @@
       >
         {thread.title}
       </span>
+    </span>
+
+    <!-- Bottom line: scope badge, harnesses, then time ↔ ellipsis on the right -->
+    <span class="flex w-full min-w-0 items-center gap-1.5">
+      {#if scopeBucket}
+        <span
+          class="flex min-w-0 shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px] font-medium"
+          title={scopeBucket.name}
+          style="color: {scopeColor}; background: {scopeColor}14;"
+        >
+          {#if scopeIconUrl}
+            <img
+              src={scopeIconUrl}
+              alt=""
+              class="h-2.5 w-2.5 shrink-0 object-contain"
+              draggable="false"
+            />
+          {/if}
+          <span class="truncate">{scopeBucket.name}</span>
+        </span>
+      {/if}
+
+      {#if harnessIds.length > 0}
+        <span
+          {@attach captureHarnessRowElement}
+          class="ml-auto flex min-w-0 items-center justify-end gap-1 overflow-hidden"
+        >
+          {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+            <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+          {/each}
+          {#if visibleHarnessCount < harnessIds.length}
+            <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+              +{harnessIds.length - visibleHarnessCount}
+            </span>
+          {/if}
+        </span>
+      {/if}
 
       <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
       <span class="relative flex h-5 min-w-6 shrink-0 items-center justify-end">
@@ -698,22 +735,6 @@
         </span>
       </span>
     </span>
-
-    {#if harnessIds.length > 0}
-      <span
-        {@attach captureHarnessRowElement}
-        class="flex min-w-0 items-center justify-center gap-1 overflow-hidden"
-      >
-        {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
-          <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
-        {/each}
-        {#if visibleHarnessCount < harnessIds.length}
-          <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
-            +{harnessIds.length - visibleHarnessCount}
-          </span>
-        {/if}
-      </span>
-    {/if}
   </button>
 
   <!-- Hover popover with thread info -->
