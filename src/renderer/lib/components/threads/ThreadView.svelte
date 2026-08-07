@@ -113,6 +113,7 @@
     AgentPart,
     AgentEvent,
     AgentContextUsage,
+    AgentHarnessUsage,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -542,6 +543,44 @@
       rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
     }
+  })
+  /**
+   * Per-harness quota telemetry for threads that used more than one harness.
+   * Unlike `contextUsage` (which only reflects the current provider), this scans
+   * every assistant message so each harness's windows and thread cost are shown
+   * independently in the battery popover.
+   */
+  const harnessUsage = $derived.by((): AgentHarnessUsage[] => {
+    const byHarness: Record<string, AgentHarnessUsage> = {}
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      const harnessId = message.harnessId ?? settings.harnessId
+      const providerId = message.providerId ?? settings.providerId
+      const key = `${harnessId}:${providerId}`
+      const stepCost = message.parts.reduce(
+        (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
+        0
+      )
+      const entry = byHarness[key]
+      if (entry) {
+        entry.costUsd += message.cost ?? stepCost
+        if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
+        if (message.credits) entry.credits = message.credits
+        if (message.modelId) entry.modelId = message.modelId
+        continue
+      }
+      byHarness[key] = {
+        harnessId,
+        providerId,
+        ...(message.modelId ? { modelId: message.modelId } : {}),
+        costUsd: message.cost ?? stepCost,
+        rateLimits: message.rateLimits ?? [],
+        ...(message.credits ? { credits: message.credits } : {})
+      }
+    }
+    return Object.values(byHarness).filter(
+      (entry) => entry.rateLimits.length > 0 || entry.credits || entry.costUsd > 0
+    )
   })
   /** Minimum quiet time before the rendered battery settles mid-turn. */
   const CONTEXT_USAGE_SETTLE_MS = 6000
@@ -5583,6 +5622,7 @@
               onSlashCommand={executeHarnessCommand}
               contextUsage={contextUsageDisplay}
               onRevealUsage={revealContextUsage}
+              {harnessUsage}
               canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
               {compacting}
               onCompact={() => void compactWork()}
