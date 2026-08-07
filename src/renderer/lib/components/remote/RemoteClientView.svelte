@@ -240,14 +240,14 @@
           <Switch
             checked={keepAliveOn}
             onchange={(enabled) => void handleKeepAliveToggle(enabled)}
-            label="Keep the desktop alive in the tray while I am away"
-            title="Keep the desktop alive in the tray while I am away"
-            aria-label="Keep remote mode on"
+            label="Accept phone sessions while the app is open"
+            title="Accept phone sessions while the app is open"
+            aria-label="Enable remote mode"
           />
         </div>
         <p class="mt-2 text-[11px] leading-relaxed text-dimmed">
-          While remote mode is on the desktop stays alive, accepts incoming phone sessions, and
-          refuses full quit while a session is live. Turn it off when you are back at your desk.
+          While remote mode is on, phones can connect to this desktop and the device stays awake
+          during a live session. Closing the app disconnects everything.
         </p>
         {#if remoteStatus?.gateway?.url}
           <p class="mt-2 text-[11px] text-muted">

@@ -35,6 +35,11 @@ export interface RemoteModeOptions {
   rpc?: RemoteRpcDispatcher | null
   /** Optional storage used to persist the remote-mode flag across restarts. */
   storage?: import('../storage-engine').StorageEngine | null
+  /**
+   * Called whenever the live remote-session state changes (a phone connects or
+   * disconnects). Lets the host keep the device awake while a session is live.
+   */
+  onSessionActiveChange?: (active: boolean) => void
 }
 
 export const DEFAULT_LAN_PORT = 4455
@@ -64,6 +69,7 @@ export class RemoteModeController {
   private readonly iconPath: string
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage-engine').StorageEngine | null
+  private readonly onSessionActiveChange?: (active: boolean) => void
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
   /** Persisted device-name overrides, keyed by device id. */
@@ -77,6 +83,7 @@ export class RemoteModeController {
     this.iconPath = options.iconPath
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
+    this.onSessionActiveChange = options.onSessionActiveChange
   }
 
   /** Load persisted device names so renames survive restarts. */
@@ -168,7 +175,6 @@ export class RemoteModeController {
       this.keepAlive.dispatch({ type: 'arm' })
       void this.startGateway()
       this.ensureTray()
-      this.hideWindowToTray()
       void this.persistEnabled(true)
       Logger.info('Remote mode enabled')
     } else if (!enabled && this.remoteModeActive) {
@@ -177,6 +183,7 @@ export class RemoteModeController {
       this.gateway = null
       this.tray?.destroy()
       this.tray = null
+      this.onSessionActiveChange?.(false)
       void this.persistEnabled(false)
       Logger.info('Remote mode disabled')
     }
@@ -211,10 +218,12 @@ export class RemoteModeController {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
       this.installEventForwarder()
+      this.onSessionActiveChange?.(true)
     } else if (!isLive && wasLive) {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
       setRemoteEventForwarder(null)
+      this.onSessionActiveChange?.(false)
     }
     this.syncTray()
     this.broadcast()
@@ -248,23 +257,32 @@ export class RemoteModeController {
     })
   }
 
-  /** Intercept a window close while remote mode is on — hide to tray instead. */
-  handleWindowClose(): boolean {
-    if (!this.remoteModeActive) return false
-    this.hideWindowToTray()
-    return true
-  }
-
-  /** `window-all-closed`: keep the app alive in the tray while away. */
-  handleAllWindowsClosed(): boolean {
-    return this.remoteModeActive
-  }
-
-  /** `before-quit`: refuse full quit while a remote session is live. */
-  handleBeforeQuit(): boolean {
-    if (!this.keepAlive.blockedQuit) return false
-    this.tray?.notify('Quit blocked', 'A remote session is live on this desktop.')
-    return true
+  /**
+   * Tear everything down when the user closes the app: disconnect peers, stop
+   * the gateway, destroy the Tray, disarm keep-alive, and release the
+   * device-awake blocker. Closing the app must leave nothing alive.
+   */
+  async dispose(): Promise<void> {
+    this.keepAlive.dispatch({ type: 'disarm' })
+    setRemoteEventForwarder(null)
+    this.onSessionActiveChange?.(false)
+    if (this.gateway) {
+      const gateway = this.gateway
+      this.gateway = null
+      try {
+        await gateway.stop()
+      } catch (error) {
+        Logger.error('Remote gateway stop failed during shutdown:', error)
+      }
+    }
+    try {
+      this.tray?.destroy()
+    } catch (error) {
+      Logger.error('Remote tray destroy failed during shutdown:', error)
+    }
+    this.tray = null
+    this.devices = []
+    Logger.info('Remote mode disposed')
   }
 
   registerIpc(): void {
@@ -339,10 +357,7 @@ export class RemoteModeController {
         this.toggleRemoteMode(enabled)
       },
       onQuit: () => {
-        if (this.keepAlive.blockedQuit) {
-          this.tray?.notify('Quit blocked', 'A remote session is live on this desktop.')
-          return false
-        }
+        // Closing the app always fully quits — nothing is kept alive.
         return true
       },
       onRestore: () => this.restoreWindow()
@@ -352,11 +367,6 @@ export class RemoteModeController {
 
   private syncTray(): void {
     this.tray?.refresh(this.status)
-  }
-
-  private hideWindowToTray(): void {
-    const window = BrowserWindow.getAllWindows()[0]
-    if (window && !window.isDestroyed()) window.hide()
   }
 
   private restoreWindow(): void {

@@ -72,7 +72,8 @@ export function createRemoteTray(
       { type: 'separator' },
       {
         label: 'Quit',
-        enabled: !status.blockedQuit,
+        // Closing the app always fully quits — the Tray never blocks it.
+        enabled: true,
         click: () => {
           if (callbacks.onQuit()) app.quit()
         }

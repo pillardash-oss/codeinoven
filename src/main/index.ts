@@ -73,6 +73,7 @@ registerSignalHandlers()
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let quitCleanupStarted = false
+let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
@@ -166,7 +167,8 @@ const remoteMode = new RemoteModeController({
     chatEngine,
     storage
   }),
-  storage
+  storage,
+  onSessionActiveChange: (active) => powerWakeService.setRemoteSessionActive(active)
 })
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -284,14 +286,10 @@ function createWindow(): BrowserWindow {
   })
 
   window.on('close', (event) => {
-    // While remote mode is on, closing the window hides to the Tray instead
-    // of quitting — the desktop keeps running to accept phone sessions.
-    if (remoteMode.handleWindowClose()) {
-      event.preventDefault()
-      return
-    }
-    // Gate the close while threads are working — ask the renderer to confirm
-    // before letting the window (and with it the app) go away.
+    // Closing the window always closes the app — nothing is kept alive in the
+    // Tray. Gate the close while threads are working — ask the renderer to
+    // confirm before letting the window (and with it the app) go away. During
+    // an approved quit the flags below let the close pass straight through.
     if (quitConfirmed || quitCleanupStarted) return
     event.preventDefault()
     requestCloseConfirmation()
@@ -442,11 +440,9 @@ void app
   })
 
 app.on('window-all-closed', () => {
-  // While remote mode is on the app keeps running in the Tray with no window,
-  // so the desktop can keep accepting phone sessions. Otherwise closing the
-  // last window (traffic-light close button) fully quits the app. Cmd+Q
-  // follows the same path through before-quit → shutdown pipeline → will-quit.
-  if (remoteMode.handleAllWindowsClosed()) return
+  // Closing the last window (traffic-light close button) fully quits the app.
+  // Cmd+Q follows the same path through before-quit → shutdown pipeline →
+  // will-quit. Nothing is kept alive in the Dock or Tray after the user closes.
   app.quit()
 })
 
@@ -454,16 +450,25 @@ app.on('window-all-closed', () => {
  * Ordered disposal executed once the quit lifecycle begins.
  *
  * 1. Renderer notification + 500ms grace period
- * 2. PTY sessions destroyed
- * 3. Notification service stopped
- * 4. Chat engine / driver processes disposed
- * 5. Log buffer flushed
- * 6. app.quit() — re-enters before-quit, but the guard skips cleanup
+ * 2. Remote mode torn down (gateway, Tray, keep-alive, event forwarder)
+ * 3. PTY sessions destroyed
+ * 4. Notification service stopped
+ * 5. Chat engine / driver processes disposed
+ * 6. Log buffer flushed
+ * 7. app.quit() — re-enters before-quit, but the guard skips cleanup
  *    and Electron proceeds to close windows → will-quit → exit.
  */
 async function runShutdownPipeline(): Promise<void> {
   // Give the renderer a moment to process window:beforeQuit.
   await new Promise<void>((resolve) => setTimeout(resolve, 500))
+
+  // Close the phone gateway, destroy the Tray, and disarm keep-alive first so
+  // closing the app disconnects every remote session and leaves nothing behind.
+  try {
+    await remoteMode.dispose()
+  } catch (error) {
+    Logger.error('Remote mode cleanup failed during shutdown:', error)
+  }
 
   try {
     updaterService.stop()
@@ -484,7 +489,11 @@ async function runShutdownPipeline(): Promise<void> {
   }
   setNotificationService(null)
   setPowerWakeService(null)
-  powerWakeService.stop()
+  try {
+    powerWakeService.stop()
+  } catch (error) {
+    Logger.error('Power-wake cleanup failed during shutdown:', error)
+  }
 
   try {
     await computerUsePipService.dispose()
@@ -523,11 +532,6 @@ async function runShutdownPipeline(): Promise<void> {
 
 app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
-  // Refuse a full quit while a remote phone session is live.
-  if (remoteMode.handleBeforeQuit()) {
-    event.preventDefault()
-    return
-  }
   event.preventDefault()
 
   // If the user hasn't explicitly approved a force close, gate the quit on the
@@ -546,7 +550,19 @@ app.on('before-quit', (event) => {
     }
   }
 
-  void runShutdownPipeline()
+  void runShutdownPipeline().finally(() => {
+    if (shutdownFailsafe) {
+      clearTimeout(shutdownFailsafe)
+      shutdownFailsafe = null
+    }
+  })
+
+  // Failsafe: if any disposal step hangs, force the process to exit so the app
+  // never lingers in the Dock with a stale icon after the user chose to close.
+  shutdownFailsafe = setTimeout(() => {
+    Logger.error('Shutdown pipeline timed out — forcing exit')
+    app.exit(0)
+  }, 15_000)
 })
 
 app.on('will-quit', () => {
