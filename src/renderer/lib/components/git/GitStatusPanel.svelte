@@ -247,8 +247,20 @@
     }).catch(() => null)
     if (!thread) return
 
+    // Record the owning thread so the PR's Agent tab can jump back into it later.
+    await gitState.createPrReviewWorkspace(projectId, pr.number, thread.id)
+    await gitState.loadAgentReport(projectId, pr.number)
     rendererRecovery.setDraft(projectId, thread.id, agentReviewPrompt(pr, reportDirectory), [], [])
     workspaceState.openThread(thread, project)
+  }
+
+  /** Reopen the thread that owns a PR's agent review. */
+  async function openReviewThread(threadId: string): Promise<void> {
+    const [project, thread] = await Promise.all([
+      invoke('project:get', projectId).catch(() => null),
+      invoke('thread:get', projectId, threadId).catch(() => null)
+    ])
+    if (thread) workspaceState.openThread(thread, project)
   }
 
   /** The first message the review agent receives — explicit about isolation and output. */
@@ -1210,6 +1222,7 @@
               summary={selectedPullRequest}
               onBack={() => (selectedPullRequest = null)}
               onAgentReview={(pr) => void startAgentReview(pr)}
+              onOpenThread={(threadId) => void openReviewThread(threadId)}
             />
           {:else}
             <GitPullRequestList

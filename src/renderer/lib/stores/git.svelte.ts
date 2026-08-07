@@ -15,12 +15,13 @@ import type {
   GitStatus,
   MergeSummary,
   PrCreateInput,
+  PrAgentReport,
   PrMergeMethod,
   PrReviewEvent,
   PrState,
+  PullRequestBundle,
   PullRequestComment,
-  PullRequestCommit,
-  PullRequestDetail,
+  PullRequestFile,
   PullRequestPage,
   PullRequestReference
 } from '$shared/types'
@@ -49,6 +50,11 @@ export type GitOperation =
   | 'pr-merge'
   | 'pr-comment'
   | 'pr-review'
+  | 'pr-list'
+  | 'pr-detail'
+
+/** How long a cached PR page or bundle is served without refetching. */
+const PR_CACHE_TTL_MS = 60_000
 
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
@@ -61,7 +67,7 @@ function errorMessage(error: unknown, fallback: string): string {
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
  */
-class GitState {
+export class GitState {
   status: GitStatus | null = $state(null)
   branches: GitBranchInfo[] = $state([])
   remotes: GitRemoteInfo[] = $state([])
@@ -71,6 +77,9 @@ class GitState {
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
 
+  // Not reactive rendered data — a plain dedup registry for agent-event
+  // subscriptions, so SvelteSet is the wrong tool here.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private subscriptions = new Set<string>()
 
   get conflicted(): string[] {
@@ -456,61 +465,99 @@ class GitState {
     }
   }
 
-  /** One page of pull requests; returns an empty page when signed out. */
-  async listPullRequestPage(
+  /**
+   * Cached PR listings and detail bundles.
+   *
+   * The sidebar tab is mounted and unmounted every time the user switches tabs,
+   * so without a store-level cache every visit would re-fetch and re-show a
+   * spinner. Cached data renders immediately and is revalidated in the
+   * background when it is older than `PR_CACHE_TTL_MS`.
+   */
+  prPages: Record<string, { page: PullRequestPage; fetchedAt: number }> = $state({})
+  prBundles: Record<string, PullRequestBundle> = $state({})
+  prAgentReports: Record<string, PrAgentReport> = $state({})
+
+  static pageKey(owner: string, repo: string, state: PrState, page: number): string {
+    return `${owner}/${repo}:${state}:${page}`
+  }
+
+  static bundleKey(owner: string, repo: string, pullNumber: number): string {
+    return `${owner}/${repo}#${pullNumber}`
+  }
+
+  /**
+   * Load a page of pull requests, serving cache first.
+   *
+   * Returns immediately when fresh cache exists; otherwise fetches. Pass
+   * `force` for the explicit refresh button.
+   */
+  async ensurePullRequestPage(
     projectId: string,
     owner: string,
     repo: string,
     state: PrState,
-    page: number
-  ): Promise<PullRequestPage> {
+    page: number,
+    force = false
+  ): Promise<void> {
+    const key = GitState.pageKey(owner, repo, state, page)
+    const cached = this.prPages[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    this.markBusy('pr-list', true)
     try {
-      return await invoke('pr:page', projectId, owner, repo, state, page)
+      const result = await invoke('pr:page', projectId, owner, repo, state, page)
+      this.prPages = { ...this.prPages, [key]: { page: result, fetchedAt: Date.now() } }
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull requests could not be loaded')
-      return { items: [], page, hasMore: false }
+    } finally {
+      this.markBusy('pr-list', false)
     }
   }
 
-  async getPullRequest(
+  /** Load everything a PR detail view needs, serving cache first. */
+  async ensurePullRequestBundle(
     projectId: string,
     owner: string,
     repo: string,
-    pullNumber: number
-  ): Promise<PullRequestDetail | null> {
+    pullNumber: number,
+    force = false
+  ): Promise<void> {
+    const key = GitState.bundleKey(owner, repo, pullNumber)
+    const cached = this.prBundles[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    this.markBusy('pr-detail', true)
     try {
-      return await invoke('pr:get', projectId, owner, repo, pullNumber)
+      const bundle = await invoke('pr:bundle', projectId, owner, repo, pullNumber)
+      this.prBundles = { ...this.prBundles, [key]: bundle }
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be loaded')
+    } finally {
+      this.markBusy('pr-detail', false)
+    }
+  }
+
+  /** Files and patches for one commit inside a PR. */
+  async getCommitFiles(
+    projectId: string,
+    owner: string,
+    repo: string,
+    sha: string
+  ): Promise<PullRequestFile[]> {
+    try {
+      return await invoke('pr:commitFiles', projectId, owner, repo, sha)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Commit files could not be loaded')
+      return []
+    }
+  }
+
+  /** Read the agent's review report for a PR, if it has written one. */
+  async loadAgentReport(projectId: string, pullNumber: number): Promise<PrAgentReport | null> {
+    try {
+      const report = await invoke('pr:agentReport', projectId, pullNumber)
+      this.prAgentReports = { ...this.prAgentReports, [String(pullNumber)]: report }
+      return report
+    } catch {
       return null
-    }
-  }
-
-  async listPullRequestCommits(
-    projectId: string,
-    owner: string,
-    repo: string,
-    pullNumber: number
-  ): Promise<PullRequestCommit[]> {
-    try {
-      return await invoke('pr:commits', projectId, owner, repo, pullNumber)
-    } catch (reason) {
-      this.error = errorMessage(reason, 'Pull request commits could not be loaded')
-      return []
-    }
-  }
-
-  async listPullRequestComments(
-    projectId: string,
-    owner: string,
-    repo: string,
-    pullNumber: number
-  ): Promise<PullRequestComment[]> {
-    try {
-      return await invoke('pr:comments', projectId, owner, repo, pullNumber)
-    } catch (reason) {
-      this.error = errorMessage(reason, 'Pull request comments could not be loaded')
-      return []
     }
   }
 
@@ -555,9 +602,13 @@ class GitState {
   }
 
   /** Create `.cio/git/pr/<number>/` so an agent has somewhere to write its report. */
-  async createPrReviewWorkspace(projectId: string, pullNumber: number): Promise<string | null> {
+  async createPrReviewWorkspace(
+    projectId: string,
+    pullNumber: number,
+    threadId?: string
+  ): Promise<string | null> {
     try {
-      return await invoke('pr:reviewWorkspace', projectId, pullNumber)
+      return await invoke('pr:reviewWorkspace', projectId, pullNumber, threadId)
     } catch (reason) {
       this.error = errorMessage(reason, 'The review workspace could not be created')
       return null

@@ -1,5 +1,5 @@
 import { app, ipcMain, dialog, shell, clipboard, BrowserWindow } from 'electron'
-import { readFile, writeFile, mkdtemp, mkdir } from 'fs/promises'
+import { readFile, writeFile, mkdtemp, mkdir, stat } from 'fs/promises'
 import { tmpdir, release } from 'os'
 import { basename, dirname, extname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -2670,28 +2670,81 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
-    'pr:get',
+    'pr:bundle',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.getPullRequest(target)
+      // Fetched together so the sidebar renders one complete view, not six
+      // staggered ones. Optional surfaces degrade to empty rather than failing
+      // the whole bundle (e.g. a repo with checks disabled).
+      const [detail, commits, comments, reviews, reviewComments, files, checks] = await Promise.all(
+        [
+          provider.getPullRequest(target),
+          provider.listPullRequestCommits(target).catch(() => []),
+          provider.listPullRequestComments(target).catch(() => []),
+          provider.listPullRequestReviews(target).catch(() => []),
+          provider.listPullRequestReviewComments(target).catch(() => []),
+          provider.listPullRequestFiles(target).catch(() => []),
+          provider
+            .getPullRequestChecks(target)
+            .catch(() => ({ state: 'none' as const, checks: [] }))
+        ]
+      )
+      return {
+        detail,
+        commits,
+        comments,
+        reviews,
+        reviewComments,
+        files,
+        checks,
+        fetchedAt: Date.now()
+      }
     }
   )
 
   ipcMain.handle(
-    'pr:commits',
-    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
-      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.listPullRequestCommits(target)
+    'pr:commitFiles',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, sha: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.getCommitFiles(
+        {
+          owner: validateBoundedString(owner, 'PR owner', 1, 128),
+          repo: validateBoundedString(repo, 'PR repository', 1, 128)
+        },
+        validateEntityId(sha, 'Commit sha')
+      )
     }
   )
 
-  ipcMain.handle(
-    'pr:comments',
-    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
-      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.listPullRequestComments(target)
+  ipcMain.handle('pr:agentReport', async (_, projectId: unknown, pullNumber: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const reportPath = join(
+      projectPath,
+      '.cio',
+      'git',
+      'pr',
+      String(validatePrNumber(pullNumber)),
+      'review.md'
+    )
+    const threadId = await readFile(join(dirname(reportPath), 'thread.json'), 'utf-8')
+      .then((raw) => {
+        const parsed: unknown = JSON.parse(raw)
+        const value =
+          typeof parsed === 'object' && parsed !== null
+            ? (parsed as Record<string, unknown>)['threadId']
+            : null
+        return typeof value === 'string' ? value : null
+      })
+      .catch(() => null)
+    try {
+      const [content, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
+      return { path: reportPath, content, updatedAt: stats.mtimeMs, threadId }
+    } catch {
+      // No report yet — the agent hasn't finished (or hasn't been asked).
+      return { path: reportPath, content: '', updatedAt: null, threadId }
     }
-  )
+  })
 
   ipcMain.handle(
     'pr:comment',
@@ -2733,12 +2786,24 @@ export function registerIpcHandlers(
     }
   )
 
-  ipcMain.handle('pr:reviewWorkspace', async (_, projectId: unknown, pullNumber: unknown) => {
-    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
-    const directory = join(projectPath, '.cio', 'git', 'pr', String(validatePrNumber(pullNumber)))
-    await mkdir(directory, { recursive: true })
-    return directory
-  })
+  ipcMain.handle(
+    'pr:reviewWorkspace',
+    async (_, projectId: unknown, pullNumber: unknown, threadId?: unknown) => {
+      const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+      const directory = join(projectPath, '.cio', 'git', 'pr', String(validatePrNumber(pullNumber)))
+      await mkdir(directory, { recursive: true })
+      if (threadId !== undefined) {
+        // Remember which thread owns this review so the sidebar can jump back
+        // into the conversation after a restart.
+        await writeFile(
+          join(directory, 'thread.json'),
+          JSON.stringify({ threadId: validateEntityId(threadId, 'Thread ID') }, null, 2),
+          'utf-8'
+        )
+      }
+      return directory
+    }
+  )
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())

@@ -2550,6 +2550,90 @@ export interface PullRequestComment {
 /** Review verdict submitted from the sidebar. */
 export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
 
+/** One changed file in a pull request or commit, with its unified patch. */
+export interface PullRequestFile {
+  path: string
+  /** Provider status: added, modified, removed, renamed… */
+  status: string
+  additions: number
+  deletions: number
+  /** Unified diff hunk text; null for binary files or oversized patches. */
+  patch: string | null
+}
+
+/** A submitted review (approval, change request, or review comment). */
+export interface PullRequestReview {
+  id: number
+  authorLogin: string
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
+  state: string
+  body: string
+  submittedAt: string
+}
+
+/** An inline code comment attached to a line of the diff. */
+export interface PullRequestReviewComment {
+  id: number
+  authorLogin: string
+  body: string
+  path: string
+  /** Line in the file the comment anchors to; null once outdated. */
+  line: number | null
+  createdAt: string
+}
+
+/** One CI check or commit status on the PR head. */
+export interface PullRequestCheck {
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'timed_out'
+    | 'action_required'
+    | 'skipped'
+    | null
+  /** Provider page for the run, when one exists. */
+  url: string | null
+}
+
+/** Rolled-up CI state for a pull request head. */
+export interface PullRequestChecks {
+  state: 'success' | 'failure' | 'pending' | 'none'
+  checks: PullRequestCheck[]
+}
+
+/**
+ * Everything the PR detail view renders, fetched in one round trip.
+ *
+ * The sidebar shows this as a single unit, so bundling avoids six sequential
+ * spinners and lets the renderer cache one object per pull request.
+ */
+export interface PullRequestBundle {
+  detail: PullRequestDetail
+  commits: PullRequestCommit[]
+  comments: PullRequestComment[]
+  reviews: PullRequestReview[]
+  reviewComments: PullRequestReviewComment[]
+  files: PullRequestFile[]
+  checks: PullRequestChecks
+  /** Epoch ms this bundle was fetched, for cache staleness display. */
+  fetchedAt: number
+}
+
+/** An agent's review report read back from `.cio/git/pr/<number>/review.md`. */
+export interface PrAgentReport {
+  /** Absolute path to the report file. */
+  path: string
+  content: string
+  /** Epoch ms of the last write, or null when no report exists yet. */
+  updatedAt: number | null
+  /** Thread the review was handed to, so the UI can jump back into it. */
+  threadId: string | null
+}
+
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
 export interface GitRepositoryIdentity {
   owner: string

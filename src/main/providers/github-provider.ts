@@ -3,7 +3,12 @@ import type {
   PrDraft,
   PullRequestComment,
   PullRequestCommit,
+  PullRequestCheck,
+  PullRequestChecks,
   PullRequestDetail,
+  PullRequestFile,
+  PullRequestReview,
+  PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference,
   PullRequestSummary
@@ -188,6 +193,137 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
+  async listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]> {
+    const response = await this.request(`${this.pullPath(input)}/files?per_page=100`, {
+      method: 'GET'
+    })
+    return this.toFiles(response)
+  }
+
+  async listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]> {
+    const response = await this.request(`${this.pullPath(input)}/reviews?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestReview[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const id = this.readNumber(record, 'id')
+      const state = this.readString(record, 'state') ?? ''
+      // A "PENDING" review has not been submitted and is invisible to others.
+      if (id <= 0 || state === 'PENDING') return []
+      const user = this.readRecord(record, 'user')
+      return [
+        {
+          id,
+          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+          state,
+          body: this.readString(record, 'body') ?? '',
+          submittedAt: this.readString(record, 'submitted_at') ?? ''
+        }
+      ]
+    })
+  }
+
+  async listPullRequestReviewComments(
+    input: PullRequestTarget
+  ): Promise<PullRequestReviewComment[]> {
+    const response = await this.request(`${this.pullPath(input)}/comments?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestReviewComment[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const id = this.readNumber(record, 'id')
+      if (id <= 0) return []
+      const user = this.readRecord(record, 'user')
+      const line = this.readNumber(record, 'line')
+      return [
+        {
+          id,
+          authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+          body: this.readString(record, 'body') ?? '',
+          path: this.readString(record, 'path') ?? '',
+          line: line > 0 ? line : null,
+          createdAt: this.readString(record, 'created_at') ?? ''
+        }
+      ]
+    })
+  }
+
+  /**
+   * CI state for the PR head.
+   *
+   * GitHub exposes two independent systems — modern check runs and legacy commit
+   * statuses — and a repository can use either, so both are merged here.
+   */
+  async getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks> {
+    const detail = await this.request(this.pullPath(input), { method: 'GET' })
+    const head = Array.isArray(detail) ? null : this.readRecord(detail, 'head')
+    const sha = head ? this.readString(head, 'sha') : null
+    if (!sha) return { state: 'none', checks: [] }
+
+    const [runsResponse, statusResponse] = await Promise.all([
+      this.request(`${this.repoPath(input)}/commits/${sha}/check-runs?per_page=100`, {
+        method: 'GET'
+      }).catch(() => ({}) as Record<string, unknown>),
+      this.request(`${this.repoPath(input)}/commits/${sha}/status`, { method: 'GET' }).catch(
+        () => ({}) as Record<string, unknown>
+      )
+    ])
+
+    const checks: PullRequestCheck[] = []
+    const runsRecord = Array.isArray(runsResponse) ? {} : runsResponse
+    const runs = runsRecord['check_runs']
+    if (Array.isArray(runs)) {
+      for (const run of runs) {
+        if (typeof run !== 'object' || run === null) continue
+        const record = run as Record<string, unknown>
+        checks.push({
+          name: this.readString(record, 'name') ?? 'check',
+          status: this.toCheckStatus(this.readString(record, 'status')),
+          conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
+          url: this.readString(record, 'html_url')
+        })
+      }
+    }
+
+    const statusRecord = Array.isArray(statusResponse) ? {} : statusResponse
+    const statuses = statusRecord['statuses']
+    if (Array.isArray(statuses)) {
+      for (const status of statuses) {
+        if (typeof status !== 'object' || status === null) continue
+        const record = status as Record<string, unknown>
+        const state = this.readString(record, 'state')
+        checks.push({
+          name: this.readString(record, 'context') ?? 'status',
+          status: state === 'pending' ? 'in_progress' : 'completed',
+          conclusion:
+            state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
+          url: this.readString(record, 'target_url')
+        })
+      }
+    }
+
+    return { state: this.rollUpChecks(checks), checks }
+  }
+
+  /** Files and patches for one commit — powers commit drill-down in the sidebar. */
+  async getCommitFiles(
+    input: { owner: string; repo: string },
+    sha: string
+  ): Promise<PullRequestFile[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/commits/${encodeURIComponent(sha)}`,
+      {
+        method: 'GET'
+      }
+    )
+    const record = Array.isArray(response) ? {} : response
+    return this.toFiles(record['files'])
+  }
+
   resolveRepositoryIdentity(remoteUrl: string): GitRepositoryIdentity | null {
     const url = remoteUrl.trim()
     if (!url) return null
@@ -259,6 +395,60 @@ export class GitHubProvider implements GitProvider {
       url,
       title: this.readString(record, 'title') ?? (number > 0 ? `Pull request #${number}` : '')
     }
+  }
+
+  private toFiles(payload: unknown): PullRequestFile[] {
+    const items = Array.isArray(payload) ? payload : []
+    return items.flatMap((item): PullRequestFile[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const path = this.readString(record, 'filename')
+      if (!path) return []
+      return [
+        {
+          path,
+          status: this.readString(record, 'status') ?? 'modified',
+          additions: this.readNumber(record, 'additions'),
+          deletions: this.readNumber(record, 'deletions'),
+          patch: this.readString(record, 'patch')
+        }
+      ]
+    })
+  }
+
+  private toCheckStatus(value: string | null): PullRequestCheck['status'] {
+    return value === 'queued' || value === 'in_progress' || value === 'completed'
+      ? value
+      : 'unknown'
+  }
+
+  private toCheckConclusion(value: string | null): PullRequestCheck['conclusion'] {
+    switch (value) {
+      case 'success':
+      case 'failure':
+      case 'neutral':
+      case 'cancelled':
+      case 'timed_out':
+      case 'action_required':
+      case 'skipped':
+        return value
+      default:
+        return null
+    }
+  }
+
+  /** Failure wins over pending, pending over success — the same order GitHub shows. */
+  private rollUpChecks(checks: PullRequestCheck[]): PullRequestChecks['state'] {
+    if (checks.length === 0) return 'none'
+    const failing = checks.some(
+      (check) =>
+        check.conclusion === 'failure' ||
+        check.conclusion === 'timed_out' ||
+        check.conclusion === 'action_required'
+    )
+    if (failing) return 'failure'
+    if (checks.some((check) => check.status !== 'completed')) return 'pending'
+    return 'success'
   }
 
   private repoPath(input: { owner: string; repo: string }): string {
