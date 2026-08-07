@@ -647,14 +647,14 @@
               class="z-50 w-52 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
             >
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
                 onSelect={() => (showPullRequestSheet = true)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
                 disabled={gitState.branches.length < 2}
                 onSelect={() => (showIntegrateModal = true)}
               >
@@ -663,7 +663,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
                 disabled={status?.clean ?? true}
                 onSelect={() => (showStashModal = true)}
               >

@@ -23,6 +23,9 @@ const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
 
 const NETWORK_TIMEOUT_MS = 15_000
 
+/** Refuse to inline an avatar larger than this (guards the IPC payload). */
+const AVATAR_MAX_BYTES = 512 * 1024
+
 /**
  * GitHub device-flow OAuth for the Git sidebar.
  *
@@ -54,7 +57,10 @@ export class GitHubAuthService {
    * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
    */
   private get clientId(): string {
-    const baked = typeof __CODEINOVEN_GITHUB_CLIENT_ID__ === 'string' ? __CODEINOVEN_GITHUB_CLIENT_ID__ : undefined
+    const baked =
+      typeof __CODEINOVEN_GITHUB_CLIENT_ID__ === 'string'
+        ? __CODEINOVEN_GITHUB_CLIENT_ID__
+        : undefined
     const runtime = process.env['CODEINOVEN_GITHUB_CLIENT_ID']
     return (baked?.trim() ? baked : (runtime ?? '')).trim()
   }
@@ -98,7 +104,7 @@ export class GitHubAuthService {
         return {
           login,
           name: this.readString(record, 'name'),
-          avatarUrl
+          avatarUrl: (await this.inlineAvatar(avatarUrl)) ?? avatarUrl
         }
       } finally {
         clearTimeout(timer)
@@ -206,6 +212,37 @@ export class GitHubAuthService {
         throw new Error('GitHub request timed out', { cause: failure })
       }
       throw failure
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Download the avatar here and hand the renderer a `data:` URL.
+   *
+   * The renderer's CSP is `img-src 'self' data: blob: file: appfile:` — remote
+   * hosts are deliberately not allowed, so a raw githubusercontent URL renders
+   * as a broken image. Inlining keeps the CSP tight and the avatar visible.
+   * Returns null on any failure so the caller can fall back to the remote URL.
+   */
+  private async inlineAvatar(url: string): Promise<string | null> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), NETWORK_TIMEOUT_MS)
+    try {
+      // Ask for a small square; the UI never renders it larger than 32px.
+      const sized = `${url}${url.includes('?') ? '&' : '?'}s=128`
+      const response = await fetch(sized, {
+        headers: { 'User-Agent': 'CodeInOven' },
+        signal: controller.signal
+      })
+      if (!response.ok) return null
+      const type = response.headers.get('content-type') ?? 'image/png'
+      if (!type.startsWith('image/')) return null
+      const bytes = Buffer.from(await response.arrayBuffer())
+      if (bytes.byteLength > AVATAR_MAX_BYTES) return null
+      return `data:${type};base64,${bytes.toString('base64')}`
+    } catch {
+      return null
     } finally {
       clearTimeout(timer)
     }

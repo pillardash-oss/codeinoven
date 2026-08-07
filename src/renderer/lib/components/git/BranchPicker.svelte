@@ -131,11 +131,18 @@
   }}
 >
   <DropdownMenu.Trigger
-    class="flex h-7 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+    class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
-    title="Switch branch"
-    aria-label="Switch branch"
+    title={githubUser ? `Branch and GitHub account (@${githubUser.login})` : 'Switch branch'}
+    aria-label={githubUser ? 'Switch branch or manage GitHub account' : 'Switch branch'}
   >
+    {#if github.connected && githubUser}
+      <img
+        src={githubUser.avatarUrl}
+        alt=""
+        class="mr-0.5 h-4 w-4 shrink-0 rounded-full bg-elevated"
+      />
+    {/if}
     <GitBranch size={11} class="shrink-0" />
     <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" />
@@ -154,7 +161,7 @@
         {#if github.connected && githubUser}
           <DropdownMenu.Sub>
             <DropdownMenu.SubTrigger
-              class="flex w-full items-center gap-2 rounded-md px-1 py-1 outline-none transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 outline-none transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
               title="GitHub account actions"
               aria-label="GitHub account actions"
             >
@@ -177,7 +184,7 @@
             >
               {#if remoteWebUrl}
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
                   onSelect={() => void openUrl(remoteWebUrl)}
                 >
                   <ExternalLink size={12} class="shrink-0 text-dimmed" />
@@ -185,14 +192,14 @@
                 </DropdownMenu.Item>
               {/if}
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
                 onSelect={() => void openUrl(`https://github.com/${githubUser.login}`)}
               >
                 <User size={12} class="shrink-0 text-dimmed" />
                 View my GitHub profile
               </DropdownMenu.Item>
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
                 onSelect={() => void openUrl('https://github.com/pulls')}
               >
                 <GitFork size={12} class="shrink-0 text-dimmed" />
@@ -200,7 +207,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Separator class="my-1 h-px bg-border" />
               <DropdownMenu.Item
-                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
+                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
                 onSelect={() => {
                   open = false
                   onSignOut()
@@ -214,7 +221,7 @@
         {:else if github.configured}
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Sign in to GitHub"
             onclick={(e: MouseEvent) => {
               e.stopPropagation()
@@ -262,7 +269,7 @@
           {#each localBranches as branch (branch.name)}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
+              class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch.name)}
               onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch.name)}
             >
@@ -283,7 +290,7 @@
               {:else if onDelete}
                 <button
                   type="button"
-                  class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                  class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                   title="Delete branch {branch.name}"
                   aria-label="Delete branch {branch.name}"
                   onclick={(e: MouseEvent) => handleDelete(e, branch.name)}
@@ -303,7 +310,7 @@
           {#each remoteBranches as branch (branch.name)}
             <button
               type="button"
-              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
+              class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
               onclick={() => handleSelect(branch.name)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
@@ -333,7 +340,7 @@
             />
             <button
               type="button"
-              class="shrink-0 rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={!newBranchName.trim()}
               onclick={handleCreate}
             >
@@ -343,7 +350,7 @@
         {:else}
           <button
             type="button"
-            class="flex w-full items-center gap-2 text-[11px] text-muted outline-none transition-colors hover:text-foreground"
+            class="flex w-full cursor-pointer items-center gap-2 text-[11px] text-muted outline-none transition-colors hover:text-foreground"
             onclick={() => (creating = true)}
           >
             <Plus size={12} class="shrink-0" />
@@ -369,12 +376,12 @@
       </AlertDialog.Description>
       <div class="mt-5 flex justify-end gap-2">
         <AlertDialog.Cancel
-          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
         >
           Cancel
         </AlertDialog.Cancel>
         <AlertDialog.Action
-          class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
           onclick={confirmDelete}
         >
           Delete
