@@ -81,6 +81,8 @@ export interface RemoteRpcServices {
     | 'abort'
     | 'listPermissions'
     | 'replyPermission'
+    | 'listImageDescriptorErrors'
+    | 'replyImageDescriptor'
     | 'listQuestions'
     | 'answerQuestion'
     | 'listCommands'
@@ -381,6 +383,16 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           args[2] as 'once' | 'always' | 'reject',
           typeof args[3] === 'string' ? args[3] : undefined
+        )
+      case 'agent:listImageDescriptorErrors':
+        return chatEngine.listImageDescriptorErrors(this.string(args[0]), this.string(args[1]))
+      case 'agent:replyImageDescriptor':
+        return chatEngine.replyImageDescriptor(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as 'retry' | 'ignore',
+          args[4] as import('../../lib/types').AgentModelSelection | undefined
         )
       case 'agent:listQuestions':
         return chatEngine.listQuestions(this.string(args[0]), this.string(args[1]))

@@ -89,6 +89,8 @@ const INVOKE_CHANNELS = [
   'agent:loadSessionMessages',
   'agent:loadTemporaryChatMessages',
   'agent:replyPermission',
+  'agent:listImageDescriptorErrors',
+  'agent:replyImageDescriptor',
   'agent:runCommand',
   'agent:sendPrompt',
   'agent:steerPrompt',

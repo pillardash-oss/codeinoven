@@ -42,6 +42,8 @@ import type {
   ScopedHarnessCommand,
   HistoryEntry,
   HistoryRole,
+  ImageDescriptorErrorRequest,
+  ImageDescriptorReplyAction,
   PermissionRequest,
   PermissionReply,
   PendingAgentQuestionRequest,
@@ -536,6 +538,20 @@ export interface IpcInvokeContract {
   'agent:loadTemporaryChatMessages': Contract<[temporaryChatId: string], AgentMessage[]>
   'agent:replyPermission': Contract<
     [projectId: string, requestId: string, reply: PermissionReply, alternative?: string],
+    void
+  >
+  'agent:listImageDescriptorErrors': Contract<
+    [projectId: string, threadId: string],
+    ImageDescriptorErrorRequest[]
+  >
+  'agent:replyImageDescriptor': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      requestId: string,
+      action: ImageDescriptorReplyAction,
+      selection?: AgentModelSelection
+    ],
     void
   >
   'agent:runCommand': Contract<

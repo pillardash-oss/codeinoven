@@ -58,6 +58,8 @@ export interface UtilityTurnRequest {
   projectId: string
   threadId: string
   projectPath: string
+  /** Main thread session that owns this turn, for scoped user-decision events. */
+  sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
 }
@@ -352,6 +354,7 @@ export class UtilityOrchestrationService {
           projectId: state.request.projectId,
           threadId: state.request.threadId,
           projectPath: state.request.projectPath,
+          sessionId: state.request.sessionId,
           pinnedSelection: this.pinnedImageDescriptorSelection(state)
         })
       }
@@ -377,6 +380,7 @@ export class UtilityOrchestrationService {
       projectId: state.request.projectId,
       threadId: state.request.threadId,
       projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
       pinnedSelection: this.pinnedImageDescriptorSelection(state)
     })
     await this.audit(state, 'utility.invoked', {
