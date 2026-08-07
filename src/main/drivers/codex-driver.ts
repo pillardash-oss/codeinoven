@@ -121,13 +121,17 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
     numberValue(model?.['modelContextWindow'])
+  // Read a structured vision capability when the codex catalog reports one;
+  // unknown state defaults to vision-capable.
+  const capabilities = record(model?.['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
   return {
     id,
     providerId: 'openai',
     name: stringValue(model?.['displayName']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment: true,
+    attachment: explicitVision === undefined ? true : explicitVision !== false,
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:

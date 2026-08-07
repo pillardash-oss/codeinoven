@@ -819,6 +819,32 @@ const tools = [
       required: ['utility_id', 'operation'],
       additionalProperties: false
     }
+  },
+  {
+    name: 'image_descriptor',
+    description: 'Describe images with a vision-capable model so a text-only model can reason about them. Provide every image entry with a unique id; each entry has a source and a type: "part" when source is a file path or URL, "binary" when source is base64 image data. Accepts up to 8 images per call (batch several frames at once; call again for more). Returns a text description per image tagged with its id.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        images: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 8,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: 256 },
+              source: { type: 'string', minLength: 1 },
+              type: { type: 'string', enum: ['part', 'binary'] }
+            },
+            required: ['id', 'source', 'type']
+          }
+        }
+      },
+      required: ['images']
+    }
   }
 ]
 
@@ -859,7 +885,7 @@ for await (const line of lines) {
     } else if (request.method === 'tools/call') {
       const name = request.params?.name
       const args = request.params?.arguments || {}
-      const path = name === 'utility_search' ? '/search' : name === 'utility_activate' ? '/activate' : name === 'utility_invoke' ? '/invoke' : ''
+      const path = name === 'utility_search' ? '/search' : name === 'utility_activate' ? '/activate' : name === 'utility_invoke' ? '/invoke' : name === 'image_descriptor' ? '/image_descriptor' : ''
       if (!path) throw new Error('Unknown utility gateway tool')
       const result = await bridge(path, args)
       const content = Array.isArray(result?.content)

@@ -91,7 +91,7 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
         providerId: 'cline',
         name: 'DeepSeek Chat',
         reasoning: false,
-        attachment: true,
+        attachment: false,
         toolcall: true
       },
       {
@@ -125,7 +125,7 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
         name: 'DeepSeek V4 Flash',
         reasoning: true,
         thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
+        attachment: false,
         toolcall: true
       }
     ]
@@ -145,15 +145,25 @@ function mapRemoteClineModel(value: unknown, providerId: string): ProviderModel 
   if (!id) return null
   const name = stringValue(raw?.['name']) ?? id
   const reasoning = /reason|opus|sonnet|gemini|qwen|deepseek|kimi|mimo/iu.test(`${id} ${name}`)
+  // Prefer a structured vision capability when the catalog reports one;
+  // otherwise default to vision-capable except for known text-only families.
+  const capabilities = record(raw?.['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  const attachment = explicitVision === undefined ? !isTextOnlyModel(id) : explicitVision !== false
   return {
     id,
     providerId,
     name,
     reasoning,
     ...(reasoning ? { thinkingPresets: CLINE_THINKING_PRESETS } : {}),
-    attachment: true,
+    attachment,
     toolcall: true
   }
+}
+
+/** Known text-only model families that cannot see images. */
+function isTextOnlyModel(modelId: string): boolean {
+  return /deepseek/iu.test(modelId)
 }
 
 function uniqueModels(models: ProviderModel[]): ProviderModel[] {
