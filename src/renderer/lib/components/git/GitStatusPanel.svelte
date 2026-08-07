@@ -1,25 +1,15 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitHubUser,
     GitResetMode,
-    GitStashEntry,
-    GitHubUser
+    GitStashEntry
   } from '$shared/types'
-  import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import GitFileRow from './GitFileRow.svelte'
-  import GitPullRequestSheet from './GitPullRequestSheet.svelte'
-  import GitHubSignInModal from './GitHubSignInModal.svelte'
-  import BranchPicker from './BranchPicker.svelte'
-  import Modal from '../ui/Modal.svelte'
-  import Switch from '../ui/Switch.svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
-  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
-  import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import {
     Archive,
     ArrowLeft,
@@ -33,11 +23,22 @@
     History,
     Loader2,
     MoreHorizontal,
+    NetworkIcon,
     RefreshCw,
+    RotateCcwClock,
     Trash2,
-    TreePine,
     Unplug
   } from '@lucide/svelte'
+  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { onMount } from 'svelte'
+  import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
+  import BranchPicker from './BranchPicker.svelte'
+  import GitFileRow from './GitFileRow.svelte'
+  import GitHubSignInModal from './GitHubSignInModal.svelte'
+  import GitPullRequestSheet from './GitPullRequestSheet.svelte'
 
   interface Props {
     projectId: string
@@ -535,8 +536,8 @@
           icon: FileDiff,
           count: changes.length > 0 ? changes.length : null
         },
-        { id: 'history', label: 'History', icon: History, count: null },
-        { id: 'branches', label: 'Branches', icon: TreePine, count: null }
+        { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
+        { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null }
       ]
       // Stash is just shelved work — it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
