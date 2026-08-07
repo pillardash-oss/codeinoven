@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Ellipsis } from '@lucide/svelte'
+  import { Ellipsis, MoreVertical } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
 
@@ -20,6 +20,8 @@
     /** Fired when the menu closes — lets a touch reveal undo itself. */
     onClose?: () => void
     open?: boolean
+    /** Use a vertical ellipsis for multi-row thread rows; horizontal otherwise. */
+    vertical?: boolean
   }
 
   let {
@@ -28,7 +30,8 @@
     ariaLabel = 'Thread actions',
     onOpen = () => undefined,
     onClose = () => undefined,
-    open = $bindable(false)
+    open = $bindable(false),
+    vertical = false
   }: Props = $props()
 </script>
 
@@ -49,7 +52,11 @@
       onOpen()
     }}
   >
-    <Ellipsis size={13} />
+    {#if vertical}
+      <MoreVertical size={13} />
+    {:else}
+      <Ellipsis size={13} />
+    {/if}
   </DropdownMenu.Trigger>
 
   <DropdownMenu.Portal>

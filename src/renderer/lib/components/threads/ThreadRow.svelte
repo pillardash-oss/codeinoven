@@ -337,6 +337,10 @@
     return scopeState.bucketFor(thread.projectId, bucketId)
   })
 
+  /** Whether the bottom line (scope/harness/time) is shown. Single harness on
+   *  the default scope collapses to a one-line row with the time on the top. */
+  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1)
+
   /** Project (repo) that owns this thread, resolved for the hover popover. */
   let project = $derived(
     scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
@@ -597,7 +601,7 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
+    class="relative mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
       ? 'border-foreground bg-elevated'
@@ -612,7 +616,7 @@
     }}
     oncontextmenu={openContextMenu}
   >
-    <span class="flex w-full min-w-0 items-center gap-2">
+    <span class="flex w-full min-w-0 items-center gap-2 pr-6">
       <!-- Project icon -->
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
@@ -678,58 +682,8 @@
         {thread.title}
       </span>
 
-      <!-- Current working / last worked model -->
-      {#if thread.settings?.harnessId}
-        <span
-          class="flex shrink-0 items-center gap-0.5 text-dimmed"
-          title={currentModelProviderName ?? thread.settings.modelId ?? 'Model'}
-        >
-          <AgentIcon agentId={thread.settings.harnessId} size={14} />
-          {#if currentModelProviderName}
-            <VendorIcon name={currentModelProviderName} size={12} />
-          {/if}
-        </span>
-      {/if}
-    </span>
-
-    <!-- Bottom line: scope badge, harnesses, then time ↔ ellipsis on the right -->
-    <span class="flex w-full min-w-0 items-center gap-1.5">
-      {#if scopeBucket}
-        <span
-          class="flex min-w-0 max-w-[6rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
-          title={scopeBucket.name}
-          style="color: {scopeColor}; background: {scopeColor}0d;"
-        >
-          {#if scopeIconUrl}
-            <img
-              src={scopeIconUrl}
-              alt=""
-              class="h-2.5 w-2.5 shrink-0 object-contain opacity-70"
-              draggable="false"
-            />
-          {/if}
-          <span class="truncate">{scopeBucket.name}</span>
-        </span>
-      {/if}
-
-      {#if harnessIds.length > 0}
-        <span
-          {@attach captureHarnessRowElement}
-          class="ml-auto flex min-w-0 items-center justify-end gap-1 overflow-hidden"
-        >
-          {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
-            <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
-          {/each}
-          {#if visibleHarnessCount < harnessIds.length}
-            <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
-              +{harnessIds.length - visibleHarnessCount}
-            </span>
-          {/if}
-        </span>
-      {/if}
-
-      <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
-      <span class="relative flex h-5 min-w-6 shrink-0 items-center justify-end">
+      <!-- Single-line default: time rides on the top line -->
+      {#if !showBottomRow}
         <span
           class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
             ? 'opacity-0'
@@ -738,27 +692,87 @@
         >
           {relativeTime(thread.createdAt)}
         </span>
+      {:else}
+        <!-- Current working / last worked model — provider icon alone -->
+        {#if currentModelProviderName}
+          <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+            <VendorIcon name={currentModelProviderName} size={13} />
+          </span>
+        {/if}
+      {/if}
+    </span>
+
+    {#if showBottomRow}
+      <!-- Bottom line: scope badge, harnesses, then time on the right -->
+      <span class="flex w-full min-w-0 items-center gap-1.5 pr-6">
+        {#if scopeBucket}
+          <span
+            class="flex min-w-0 max-w-[6rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
+            title={scopeBucket.name}
+            style="color: {scopeColor}; background: {scopeColor}0d;"
+          >
+            {#if scopeIconUrl}
+              <img
+                src={scopeIconUrl}
+                alt=""
+                class="h-2.5 w-2.5 shrink-0 object-contain opacity-70"
+                draggable="false"
+              />
+            {/if}
+            <span class="truncate">{scopeBucket.name}</span>
+          </span>
+        {/if}
+
+        {#if harnessIds.length > 0}
+          <span
+            {@attach captureHarnessRowElement}
+            class="flex min-w-0 items-center gap-1 overflow-hidden {scopeBucket
+              ? 'flex-1 justify-center'
+              : 'justify-start'}"
+          >
+            {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+            {/each}
+            {#if visibleHarnessCount < harnessIds.length}
+              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+                +{harnessIds.length - visibleHarnessCount}
+              </span>
+            {/if}
+          </span>
+        {/if}
+
         <span
-          class="absolute inset-0 flex items-center justify-end transition-opacity duration-150 {hovered
-            ? 'opacity-100'
-            : 'pointer-events-none opacity-0'}"
-          aria-hidden={!hovered}
+          class="ml-auto whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            ? 'opacity-0'
+            : 'opacity-100'}"
+          aria-hidden={hovered}
         >
-          <ThreadDropdown
-            bind:open={showMenu}
-            items={menuItems}
-            onOpen={() => {
-              showPopover = false
-              clearTimeout(popoverTimer)
-            }}
-            onClose={() => {
-              if (!touchRevealed) return
-              touchRevealed = false
-              hovered = false
-            }}
-          />
+          {relativeTime(thread.createdAt)}
         </span>
       </span>
+    {/if}
+
+    <!-- Ellipsis — far right, vertically centered across the whole row, shown on hover -->
+    <span
+      class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center transition-opacity duration-150 {hovered
+        ? 'opacity-100'
+        : 'pointer-events-none opacity-0'}"
+      aria-hidden={!hovered}
+    >
+      <ThreadDropdown
+        bind:open={showMenu}
+        items={menuItems}
+        vertical={showBottomRow}
+        onOpen={() => {
+          showPopover = false
+          clearTimeout(popoverTimer)
+        }}
+        onClose={() => {
+          if (!touchRevealed) return
+          touchRevealed = false
+          hovered = false
+        }}
+      />
     </span>
   </button>
 
