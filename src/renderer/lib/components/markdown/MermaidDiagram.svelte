@@ -23,22 +23,22 @@
   let svg = $state('')
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  function cssToken(style: CSSStyleDeclaration, name: string): string {
-    return style.getPropertyValue(name).trim()
+  function cssToken(style: CSSStyleDeclaration, name: string, fallback: string): string {
+    return style.getPropertyValue(name).trim() || fallback
   }
 
   function readTheme(): MermaidTheme {
     const style = getComputedStyle(document.documentElement)
     return {
-      app: cssToken(style, '--color-app'),
-      border: cssToken(style, '--color-border'),
-      borderStrong: cssToken(style, '--color-border-strong'),
-      elevated: cssToken(style, '--color-elevated'),
-      foreground: cssToken(style, '--color-foreground'),
-      muted: cssToken(style, '--color-muted'),
-      overlay: cssToken(style, '--color-overlay'),
-      surface: cssToken(style, '--color-surface'),
-      fontFamily: cssToken(style, '--font-sans')
+      app: cssToken(style, '--color-app', '#0b0b0d'),
+      border: cssToken(style, '--color-border', '#27272c'),
+      borderStrong: cssToken(style, '--color-border-strong', '#3b3b42'),
+      elevated: cssToken(style, '--color-elevated', '#1c1c20'),
+      foreground: cssToken(style, '--color-foreground', '#f5f4f0'),
+      muted: cssToken(style, '--color-muted', '#9d9da6'),
+      overlay: cssToken(style, '--color-overlay', '#242429'),
+      surface: cssToken(style, '--color-surface', '#141417'),
+      fontFamily: cssToken(style, '--font-sans', 'system-ui, sans-serif')
     }
   }
 
