@@ -7,7 +7,9 @@
     FileText,
     MessageSquare,
     Network,
-    Save
+    PanelLeft,
+    Save,
+    X
   } from '@lucide/svelte'
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
@@ -15,6 +17,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import {
@@ -119,6 +122,8 @@
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let selectedSection = $state('overview')
+  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  let sectionsOpen = $state(false)
   // The effect reconciles a saved assignment version with the local editing buffer.
   // svelte-ignore state_referenced_locally
   let draft = $state<AssignmentPlanContent>($state.snapshot(assignment.content))
@@ -176,6 +181,9 @@
     }))
   ])
 
+  const selectedSectionLabel = $derived(
+    sections.find((section) => section.id === selectedSection)?.label ?? 'Sections'
+  )
   function annotationCount(section: string): number {
     return annotations.filter(
       (annotation) => annotation.section === section && annotation.status === 'open'
@@ -229,6 +237,7 @@
   }
 
   async function selectAndScroll(sectionId: string): Promise<void> {
+    sectionsOpen = false
     selectedSection = sectionId
     await tick()
     const target = document.getElementById(`assignment-section-${sectionId}`)
@@ -455,21 +464,38 @@
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Assignment studio">
   <header class="shrink-0 border-b bg-surface">
-    <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3">
-      <StudioDocumentNavigation
-        active="assignment"
-        {brainstormAvailable}
-        assignmentAvailable
-        {auditAvailable}
-        {agentMessagesOpen}
-        {onBack}
-        {onToggleAgentMessages}
-        {onOpenBrainstorm}
-        {onOpenSpec}
-        {onOpenAudit}
-      />
+    <div
+      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <StudioDocumentNavigation
+          active="assignment"
+          {brainstormAvailable}
+          assignmentAvailable
+          {auditAvailable}
+          {agentMessagesOpen}
+          {onBack}
+          {onToggleAgentMessages}
+          {onOpenBrainstorm}
+          {onOpenSpec}
+          {onOpenAudit}
+        />
+        <!-- The section rail is a drawer on a phone; this is its handle. -->
+        <button
+          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
+          aria-label="Open the section list"
+          title="Open the section list"
+          aria-expanded={sectionsOpen}
+          onclick={() => (sectionsOpen = true)}
+        >
+          <PanelLeft size={13} class="shrink-0" />
+          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
+        </button>
+      </div>
 
-      <div class="flex items-center justify-center gap-2 text-[11px] text-muted">
+      <div
+        class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center"
+      >
         {#if versions.length > 1 && onSelectVersion}
           <label class="sr-only" for="assignment-version">Assignment version</label>
           <select
@@ -503,7 +529,7 @@
         {/if}
       </div>
 
-      <div class="flex items-center justify-end">
+      <div class="flex items-center gap-1.5 max-md:*:h-10 max-md:*:flex-1 md:justify-end">
         {#if readOnly && auditActive && !finalComplete && onOpenAuditWork}
           <button
             class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
@@ -537,17 +563,39 @@
     {/if}
   </header>
 
-  <div class="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden">
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
+  >
+    {#if sectionsOpen}
+      <div
+        class="fixed inset-0 z-40 bg-black/50 md:hidden"
+        role="presentation"
+        onclick={() => (sectionsOpen = false)}
+      ></div>
+    {/if}
     <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface"
+      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
+        ? ''
+        : 'max-md:hidden'}"
       aria-label="Assignment sections"
     >
       <StudioSidebarResizeHandle sidebarLabel="Assignment sections" />
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">Assignment</p>
+        <button
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
+          aria-label="Close sections"
+          title="Close sections"
+          onclick={() => (sectionsOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div class="space-y-0.5 p-2" role="tablist" aria-orientation="vertical">
           {#each sections as section (section.id)}
             <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors {selectedSection ===
+              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
               section.id
                 ? 'bg-elevated font-semibold text-foreground'
                 : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
@@ -662,7 +710,7 @@
       {#each annotationMarkers as marker (marker.annotation.id)}
         <button
           class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
-          style:left={`${marker.x}px`}
+          style:left={compactViewport.matches ? undefined : `${marker.x}px`}
           style:top={`${marker.y}px`}
           data-assignment-annotation-marker={marker.annotation.id}
           title="Open anchored comment"
@@ -672,7 +720,7 @@
           <MessageSquare size={13} />
         </button>
       {/each}
-      <div bind:this={documentContent} class="mx-auto max-w-4xl px-8 py-8">
+      <div bind:this={documentContent} class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
         <div class="mb-6 flex items-center gap-2">
           <Network size={18} class="text-primary" />
           <p class="text-sm font-semibold text-foreground">Sr. Engineer execution plan</p>
@@ -700,9 +748,9 @@
 
 {#if pendingAnnotation}
   <div
-    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl"
-    style:left={`${pendingAnnotation.x}px`}
-    style:top={`${pendingAnnotation.y}px`}
+    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
+    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label="Comment on assignment selection"
   >
@@ -738,9 +786,9 @@
 
 {#if editingAnnotation && editingAnnotationPosition}
   <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl"
-    style:left={`${editingAnnotationPosition.x}px`}
-    style:top={`${editingAnnotationPosition.y}px`}
+    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
+    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Anchored assignment comment"
   >
