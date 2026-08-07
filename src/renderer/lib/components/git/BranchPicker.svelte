@@ -1,21 +1,7 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    Check,
-    GitBranch,
-    Plus,
-    Search,
-    Trash2,
-    LogOut,
-    GitFork,
-    ExternalLink,
-    ChevronRight,
-    User
-  } from '@lucide/svelte'
+  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2, GitFork } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
-  import type { GitBranchInfo, GitHubAuthStatus } from '$shared/types'
+  import type { GitBranchInfo } from '$shared/types'
 
   interface Props {
     branches: GitBranchInfo[]
@@ -23,27 +9,13 @@
     isBusy: boolean
     /** Primary remote (origin) shown as info at the top of the picker. */
     primaryRemote: { name: string; url: string } | null
-    /** GitHub account status surfaced in the picker header. */
-    github: GitHubAuthStatus
     onSelect: (branch: string) => void
     onCreate?: (name: string) => void
     onDelete?: (name: string) => void
-    onSignIn: () => void
-    onSignOut: () => void
   }
 
-  let {
-    branches,
-    currentBranch,
-    isBusy,
-    primaryRemote,
-    github,
-    onSelect,
-    onCreate,
-    onDelete,
-    onSignIn,
-    onSignOut
-  }: Props = $props()
+  let { branches, currentBranch, isBusy, primaryRemote, onSelect, onCreate, onDelete }: Props =
+    $props()
 
   let open = $state(false)
   let search = $state('')
@@ -59,23 +31,6 @@
 
   const localBranches = $derived(filtered.filter((b) => !b.remote))
   const remoteBranches = $derived(filtered.filter((b) => b.remote))
-
-  const githubUser = $derived(github.user ?? null)
-
-  /** Browsable https URL for the remote, from either an ssh or https origin. */
-  const remoteWebUrl = $derived.by(() => {
-    const url = primaryRemote?.url?.trim()
-    if (!url) return null
-    const ssh = /^(?:ssh:\/\/)?git@([^:/]+)[:/](.+?)(?:\.git)?$/.exec(url)
-    if (ssh) return `https://${ssh[1]}/${ssh[2]}`
-    if (/^https?:\/\//.test(url)) return url.replace(/\.git$/, '')
-    return null
-  })
-
-  async function openUrl(url: string): Promise<void> {
-    open = false
-    await openInBrowser(url)
-  }
 
   function handleSelect(branch: string): void {
     if (branch === currentBranch) return
@@ -133,16 +88,9 @@
   <DropdownMenu.Trigger
     class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50 data-[state=open]:bg-elevated data-[state=open]:text-foreground"
     disabled={isBusy}
-    title={githubUser ? `Branch and GitHub account (@${githubUser.login})` : 'Switch branch'}
-    aria-label={githubUser ? 'Switch branch or manage GitHub account' : 'Switch branch'}
+    title="Switch branch"
+    aria-label="Switch branch"
   >
-    {#if github.connected && githubUser}
-      <img
-        src={githubUser.avatarUrl}
-        alt=""
-        class="mr-0.5 h-4 w-4 shrink-0 rounded-full bg-elevated"
-      />
-    {/if}
     <GitBranch size={11} class="shrink-0" />
     <span class="max-w-[10ch] truncate">{currentBranch ?? 'detached'}</span>
     <ChevronDown size={10} class="shrink-0 text-dimmed" />
@@ -156,89 +104,6 @@
       collisionPadding={8}
       class="z-50 w-60 overflow-hidden rounded-xl border bg-surface shadow-xl"
     >
-      <!-- GitHub account -->
-      <div class="border-b border-border px-3 py-2">
-        {#if github.connected && githubUser}
-          <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger
-              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 outline-none transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
-              title="GitHub account actions"
-              aria-label="GitHub account actions"
-            >
-              <img
-                src={githubUser.avatarUrl}
-                alt=""
-                class="h-6 w-6 shrink-0 rounded-full bg-elevated"
-              />
-              <div class="min-w-0 flex-1 text-left">
-                <p class="truncate text-[11px] font-medium text-foreground">
-                  {githubUser.name ?? githubUser.login}
-                </p>
-                <p class="truncate text-[9px] text-dimmed">@{githubUser.login}</p>
-              </div>
-              <ChevronRight size={12} class="shrink-0 text-dimmed" />
-            </DropdownMenu.SubTrigger>
-            <DropdownMenu.SubContent
-              sideOffset={6}
-              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
-            >
-              {#if remoteWebUrl}
-                <DropdownMenu.Item
-                  class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-                  onSelect={() => void openUrl(remoteWebUrl)}
-                >
-                  <ExternalLink size={12} class="shrink-0 text-dimmed" />
-                  Open repository on GitHub
-                </DropdownMenu.Item>
-              {/if}
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-                onSelect={() => void openUrl(`https://github.com/${githubUser.login}`)}
-              >
-                <User size={12} class="shrink-0 text-dimmed" />
-                View my GitHub profile
-              </DropdownMenu.Item>
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
-                onSelect={() => void openUrl('https://github.com/pulls')}
-              >
-                <GitFork size={12} class="shrink-0 text-dimmed" />
-                My pull requests
-              </DropdownMenu.Item>
-              <DropdownMenu.Separator class="my-1 h-px bg-border" />
-              <DropdownMenu.Item
-                class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
-                onSelect={() => {
-                  open = false
-                  onSignOut()
-                }}
-              >
-                <LogOut size={12} class="shrink-0" />
-                Sign out of GitHub
-              </DropdownMenu.Item>
-            </DropdownMenu.SubContent>
-          </DropdownMenu.Sub>
-        {:else if github.configured}
-          <button
-            type="button"
-            class="flex w-full cursor-pointer items-center gap-2 rounded-md border border-border px-2 py-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Sign in to GitHub"
-            onclick={(e: MouseEvent) => {
-              e.stopPropagation()
-              open = false
-              onSignIn()
-            }}
-          >
-            <VendorIcon name="GitHub" size={13} class="shrink-0" />
-            Sign in to GitHub
-          </button>
-        {:else}
-          <p class="px-1 text-[9px] leading-relaxed text-dimmed">
-            GitHub sign-in needs a client ID to be configured.
-          </p>
-        {/if}
-      </div>
-
       <!-- Origin -->
       {#if primaryRemote}
         <div class="flex items-center gap-2 border-b border-border px-3 py-1.5">

@@ -36,6 +36,7 @@
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
+  import GitHubAccountMenu from './GitHubAccountMenu.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
@@ -565,18 +566,23 @@
   <div class="flex shrink-0 flex-col border-b border-border">
     <!-- Top row: branch + tabs + actions -->
     <div class="flex h-9 items-center gap-1 px-2">
+      {#if repoState === 'git'}
+        <GitHubAccountMenu
+          github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
+          {primaryRemote}
+          onSignIn={() => (showGitHubSignIn = true)}
+          onSignOut={() => void signOutGitHub()}
+        />
+      {/if}
       {#if repoState === 'git' && gitState.branches.length > 0}
         <BranchPicker
           branches={gitState.branches}
           currentBranch={status?.branch ?? null}
           isBusy={gitState.isBusy('checkout')}
           {primaryRemote}
-          github={{ connected: githubConnected, configured: githubConfigured, user: githubUser }}
           onSelect={(branch) => void checkoutBranch(branch)}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
-          onSignIn={() => (showGitHubSignIn = true)}
-          onSignOut={() => void signOutGitHub()}
         />
       {:else}
         <div class="flex items-center gap-1.5 px-2">
