@@ -567,7 +567,8 @@
           rateLimits: [],
           tokens: row.tokens,
           messageCount: row.messageCount,
-          durationMs: row.durationMs
+          durationMs: row.durationMs,
+          ...(row.models?.length ? { models: row.models } : {})
         }))
       })
       .catch(() => {})
@@ -612,6 +613,7 @@
         if (stored.tokens) entry.tokens = stored.tokens
         if (stored.messageCount !== undefined) entry.messageCount = stored.messageCount
         if (stored.durationMs !== undefined) entry.durationMs = stored.durationMs
+        if (stored.models?.length) entry.models = stored.models
       } else {
         byHarness[key] = { ...stored, rateLimits: [] }
       }

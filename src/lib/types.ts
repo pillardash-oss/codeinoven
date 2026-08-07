@@ -1194,6 +1194,8 @@ export interface AgentHarnessUsage {
   messageCount?: number
   /** Approximate cumulative wall-clock time spent in turns, ms. */
   durationMs?: number
+  /** Per-model cost breakdown for this harness on the thread, when available. */
+  models?: HarnessModelUsage[]
 }
 
 /** On-demand account quota snapshot for one harness used on a thread. */
@@ -1228,6 +1230,26 @@ export interface HarnessUsage {
   /** Cumulative token accounting across this harness's messages on the thread. */
   tokens: AgentTokenUsage
   /** Approximate cumulative wall-clock time spent in turns attributed to this harness, ms. */
+  durationMs: number
+  firstUsedAt: number
+  lastUsedAt: number
+  /** Per-model cost breakdown for this harness on the thread, when available. */
+  models?: HarnessModelUsage[]
+}
+
+/** One row of cumulative per-model analytics keyed by (thread, harness, provider, model). */
+export interface HarnessModelUsage {
+  threadId: string
+  harnessId: string
+  providerId: string
+  modelId: string
+  /** Number of assistant messages attributed to this model on the thread. */
+  messageCount: number
+  /** Cumulative USD cost attributed to this model, when the harness reports cost. */
+  costUsd: number
+  /** Cumulative token accounting across this model's messages on the thread. */
+  tokens: AgentTokenUsage
+  /** Approximate cumulative wall-clock time spent in turns, ms. */
   durationMs: number
   firstUsedAt: number
   lastUsedAt: number

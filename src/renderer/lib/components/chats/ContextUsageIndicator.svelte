@@ -3,7 +3,12 @@
   import { SvelteSet } from 'svelte/reactivity'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
-  import type { AgentContextUsage, AgentHarnessUsage, AgentRateLimitWindow } from '$shared/types'
+  import type {
+    AgentContextUsage,
+    AgentHarnessUsage,
+    AgentRateLimitWindow,
+    HarnessModelUsage
+  } from '$shared/types'
 
   interface Props {
     usage?: AgentContextUsage
@@ -178,6 +183,22 @@
   {/each}
 {/snippet}
 
+{#snippet modelRows(models: HarnessModelUsage[])}
+  <div class="rounded-md border border-border bg-app/40 p-2">
+    <p class="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">Models used</p>
+    {#each models as model (model.modelId)}
+      <div class="flex items-baseline justify-between gap-3 py-0.5 text-[10px]">
+        <span class="min-w-0 truncate font-medium text-foreground">{model.modelId}</span>
+        <span class="shrink-0 tabular-nums text-dimmed">
+          {model.costUsd > 0
+            ? `${formatMoney(model.costUsd)} · ${compactNumber(model.tokens.total)} tok`
+            : `${compactNumber(model.tokens.total)} tok`}
+        </span>
+      </div>
+    {/each}
+  </div>
+{/snippet}
+
 {#snippet harnessSection(entry: AgentHarnessUsage)}
   {@const key = harnessKey(entry)}
   {@const collapsed = collapsedHarnesses.has(key)}
@@ -212,9 +233,12 @@
             {/if}
           </p>
         {/if}
+        {#if entry.models?.length}
+          {@render modelRows(entry.models)}
+        {/if}
         {#if entry.rateLimits.length > 0}
           {@render limitRows(entry.rateLimits)}
-        {:else if !creditsLine(entry) && !entry.tokens}
+        {:else if !creditsLine(entry) && !entry.tokens && !entry.models?.length}
           <p class="text-[10px] text-dimmed">No quota reported for this harness.</p>
         {/if}
         {#if creditsLine(entry)}
@@ -278,6 +302,9 @@
       </div>
     {:else if usage && usage.rateLimits.length > 0}
       <div class="mt-3 space-y-2.5 border-t border-border pt-3">
+        {#if harnessUsage[0]?.models?.length}
+          {@render modelRows(harnessUsage[0].models)}
+        {/if}
         {@render limitRows(usage.rateLimits)}
       </div>
     {/if}

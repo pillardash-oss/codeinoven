@@ -1,5 +1,10 @@
 import type { Database } from '../database'
-import type { AgentMessage, HarnessUsage } from '../../../lib/types'
+import type {
+  AgentMessage,
+  AgentTokenUsage,
+  HarnessModelUsage,
+  HarnessUsage
+} from '../../../lib/types'
 
 interface HarnessUsageRow {
   project_id: string
@@ -20,6 +25,45 @@ interface HarnessUsageRow {
   last_used_at: number
 }
 
+interface HarnessModelUsageRow {
+  thread_id: string
+  harness_id: string
+  provider_id: string
+  model_id: string
+  message_count: number
+  cost_usd: number
+  tokens_in: number
+  tokens_out: number
+  tokens_reasoning: number
+  tokens_cache_read: number
+  tokens_cache_write: number
+  tokens_total: number
+  duration_ms: number
+  first_used_at: number
+  last_used_at: number
+}
+
+function tokensFromRow(
+  row: Pick<
+    HarnessUsageRow | HarnessModelUsageRow,
+    | 'tokens_in'
+    | 'tokens_out'
+    | 'tokens_reasoning'
+    | 'tokens_cache_read'
+    | 'tokens_cache_write'
+    | 'tokens_total'
+  >
+): AgentTokenUsage {
+  return {
+    input: row.tokens_in,
+    output: row.tokens_out,
+    reasoning: row.tokens_reasoning,
+    cacheRead: row.tokens_cache_read,
+    cacheWrite: row.tokens_cache_write,
+    total: row.tokens_total
+  }
+}
+
 function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
   return {
     projectId: row.project_id,
@@ -29,14 +73,22 @@ function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
     ...(row.model_id ? { modelId: row.model_id } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
-    tokens: {
-      input: row.tokens_in,
-      output: row.tokens_out,
-      reasoning: row.tokens_reasoning,
-      cacheRead: row.tokens_cache_read,
-      cacheWrite: row.tokens_cache_write,
-      total: row.tokens_total
-    },
+    tokens: tokensFromRow(row),
+    durationMs: row.duration_ms,
+    firstUsedAt: row.first_used_at,
+    lastUsedAt: row.last_used_at
+  }
+}
+
+function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
+  return {
+    threadId: row.thread_id,
+    harnessId: row.harness_id,
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    messageCount: row.message_count,
+    costUsd: row.cost_usd,
+    tokens: tokensFromRow(row),
     durationMs: row.duration_ms,
     firstUsedAt: row.first_used_at,
     lastUsedAt: row.last_used_at
@@ -103,7 +155,34 @@ export class HarnessUsageRepo {
       projectId,
       threadId
     )
-    return rows.map(rowToHarnessUsage)
+    const usages = rows.map(rowToHarnessUsage)
+    const models = this.modelsFor(threadId)
+    if (models.length > 0) {
+      const byKey = new Map<string, HarnessModelUsage[]>()
+      for (const model of models) {
+        const key = `${model.harnessId}:${model.providerId}`
+        const list = byKey.get(key)
+        if (list) list.push(model)
+        else byKey.set(key, [model])
+      }
+      for (const usage of usages) {
+        const key = `${usage.harnessId}:${usage.providerId}`
+        const modelList = byKey.get(key)
+        if (modelList) usage.models = modelList
+      }
+    }
+    return usages
+  }
+
+  /** Per-model cumulative usage rows for one thread, cost descending. */
+  modelsFor(threadId: string): HarnessModelUsage[] {
+    const rows = this.db.all<HarnessModelUsageRow>(
+      `SELECT * FROM harness_usage_models
+       WHERE thread_id = ?
+       ORDER BY cost_usd DESC, last_used_at DESC`,
+      threadId
+    )
+    return rows.map(rowToHarnessModelUsage)
   }
 
   /** Every cumulative usage row across all threads (for analytics/aggregation). */
@@ -192,6 +271,43 @@ export class HarnessUsageRepo {
           createdAt,
           completedAt
         )
+        if (modelId) {
+          this.db.run(
+            `INSERT INTO harness_usage_models(
+              thread_id, harness_id, provider_id, model_id,
+              message_count, cost_usd,
+              tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
+              duration_ms, first_used_at, last_used_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(thread_id, harness_id, provider_id, model_id) DO UPDATE SET
+              message_count = harness_usage_models.message_count + excluded.message_count,
+              cost_usd = harness_usage_models.cost_usd + excluded.cost_usd,
+              tokens_in = harness_usage_models.tokens_in + excluded.tokens_in,
+              tokens_out = harness_usage_models.tokens_out + excluded.tokens_out,
+              tokens_reasoning = harness_usage_models.tokens_reasoning + excluded.tokens_reasoning,
+              tokens_cache_read = harness_usage_models.tokens_cache_read + excluded.tokens_cache_read,
+              tokens_cache_write = harness_usage_models.tokens_cache_write + excluded.tokens_cache_write,
+              tokens_total = harness_usage_models.tokens_total + excluded.tokens_total,
+              duration_ms = harness_usage_models.duration_ms + excluded.duration_ms,
+              first_used_at = MIN(harness_usage_models.first_used_at, excluded.first_used_at),
+              last_used_at = MAX(harness_usage_models.last_used_at, excluded.last_used_at)`,
+            threadId,
+            harnessId,
+            providerId,
+            modelId,
+            1,
+            cost,
+            tokens?.input ?? 0,
+            tokens?.output ?? 0,
+            tokens?.reasoning ?? 0,
+            tokens?.cacheRead ?? 0,
+            tokens?.cacheWrite ?? 0,
+            tokens?.total ?? 0,
+            duration,
+            createdAt,
+            completedAt
+          )
+        }
         this.markCounted(threadId, message.id)
       }
     })
@@ -210,6 +326,7 @@ export class HarnessUsageRepo {
         threadId
       )
       this.db.run('DELETE FROM harness_usage_messages WHERE thread_id = ?', threadId)
+      this.db.run('DELETE FROM harness_usage_models WHERE thread_id = ?', threadId)
       const messageRows = this.db.all<{
         id: string
         role: string
@@ -227,8 +344,11 @@ export class HarnessUsageRepo {
       )
       const byHarness = new Map<
         string,
-        Required<Omit<HarnessUsage, 'projectId' | 'threadId' | 'modelId'>> & { modelId?: string }
+        Required<Omit<HarnessUsage, 'projectId' | 'threadId' | 'modelId' | 'models'>> & {
+          modelId?: string
+        }
       >()
+      const byModel = new Map<string, HarnessModelUsage>()
       for (const row of messageRows) {
         const harnessId = row.harness_id
         if (!harnessId) continue
@@ -260,22 +380,63 @@ export class HarnessUsageRepo {
           }
           if (row.model_id) entry.modelId = row.model_id
           byHarness.set(key, entry)
-          continue
+        } else {
+          entry.messageCount += 1
+          entry.costUsd += cost
+          if (tokens) {
+            entry.tokens.input += tokens.input ?? 0
+            entry.tokens.output += tokens.output ?? 0
+            entry.tokens.reasoning += tokens.reasoning ?? 0
+            entry.tokens.cacheRead += tokens.cacheRead ?? 0
+            entry.tokens.cacheWrite += tokens.cacheWrite ?? 0
+            entry.tokens.total += tokens.total ?? 0
+          }
+          entry.durationMs += duration
+          if (createdAt < entry.firstUsedAt) entry.firstUsedAt = createdAt
+          if (completedAt > entry.lastUsedAt) entry.lastUsedAt = completedAt
+          if (row.model_id) entry.modelId = row.model_id
         }
-        entry.messageCount += 1
-        entry.costUsd += cost
-        if (tokens) {
-          entry.tokens.input += tokens.input ?? 0
-          entry.tokens.output += tokens.output ?? 0
-          entry.tokens.reasoning += tokens.reasoning ?? 0
-          entry.tokens.cacheRead += tokens.cacheRead ?? 0
-          entry.tokens.cacheWrite += tokens.cacheWrite ?? 0
-          entry.tokens.total += tokens.total ?? 0
+
+        const modelId = row.model_id
+        if (modelId) {
+          const modelKey = `${harnessId}\u0000${providerId}\u0000${modelId}`
+          const modelEntry = byModel.get(modelKey)
+          if (modelEntry) {
+            modelEntry.messageCount += 1
+            modelEntry.costUsd += cost
+            if (tokens) {
+              modelEntry.tokens.input += tokens.input ?? 0
+              modelEntry.tokens.output += tokens.output ?? 0
+              modelEntry.tokens.reasoning += tokens.reasoning ?? 0
+              modelEntry.tokens.cacheRead += tokens.cacheRead ?? 0
+              modelEntry.tokens.cacheWrite += tokens.cacheWrite ?? 0
+              modelEntry.tokens.total += tokens.total ?? 0
+            }
+            modelEntry.durationMs += duration
+            if (createdAt < modelEntry.firstUsedAt) modelEntry.firstUsedAt = createdAt
+            if (completedAt > modelEntry.lastUsedAt) modelEntry.lastUsedAt = completedAt
+          } else {
+            byModel.set(modelKey, {
+              threadId,
+              harnessId,
+              providerId,
+              modelId,
+              messageCount: 1,
+              costUsd: cost,
+              tokens: {
+                input: tokens?.input ?? 0,
+                output: tokens?.output ?? 0,
+                reasoning: tokens?.reasoning ?? 0,
+                cacheRead: tokens?.cacheRead ?? 0,
+                cacheWrite: tokens?.cacheWrite ?? 0,
+                total: tokens?.total ?? 0
+              },
+              durationMs: duration,
+              firstUsedAt: createdAt,
+              lastUsedAt: completedAt
+            })
+          }
         }
-        entry.durationMs += duration
-        if (createdAt < entry.firstUsedAt) entry.firstUsedAt = createdAt
-        if (completedAt > entry.lastUsedAt) entry.lastUsedAt = completedAt
-        if (row.model_id) entry.modelId = row.model_id
       }
       for (const entry of byHarness.values()) {
         this.db.run(
@@ -303,6 +464,31 @@ export class HarnessUsageRepo {
           entry.lastUsedAt
         )
       }
+      for (const model of byModel.values()) {
+        this.db.run(
+          `INSERT INTO harness_usage_models(
+            thread_id, harness_id, provider_id, model_id,
+            message_count, cost_usd,
+            tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
+            duration_ms, first_used_at, last_used_at
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          model.threadId,
+          model.harnessId,
+          model.providerId,
+          model.modelId,
+          model.messageCount,
+          model.costUsd,
+          model.tokens.input,
+          model.tokens.output,
+          model.tokens.reasoning,
+          model.tokens.cacheRead,
+          model.tokens.cacheWrite,
+          model.tokens.total,
+          model.durationMs,
+          model.firstUsedAt,
+          model.lastUsedAt
+        )
+      }
       for (const row of messageRows) {
         if (row.harness_id) this.markCounted(threadId, row.id)
       }
@@ -313,6 +499,7 @@ export class HarnessUsageRepo {
     this.db.transaction(() => {
       this.db.run('DELETE FROM harness_usage WHERE thread_id = ?', threadId)
       this.db.run('DELETE FROM harness_usage_messages WHERE thread_id = ?', threadId)
+      this.db.run('DELETE FROM harness_usage_models WHERE thread_id = ?', threadId)
     })
   }
 
