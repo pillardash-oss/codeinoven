@@ -167,7 +167,7 @@
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
           const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry ?? null
+          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
       search
@@ -529,44 +529,68 @@
             </p>
           {:else}
             {#if favoriteModelsList.length > 0}
-              {@render groupLabel(Star, 'Favorites', 'text-amber-400')}
-              {#each favoriteModelsList as entry (modelEntryKey(entry))}
-                {@render modelRow(entry)}
-              {/each}
+              {@render groupHeader(
+                Star,
+                'favorites',
+                'Favorites',
+                'text-amber-400',
+                favoriteModelsList.length
+              )}
+              {#if !collapsedGroups.has('favorites')}
+                {#each favoriteModelsList as entry (modelEntryKey(entry))}
+                  {@render modelRow(entry)}
+                {/each}
+              {/if}
               {@render divider()}
             {/if}
 
             {#if recentModelsList.length > 0}
-              {@render groupLabel(Clock, 'Recently used', 'text-muted')}
-              {#each recentModelsList as entry (modelEntryKey(entry))}
-                {@render modelRow(entry)}
-              {/each}
+              {@render groupHeader(
+                Clock,
+                'recent',
+                'Recently used',
+                'text-muted',
+                recentModelsList.length
+              )}
+              {#if !collapsedGroups.has('recent')}
+                {#each recentModelsList as entry (modelEntryKey(entry))}
+                  {@render modelRow(entry)}
+                {/each}
+              {/if}
               {@render divider()}
             {/if}
 
             {#if unavailableFavoriteModels.length > 0 && !search}
-              {@render groupLabel(Star, 'Unavailable favorites', 'text-dimmed')}
-              {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
-                <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-xs">{favorite.modelId}</span>
-                    {#if favorite.providerId}
-                      <span class="block truncate text-[10px]">{favorite.providerId}</span>
+              {@render groupHeader(
+                Star,
+                'unavailable-favorites',
+                'Unavailable favorites',
+                'text-dimmed',
+                unavailableFavoriteModels.length
+              )}
+              {#if !collapsedGroups.has('unavailable-favorites')}
+                {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
+                  <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-xs">{favorite.modelId}</span>
+                      {#if favorite.providerId}
+                        <span class="block truncate text-[10px]">{favorite.providerId}</span>
+                      {/if}
+                    </span>
+                    {#if onToggleFavorite}
+                      <button
+                        type="button"
+                        class="shrink-0 transition-colors hover:text-foreground"
+                        title="Remove unavailable favorite"
+                        aria-label={`Remove ${favorite.modelId} from favorites`}
+                        onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
+                      >
+                        <X size={11} />
+                      </button>
                     {/if}
-                  </span>
-                  {#if onToggleFavorite}
-                    <button
-                      type="button"
-                      class="shrink-0 transition-colors hover:text-foreground"
-                      title="Remove unavailable favorite"
-                      aria-label={`Remove ${favorite.modelId} from favorites`}
-                      onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
-                    >
-                      <X size={11} />
-                    </button>
-                  {/if}
-                </div>
-              {/each}
+                  </div>
+                {/each}
+              {/if}
               {@render divider()}
             {/if}
 
@@ -627,11 +651,29 @@
   {/if}
 {/snippet}
 
-{#snippet groupLabel(Icon: typeof Star, text: string, iconClass: string)}
-  <div class="flex items-center gap-1.5 px-2 pb-1 pt-1.5">
+{#snippet groupHeader(
+  Icon: typeof Star,
+  id: string,
+  text: string,
+  iconClass: string,
+  count: number
+)}
+  {@const collapsed = collapsedGroups.has(id)}
+  <button
+    type="button"
+    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    aria-expanded={!collapsed}
+    title={collapsed ? `Expand ${text}` : `Collapse ${text}`}
+    onclick={() => toggleGroup(id)}
+  >
+    <ChevronRight
+      size={11}
+      class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+    />
     <Icon size={10} class={iconClass} />
     <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">{text}</span>
-  </div>
+    <span class="ml-auto text-[9px] text-dimmed">{count}</span>
+  </button>
 {/snippet}
 
 {#snippet divider()}
