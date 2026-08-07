@@ -1,16 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
+  import { DropdownMenu } from 'bits-ui'
   import {
     Bell,
     BrainCircuit,
+    Check,
     ChevronDown,
     FileText,
     History,
     Loader2,
     MessageSquare,
+    MoreVertical,
     PanelLeft,
-    Search,
+    Power,
     X
   } from '@lucide/svelte'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
@@ -20,7 +23,6 @@
   import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import NotificationPanel from '$lib/components/notifications/NotificationPanel.svelte'
   import MemoryPanel from '$lib/components/memory/MemoryPanel.svelte'
-  import ScopeView from '$lib/components/scope/ScopeView.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
@@ -39,9 +41,18 @@
 
   let { onDisconnect = () => undefined }: Props = $props()
 
-  /** The sidebar's view mode: the dropdown heading switches between them. */
-  let sidebarMode = $state<'projects' | 'trades' | 'charts'>('projects')
+  type SidebarMode = 'projects' | 'threads' | 'chats'
+
+  const SIDEBAR_MODES: { id: SidebarMode; label: string }[] = [
+    { id: 'projects', label: 'Projects' },
+    { id: 'threads', label: 'Threads' },
+    { id: 'chats', label: 'Chats' }
+  ]
+
+  /** The sidebar's view mode — the dropdown heading switches between them. */
+  let sidebarMode = $state<SidebarMode>('projects')
   let sidebarOpen = $state(false)
+  let modeMenuOpen = $state(false)
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -50,13 +61,44 @@
   const projectIcons = new SvelteMap<string, string>()
   const expandedFolders = new SvelteSet<string>()
 
-  /** Overlays for the header icons — notifications and memory proposals. */
+  /** Sheets behind the header's overflow menu. */
   let notificationsOpen = $state(false)
   let memoryOpen = $state(false)
   let historyOpen = $state(false)
 
   let selectedThread = $derived(workspaceState.selectedThread)
   let selectedProject = $derived(workspaceState.activeProject)
+
+  let modeLabel = $derived(
+    SIDEBAR_MODES.find((entry) => entry.id === sidebarMode)?.label ?? 'Projects'
+  )
+
+  /** One dot on the overflow trigger so nothing important hides behind it. */
+  let hasOverflowAttention = $derived(
+    memoryProposalState.hasPending || notificationPanelState.totalCount > 0
+  )
+
+  // ─── Viewport height ───────────────────────────────────────────────────
+  // `100dvh` accounts for the browser chrome but not the on-screen keyboard,
+  // which would push the composer out of view. The visual viewport does.
+  let viewportHeight = $state<number | null>(null)
+
+  $effect(() => {
+    const viewport = window.visualViewport
+    if (!viewport) return
+    const sync = (): void => {
+      viewportHeight = viewport.height
+    }
+    sync()
+    viewport.addEventListener('resize', sync)
+    viewport.addEventListener('scroll', sync)
+    return () => {
+      viewport.removeEventListener('resize', sync)
+      viewport.removeEventListener('scroll', sync)
+    }
+  })
+
+  let shellHeight = $derived(viewportHeight === null ? '100dvh' : `${viewportHeight}px`)
 
   // ─── Data loading (mirrors the desktop Workspace shell) ────────────────
 
@@ -155,10 +197,38 @@
     return map
   })
 
-  let tradesThreads = $derived(
+  /** Threads mode: every project thread, flat. */
+  let flatThreads = $derived(
     allThreads
       .filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
       .sort((a, b) => threadSort(a, b, null))
+  )
+
+  /** Chats mode: the standalone inbox conversations, pinned first. */
+  let chatThreads = $derived(
+    allThreads
+      .filter((t) => !t.archived && t.projectId === INBOX_PROJECT_ID)
+      .sort((a, b) => {
+        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+        return threadSort(a, b, null)
+      })
+  )
+
+  /** The search popover follows whatever the sidebar is currently showing. */
+  let searchThreads = $derived(
+    sidebarMode === 'chats'
+      ? allThreads.filter((t) => t.projectId === INBOX_PROJECT_ID)
+      : sidebarMode === 'threads'
+        ? allThreads.filter((t) => t.projectId !== INBOX_PROJECT_ID)
+        : allThreads
+  )
+
+  let searchScope = $derived(
+    sidebarMode === 'chats'
+      ? { projectId: INBOX_PROJECT_ID }
+      : sidebarMode === 'threads'
+        ? { filter: (t: Thread) => t.projectId !== INBOX_PROJECT_ID && !t.archived }
+        : {}
   )
 
   // ─── Thread + folder actions (same as the desktop shell) ───────────────
@@ -226,96 +296,114 @@
   })
 </script>
 
-<div class="flex h-full flex-col overflow-hidden bg-app text-foreground">
-  <!-- Compact header: floating menu button · thread title · right icons -->
-  <header class="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-surface px-2">
-    <button
-      type="button"
-      class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label="Open the sidebar"
-      title="Open the sidebar"
-      onclick={() => (sidebarOpen = true)}
-    >
-      <PanelLeft size={18} />
-    </button>
-
-    <div class="min-w-0 flex-1 px-1 text-center">
-      <p class="truncate text-[13px] font-semibold tracking-tight">
-        {selectedThread?.title ?? 'CodeInOven'}
-      </p>
-      {#if selectedProject && selectedThread}
-        <p class="truncate text-[10px] text-dimmed">{selectedProject.name}</p>
-      {/if}
-    </div>
-
-    <div class="flex shrink-0 items-center gap-0.5">
-      <!-- History — jump to a past message. -->
+<div
+  class="mobile-shell flex w-full flex-col overflow-hidden bg-app text-foreground"
+  style="height: {shellHeight}"
+>
+  <!-- Header: menu · centred thread title · overflow menu. The side slots are
+       the same width so the title sits on the true centre line. -->
+  <div class="shrink-0 border-b border-border bg-surface pt-[env(safe-area-inset-top)]">
+    <header class="grid h-14 grid-cols-[2.75rem_1fr_2.75rem] items-center gap-1 px-2">
       <button
         type="button"
-        class="relative flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Message history"
-        title="Message history"
-        disabled={workspaceState.messageCount === 0}
-        onclick={() => (historyOpen = !historyOpen)}
+        class="flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+        aria-label="Open the sidebar"
+        title="Open the sidebar"
+        onclick={() => (sidebarOpen = true)}
       >
-        <History size={16} />
+        <PanelLeft size={19} />
       </button>
 
-      <!-- Memory proposals. -->
-      <button
-        type="button"
-        class="relative flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Open memory"
-        title="Open memory"
-        onclick={() => (memoryOpen = !memoryOpen)}
-      >
-        <BrainCircuit size={16} />
-        {#if memoryProposalState.hasPending}
-          <span class="absolute top-0.5 right-0.5 flex items-start">
-            <StatusBadge kind="attention" title="Memory proposals needing attention" />
-          </span>
+      <div class="min-w-0 px-1 text-center">
+        <p class="truncate text-[14px] font-semibold tracking-tight">
+          {selectedThread?.title ?? 'CodeInOven'}
+        </p>
+        {#if selectedProject && selectedThread && selectedProject.id !== INBOX_PROJECT_ID}
+          <p class="truncate text-[11px] text-dimmed">{selectedProject.name}</p>
         {/if}
-      </button>
+      </div>
 
-      <!-- Spec studio. -->
-      {#if selectedThread && workspaceState.specStudioAvailable}
-        <button
-          type="button"
-          class="flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={workspaceState.specStudioOpen ? 'Close spec studio' : 'Open spec studio'}
-          title={workspaceState.specStudioOpen ? 'Close spec studio' : 'Open spec studio'}
-          onclick={() => workspaceState.toggleSpecStudio?.()}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="relative flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+          aria-label="More options"
+          title="More options"
         >
-          <FileText size={16} />
-        </button>
-      {/if}
+          <MoreVertical size={19} />
+          {#if hasOverflowAttention}
+            <span class="absolute top-1.5 right-1.5 flex items-start">
+              <StatusBadge kind="attention" title="Items need your attention" />
+            </span>
+          {/if}
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="end"
+            sideOffset={6}
+            collisionPadding={8}
+            class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
+          >
+            <DropdownMenu.Item
+              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground data-[disabled]:opacity-40"
+              disabled={workspaceState.messageCount === 0}
+              onSelect={() => (historyOpen = true)}
+            >
+              <History size={16} />
+              <span class="flex-1 text-left">Message history</span>
+            </DropdownMenu.Item>
 
-      <!-- Notifications. -->
-      <button
-        type="button"
-        class="relative flex h-9 w-9 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label={`Open notifications (${notificationPanelState.totalCount})`}
-        title="Open notifications"
-        onclick={() => (notificationsOpen = !notificationsOpen)}
-      >
-        <Bell size={16} />
-        {#if notificationPanelState.totalCount > 0}
-          <span class="absolute top-0.5 right-0.5 flex items-start gap-px">
-            {#if notificationPanelState.hasCompleted}
-              <StatusBadge kind="completed" title="Completed notifications" />
-            {/if}
-            {#if notificationPanelState.hasAttention}
-              <StatusBadge kind="attention" title="Notifications needing attention" />
-            {/if}
-          </span>
-        {/if}
-      </button>
-    </div>
-  </header>
+            <DropdownMenu.Item
+              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+              onSelect={() => (memoryOpen = true)}
+            >
+              <BrainCircuit size={16} />
+              <span class="flex-1 text-left">Memory</span>
+              {#if memoryProposalState.hasPending}
+                <StatusBadge kind="attention" title="Memory proposals needing attention" />
+              {/if}
+            </DropdownMenu.Item>
 
-  <!-- Conversation — the desktop ThreadView, reused as-is (it embeds the
-       ChatComposer at the bottom). -->
-  <main class="min-h-0 flex-1">
+            {#if selectedThread && workspaceState.specStudioAvailable}
+              <DropdownMenu.Item
+                class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => workspaceState.toggleSpecStudio?.()}
+              >
+                <FileText size={16} />
+                <span class="flex-1 text-left">Specification</span>
+                {#if workspaceState.specStudioOpen}
+                  <Check size={15} class="text-primary" />
+                {/if}
+              </DropdownMenu.Item>
+            {/if}
+
+            <DropdownMenu.Item
+              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+              onSelect={() => (notificationsOpen = true)}
+            >
+              <Bell size={16} />
+              <span class="flex-1 text-left">Notifications</span>
+              {#if notificationPanelState.totalCount > 0}
+                <span class="flex items-start gap-px">
+                  {#if notificationPanelState.hasCompleted}
+                    <StatusBadge kind="completed" title="Completed notifications" />
+                  {/if}
+                  {#if notificationPanelState.hasAttention}
+                    <StatusBadge kind="attention" title="Notifications needing attention" />
+                  {/if}
+                </span>
+              {/if}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </header>
+  </div>
+
+  <!-- Conversation — the desktop ThreadView, reused as-is. It scrolls its own
+       message list and keeps the ChatComposer pinned, which only works when
+       the parent is a bounded flex column. -->
+  <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {#if selectedThread}
       {#key selectedThread.id}
         <ThreadView
@@ -325,55 +413,55 @@
       {/key}
     {:else}
       <div class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-surface">
-          <MessageSquare size={22} class="text-primary" />
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface">
+          <MessageSquare size={24} class="text-primary" />
         </div>
-        <p class="text-sm font-medium">Select a thread</p>
-        <p class="max-w-60 text-xs leading-relaxed text-dimmed">
+        <p class="text-[15px] font-medium">Select a thread</p>
+        <p class="max-w-64 text-[13px] leading-relaxed text-dimmed">
           Open the sidebar to browse your projects and conversations.
         </p>
         <button
           type="button"
-          class="mt-1 flex h-9 items-center gap-1.5 rounded-xl bg-primary px-4 text-[13px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+          class="mt-1 flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
           onclick={() => (sidebarOpen = true)}
         >
-          <PanelLeft size={14} />
+          <PanelLeft size={15} />
           Open sidebar
         </button>
       </div>
     {/if}
   </main>
 
-  <!-- History jump menu. -->
+  <!-- History jump sheet. -->
   {#if historyOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/40"
+      class="fixed inset-0 z-40 bg-black/50"
       role="presentation"
       onclick={() => (historyOpen = false)}
     ></div>
     <aside
-      class="fixed right-0 bottom-0 left-0 z-50 max-h-[70vh] overflow-hidden rounded-t-2xl border-t border-border bg-surface shadow-2xl"
+      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[72dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
       aria-label="Jump to message"
     >
-      <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
           Your messages
         </p>
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
           aria-label="Close history"
           title="Close history"
           onclick={() => (historyOpen = false)}
         >
-          <X size={15} />
+          <X size={16} />
         </button>
       </div>
-      <div class="max-h-[calc(70vh-2.75rem)] overflow-y-auto p-1.5">
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
         {#each workspaceState.userMessages as message, index (message.id)}
           <button
             type="button"
-            class="block w-full truncate rounded-lg px-3 py-2.5 text-left text-[13px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="block w-full truncate rounded-lg px-3 py-3 text-left text-[14px] text-muted transition-colors active:bg-elevated"
             title={message.content}
             onclick={() => historyJump(message.id)}
           >
@@ -381,7 +469,7 @@
             {message.content}
           </button>
         {:else}
-          <p class="px-3 py-6 text-center text-xs text-dimmed">No messages yet</p>
+          <p class="px-3 py-8 text-center text-[13px] text-dimmed">No messages yet</p>
         {/each}
       </div>
     </aside>
@@ -390,29 +478,29 @@
   <!-- Notifications sheet. -->
   {#if notificationsOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/40"
+      class="fixed inset-0 z-40 bg-black/50"
       role="presentation"
       onclick={() => (notificationsOpen = false)}
     ></div>
     <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface shadow-2xl"
+      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[82dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
       aria-label="Notifications"
     >
-      <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
           Notifications
         </p>
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
           aria-label="Close notifications"
           title="Close notifications"
           onclick={() => (notificationsOpen = false)}
         >
-          <X size={15} />
+          <X size={16} />
         </button>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <NotificationPanel />
       </div>
     </aside>
@@ -421,27 +509,27 @@
   <!-- Memory sheet. -->
   {#if memoryOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/40"
+      class="fixed inset-0 z-40 bg-black/50"
       role="presentation"
       onclick={() => (memoryOpen = false)}
     ></div>
     <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[80vh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface shadow-2xl"
+      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[82dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
       aria-label="Memory"
     >
-      <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-4">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
         <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">Memory</p>
         <button
           type="button"
-          class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
           aria-label="Close memory"
           title="Close memory"
           onclick={() => (memoryOpen = false)}
         >
-          <X size={15} />
+          <X size={16} />
         </button>
       </div>
-      <div class="min-h-0 flex-1 overflow-y-auto p-3">
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
         <MemoryPanel
           variant="sidebar"
           projectId={selectedThread?.projectId ?? selectedProject?.id}
@@ -454,62 +542,81 @@
   <!-- Sidebar drawer. -->
   {#if sidebarOpen}
     <div
-      class="fixed inset-0 z-50 bg-black/40"
+      class="fixed inset-0 z-50 bg-black/50"
       role="presentation"
       onclick={() => (sidebarOpen = false)}
     ></div>
     <aside
-      class="fixed top-0 bottom-0 left-0 z-50 flex w-[86vw] max-w-80 flex-col border-r border-border bg-surface shadow-2xl"
+      class="fixed top-0 bottom-0 left-0 z-50 flex w-[86vw] max-w-88 flex-col border-r border-border bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
       aria-label="Sidebar"
     >
-      <!-- Sidebar header: mode dropdown + close. -->
-      <div class="flex h-12 shrink-0 items-center gap-1 border-b border-border px-2">
-        <div class="relative min-w-0 flex-1">
-          <select
-            class="w-full appearance-none rounded-xl border border-border bg-elevated px-3 py-2 pr-8 text-[13px] font-medium outline-none focus:border-primary"
-            bind:value={sidebarMode}
-            aria-label="Switch sidebar view"
+      <!-- One header row: the mode heading doubles as the switcher, and search
+           lives beside it as an icon that opens its own dropdown. -->
+      <div class="flex h-14 shrink-0 items-center gap-0.5 border-b border-border px-2">
+        <DropdownMenu.Root bind:open={modeMenuOpen}>
+          <DropdownMenu.Trigger
+            class="flex h-11 min-w-0 flex-1 items-center gap-1.5 rounded-xl px-2.5 text-left transition-colors active:bg-elevated"
+            aria-label="Switch sidebar view — currently {modeLabel}"
+            title="Switch sidebar view"
           >
-            <option value="projects">Projects</option>
-            <option value="trades">Trades</option>
-            <option value="charts">Charts</option>
-          </select>
-          <ChevronDown
-            size={14}
-            class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-dimmed"
+            <span class="truncate text-[15px] font-semibold tracking-tight">{modeLabel}</span>
+            <ChevronDown
+              size={15}
+              class="shrink-0 text-dimmed transition-transform {modeMenuOpen ? 'rotate-180' : ''}"
+            />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-48 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#each SIDEBAR_MODES as entry (entry.id)}
+                <DropdownMenu.Item
+                  class="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-[14px] outline-none transition-colors hover:bg-elevated focus:bg-elevated {sidebarMode ===
+                  entry.id
+                    ? 'text-foreground'
+                    : 'text-muted'}"
+                  onSelect={() => (sidebarMode = entry.id)}
+                >
+                  <span class="flex-1 text-left">{entry.label}</span>
+                  {#if sidebarMode === entry.id}
+                    <Check size={15} class="text-primary" />
+                  {/if}
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+
+        <div class="flex shrink-0 items-center justify-center">
+          <ThreadSearchControl
+            threads={searchThreads}
+            contextLabel={sidebarMode === 'chats' ? 'chats' : 'threads'}
+            title="Search {sidebarMode === 'chats' ? 'chats' : 'threads'}"
+            onOpen={openThread}
+            fts={searchScope}
           />
         </div>
+
         <button
           type="button"
-          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
           aria-label="Close the sidebar"
           title="Close the sidebar"
           onclick={() => (sidebarOpen = false)}
         >
-          <X size={16} />
+          <X size={18} />
         </button>
       </div>
 
-      <!-- Search — the same ThreadSearchControl the desktop sidebar uses. -->
-      <div class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-2">
-        <ThreadSearchControl
-          threads={allThreads.filter((t) => t.projectId !== INBOX_PROJECT_ID)}
-          contextLabel="threads"
-          title="Search threads"
-          onOpen={openThread}
-          fts={{ filter: (t) => t.projectId !== INBOX_PROJECT_ID && !t.archived }}
-        />
-        <span class="flex h-7 items-center gap-1 text-[11px] text-dimmed">
-          <Search size={13} />
-          Search
-        </span>
-      </div>
-
       <!-- Sidebar content — scrollable. -->
-      <div class="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
         {#if loading}
-          <div class="flex items-center gap-2 px-3 py-4 text-[13px] text-muted">
-            <Loader2 size={14} class="animate-spin" />
+          <div class="flex items-center gap-2 px-3 py-4 text-[14px] text-muted">
+            <Loader2 size={15} class="animate-spin" />
             Loading…
           </div>
         {:else if sidebarMode === 'projects'}
@@ -552,19 +659,19 @@
                     onFork={forkThread}
                   />
                 {:else}
-                  <p class="px-2 py-1.5 text-[11px] text-dimmed">No threads yet</p>
+                  <p class="px-2 py-1.5 text-[12px] text-dimmed">No threads yet</p>
                 {/each}
               </div>
             {/if}
           {:else}
-            <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-              <p class="text-xs text-muted">No projects yet</p>
-              <p class="text-xs text-dimmed">Add a project on the desktop to get started</p>
+            <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
+              <p class="text-[13px] text-muted">No projects yet</p>
+              <p class="text-[13px] text-dimmed">Add a project on the desktop to get started</p>
             </div>
           {/each}
-        {:else if sidebarMode === 'trades'}
+        {:else if sidebarMode === 'threads'}
           <div class="space-y-px" role="list">
-            {#each tradesThreads as thread (thread.id)}
+            {#each flatThreads as thread (thread.id)}
               <ThreadRow
                 {thread}
                 projectIconUrl={projectIcons.has(thread.projectId)
@@ -581,12 +688,30 @@
                 onFork={forkThread}
               />
             {:else}
-              <p class="px-2 py-10 text-center text-xs text-dimmed">No threads yet</p>
+              <p class="px-2 py-12 text-center text-[13px] text-dimmed">No threads yet</p>
             {/each}
           </div>
         {:else}
-          <!-- Charts — the desktop ScopeView board, reused as-is. -->
-          <ScopeView navigateToProjects={() => (sidebarMode = 'projects')} />
+          <!-- Chats — the standalone inbox conversations. -->
+          <div class="space-y-px" role="list">
+            {#each chatThreads as thread (thread.id)}
+              <ThreadRow
+                {thread}
+                selected={selectedThread?.id === thread.id}
+                onOpen={openThread}
+                onRename={handleRename}
+                onTogglePin={togglePin}
+                onDelete={handleDelete}
+                onFork={forkThread}
+              />
+            {:else}
+              <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
+                <MessageSquare size={20} class="text-dimmed" />
+                <p class="text-[13px] text-muted">No chats yet</p>
+                <p class="text-[13px] text-dimmed">Start a chat on the desktop to see it here</p>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
 
@@ -594,14 +719,32 @@
       <div class="shrink-0 border-t border-border p-2">
         <button
           type="button"
-          class="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+          class="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-elevated text-[14px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
           title="Disconnect from the desktop"
           onclick={() => onDisconnect()}
         >
-          <X size={14} />
+          <Power size={15} />
           Disconnect
         </button>
       </div>
     </aside>
   {/if}
 </div>
+
+<style>
+  /* The reused desktop conversation is laid out for a wide window. On a phone
+     the gutters waste most of the line, so tighten them here rather than
+     branching the shared components. */
+  .mobile-shell :global(.conversation-gutter) {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .mobile-shell :global(.composer-gutter) {
+    padding-bottom: calc(0.5rem + env(safe-area-inset-bottom));
+  }
+
+  .mobile-shell :global(.conversation-gutter[class*='overflow-y-auto']) {
+    overscroll-behavior: contain;
+  }
+</style>
