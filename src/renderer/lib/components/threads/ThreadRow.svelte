@@ -14,9 +14,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
-  import { projectIdentityTitle, remoteOriginLabel } from '$lib/project-location'
   import { longPress } from '$lib/long-press.svelte'
-  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -348,14 +346,6 @@
    *  the default scope collapses to a one-line row with the time on the top. */
   let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1)
 
-  /** Project (repo) that owns this thread, resolved for the hover popover. */
-  let project = $derived(
-    scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-  )
-
-  /** Git remote origin URL for the thread's project, resolved lazily on hover. */
-  let remoteOriginUrl = $derived(projectRemotes.get(thread.projectId) ?? null)
-
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
   )
@@ -466,7 +456,6 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
-    if (project) void projectRemotes.ensure(thread.projectId, project.path)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -805,19 +794,6 @@
       >
         <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
         <dl class="space-y-1.5 text-[11px]">
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
-            <dd
-              class="truncate text-muted"
-              title={remoteOriginUrl ?? (project ? projectIdentityTitle(project) : undefined)}
-            >
-              {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : (project?.name ?? '—')}
-            </dd>
-          </div>
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Branch</dt>
-            <dd class="truncate text-muted">{thread.branch ?? '—'}</dd>
-          </div>
           {#if scopeBucket}
             <div class="flex gap-2">
               <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
