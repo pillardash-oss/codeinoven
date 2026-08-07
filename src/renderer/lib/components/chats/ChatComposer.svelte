@@ -69,6 +69,7 @@
     PromptProjectReference,
     ComposerProject,
     AgentContextUsage,
+    AgentHarnessUsage,
     PromptReference,
     AssignmentTask
   } from '$shared/types'
@@ -161,6 +162,8 @@
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    /** Per-harness quota telemetry when a thread used more than one harness. */
+    harnessUsage?: AgentHarnessUsage[]
     /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
     onRevealUsage?: () => void
     /** Whether this harness can explicitly compact conversation context. */
@@ -214,6 +217,7 @@
     recentModels = [],
     onModelUsed,
     contextUsage,
+    harnessUsage = [],
     onRevealUsage,
     canCompact = false,
     compacting = false,
@@ -1854,6 +1858,7 @@
     {#if contextUsage || canCompact}
       <ContextUsageIndicator
         usage={contextUsage}
+        {harnessUsage}
         {canCompact}
         {compacting}
         {onCompact}
