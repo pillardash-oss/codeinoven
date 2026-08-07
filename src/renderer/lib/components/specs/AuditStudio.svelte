@@ -1,14 +1,5 @@
 <script lang="ts">
-  import {
-    Check,
-    MessageSquare,
-    MessageSquarePlus,
-    PanelLeft,
-    Pencil,
-    Plus,
-    Save,
-    X
-  } from '@lucide/svelte'
+  import { Check, MessageSquare, MessageSquarePlus, Pencil, Plus, Save, X } from '@lucide/svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import type {
     AuditAnnotation,
@@ -116,10 +107,6 @@
     { id: 'resolution_recommendation', label: 'Resolution' },
     { id: 'conclusion', label: 'Conclusion' }
   ]
-
-  const selectedSectionLabel = $derived(
-    auditSections.find((section) => section.id === selectedSection)?.label ?? 'Sections'
-  )
 
   const auditMarkdownHeadings: Record<AuditSectionId, string> = {
     executive_summary: 'Executive Summary',
@@ -611,21 +598,13 @@
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="audit sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
           {onOpenSpec}
           {onOpenAssignment}
         />
-        <!-- The section rail is a drawer on a phone; this is its handle. -->
-        <button
-          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
-          aria-label="Open the section list"
-          title="Open the section list"
-          aria-expanded={sectionsOpen}
-          onclick={() => (sectionsOpen = true)}
-        >
-          <PanelLeft size={13} class="shrink-0" />
-          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
-        </button>
       </div>
       <div class="flex items-center gap-2 max-md:flex-wrap">
         <label class="sr-only" for="audit-version">Audit report version</label>
