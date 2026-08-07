@@ -24,6 +24,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import type {
     PrAgentReport,
     PrMergeMethod,
@@ -76,6 +77,15 @@
   const reviewing = $derived(gitState.isBusy('pr-review'))
   const merging = $derived(gitState.isBusy('pr-merge'))
   const open = $derived((detail?.state ?? summary.state) === 'open')
+  const hasBody = $derived(commentBody.trim().length > 0)
+  /** Why merging may not be a good idea right now — shown next to the button. */
+  const mergeBlocker = $derived.by(() => {
+    if (!open) return ''
+    if (detail?.mergeable === false) return 'conflicts with the base branch'
+    if (checks?.state === 'failure') return 'checks are failing'
+    if (checks?.state === 'pending') return 'checks are still running'
+    return ''
+  })
 
   /**
    * Conversation as one chronological stream: the PR description, issue
@@ -411,65 +421,6 @@
     {/if}
   </div>
 
-  <!-- Actions -->
-  <div class="flex shrink-0 flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Review this pull request with an agent"
-      onclick={() => onAgentReview(summary)}
-    >
-      <Bot size={11} />
-      Agent review
-    </button>
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
-      title="Approve this pull request"
-      disabled={!open || reviewing}
-      onclick={() => void submitReview('APPROVE')}
-    >
-      <ThumbsUp size={11} />
-      Approve
-    </button>
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
-      title="Request changes on this pull request"
-      disabled={!open || reviewing}
-      onclick={() => void submitReview('REQUEST_CHANGES')}
-    >
-      <TriangleAlert size={11} />
-      Request changes
-    </button>
-    <span class="flex-1"></span>
-    <select
-      class="h-6 cursor-pointer rounded-md border border-border bg-elevated px-1 text-[10px] text-foreground outline-none"
-      title="Merge method"
-      aria-label="Merge method"
-      bind:value={method}
-      disabled={!open}
-    >
-      {#each mergeMethods as option (option.id)}
-        <option value={option.id}>{option.label}</option>
-      {/each}
-    </select>
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-      title="Merge this pull request"
-      disabled={!open || merging}
-      onclick={() => (mergeConfirm = true)}
-    >
-      {#if merging}
-        <Loader2 size={11} class="animate-spin" />
-      {:else}
-        <Merge size={11} />
-      {/if}
-      Merge
-    </button>
-  </div>
-
   {#if notice}
     <p
       class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1 text-[10px] text-success"
@@ -693,37 +644,117 @@
     {/if}
   </div>
 
-  <!-- Comment composer -->
-  <div class="shrink-0 border-t border-border px-3 py-2">
-    <textarea
-      class="min-h-[52px] w-full resize-y rounded-lg border border-border bg-elevated px-2 py-1.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-      placeholder="Leave a comment or review note…"
-      bind:value={commentBody}></textarea>
-    <div class="mt-1.5 flex items-center gap-1">
-      <button
-        type="button"
-        class="flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
-        title="Submit as a review comment"
-        disabled={!open || reviewing || !commentBody.trim()}
-        onclick={() => void submitReview('COMMENT')}
+  <!--
+    Everything that consumes what you write lives here, under the editor.
+    Approve and Request changes used to sit in a bar at the top of the panel,
+    far from the text they submit — which is why requesting changes with an
+    empty box only failed once GitHub rejected it.
+  -->
+  <div class="shrink-0 border-t border-border">
+    <div class="px-3 pt-2">
+      <div
+        class="rounded-lg border border-border bg-elevated focus-within:border-primary"
+        role="presentation"
       >
-        <MessageSquare size={11} />
-        Review comment
-      </button>
-      <span class="flex-1"></span>
+        <RichMarkdownEditor
+          bind:value={commentBody}
+          placeholder="Leave a comment, or write the feedback for a review…"
+          ariaLabel="Pull request comment"
+          class="max-h-40 min-h-[52px] w-full overflow-y-auto px-2 py-1.5 text-[11px] leading-relaxed text-foreground outline-none"
+        />
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-1 px-3 py-2">
       <button
         type="button"
-        class="flex h-6 cursor-pointer items-center gap-1 rounded-md bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-        title="Post comment"
-        disabled={posting || !commentBody.trim()}
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+        title={hasBody ? 'Post this as a comment' : 'Write something first'}
+        disabled={posting || !hasBody}
         onclick={() => void postComment()}
       >
         {#if posting}
           <Loader2 size={11} class="animate-spin" />
         {:else}
-          <Send size={11} />
+          <MessageSquare size={11} />
         {/if}
         Comment
+      </button>
+      <span class="flex-1"></span>
+      <span class="text-[9px] uppercase tracking-wide text-dimmed">Review</span>
+      <button
+        type="button"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+        title={open
+          ? 'Approve this pull request (a comment is optional)'
+          : 'This pull request is no longer open'}
+        disabled={!open || reviewing}
+        onclick={() => void submitReview('APPROVE')}
+      >
+        <ThumbsUp size={11} />
+        Approve
+      </button>
+      <button
+        type="button"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+        title={!open
+          ? 'This pull request is no longer open'
+          : hasBody
+            ? 'Request changes on this pull request'
+            : 'Write what needs to change first — GitHub requires a comment'}
+        disabled={!open || reviewing || !hasBody}
+        onclick={() => void submitReview('REQUEST_CHANGES')}
+      >
+        <TriangleAlert size={11} />
+        Request changes
+      </button>
+    </div>
+
+    {#if open && !hasBody}
+      <p class="px-3 pb-2 text-[9px] leading-relaxed text-dimmed">
+        Requesting changes needs a comment saying what to change. Approving does not.
+      </p>
+    {/if}
+
+    <!-- Merging is a separate decision from reviewing, so it gets its own row. -->
+    <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
+      <label class="text-[9px] uppercase tracking-wide text-dimmed" for="pr-merge-method">
+        Merge
+      </label>
+      <select
+        id="pr-merge-method"
+        class="h-7 cursor-pointer rounded-md border border-border bg-elevated px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
+        title="How the commits are combined when merging"
+        aria-label="Merge method"
+        bind:value={method}
+        disabled={!open}
+      >
+        {#each mergeMethods as option (option.id)}
+          <option value={option.id}>{option.label}</option>
+        {/each}
+      </select>
+      {#if mergeBlocker}
+        <span class="flex min-w-0 items-center gap-1 text-[9px] text-warning">
+          <TriangleAlert size={10} class="shrink-0" />
+          <span class="truncate">{mergeBlocker}</span>
+        </span>
+      {/if}
+      <span class="flex-1"></span>
+      <button
+        type="button"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+        title={open
+          ? `Merge this pull request into ${summary.baseRef}`
+          : 'This pull request is no longer open'}
+        disabled={!open || merging}
+        onclick={() => (mergeConfirm = true)}
+      >
+        {#if merging}
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <Merge size={11} />
+        {/if}
+        Merge into {summary.baseRef}
       </button>
     </div>
   </div>
