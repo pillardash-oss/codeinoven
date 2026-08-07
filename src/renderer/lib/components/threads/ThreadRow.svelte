@@ -623,6 +623,12 @@
     }}
     oncontextmenu={openContextMenu}
   >
+    <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
+    <span
+      class="pointer-events-none absolute inset-x-0 bottom-0 h-px"
+      aria-hidden="true"
+      style="background: linear-gradient(to right, transparent, var(--color-border-strong), transparent);"
+    ></span>
     <span class="flex w-full min-w-0 items-center gap-2">
       <!-- Project icon -->
       {#if projectIconUrl}
