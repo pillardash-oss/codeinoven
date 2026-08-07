@@ -9,12 +9,16 @@
     Loader2,
     MessageSquare,
     RotateCcw,
-    X
+    X,
+    Zap
   } from '@lucide/svelte'
   import ChatComposer from './ChatComposer.svelte'
   import ImagePreview from './ImagePreview.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -32,6 +36,7 @@
     AgentPart,
     PromptAttachment,
     PromptReference,
+    ProviderCatalog,
     ThreadSettings
   } from '$shared/types'
 
@@ -126,6 +131,63 @@
     } finally {
       convertingMessageId = null
     }
+  }
+
+  // ─── Turn attribution (harness / model / time) ─────────────────────────
+
+  let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /** Provider catalog entry for the message, falling back to the chat's model. */
+  function messageProvider(message: AgentMessage): ProviderCatalog | undefined {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return undefined
+    return providers.find((p) => p.models.some((m) => m.id === modelId))
+  }
+
+  /** Human model name for the message, falling back to the chat's model. */
+  function messageModelLabel(message: AgentMessage): string | null {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) => m.id === modelId && (!message.providerId || m.providerId === message.providerId)
+      ) ?? allModels.find((m) => m.id === modelId)
+    if (model) return model.name
+    return fastVariantForModelId(modelId)?.label ?? modelId
+  }
+
+  /** Harness that produced the message — falls back to the chat's harness. */
+  function messageHarnessId(message: AgentMessage): string {
+    return message.harnessId ?? tab.settings.harnessId ?? 'opencode'
+  }
+
+  function messageHarnessName(message: AgentMessage): string {
+    return getAgentIcon(messageHarnessId(message))?.name ?? messageHarnessId(message)
+  }
+
+  function formatTime(ts: number): string {
+    if (!ts) return ''
+    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function formatDuration(ms: number): string {
+    if (ms < 1000) return '<1s'
+    const total = Math.round(ms / 1000)
+    if (total < 60) return `${total}s`
+    const m = Math.floor(total / 60)
+    const s = total % 60
+    return s > 0 ? `${m}m ${s}s` : `${m}m`
+  }
+
+  /** Duration from the preceding user prompt to this assistant message's completion. */
+  function turnDuration(messageIndex: number): number | null {
+    const assistant = tab.messages[messageIndex]
+    if (assistant?.role !== 'assistant' || !assistant.completedAt) return null
+    let start = messageIndex - 1
+    while (start >= 0 && tab.messages[start]?.role === 'assistant') start--
+    const userMsg = tab.messages[start]
+    if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
+    return assistant.completedAt - userMsg.createdAt
   }
 
   /** When the agent started working on the turn an assistant message belongs to. */
@@ -533,7 +595,7 @@
             </div>
           {:else if textFor(message)}
             {@const traceParts = workingParts(message)}
-            <div class="flex min-w-0 flex-col gap-2.5 text-sm text-foreground">
+            <div class="group flex min-w-0 flex-col gap-2.5 text-sm text-foreground">
               {#if traceParts.length > 0}
                 <WorkingTrace
                   parts={traceParts}
@@ -547,52 +609,27 @@
                   {harnessName}
                 />
               {/if}
-              {#if textFor(message)}
-                <MarkdownView text={textFor(message)} />
+              <MarkdownView text={textFor(message)} />
+              {#if tab.mode !== 'audit' && turnFinished(message)}
+                {@render turnFooter(message, messageIndex)}
               {/if}
             </div>
           {:else if workingParts(message).length > 0}
-            <WorkingTrace
-              parts={workingParts(message)}
-              open={tab.busy}
-              busy={tab.busy}
-              latest={tab.busy}
-              startTime={turnStartTime(messageIndex)}
-              {modelLabel}
-              {providerName}
-              harnessId={tab.settings.harnessId}
-              {harnessName}
-            />
-          {/if}
-          {#if message.role === 'assistant' && tab.mode !== 'audit' && turnFinished(message)}
-            <div class="flex items-center gap-1.5">
-              <div class="flex items-center gap-0.5">
-                <button
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-label="Copy message"
-                  title="Copy"
-                  onclick={() => copyMessage(message)}
-                >
-                  {#if copiedMessageId === message.id}
-                    <Check size={12} class="text-success" />
-                  {:else}
-                    <Copy size={12} />
-                  {/if}
-                </button>
-                <button
-                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label="Continue in a new thread"
-                  title="Continue in a new thread"
-                  disabled={convertingMessageId !== null}
-                  onclick={() => continueInThread(message)}
-                >
-                  {#if convertingMessageId === message.id}
-                    <Loader2 size={12} class="animate-spin" />
-                  {:else}
-                    <GitFork size={12} />
-                  {/if}
-                </button>
-              </div>
+            <div class="group flex min-w-0 flex-col gap-2.5">
+              <WorkingTrace
+                parts={workingParts(message)}
+                open={tab.busy}
+                busy={tab.busy}
+                latest={tab.busy}
+                startTime={turnStartTime(messageIndex)}
+                {modelLabel}
+                {providerName}
+                harnessId={tab.settings.harnessId}
+                {harnessName}
+              />
+              {#if tab.mode !== 'audit' && turnFinished(message)}
+                {@render turnFooter(message, messageIndex)}
+              {/if}
             </div>
           {/if}
         {/each}
@@ -677,3 +714,72 @@
     {/if}
   {/if}
 </div>
+
+{#snippet turnFooter(message: AgentMessage, messageIndex: number)}
+  {@const msgModelLabel = messageModelLabel(message)}
+  {@const msgFastVariant = fastVariantForModelId(message.modelId ?? tab.settings.modelId)}
+  {@const msgDuration = turnDuration(messageIndex)}
+  <div class="flex items-center gap-1.5">
+    <div class="flex items-center gap-0.5">
+      <button
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Copy message"
+        title="Copy"
+        onclick={() => copyMessage(message)}
+      >
+        {#if copiedMessageId === message.id}
+          <Check size={12} class="text-success" />
+        {:else}
+          <Copy size={12} />
+        {/if}
+      </button>
+      <button
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="Continue in a new thread"
+        title="Continue in a new thread"
+        disabled={convertingMessageId !== null}
+        onclick={() => continueInThread(message)}
+      >
+        {#if convertingMessageId === message.id}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <GitFork size={12} />
+        {/if}
+      </button>
+    </div>
+    <div
+      class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+    >
+      <span class="flex items-center gap-1 text-[10px] text-dimmed">
+        <AgentIcon agentId={messageHarnessId(message)} size={14} />
+        {messageHarnessName(message)}
+      </span>
+      {#if msgModelLabel}
+        <span class="text-[10px] text-dimmed">·</span>
+        <span class="flex items-center gap-1 text-[10px] text-dimmed">
+          <VendorIcon name={messageProvider(message)?.name ?? msgModelLabel} size={12} />
+          {msgModelLabel}
+          {#if msgFastVariant}
+            <Zap
+              size={10}
+              class="text-accent"
+              fill="currentColor"
+              aria-label="Fast inference"
+              title={`Fast inference — ~${msgFastVariant.multiplier}× usage`}
+            />
+          {/if}
+        </span>
+      {/if}
+      <span class="text-[10px] text-dimmed"
+        >· {formatTime(message.completedAt ?? message.createdAt)}</span
+      >
+      {#if msgDuration !== null}
+        <span class="text-[10px] text-dimmed tabular-nums">· {formatDuration(msgDuration)}</span>
+      {:else if message.completedAt && message.createdAt}
+        <span class="text-[10px] text-dimmed tabular-nums"
+          >· {formatDuration(message.completedAt - message.createdAt)}</span
+        >
+      {/if}
+    </div>
+  </div>
+{/snippet}
