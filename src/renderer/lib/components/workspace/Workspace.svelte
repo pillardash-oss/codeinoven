@@ -65,7 +65,10 @@
   } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import {
+    contextSidebarState,
+    type TemporaryChatContextTab
+  } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
@@ -1432,6 +1435,26 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /**
+   * Promote a side chat (quick chat) into a regular thread: the conversation
+   * is persisted as a new thread and opened so the user can keep prompting.
+   */
+  async function handleContinueInThread(tab: TemporaryChatContextTab): Promise<void> {
+    const converted = await invoke(
+      'temporary-chat:convertToThread',
+      tab.projectId,
+      tab.threadId,
+      tab.temporaryChatId,
+      tab.settings
+    )
+    contextSidebarState.close(tab.id)
+    allThreads = [converted, ...allThreads]
+    scopeState.updateThread(converted)
+    if (converted.projectId === INBOX_PROJECT_ID) navigate('chats')
+    else if (mode === 'chats') navigate('projects')
+    workspaceState.openThread(converted, projects.find((p) => p.id === converted.projectId) ?? null)
+  }
+
   loadData()
 </script>
 
@@ -2520,7 +2543,10 @@
                   threadId={activeContextTab.threadId}
                 />
               {:else if activeContextTab.kind === 'temporary-chat'}
-                <TemporaryChatView tab={activeContextTab} />
+                <TemporaryChatView
+                  tab={activeContextTab}
+                  onContinueInThread={handleContinueInThread}
+                />
               {:else if activeContextTab.kind === 'notifications'}
                 <NotificationPanel />
               {:else if activeContextTab.kind === 'memory'}
