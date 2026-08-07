@@ -17,6 +17,8 @@
   import { projectIdentityTitle, remoteOriginLabel } from '$lib/project-location'
   import { longPress } from '$lib/long-press.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import type { Thread } from '$shared/types'
 
@@ -118,6 +120,62 @@
   let popoverEl = $state<HTMLDivElement>()
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
+
+  /** Distinct harnesses used in this thread's session, newest first. */
+  let harnessIds = $derived.by((): string[] => {
+    const ids = thread.usedHarnessIds ?? []
+    if (thread.settings?.harnessId && !ids.includes(thread.settings.harnessId)) {
+      return [...ids, thread.settings.harnessId]
+    }
+    return ids
+  })
+
+  /** How many harness icons fit on the single bottom line before the +n chip. */
+  let visibleHarnessCount = $state(0)
+  let harnessRowEl = $state<HTMLSpanElement>()
+
+  const captureHarnessRowElement: Attachment<HTMLSpanElement> = (element) => {
+    harnessRowEl = element
+    return () => {
+      if (harnessRowEl === element) harnessRowEl = undefined
+    }
+  }
+
+  function harnessName(id: string): string {
+    return getAgentIcon(id)?.name ?? id
+  }
+
+  $effect(() => {
+    const row = harnessRowEl
+    if (!row) return
+    let frame = 0
+    const measure = (): void => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const total = harnessIds.length
+        if (total === 0) {
+          visibleHarnessCount = 0
+          return
+        }
+        // Each icon is 14px with a 4px gap; reserve room for the "+n" chip.
+        const ICON = 14
+        const GAP = 4
+        const PLUS = 22
+        const available = row.clientWidth - PLUS
+        const perIcon = ICON + GAP
+        let count = Math.floor((available + GAP) / perIcon)
+        count = Math.max(0, Math.min(total, count))
+        visibleHarnessCount = count
+      })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(row)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  })
 
   const captureRowElement: Attachment<HTMLDivElement> = (element) => {
     rowEl = element
@@ -527,7 +585,7 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="flex w-full items-center gap-2 border-l-2 text-left transition-colors {compact
+    class="flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
       ? 'border-foreground bg-elevated'
@@ -542,102 +600,120 @@
     }}
     oncontextmenu={openContextMenu}
   >
-    <!-- Project icon -->
-    {#if projectIconUrl}
-      <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
-    {/if}
+    <span class="flex w-full min-w-0 items-center gap-2">
+      <!-- Project icon -->
+      {#if projectIconUrl}
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {/if}
 
-    <!-- State indicator / pin toggle — fixed slot, opacity crossfade, zero layout shift -->
-    <span class="relative h-4 w-4 shrink-0">
-      <span
-        class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
-          ? 'opacity-0'
-          : 'opacity-100'}"
-        aria-hidden={pinVisible}
-      >
-        {#if badgeProps}
-          <StatusBadge
-            stage={badgeProps.stage}
-            kind={badgeProps.kind}
-            variant={badgeProps.variant ?? 'dot'}
-            animated={badgeProps.animated}
-            size="md"
-            title={isWorking ? stageLabel : threadState}
-          />
-        {:else}
-          <span
-            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
-            aria-label={threadState}
-            title={threadState}
-          ></span>
-        {/if}
-      </span>
-      <span
-        role="button"
-        tabindex={-1}
-        class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
-          ? 'opacity-100'
-          : 'pointer-events-none opacity-0'}"
-        aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
-        aria-hidden={!pinVisible}
-        title={effectivePinned ? 'Unpin' : 'Pin'}
-        onclick={(e: MouseEvent) => {
-          e.stopPropagation()
-          onTogglePin(thread)
-        }}
-        onkeydown={(e: KeyboardEvent) => {
-          if (e.key === 'Enter') {
+      <!-- State indicator / pin toggle — fixed slot, opacity crossfade, zero layout shift -->
+      <span class="relative h-4 w-4 shrink-0">
+        <span
+          class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
+            ? 'opacity-0'
+            : 'opacity-100'}"
+          aria-hidden={pinVisible}
+        >
+          {#if badgeProps}
+            <StatusBadge
+              stage={badgeProps.stage}
+              kind={badgeProps.kind}
+              variant={badgeProps.variant ?? 'dot'}
+              animated={badgeProps.animated}
+              size="md"
+              title={isWorking ? stageLabel : threadState}
+            />
+          {:else}
+            <span
+              class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+              aria-label={threadState}
+              title={threadState}
+            ></span>
+          {/if}
+        </span>
+        <span
+          role="button"
+          tabindex={-1}
+          class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0'}"
+          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+          aria-hidden={!pinVisible}
+          title={effectivePinned ? 'Unpin' : 'Pin'}
+          onclick={(e: MouseEvent) => {
             e.stopPropagation()
             onTogglePin(thread)
-          }
-        }}
+          }}
+          onkeydown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+              e.stopPropagation()
+              onTogglePin(thread)
+            }
+          }}
+        >
+          <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+        </span>
+      </span>
+
+      <!-- Title -->
+      <span
+        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+          ? 'font-medium text-warning'
+          : threadState === 'unread'
+            ? 'font-medium text-foreground'
+            : 'text-foreground'}"
       >
-        <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+        {thread.title}
+      </span>
+
+      <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
+      <span class="relative flex h-5 min-w-6 shrink-0 items-center justify-end">
+        <span
+          class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            ? 'opacity-0'
+            : 'opacity-100'}"
+          aria-hidden={hovered}
+        >
+          {relativeTime(thread.createdAt)}
+        </span>
+        <span
+          class="absolute inset-0 flex items-center justify-end transition-opacity duration-150 {hovered
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0'}"
+          aria-hidden={!hovered}
+        >
+          <ThreadDropdown
+            bind:open={showMenu}
+            items={menuItems}
+            onOpen={() => {
+              showPopover = false
+              clearTimeout(popoverTimer)
+            }}
+            onClose={() => {
+              if (!touchRevealed) return
+              touchRevealed = false
+              hovered = false
+            }}
+          />
+        </span>
       </span>
     </span>
 
-    <!-- Title -->
-    <span
-      class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
-        ? 'font-medium text-warning'
-        : threadState === 'unread'
-          ? 'font-medium text-foreground'
-          : 'text-foreground'}"
-    >
-      {thread.title}
-    </span>
-
-    <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
-    <span class="relative flex h-5 min-w-6 shrink-0 items-center justify-end">
+    {#if harnessIds.length > 0}
       <span
-        class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
-          ? 'opacity-0'
-          : 'opacity-100'}"
-        aria-hidden={hovered}
+        {@attach captureHarnessRowElement}
+        class="flex min-w-0 items-center gap-1 overflow-hidden"
       >
-        {relativeTime(thread.createdAt)}
+        {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+          <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+        {/each}
+        {#if visibleHarnessCount < harnessIds.length}
+          <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+            +{harnessIds.length - visibleHarnessCount}
+          </span>
+        {/if}
       </span>
-      <span
-        class="absolute inset-0 flex items-center justify-end transition-opacity duration-150 {hovered
-          ? 'opacity-100'
-          : 'pointer-events-none opacity-0'}"
-        aria-hidden={!hovered}
-      >
-        <ThreadDropdown
-          bind:open={showMenu}
-          items={menuItems}
-          onOpen={() => {
-            showPopover = false
-            clearTimeout(popoverTimer)
-          }}
-          onClose={() => {
-            if (!touchRevealed) return
-            touchRevealed = false
-            hovered = false
-          }}
-        />
-      </span>
-    </span>
+    {/if}
   </button>
 
   <!-- Hover popover with thread info -->

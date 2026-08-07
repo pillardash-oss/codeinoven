@@ -159,6 +159,8 @@ export interface Thread {
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
   settings?: ThreadSettings
+  /** Distinct agent harnesses used across this thread's session, newest first. */
+  usedHarnessIds?: string[]
   /** Last-known context/token usage snapshot, for instant meter restore. */
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */

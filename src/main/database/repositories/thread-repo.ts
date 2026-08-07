@@ -293,20 +293,55 @@ export class ThreadRepo {
     return row ? rowToThread(row) : null
   }
 
+  /** Map of thread id → distinct harness ids used in its session, newest first. */
+  private usedHarnessesFor(threadIds: string[]): Map<string, string[]> {
+    const result = new Map<string, string[]>()
+    if (threadIds.length === 0) return result
+    const placeholders = threadIds.map(() => '?').join(',')
+    const rows = this.db.all<{ thread_id: string; harness_id: string }>(
+      `SELECT thread_id, harness_id
+       FROM agent_messages
+       WHERE thread_id IN (${placeholders})
+         AND harness_id IS NOT NULL AND harness_id != ''
+       GROUP BY thread_id, harness_id
+       ORDER BY MAX(created_at) DESC`,
+      ...threadIds
+    )
+    for (const row of rows) {
+      const list = result.get(row.thread_id)
+      if (list) {
+        list.push(row.harness_id)
+      } else {
+        result.set(row.thread_id, [row.harness_id])
+      }
+    }
+    return result
+  }
+
   listByProject(projectId: string): Thread[] {
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads WHERE project_id = ?
        ORDER BY pinned DESC, sort_order ASC, last_activity DESC`,
       projectId
     )
-    return rows.map(rowToThread)
+    const threads = rows.map(rowToThread)
+    const used = this.usedHarnessesFor(threads.map((t) => t.id))
+    for (const thread of threads) {
+      thread.usedHarnessIds = used.get(thread.id)
+    }
+    return threads
   }
 
   listAll(): Thread[] {
     const rows = this.db.all<ThreadRow>(
       'SELECT * FROM threads ORDER BY pinned DESC, sort_order ASC, last_activity DESC'
     )
-    return rows.map(rowToThread)
+    const threads = rows.map(rowToThread)
+    const used = this.usedHarnessesFor(threads.map((t) => t.id))
+    for (const thread of threads) {
+      thread.usedHarnessIds = used.get(thread.id)
+    }
+    return threads
   }
 
   delete(id: string): void {
