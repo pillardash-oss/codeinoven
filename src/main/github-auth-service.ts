@@ -104,7 +104,8 @@ export class GitHubAuthService {
         return {
           login,
           name: this.readString(record, 'name'),
-          avatarUrl: (await this.inlineAvatar(avatarUrl)) ?? avatarUrl
+          // Never hand back the remote URL: the renderer CSP would block it.
+          avatarUrl: await this.inlineAvatar(avatarUrl)
         }
       } finally {
         clearTimeout(timer)
