@@ -5,8 +5,12 @@ import type {
   PrReviewEvent,
   PrState,
   PullRequestComment,
+  PullRequestChecks,
   PullRequestCommit,
   PullRequestDetail,
+  PullRequestFile,
+  PullRequestReview,
+  PullRequestReviewComment,
   PullRequestPage,
   PullRequestReference
 } from '../lib/types'
@@ -68,6 +72,11 @@ export interface GitProvider {
   listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]>
   createPullRequestComment(input: CreatePrCommentInput): Promise<PullRequestComment>
   createPullRequestReview(input: CreatePrReviewInput): Promise<void>
+  listPullRequestFiles(input: PullRequestTarget): Promise<PullRequestFile[]>
+  listPullRequestReviews(input: PullRequestTarget): Promise<PullRequestReview[]>
+  listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
+  getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks>
+  getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>
   /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.

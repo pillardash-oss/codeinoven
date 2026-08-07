@@ -812,7 +812,7 @@
           {#if scopeBucket}
             <div class="flex gap-2">
               <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
-              <dd class="flex items-center gap-1 truncate text-muted">
+              <dd class="flex min-w-0 items-center gap-1 text-muted">
                 {#if scopeIconUrl}
                   <img
                     src={scopeIconUrl}
@@ -821,7 +821,7 @@
                     draggable="false"
                   />
                 {/if}
-                <span>{scopeBucket.name}</span>
+                <span class="min-w-0 break-words">{scopeBucket.name}</span>
               </dd>
             </div>
           {/if}

@@ -10,7 +10,7 @@
     MessageSquare,
     RefreshCw
   } from '@lucide/svelte'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import type { PrState, PullRequestSummary } from '$shared/types'
@@ -34,34 +34,27 @@
 
   let prState = $state<PrState>('open')
   let page = $state(1)
-  let items = $state<PullRequestSummary[]>([])
-  let hasMore = $state(false)
-  let loading = $state(false)
-  let loadedKey = $state('')
 
-  /** Identity + filter + page — changing any of them means a reload is due. */
-  const requestKey = $derived(
-    identity && githubConnected ? `${identity.owner}/${identity.repo}:${prState}:${page}` : ''
+  /** Cached page for the current filter — renders instantly on tab re-entry. */
+  const cached = $derived(
+    identity
+      ? gitState.prPages[GitState.pageKey(identity.owner, identity.repo, prState, page)]
+      : undefined
   )
+  const items = $derived(cached?.page.items ?? [])
+  const hasMore = $derived(cached?.page.hasMore ?? false)
+  const loading = $derived(gitState.isBusy('pr-list'))
 
-  async function load(): Promise<void> {
+  async function load(force = false): Promise<void> {
     if (!identity || !githubConnected) return
-    const key = requestKey
-    loading = true
-    try {
-      const result = await gitState.listPullRequestPage(
-        projectId,
-        identity.owner,
-        identity.repo,
-        prState,
-        page
-      )
-      items = result.items
-      hasMore = result.hasMore
-      loadedKey = key
-    } finally {
-      loading = false
-    }
+    await gitState.ensurePullRequestPage(
+      projectId,
+      identity.owner,
+      identity.repo,
+      prState,
+      page,
+      force
+    )
   }
 
   function selectState(next: PrState): void {
@@ -83,7 +76,13 @@
   }
 
   $effect(() => {
-    if (requestKey && requestKey !== loadedKey) void load()
+    // Re-runs whenever the repo, filter, or page changes; the store decides
+    // whether that actually needs a network call.
+    if (identity && githubConnected) {
+      const owner = identity.owner
+      const repo = identity.repo
+      void gitState.ensurePullRequestPage(projectId, owner, repo, prState, page)
+    }
   })
 </script>
 
@@ -127,7 +126,7 @@
         title="Refresh pull requests"
         aria-label="Refresh pull requests"
         disabled={loading}
-        onclick={() => void load()}
+        onclick={() => void load(true)}
       >
         <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
       </button>

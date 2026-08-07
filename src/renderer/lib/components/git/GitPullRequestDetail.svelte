@@ -3,25 +3,33 @@
     ArrowLeft,
     Bot,
     Check,
+    CircleDot,
+    CircleSlash,
     ExternalLink,
+    FileDiff,
     GitCommitHorizontal,
     Loader2,
     MessageSquare,
     Merge,
+    MessagesSquare,
+    RefreshCw,
     Send,
+    ShieldCheck,
     ThumbsUp,
-    TriangleAlert
+    TriangleAlert,
+    X
   } from '@lucide/svelte'
   import { AlertDialog } from 'bits-ui'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
   import type {
+    PrAgentReport,
     PrMergeMethod,
     PrReviewEvent,
-    PullRequestComment,
-    PullRequestCommit,
-    PullRequestDetail,
+    PullRequestCheck,
+    PullRequestFile,
     PullRequestSummary
   } from '$shared/types'
 
@@ -32,11 +40,13 @@
     onBack: () => void
     /** Hand this PR to an agent for a worktree review. */
     onAgentReview: (pr: PullRequestSummary) => void
+    /** Reopen the thread that owns this PR's agent review. */
+    onOpenThread: (threadId: string) => void
   }
 
-  let { projectId, identity, summary, onBack, onAgentReview }: Props = $props()
+  let { projectId, identity, summary, onBack, onAgentReview, onOpenThread }: Props = $props()
 
-  type DetailTab = 'commits' | 'comments'
+  type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
 
   const mergeMethods: Array<{ id: PrMergeMethod; label: string }> = [
     { id: 'squash', label: 'Squash' },
@@ -44,37 +54,105 @@
     { id: 'rebase', label: 'Rebase' }
   ]
 
-  let detail = $state<PullRequestDetail | null>(null)
-  let commits = $state<PullRequestCommit[]>([])
-  let comments = $state<PullRequestComment[]>([])
-  let tab = $state<DetailTab>('commits')
-  let loading = $state(false)
+  let tab = $state<DetailTab>('conversation')
   let commentBody = $state('')
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
   let notice = $state('')
-  let loadedNumber = $state(0)
+  let expandedCommit = $state<string | null>(null)
+  let commitFiles = $state<Record<string, PullRequestFile[]>>({})
+  let loadingCommit = $state<string | null>(null)
+  let expandedFile = $state<string | null>(null)
+  let agentReport = $state<PrAgentReport | null>(null)
 
   const number = $derived(summary.number)
+  const bundle = $derived(
+    gitState.prBundles[GitState.bundleKey(identity.owner, identity.repo, number)]
+  )
+  const detail = $derived(bundle?.detail ?? null)
+  const checks = $derived(bundle?.checks ?? null)
+  const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
   const reviewing = $derived(gitState.isBusy('pr-review'))
   const merging = $derived(gitState.isBusy('pr-merge'))
   const open = $derived((detail?.state ?? summary.state) === 'open')
 
-  async function load(): Promise<void> {
-    loading = true
-    loadedNumber = number
+  /**
+   * Conversation as one chronological stream: the PR description, issue
+   * comments, submitted reviews, and inline code comments — the same context
+   * GitHub shows, so a merge decision never needs the browser.
+   */
+  const conversation = $derived.by(() => {
+    if (!bundle) return []
+    const entries: Array<{
+      key: string
+      author: string
+      at: string
+      body: string
+      kind: 'description' | 'comment' | 'review' | 'inline'
+      meta?: string
+    }> = []
+    if (bundle.detail.body.trim()) {
+      entries.push({
+        key: 'body',
+        author: bundle.detail.authorLogin,
+        at: bundle.detail.createdAt,
+        body: bundle.detail.body,
+        kind: 'description'
+      })
+    }
+    for (const comment of bundle.comments) {
+      entries.push({
+        key: `c${comment.id}`,
+        author: comment.authorLogin,
+        at: comment.createdAt,
+        body: comment.body,
+        kind: 'comment'
+      })
+    }
+    for (const review of bundle.reviews) {
+      entries.push({
+        key: `r${review.id}`,
+        author: review.authorLogin,
+        at: review.submittedAt,
+        body: review.body,
+        kind: 'review',
+        meta: review.state.replace(/_/gu, ' ').toLowerCase()
+      })
+    }
+    for (const comment of bundle.reviewComments) {
+      entries.push({
+        key: `rc${comment.id}`,
+        author: comment.authorLogin,
+        at: comment.createdAt,
+        body: comment.body,
+        kind: 'inline',
+        meta: comment.line === null ? comment.path : `${comment.path}:${comment.line}`
+      })
+    }
+    return entries
+      .filter((entry) => entry.body.trim() || entry.kind === 'review')
+      .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
+  })
+
+  async function refresh(): Promise<void> {
+    await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
+    agentReport = await gitState.loadAgentReport(projectId, number)
+  }
+
+  async function toggleCommit(sha: string): Promise<void> {
+    if (expandedCommit === sha) {
+      expandedCommit = null
+      return
+    }
+    expandedCommit = sha
+    if (commitFiles[sha]) return
+    loadingCommit = sha
     try {
-      const [nextDetail, nextCommits, nextComments] = await Promise.all([
-        gitState.getPullRequest(projectId, identity.owner, identity.repo, number),
-        gitState.listPullRequestCommits(projectId, identity.owner, identity.repo, number),
-        gitState.listPullRequestComments(projectId, identity.owner, identity.repo, number)
-      ])
-      detail = nextDetail
-      commits = nextCommits
-      comments = nextComments
+      const files = await gitState.getCommitFiles(projectId, identity.owner, identity.repo, sha)
+      commitFiles = { ...commitFiles, [sha]: files }
     } finally {
-      loading = false
+      loadingCommit = null
     }
   }
 
@@ -89,22 +167,21 @@
       body
     )
     if (created) {
-      comments = [...comments, created]
       commentBody = ''
-      tab = 'comments'
+      tab = 'conversation'
       notice = 'Comment posted'
+      await refresh()
     }
   }
 
   async function submitReview(event: PrReviewEvent): Promise<void> {
-    const body = commentBody.trim()
     const done = await gitState.reviewPullRequest(
       projectId,
       identity.owner,
       identity.repo,
       number,
       event,
-      body
+      commentBody.trim()
     )
     if (done) {
       commentBody = ''
@@ -114,7 +191,7 @@
           : event === 'REQUEST_CHANGES'
             ? 'Changes requested'
             : 'Review comment submitted'
-      await load()
+      await refresh()
     }
   }
 
@@ -129,14 +206,97 @@
     )
     if (merged) {
       notice = `Merged with ${method}`
-      await load()
+      await refresh()
     }
   }
 
+  /** Post the agent's report into the PR conversation, verbatim. */
+  async function postAgentReport(): Promise<void> {
+    if (!agentReport?.content.trim()) return
+    const created = await gitState.commentOnPullRequest(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number,
+      agentReport.content
+    )
+    if (created) {
+      notice = 'Agent review posted to the pull request'
+      tab = 'conversation'
+      await refresh()
+    }
+  }
+
+  function checkIcon(check: PullRequestCheck): typeof Check {
+    if (check.status !== 'completed') return CircleDot
+    if (check.conclusion === 'success') return Check
+    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CircleSlash
+    return X
+  }
+
+  function checkClass(check: PullRequestCheck): string {
+    if (check.status !== 'completed') return 'text-warning'
+    if (check.conclusion === 'success') return 'text-success'
+    if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return 'text-dimmed'
+    return 'text-danger'
+  }
+
+  /** Colorize a unified patch the way the rest of the app renders diffs. */
+  function patchLineClass(line: string): string {
+    if (line.startsWith('@@')) return 'text-primary'
+    if (line.startsWith('+')) return 'bg-success/10 text-success'
+    if (line.startsWith('-')) return 'bg-danger/10 text-danger'
+    return 'text-muted'
+  }
+
   $effect(() => {
-    if (number !== loadedNumber) void load()
+    const owner = identity.owner
+    const repo = identity.repo
+    void gitState.ensurePullRequestBundle(projectId, owner, repo, number)
+  })
+
+  $effect(() => {
+    const pull = number
+    void gitState.loadAgentReport(projectId, pull).then((report) => {
+      agentReport = report
+    })
   })
 </script>
+
+{#snippet fileList(files: PullRequestFile[], keyPrefix: string)}
+  {#each files as file (file.path)}
+    {@const fileKey = `${keyPrefix}:${file.path}`}
+    <div class="border-b border-border/50">
+      <button
+        type="button"
+        class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
+        onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
+      >
+        <FileDiff size={11} class="shrink-0 text-dimmed" />
+        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
+          {file.path}
+        </span>
+        <span class="shrink-0 text-[9px] tabular-nums">
+          <span class="text-success">+{file.additions}</span>
+          <span class="text-danger">−{file.deletions}</span>
+        </span>
+      </button>
+      {#if expandedFile === fileKey}
+        {#if file.patch}
+          <pre
+            class="overflow-x-auto bg-elevated/40 px-3 py-1.5 font-mono text-[9px] leading-relaxed"><!--
+         -->{#each file.patch.split('\n') as line, index (index)}<span
+                class="block {patchLineClass(line)}">{line || ' '}</span
+              >{/each}</pre>
+        {:else}
+          <p class="px-3 py-2 text-[10px] text-dimmed">
+            No inline diff for this file (binary or too large).
+          </p>
+        {/if}
+      {/if}
+    </div>
+  {/each}
+{/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
   <!-- Header -->
@@ -162,7 +322,37 @@
       >
         {detail?.state ?? summary.state}{summary.draft ? ' · draft' : ''}
       </span>
+      {#if checks && checks.state !== 'none'}
+        <button
+          type="button"
+          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors {checks.state ===
+          'failure'
+            ? 'bg-danger/10 text-danger hover:bg-danger/20'
+            : checks.state === 'pending'
+              ? 'bg-warning/10 text-warning hover:bg-warning/20'
+              : 'bg-success/10 text-success hover:bg-success/20'}"
+          title="View check results"
+          onclick={() => (tab = 'checks')}
+        >
+          <ShieldCheck size={10} />
+          {checks.state === 'failure'
+            ? 'checks failing'
+            : checks.state === 'pending'
+              ? 'checks running'
+              : 'checks passing'}
+        </button>
+      {/if}
       <span class="flex-1"></span>
+      <button
+        type="button"
+        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+        title="Refresh pull request"
+        aria-label="Refresh pull request"
+        disabled={gitState.isBusy('pr-detail')}
+        onclick={() => void refresh()}
+      >
+        <RefreshCw size={12} class={gitState.isBusy('pr-detail') ? 'animate-spin' : ''} />
+      </button>
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -264,31 +454,24 @@
   {/if}
 
   <!-- Tabs -->
-  <div class="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors {tab ===
-      'commits'
-        ? 'bg-elevated text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      onclick={() => (tab = 'commits')}
-    >
-      <GitCommitHorizontal size={11} />
-      Commits
-      {#if commits.length > 0}<span class="tabular-nums text-dimmed">{commits.length}</span>{/if}
-    </button>
-    <button
-      type="button"
-      class="flex h-6 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors {tab ===
-      'comments'
-        ? 'bg-elevated text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      onclick={() => (tab = 'comments')}
-    >
-      <MessageSquare size={11} />
-      Comments
-      {#if comments.length > 0}<span class="tabular-nums text-dimmed">{comments.length}</span>{/if}
-    </button>
+  <div
+    class="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border px-2 py-1.5"
+  >
+    {#each [{ id: 'conversation' as const, label: 'Conversation', icon: MessagesSquare, count: conversation.length }, { id: 'commits' as const, label: 'Commits', icon: GitCommitHorizontal, count: bundle?.commits.length ?? 0 }, { id: 'files' as const, label: 'Files', icon: FileDiff, count: bundle?.files.length ?? 0 }, { id: 'checks' as const, label: 'Checks', icon: ShieldCheck, count: checks?.checks.length ?? 0 }, { id: 'agent' as const, label: 'Agent', icon: Bot, count: agentReport?.content ? 1 : 0 }] as entry (entry.id)}
+      {@const Icon = entry.icon}
+      <button
+        type="button"
+        class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium transition-colors {tab ===
+        entry.id
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        onclick={() => (tab = entry.id)}
+      >
+        <Icon size={11} />
+        {entry.label}
+        {#if entry.count > 0}<span class="tabular-nums text-dimmed">{entry.count}</span>{/if}
+      </button>
+    {/each}
   </div>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
@@ -297,38 +480,167 @@
         <Loader2 size={13} class="animate-spin" />
         Loading pull request…
       </div>
-    {:else if tab === 'commits'}
-      {#if commits.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">No commits on this branch.</p>
+    {:else if tab === 'conversation'}
+      {#if conversation.length === 0}
+        <p class="px-4 py-8 text-center text-[11px] text-dimmed">Nothing has been said yet.</p>
       {:else}
-        {#each commits as commit (commit.sha)}
-          <div class="flex items-start gap-2 border-b border-border/50 px-3 py-1.5">
-            <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[11px] text-foreground">{commit.message}</p>
-              <p class="truncate text-[9px] text-dimmed">
-                <span class="font-mono">{commit.shortSha}</span>
-                · {commit.authorName} · {relativeTime(commit.date)}
-              </p>
-            </div>
+        {#each conversation as entry (entry.key)}
+          <div class="border-b border-border/50 px-3 py-2">
+            <p class="flex flex-wrap items-center gap-1 text-[9px] text-dimmed">
+              <span class="font-medium text-muted">{entry.author}</span>
+              {#if entry.kind === 'description'}
+                <span class="rounded bg-elevated px-1 py-px">description</span>
+              {:else if entry.kind === 'review'}
+                <span
+                  class="rounded px-1 py-px {entry.meta === 'approved'
+                    ? 'bg-success/10 text-success'
+                    : entry.meta === 'changes requested'
+                      ? 'bg-warning/10 text-warning'
+                      : 'bg-elevated'}">{entry.meta}</span
+                >
+              {:else if entry.kind === 'inline'}
+                <span class="truncate rounded bg-elevated px-1 py-px font-mono">{entry.meta}</span>
+              {/if}
+              <span>· {relativeTime(entry.at)}</span>
+            </p>
+            {#if entry.body.trim()}
+              <MarkdownView text={entry.body} class="mt-1 text-[11px] leading-relaxed" />
+            {/if}
           </div>
         {/each}
       {/if}
-    {:else if comments.length === 0}
-      <p class="px-4 py-8 text-center text-[11px] text-dimmed">No comments yet.</p>
-    {:else}
-      {#each comments as comment (comment.id)}
-        <div class="border-b border-border/50 px-3 py-2">
-          <p class="text-[9px] text-dimmed">
-            {comment.authorLogin} · {relativeTime(comment.createdAt)}
+    {:else if tab === 'commits'}
+      {#if !bundle || bundle.commits.length === 0}
+        <p class="px-4 py-8 text-center text-[11px] text-dimmed">No commits on this branch.</p>
+      {:else}
+        {#each bundle.commits as commit (commit.sha)}
+          <div class="border-b border-border/50">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-start gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
+              title="Show the files changed in {commit.shortSha}"
+              onclick={() => void toggleCommit(commit.sha)}
+            >
+              <GitCommitHorizontal size={12} class="mt-0.5 shrink-0 text-dimmed" />
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-[11px] text-foreground">{commit.message}</p>
+                <p class="truncate text-[9px] text-dimmed">
+                  <span class="font-mono">{commit.shortSha}</span>
+                  · {commit.authorName} · {relativeTime(commit.date)}
+                </p>
+              </div>
+              {#if loadingCommit === commit.sha}
+                <Loader2 size={11} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
+              {/if}
+            </button>
+            {#if expandedCommit === commit.sha}
+              {@const files = commitFiles[commit.sha] ?? []}
+              {#if files.length === 0 && loadingCommit !== commit.sha}
+                <p class="px-3 py-2 text-[10px] text-dimmed">No files in this commit.</p>
+              {:else}
+                <div class="border-t border-border/50 bg-elevated/20">
+                  {@render fileList(files, commit.sha)}
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    {:else if tab === 'files'}
+      {#if !bundle || bundle.files.length === 0}
+        <p class="px-4 py-8 text-center text-[11px] text-dimmed">No changed files.</p>
+      {:else}
+        {@render fileList(bundle.files, 'pr')}
+      {/if}
+    {:else if tab === 'checks'}
+      {#if !checks || checks.checks.length === 0}
+        <p class="px-4 py-8 text-center text-[11px] text-dimmed">
+          No checks have reported on this branch.
+        </p>
+      {:else}
+        {#each checks.checks as check (check.name + (check.url ?? ''))}
+          {@const Icon = checkIcon(check)}
+          <div class="flex items-center gap-2 border-b border-border/50 px-3 py-1.5">
+            <Icon size={12} class="shrink-0 {checkClass(check)}" />
+            <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">{check.name}</span>
+            <span class="shrink-0 text-[9px] text-dimmed">
+              {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
+            </span>
+            {#if check.url}
+              <button
+                type="button"
+                class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                title="Open {check.name} results"
+                aria-label="Open {check.name} results"
+                onclick={() => void openInBrowser(check.url ?? '')}
+              >
+                <ExternalLink size={11} />
+              </button>
+            {/if}
+          </div>
+        {/each}
+      {/if}
+    {:else if agentReport?.content.trim()}
+      <div class="px-3 py-2">
+        <div class="mb-2 flex items-center gap-2">
+          <p class="flex-1 truncate text-[9px] text-dimmed">
+            {agentReport.path} · {relativeTime(agentReport.updatedAt)}
           </p>
-          <p
-            class="mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground"
+          {#if agentReport.threadId}
+            <button
+              type="button"
+              class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Open the thread that produced this review"
+              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
+            >
+              <Bot size={11} />
+              Open thread
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[10px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+            title="Post this report as a comment on the pull request"
+            disabled={posting}
+            onclick={() => void postAgentReport()}
           >
-            {comment.body}
-          </p>
+            <Send size={11} />
+            Post to PR
+          </button>
         </div>
-      {/each}
+        <MarkdownView text={agentReport.content} class="text-[11px] leading-relaxed" />
+      </div>
+    {:else}
+      <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
+        <Bot size={20} class="text-dimmed" />
+        <p class="text-[11px] leading-relaxed text-muted">
+          No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
+          worktree and writes its findings to <span class="font-mono"
+            >.cio/git/pr/{number}/review.md</span
+          >. The report shows up here when it lands.
+        </p>
+        <div class="flex items-center gap-2">
+          {#if agentReport?.threadId}
+            <button
+              type="button"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-3 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+              title="Open the review thread already running for this pull request"
+              onclick={() => onOpenThread(agentReport?.threadId ?? '')}
+            >
+              <Bot size={12} />
+              Open review thread
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            onclick={() => onAgentReview(summary)}
+          >
+            <Bot size={12} />
+            Start agent review
+          </button>
+        </div>
+      </div>
     {/if}
   </div>
 
@@ -380,8 +692,11 @@
       <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
         <strong class="text-foreground">{summary.title}</strong> will be merged into
         <strong class="text-foreground">{summary.baseRef}</strong> using the
-        <strong class="text-foreground">{method}</strong> method. This runs on GitHub and cannot be undone
-        from here.
+        <strong class="text-foreground">{method}</strong> method.
+        {#if checks?.state === 'failure'}
+          Checks are currently <strong class="text-danger">failing</strong> on this branch.
+        {/if}
+        This runs on GitHub and cannot be undone from here.
       </AlertDialog.Description>
       <div class="mt-5 flex justify-end gap-2">
         <AlertDialog.Cancel

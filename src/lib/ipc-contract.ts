@@ -67,12 +67,13 @@ import type {
   HarnessUsage,
   MergeSummary,
   PrCreateInput,
+  PrAgentReport,
   PrMergeMethod,
   PrReviewEvent,
   PrState,
+  PullRequestBundle,
   PullRequestComment,
-  PullRequestCommit,
-  PullRequestDetail,
+  PullRequestFile,
   PullRequestPage,
   PullRequestReference,
   PromptAttachment,
@@ -705,18 +706,17 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage
   >
-  'pr:get': Contract<
+  /** Everything the PR detail view needs, fetched in parallel in one round trip. */
+  'pr:bundle': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestDetail
+    PullRequestBundle
   >
-  'pr:commits': Contract<
-    [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestCommit[]
+  'pr:commitFiles': Contract<
+    [projectId: string, owner: string, repo: string, sha: string],
+    PullRequestFile[]
   >
-  'pr:comments': Contract<
-    [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestComment[]
-  >
+  /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
+  'pr:agentReport': Contract<[projectId: string, pullNumber: number], PrAgentReport>
   'pr:comment': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
     PullRequestComment
@@ -733,7 +733,7 @@ export interface IpcInvokeContract {
     void
   >
   /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
-  'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number], string>
+  'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>
   'github:authStatus': Contract<[], GitHubAuthStatus>
   'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
   'github:poll': Contract<[deviceCode: string], GitHubPollResult>
