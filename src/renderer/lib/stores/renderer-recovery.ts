@@ -64,6 +64,12 @@ export interface QueuedMessageEntry {
 export interface RendererRecoverySnapshot {
   version: 1
   activeView: MainView
+  /** Last content view (Projects/Chats/Threads) — the shell returns here when
+   *  leaving Settings or Scope. Persisted so a restart made while on a Settings
+   *  page or the Scope view still returns to the previous content view. */
+  lastContentView: 'projects' | 'chats' | 'threads'
+  /** Last non-Settings view — the Settings back button returns here. */
+  lastViewBeforeSettings: MainView
   selectedProjectId: string | null
   selectedThread: SelectedThreadReference | null
   composerDrafts: Record<string, ComposerDraftEntry>
@@ -121,6 +127,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
   return {
     version: 1,
     activeView: 'projects',
+    lastContentView: 'projects',
+    lastViewBeforeSettings: 'projects',
     selectedProjectId: null,
     selectedThread: null,
     composerDrafts: {},
@@ -248,6 +256,20 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
+function parseContentView(value: unknown, activeView: MainView): 'projects' | 'chats' | 'threads' {
+  if (value === 'projects' || value === 'chats' || value === 'threads') return value
+  // Legacy snapshots don't carry a content view — fall back to the active view
+  // so an app closed directly on Threads/Chats still returns there.
+  return activeView === 'chats' || activeView === 'threads' ? activeView : 'projects'
+}
+
+function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
+  if (value === 'projects' || value === 'chats' || value === 'scope' || value === 'threads') {
+    return value
+  }
+  return fallback
+}
+
 export function recoveryDraftKey(projectId: string, threadId: string): string {
   return JSON.stringify([projectId, threadId])
 }
@@ -371,10 +393,18 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
     const selectedProjectId =
       selectedThread?.projectId ??
       (isRecoveryIdentifier(parsed.selectedProjectId) ? parsed.selectedProjectId : null)
+    const activeView = normalizeMainView(parsed.activeView) ?? 'projects'
+    const lastContentView = parseContentView(parsed.lastContentView, activeView)
+    const lastViewBeforeSettings = parseNonSettingsView(
+      parsed.lastViewBeforeSettings,
+      lastContentView
+    )
 
     return {
       version: 1,
-      activeView: normalizeMainView(parsed.activeView) ?? 'projects',
+      activeView,
+      lastContentView,
+      lastViewBeforeSettings,
       selectedProjectId,
       selectedThread,
       composerDrafts: parseDrafts(parsed.composerDrafts),

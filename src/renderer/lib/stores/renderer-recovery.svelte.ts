@@ -9,6 +9,7 @@ import {
   browserRecoveryStorage,
   emptyRendererRecoverySnapshot,
   isRecoveryIdentifier,
+  isSettingsView,
   loadRendererRecoveryState,
   persistRendererRecoveryState,
   recoveryDraftKey,
@@ -45,6 +46,8 @@ export {
  */
 export class RendererRecoveryStore {
   activeView = $state<MainView>('projects')
+  lastContentView = $state<'projects' | 'chats' | 'threads'>('projects')
+  lastViewBeforeSettings = $state<MainView>('projects')
   selectedProjectId = $state<string | null>(null)
   selectedThread = $state<SelectedThreadReference | null>(null)
   collapsedFolders = $state<string[]>([])
@@ -59,6 +62,8 @@ export class RendererRecoveryStore {
   constructor(private readonly storage: RecoveryStorage | undefined = browserRecoveryStorage()) {
     const saved = loadRendererRecoveryState(this.storage)
     this.activeView = saved.activeView
+    this.lastContentView = saved.lastContentView
+    this.lastViewBeforeSettings = saved.lastViewBeforeSettings
     this.selectedProjectId = saved.selectedProjectId
     this.selectedThread = saved.selectedThread
     this.collapsedFolders = saved.collapsedFolders
@@ -88,6 +93,8 @@ export class RendererRecoveryStore {
     return {
       version: 1,
       activeView: this.activeView,
+      lastContentView: this.lastContentView,
+      lastViewBeforeSettings: this.lastViewBeforeSettings,
       selectedProjectId: this.selectedProjectId,
       selectedThread: this.selectedThread ? { ...this.selectedThread } : null,
       composerDrafts: { ...this.composerDrafts },
@@ -117,6 +124,15 @@ export class RendererRecoveryStore {
 
   setActiveView(view: MainView): void {
     this.activeView = view
+    // Track the last content view so returning from Settings/Scope — even
+    // across a restart made on a Settings page — lands back on the same view.
+    if (view === 'projects' || view === 'chats' || view === 'threads') {
+      this.lastContentView = view
+    }
+    // Remember the last non-settings view for the Settings back button.
+    if (!isSettingsView(view)) {
+      this.lastViewBeforeSettings = view
+    }
     this.persist()
   }
 
@@ -284,6 +300,8 @@ export class RendererRecoveryStore {
   reset(): void {
     const initial = emptyRendererRecoverySnapshot()
     this.activeView = initial.activeView
+    this.lastContentView = initial.lastContentView
+    this.lastViewBeforeSettings = initial.lastViewBeforeSettings
     this.selectedProjectId = initial.selectedProjectId
     this.selectedThread = initial.selectedThread
     this.composerDrafts = initial.composerDrafts
