@@ -55,6 +55,11 @@ export class ThreadManager {
     return this.harnessUsageRepo.listByThread(projectId, threadId)
   }
 
+  /** Accumulate a completed turn's harness usage (ledger-guarded, idempotent). */
+  accumulateHarnessUsage(projectId: string, threadId: string, messages: AgentMessage[]): void {
+    this.harnessUsageRepo.accumulateTurn(projectId, threadId, messages)
+  }
+
   /** Rebuild a thread's harness usage rows from its persisted messages. */
   reconcileHarnessUsage(projectId: string, threadId: string): void {
     this.harnessUsageRepo.reconcile(projectId, threadId)
@@ -463,7 +468,6 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId)
       }
-      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 
@@ -484,7 +488,6 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId)
       }
-      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 
@@ -524,7 +527,6 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId, sessionId)
       }
-      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 

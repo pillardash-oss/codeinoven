@@ -395,4 +395,16 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_thread
   ON harness_usage(project_id, thread_id);
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_harness
-  ON harness_usage(harness_id);`
+  ON harness_usage(harness_id);
+
+-- Idempotency ledger: which agent_messages have already been accumulated into
+-- harness_usage. Rows cascade-delete with their thread, so per-thread usage is
+-- never double counted even across retries, compaction, or restart.
+CREATE TABLE IF NOT EXISTS harness_usage_messages (
+  thread_id  TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  message_id TEXT NOT NULL,
+  PRIMARY KEY (thread_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
+  ON harness_usage_messages(thread_id);`

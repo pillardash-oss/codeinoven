@@ -8886,6 +8886,10 @@ export class ChatEngine {
         )
       )
       await this.threadManager.upsertMessages(info.projectId, info.threadId, merged)
+      // Snapshot this turn's harness usage into the dedicated analytics table.
+      // Runs on every turn end (success or failure) and is ledger-guarded, so
+      // cost/tokens are added to the thread's existing per-harness totals once.
+      this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
 
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
