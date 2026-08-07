@@ -316,23 +316,9 @@ export class GitService {
   async commitDiff(projectPath: string, hash: string): Promise<GitFileChange[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const git = this.client(directory)
-        const result = await git.show([`${hash}^!`, '--stat', '--format='])
-        const lines = result.split('\n').filter((line) => line.trim())
-        const changes: GitFileChange[] = []
-        for (const line of lines) {
-          const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+)/u.exec(line)
-          if (match) {
-            const path = match[1]?.trim() ?? ''
-            const statusChar = match[3]?.[0] ?? 'M'
-            const status: GitFileStatus =
-              statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
-            changes.push({ path, status, staged: false })
-          }
-        }
-        return changes
-      })
+      return this.wrapError(projectPath, 'read', async () =>
+        this.diffVsParent(this.client(directory), hash)
+      )
     })
   }
 
@@ -340,68 +326,29 @@ export class GitService {
   async commitFileDiff(projectPath: string, hash: string, relativePath: string): Promise<GitDiff> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
-      return this.wrapError(projectPath, 'read', async () => {
-        const safeHash = hash.trim()
-        const safePath = this.assertRelativePath(directory, relativePath)
-        const git = this.client(directory)
-        const parentRef = `${safeHash}^`
-        const parentExists = await this.refExists(git, parentRef)
-        if (!parentExists) {
-          // Root commit: the whole file is new, reuse the untracked/added shape.
-          const blob = await this.readBlob(git, `${safeHash}:${safePath}`)
-          if (!blob) return this.emptyDiff(safePath, false)
-          const additions = blob.content.length === 0 ? 0 : blob.content.split('\n').length
-          return {
-            path: safePath,
-            staged: false,
-            content: blob.content
-              .split('\n')
-              .map((line) => `+${line}`)
-              .join('\n'),
-            before: '',
-            after: blob.content,
-            binary: blob.content.includes('\0'),
-            additions,
-            deletions: 0,
-            truncated: blob.truncated
-          }
-        }
-        const content = await git.diff([parentRef, safeHash, '--', safePath])
-        const summary = await git.diffSummary([parentRef, safeHash, '--', safePath])
-        const file = summary.files[0]
-        const additions =
-          file && 'insertions' in file && typeof file.insertions === 'number' ? file.insertions : 0
-        const deletions =
-          file && 'deletions' in file && typeof file.deletions === 'number' ? file.deletions : 0
-        const binary = file?.binary ?? false
-        const truncated = Buffer.byteLength(content, 'utf-8') > MAX_DIFF_BYTES
-        const boundedContent = truncated
-          ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
-          : content
+      return this.wrapError(projectPath, 'read', async () =>
+        this.fileDiffVsParent(this.client(directory), directory, hash, relativePath)
+      )
+    })
+  }
 
-        let before: string | undefined
-        let after: string | undefined
-        let sideTruncated = false
-        if (!binary) {
-          const beforeBlob = await this.readBlob(git, `${parentRef}:${safePath}`)
-          const afterBlob = await this.readBlob(git, `${safeHash}:${safePath}`)
-          before = beforeBlob?.content
-          after = afterBlob?.content
-          sideTruncated = (beforeBlob?.truncated ?? false) || (afterBlob?.truncated ?? false)
-        }
+  /** Files changed by a stash (e.g. `stash@{0}`), compared against its parent. */
+  async stashDiff(projectPath: string, id: string): Promise<GitFileChange[]> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () =>
+        this.diffVsParent(this.client(directory), id)
+      )
+    })
+  }
 
-        return {
-          path: safePath,
-          staged: false,
-          content: boundedContent,
-          binary,
-          additions,
-          deletions,
-          truncated: truncated || sideTruncated,
-          before,
-          after
-        }
-      })
+  /** Full per-file diff of one file within a stash, compared against its parent. */
+  async stashFileDiff(projectPath: string, id: string, relativePath: string): Promise<GitDiff> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () =>
+        this.fileDiffVsParent(this.client(directory), directory, id, relativePath)
+      )
     })
   }
 
@@ -673,6 +620,93 @@ export class GitService {
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────
+
+  /** Files changed by any commit-like ref (hash or `stash@{n}`), vs its first parent. */
+  private async diffVsParent(git: SimpleGit, ref: string): Promise<GitFileChange[]> {
+    const safeRef = ref.trim()
+    const result = await git.show([`${safeRef}^!`, '--stat', '--format='])
+    const lines = result.split('\n').filter((line) => line.trim())
+    const changes: GitFileChange[] = []
+    for (const line of lines) {
+      const match = /^(.+?)\s+\|\s+(\d+)\s+([+-]+)/u.exec(line)
+      if (match) {
+        const path = match[1]?.trim() ?? ''
+        const statusChar = match[3]?.[0] ?? 'M'
+        const status: GitFileStatus =
+          statusChar === '+' ? 'added' : statusChar === '-' ? 'deleted' : 'modified'
+        changes.push({ path, status, staged: false })
+      }
+    }
+    return changes
+  }
+
+  /** Per-file diff for any commit-like ref (hash or `stash@{n}`), vs its first parent. */
+  private async fileDiffVsParent(
+    git: SimpleGit,
+    directory: string,
+    ref: string,
+    relativePath: string
+  ): Promise<GitDiff> {
+    const safeRef = ref.trim()
+    const safePath = this.assertRelativePath(directory, relativePath)
+    const parentRef = `${safeRef}^`
+    const parentExists = await this.refExists(git, parentRef)
+    if (!parentExists) {
+      // Root commit: the whole file is new, reuse the untracked/added shape.
+      const blob = await this.readBlob(git, `${safeRef}:${safePath}`)
+      if (!blob) return this.emptyDiff(safePath, false)
+      const additions = blob.content.length === 0 ? 0 : blob.content.split('\n').length
+      return {
+        path: safePath,
+        staged: false,
+        content: blob.content
+          .split('\n')
+          .map((line) => `+${line}`)
+          .join('\n'),
+        before: '',
+        after: blob.content,
+        binary: blob.content.includes('\0'),
+        additions,
+        deletions: 0,
+        truncated: blob.truncated
+      }
+    }
+    const content = await git.diff([parentRef, safeRef, '--', safePath])
+    const summary = await git.diffSummary([parentRef, safeRef, '--', safePath])
+    const file = summary.files[0]
+    const additions =
+      file && 'insertions' in file && typeof file.insertions === 'number' ? file.insertions : 0
+    const deletions =
+      file && 'deletions' in file && typeof file.deletions === 'number' ? file.deletions : 0
+    const binary = file?.binary ?? false
+    const truncated = Buffer.byteLength(content, 'utf-8') > MAX_DIFF_BYTES
+    const boundedContent = truncated
+      ? `${content.slice(0, MAX_DIFF_BYTES)}\n… (diff truncated to ${MAX_DIFF_BYTES} bytes)`
+      : content
+
+    let before: string | undefined
+    let after: string | undefined
+    let sideTruncated = false
+    if (!binary) {
+      const beforeBlob = await this.readBlob(git, `${parentRef}:${safePath}`)
+      const afterBlob = await this.readBlob(git, `${safeRef}:${safePath}`)
+      before = beforeBlob?.content
+      after = afterBlob?.content
+      sideTruncated = (beforeBlob?.truncated ?? false) || (afterBlob?.truncated ?? false)
+    }
+
+    return {
+      path: safePath,
+      staged: false,
+      content: boundedContent,
+      binary,
+      additions,
+      deletions,
+      truncated: truncated || sideTruncated,
+      before,
+      after
+    }
+  }
 
   /** Resolve a project-relative path and forbid escaping the repository root. */
   private assertRelativePath(directory: string, path: string): string {

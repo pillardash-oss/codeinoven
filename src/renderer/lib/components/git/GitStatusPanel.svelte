@@ -7,6 +7,7 @@
     GitDiff,
     GitFileChange,
     GitResetMode,
+    GitStashEntry,
     GitHubUser
   } from '$shared/types'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
@@ -84,6 +85,13 @@
   let commitDiffErrors = $state<Record<string, string | null>>({})
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
+  let selectedStash = $state<GitStashEntry | null>(null)
+  let loadingStashDiff = $state(false)
+  let stashDiffChanges = $state<GitFileChange[]>([])
+  let stashDiffs = $state<Record<string, GitDiff>>({})
+  let stashExpanded = $state<Record<string, boolean>>({})
+  let loadingStashDiffFile = $state<Record<string, boolean>>({})
+  let stashDiffErrors = $state<Record<string, string | null>>({})
 
   const resetOptions: Array<{ mode: GitResetMode; label: string; hint: string }> = [
     { mode: 'soft', label: 'Soft', hint: 'keep index + worktree' },
@@ -273,6 +281,48 @@
     }
   }
 
+  async function selectStash(stash: GitStashEntry): Promise<void> {
+    selectedStash = stash
+    loadingStashDiff = true
+    stashDiffChanges = await gitState.getStashDiff(projectId, stash.id)
+    stashDiffs = {}
+    stashExpanded = {}
+    loadingStashDiffFile = {}
+    stashDiffErrors = {}
+    loadingStashDiff = false
+  }
+
+  function clearSelectedStash(): void {
+    selectedStash = null
+    stashDiffChanges = []
+    stashDiffs = {}
+    stashExpanded = {}
+    loadingStashDiffFile = {}
+    stashDiffErrors = {}
+  }
+
+  async function toggleStashDiff(change: GitFileChange): Promise<void> {
+    const stash = selectedStash
+    if (!stash) return
+    if (stashExpanded[change.path]) {
+      stashExpanded = { ...stashExpanded, [change.path]: false }
+      return
+    }
+    stashExpanded = { ...stashExpanded, [change.path]: true }
+    stashDiffErrors = { ...stashDiffErrors, [change.path]: null }
+    if (stashDiffs[change.path]) return
+    loadingStashDiffFile = { ...loadingStashDiffFile, [change.path]: true }
+    try {
+      const diff = await gitState.getStashFileDiff(projectId, stash.id, change.path)
+      stashDiffs = { ...stashDiffs, [change.path]: diff }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'The diff could not be loaded'
+      stashDiffErrors = { ...stashDiffErrors, [change.path]: message }
+    } finally {
+      loadingStashDiffFile = { ...loadingStashDiffFile, [change.path]: false }
+    }
+  }
+
   function startAmend(): void {
     const commit = selectedCommit
     if (!commit) return
@@ -443,6 +493,7 @@
   async function popStash(id?: string): Promise<void> {
     await gitState.popStash(projectId, id)
     if (!gitState.error) {
+      clearSelectedStash()
       leaveStashesTabIfEmpty()
       void refreshStatus()
       void reloadHistory()
@@ -464,6 +515,7 @@
     stashDropTarget = null
     await gitState.dropStash(projectId, target)
     if (!gitState.error) {
+      clearSelectedStash()
       leaveStashesTabIfEmpty()
       void refreshStatus()
     }
@@ -1014,15 +1066,23 @@
         </div>
       {:else if activeTab === 'stashes'}
         <div class="p-2">
-          <div class="overflow-hidden rounded-lg border border-border bg-surface">
-            {#each gitState.stashes as stash (stash.id)}
-              <div
-                class="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-elevated/40"
-              >
-                <Archive size={12} class="shrink-0 text-dimmed" />
+          {#if selectedStash}
+            {@const stash = selectedStash}
+            <!-- Stash diff view -->
+            <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  title="Back to stash list"
+                  aria-label="Back to stash list"
+                  onclick={clearSelectedStash}
+                >
+                  <ArrowLeft size={12} />
+                </button>
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-[11px] leading-snug text-foreground">{stash.message}</p>
-                  <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                  <p class="truncate text-[11px] font-medium text-foreground">{stash.message}</p>
+                  <div class="flex items-center gap-1.5 text-[9px] text-dimmed">
                     <span class="font-mono">{stash.id}</span>
                     {#if stash.branch}
                       <span>·</span>
@@ -1032,31 +1092,101 @@
                     <span>{relativeTime(stash.date)}</span>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                  disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
-                  title="Restore stash {stash.id} into the working tree"
-                  onclick={() => void popStash(stash.id)}
-                >
-                  {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
-                </button>
-                <button
-                  type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                  disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
-                  title="Discard stash {stash.id}"
-                  aria-label="Discard stash {stash.id}"
-                  onclick={() => requestStashDrop(stash.id)}
-                >
-                  <Trash2 size={12} />
-                </button>
               </div>
-            {/each}
-          </div>
-          <p class="mt-2 px-1 text-[9px] leading-relaxed text-dimmed">
-            Popping restores a stash into your working tree and removes it from this list.
-          </p>
+            </div>
+            <div class="p-2">
+              {#if loadingStashDiff}
+                <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
+                  <Loader2 size={14} class="animate-spin" />
+                  Loading changes
+                </div>
+              {:else if stashDiffChanges.length === 0}
+                <div class="flex flex-col items-center justify-center py-12 text-center">
+                  <Archive size={22} class="mx-auto mb-2 text-dimmed" />
+                  <p class="text-xs font-medium text-muted">No file changes</p>
+                  <p class="mt-1 text-[10px] text-dimmed">This stash has no changes.</p>
+                </div>
+              {:else}
+                <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                  <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                    <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                      Changed files
+                    </span>
+                    <span class="text-[8px] tabular-nums text-dimmed">
+                      {stashDiffChanges.length}
+                    </span>
+                  </div>
+                  {#each stashDiffChanges as change (change.path)}
+                    <GitFileRow
+                      {change}
+                      diff={stashDiffs[change.path] ?? null}
+                      loadingDiff={loadingStashDiffFile[change.path] ?? false}
+                      error={stashDiffErrors[change.path] ?? null}
+                      expanded={stashExpanded[change.path] ?? false}
+                      readonly
+                      onToggleDiff={() => void toggleStashDiff(change)}
+                      onToggleStage={() => {}}
+                    />
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {:else}
+            <div class="overflow-hidden rounded-lg border border-border bg-surface">
+              {#each gitState.stashes as stash (stash.id)}
+                <div
+                  class="flex items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 hover:bg-elevated/40"
+                >
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 items-center gap-2 rounded text-left transition-colors hover:text-foreground"
+                    title="View changes in stash {stash.id}"
+                    aria-label="View changes in stash {stash.id}"
+                    onclick={() => void selectStash(stash)}
+                  >
+                    <Archive size={12} class="shrink-0 text-dimmed" />
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[11px] leading-snug text-foreground">
+                        {stash.message}
+                      </span>
+                      <span class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                        <span class="font-mono">{stash.id}</span>
+                        {#if stash.branch}
+                          <span>·</span>
+                          <span class="truncate">{stash.branch}</span>
+                        {/if}
+                        <span>·</span>
+                        <span>{relativeTime(stash.date)}</span>
+                      </span>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                    title="Restore stash {stash.id} into the working tree"
+                    onclick={() => void popStash(stash.id)}
+                  >
+                    {gitState.isBusy('stash-pop') ? 'Popping…' : 'Pop'}
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                    disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                    title="Discard stash {stash.id}"
+                    aria-label="Discard stash {stash.id}"
+                    onclick={() => requestStashDrop(stash.id)}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+            <p class="mt-2 px-1 text-[9px] leading-relaxed text-dimmed">
+              Click a stash to inspect its changes. Popping restores it to your working tree and
+              removes it from this list.
+            </p>
+          {/if}
         </div>
       {/if}
     {/if}

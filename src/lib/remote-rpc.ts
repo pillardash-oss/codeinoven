@@ -199,6 +199,8 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'git:stashList',
   'git:stashPop',
   'git:stashDrop',
+  'git:stashDiff',
+  'git:stashFileDiff',
   'git:abortMerge',
   'git:abortRebase',
   'github:authStatus',

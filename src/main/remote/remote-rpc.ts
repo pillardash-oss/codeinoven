@@ -953,6 +953,17 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2])
         )
+      case 'git:stashDiff':
+        return this.gitService.stashDiff(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:stashFileDiff':
+        return this.gitService.stashFileDiff(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
       case 'git:reset':
         return this.syncBranchAfterCheckout(
           this.string(args[0]),
