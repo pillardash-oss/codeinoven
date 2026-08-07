@@ -362,23 +362,35 @@
     Boolean(workspaceState.selectedThread && contextSidebarState.visible)
   )
 
+  /** Whether the terminal area is currently visible (dock at the bottom, or a
+   * focused terminal tab inside the sidebar when not docked). */
+  let terminalOpen = $derived(
+    contextSidebarState.terminalPlacement === 'bottom'
+      ? contextSidebarState.terminalDockVisible
+      : Boolean(contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'terminal')
+  )
+
   function openTerminal(): void {
     const thread = workspaceState.selectedThread
     if (!thread) return
     const tab = contextSidebarState.activeTab
-    if (
-      contextSidebarState.visible &&
-      tab?.kind === 'terminal' &&
-      tab.projectId === thread.projectId &&
-      tab.threadId === thread.id
-    ) {
-      // When the terminal lives in its own bottom dock, toggle just the dock
-      // so an open sidebar (files, git, …) stays put.
-      if (contextSidebarState.terminalPlacement === 'bottom') {
+    const terminalActive =
+      tab?.kind === 'terminal' && tab.projectId === thread.projectId && tab.threadId === thread.id
+
+    if (contextSidebarState.terminalPlacement === 'bottom') {
+      // Terminal lives in its own bottom dock — the button toggles just the
+      // dock; the right sidebar is never affected.
+      if (terminalActive && contextSidebarState.terminalDockVisible) {
         contextSidebarState.toggleTerminalDock()
       } else {
-        contextSidebarState.hide()
+        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
       }
+      return
+    }
+
+    // Terminal lives in the sidebar — toggle the whole context panel.
+    if (contextSidebarState.visible && terminalActive) {
+      contextSidebarState.hide()
     } else {
       contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
     }
@@ -1216,9 +1228,11 @@
     <!-- Terminal — only when a thread is open in a terminal-hosting view, never in chat mode or scope view -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.terminalAvailable}
       <button
-        class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label="Open terminal"
-        title="Open terminal"
+        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {terminalOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
+        title={terminalOpen ? 'Hide terminal' : 'Show terminal'}
         onclick={openTerminal}
       >
         <SquareTerminal size={16} />
