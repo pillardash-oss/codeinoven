@@ -7,6 +7,7 @@
     BrainCircuit,
     Check,
     ChevronDown,
+    Download,
     FileText,
     GitBranch,
     History,
@@ -15,6 +16,7 @@
     MoreVertical,
     PanelLeft,
     Power,
+    Share,
     X
   } from '@lucide/svelte'
   import ThreadView from '$lib/components/threads/ThreadView.svelte'
@@ -28,6 +30,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
+  import { pwaInstall } from '$lib/remote/pwa-install.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { workspaceState, threadSort } from '$lib/stores/workspace.svelte'
@@ -70,6 +73,7 @@
   let memoryOpen = $state(false)
   let historyOpen = $state(false)
   let gitOpen = $state(false)
+  let installGuideOpen = $state(false)
   let selectedThread = $derived(workspaceState.selectedThread)
   let selectedProject = $derived(workspaceState.activeProject)
 
@@ -84,6 +88,19 @@
   let hasOverflowAttention = $derived(
     memoryProposalState.hasPending || notificationPanelState.totalCount > 0
   )
+
+  /** Install affordance in the sidebar footer — hidden once the app is installed. */
+  let showInstall = $derived(
+    !pwaInstall.installed && (pwaInstall.canInstall || pwaInstall.iosGuideAvailable)
+  )
+
+  function handleInstall(): void {
+    if (pwaInstall.canInstall) {
+      void pwaInstall.install()
+    } else {
+      installGuideOpen = true
+    }
+  }
 
   // ─── Viewport height ───────────────────────────────────────────────────
   // `100dvh` accounts for the browser chrome but not the on-screen keyboard,
@@ -318,6 +335,9 @@
     mobileNotifications.setOpenHandler(
       (projectId, threadId) => void openThreadById(projectId, threadId)
     )
+    // Ask once per browser for system notification permission on first connect;
+    // afterwards the notifications sheet switch remains the control.
+    void mobileNotifications.maybePrompt()
     const onServiceWorkerMessage = (event: MessageEvent): void => {
       const record = event.data
       if (record?.type === 'notification:open' && record.projectId && record.threadId) {
@@ -826,17 +846,102 @@
         {/if}
       </div>
 
-      <!-- Sidebar footer: the only setting is disconnect. -->
+      <!-- Sidebar footer: install (until added to the home screen) + disconnect. -->
       <div class="shrink-0 border-t border-border p-2">
+        <div class="flex gap-2">
+          {#if showInstall}
+            <button
+              type="button"
+              class="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+              title={pwaInstall.iosGuideAvailable
+                ? 'Add CodeInOven to your home screen'
+                : 'Install CodeInOven on this device'}
+              onclick={handleInstall}
+            >
+              <Download size={15} />
+              Install
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-elevated text-[14px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
+            title="Disconnect from the desktop"
+            onclick={() => onDisconnect()}
+          >
+            <Power size={15} />
+            Disconnect
+          </button>
+        </div>
+      </div>
+    </aside>
+  {/if}
+
+  <!-- iOS "Add to Home Screen" guide sheet. -->
+  {#if installGuideOpen}
+    <div
+      class="fixed inset-0 z-40 bg-black/50"
+      role="presentation"
+      onclick={() => (installGuideOpen = false)}
+    ></div>
+    <aside
+      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[82dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
+      aria-label="Install CodeInOven"
+    >
+      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          Install CodeInOven
+        </p>
         <button
           type="button"
-          class="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-elevated text-[14px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
-          title="Disconnect from the desktop"
-          onclick={() => onDisconnect()}
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
+          aria-label="Close install guide"
+          title="Close install guide"
+          onclick={() => (installGuideOpen = false)}
         >
-          <Power size={15} />
-          Disconnect
+          <X size={16} />
         </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5">
+        <p class="text-[14px] leading-relaxed text-foreground">
+          Install CodeInOven for a full-screen app icon and notifications that work in the
+          background.
+        </p>
+        <ol class="mt-4 space-y-4">
+          <li class="flex items-start gap-3">
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+              >1</span
+            >
+            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              Tap the <span class="text-foreground">Share</span> button in Safari's toolbar.
+            </span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+              >2</span
+            >
+            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              Choose <span class="text-foreground">Add to Home Screen</span>.
+            </span>
+          </li>
+          <li class="flex items-start gap-3">
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+              >3</span
+            >
+            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+              Tap <span class="text-foreground">Add</span>. CodeInOven opens like its own app.
+            </span>
+          </li>
+        </ol>
+        <div class="mt-5 flex items-start gap-2.5 rounded-xl bg-elevated px-3.5 py-3">
+          <Share size={14} class="mt-0.5 shrink-0 text-primary" />
+          <p class="text-[12px] leading-relaxed text-muted">
+            Open the installed icon going forward — the install button here disappears once it's
+            added.
+          </p>
+        </div>
       </div>
     </aside>
   {/if}

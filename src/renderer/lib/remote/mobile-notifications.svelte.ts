@@ -24,11 +24,17 @@ import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { remoteLog } from './logger'
 
 const ENABLED_KEY = 'codeinoven.remote.notificationsEnabled'
+const ASKED_KEY = 'codeinoven.remote.notificationsAsked'
 const APP_SLUG = 'codeinoven'
 
 export type MobileNotificationPermission = NotificationPermission | 'unsupported'
 
 export type OpenNotificationHandler = (projectId: string, threadId: string) => void
+
+/** `renotify` is a real Web Notification option absent from this project's lib.dom. */
+interface ReplacingNotificationOptions extends NotificationOptions {
+  renotify?: boolean
+}
 
 class MobileNotifications {
   /** User opt-in — persisted so it survives reloads. */
@@ -82,6 +88,28 @@ class MobileNotifications {
     this.persist(false)
   }
 
+  /**
+   * One-time proactive permission prompt on first connect. The browser prompt
+   * is shown at most once per browser; afterwards control lives in the
+   * notifications sheet's switch, which still re-requests a `default`
+   * permission when the user flips it on.
+   */
+  async maybePrompt(): Promise<MobileNotificationPermission> {
+    if (typeof Notification === 'undefined') {
+      this.permission = 'unsupported'
+      return this.permission
+    }
+    if (this.permission !== 'default' || this.readAsked()) return this.permission
+    this.persistAsked(true)
+    const result = await Notification.requestPermission()
+    this.permission = result
+    if (result === 'granted') {
+      this.enabled = true
+      this.persist(true)
+    }
+    return result
+  }
+
   private handle(payload: AgentNotificationPayload): void {
     if (!payload || typeof payload !== 'object') return
     notificationPanelState.add(payload)
@@ -92,13 +120,21 @@ class MobileNotifications {
   private async showSystemNotification(payload: AgentNotificationPayload): Promise<void> {
     try {
       const registration = await navigator.serviceWorker.ready
-      registration.showNotification(payload.title, {
+      const options: ReplacingNotificationOptions = {
         body: payload.body,
-        tag: payload.id,
+        // One notification per thread: a newer agent status replaces the older
+        // one instead of stacking duplicates for every status transition.
+        tag: `${APP_SLUG}-${payload.projectId}-${payload.threadId}`,
+        renotify: true,
+        // Attention and error demand action, so they stay until tapped.
+        // Completion is informational and auto-dismisses quietly.
+        requireInteraction: payload.kind === 'attention' || payload.kind === 'error',
+        silent: payload.kind === 'completed',
         data: { projectId: payload.projectId, threadId: payload.threadId },
         icon: './icon.png',
         badge: './icon.png'
-      })
+      }
+      registration.showNotification(payload.title, options)
     } catch (error) {
       remoteLog.error(`Phone system notification failed: ${String(error)}`)
     }
@@ -114,6 +150,23 @@ class MobileNotifications {
       return localStorage.getItem(ENABLED_KEY) === '1'
     } catch {
       return false
+    }
+  }
+
+  private readAsked(): boolean {
+    try {
+      return localStorage.getItem(ASKED_KEY) === '1'
+    } catch {
+      return false
+    }
+  }
+
+  private persistAsked(asked: boolean): void {
+    try {
+      if (asked) localStorage.setItem(ASKED_KEY, '1')
+      else localStorage.removeItem(ASKED_KEY)
+    } catch {
+      // best-effort
     }
   }
 
