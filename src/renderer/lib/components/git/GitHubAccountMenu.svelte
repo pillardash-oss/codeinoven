@@ -43,7 +43,11 @@
       title="GitHub account — {user.name ?? user.login} (@{user.login})"
       aria-label="GitHub account for {user.login}"
     >
-      <img src={user.avatarUrl} alt="" class="h-5 w-5 rounded-full bg-elevated" />
+      {#if user.avatarUrl}
+        <img src={user.avatarUrl} alt="" class="h-5 w-5 rounded-full bg-elevated" />
+      {:else}
+        <VendorIcon name="GitHub" size={14} />
+      {/if}
     </DropdownMenu.Trigger>
 
     <DropdownMenu.Portal>
@@ -55,7 +59,15 @@
         class="z-50 w-60 overflow-hidden rounded-xl border border-border bg-surface shadow-xl"
       >
         <div class="flex items-center gap-2 border-b border-border px-3 py-2">
-          <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 rounded-full bg-elevated" />
+          {#if user.avatarUrl}
+            <img src={user.avatarUrl} alt="" class="h-7 w-7 shrink-0 rounded-full bg-elevated" />
+          {:else}
+            <span
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated"
+            >
+              <VendorIcon name="GitHub" size={14} />
+            </span>
+          {/if}
           <div class="min-w-0 flex-1">
             <p class="truncate text-[11px] font-medium text-foreground">
               {user.name ?? user.login}
@@ -107,12 +119,11 @@
 {:else if github.configured}
   <button
     type="button"
-    class="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+    class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
     title="Sign in to GitHub"
     aria-label="Sign in to GitHub"
     onclick={onSignIn}
   >
-    <VendorIcon name="GitHub" size={13} class="shrink-0" />
-    Sign in
+    <VendorIcon name="GitHub" size={14} />
   </button>
 {/if}

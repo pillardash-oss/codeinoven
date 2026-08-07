@@ -2520,7 +2520,12 @@ export interface GitHubAuthStatus {
 export interface GitHubUser {
   login: string
   name: string | null
-  avatarUrl: string
+  /**
+   * Avatar as a `data:` URL — the renderer's CSP blocks remote image hosts, so
+   * the main process downloads and inlines it. Null when the download failed;
+   * the UI falls back to the GitHub mark.
+   */
+  avatarUrl: string | null
 }
 
 /** One entry from `git stash list`, e.g. `stash@{0}`. */

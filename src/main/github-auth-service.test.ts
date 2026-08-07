@@ -117,6 +117,13 @@ describe('GitHubAuthService', () => {
         avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4'
       })
     )
+    // Avatar download — inlined as a data URL because the renderer CSP blocks
+    // remote image hosts.
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers({ 'content-type': 'image/png' }),
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer
+    } as unknown as Response)
     const service = new GitHubAuthService(vault)
 
     await expect(service.status()).resolves.toEqual({
@@ -125,7 +132,7 @@ describe('GitHubAuthService', () => {
       user: {
         login: 'octocat',
         name: 'The Octocat',
-        avatarUrl: 'https://avatars.githubusercontent.com/u/1?v=4'
+        avatarUrl: 'data:image/png;base64,AQID'
       }
     })
     await expect(service.resolveToken()).resolves.toBe('gho_secret')
