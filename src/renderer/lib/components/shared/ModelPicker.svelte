@@ -37,7 +37,6 @@
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
     label?: string
-    responsiveLabel?: boolean
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
@@ -63,7 +62,6 @@
     disabled = false,
     variant = 'compact',
     label,
-    responsiveLabel = false,
     fast = false,
     onSelect,
     onToggleFavorite,
@@ -441,9 +439,7 @@
       {:else}
         <Cpu size={12} />
       {/if}
-      <span class="min-w-0 flex-1 truncate text-left" class:responsive-model-label={responsiveLabel}
-        >{selectedLabel}</span
-      >
+      <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
       {#if fast}
         <Zap
           size={11}
@@ -841,11 +837,3 @@
     </span>
   </button>
 {/snippet}
-
-<style>
-  @container (max-width: 520px) {
-    .responsive-model-label {
-      display: none;
-    }
-  }
-</style>
