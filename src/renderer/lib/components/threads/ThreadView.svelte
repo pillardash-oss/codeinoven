@@ -753,6 +753,12 @@
             rateLimits: []
           }),
           rateLimits: currentUsage.rateLimits,
+          ...(currentUsage.contextWindow !== undefined
+            ? { contextWindow: currentUsage.contextWindow }
+            : {}),
+          ...(currentUsage.contextUsed !== undefined
+            ? { contextUsed: currentUsage.contextUsed }
+            : {}),
           ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
         }
         commitContextUsage(merged)

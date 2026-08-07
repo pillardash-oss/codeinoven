@@ -266,7 +266,12 @@ export interface HarnessDriver {
    */
   readAccountUsage?(
     projectPath: string
-  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null>
+  ): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    contextWindow?: number
+    contextUsed?: number
+  } | null>
 
   /** Build, but do not execute, an interactive login handoff. */
   beginLogin?(projectPath: string, options?: HarnessLoginOptions): Promise<HarnessLoginHandoff>

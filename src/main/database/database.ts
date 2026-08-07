@@ -189,6 +189,12 @@ export class Database {
     if (!columns.some((column) => column.name === 'usage_credits_json')) {
       this.db?.exec('ALTER TABLE agent_messages ADD COLUMN usage_credits_json TEXT')
     }
+    if (!columns.some((column) => column.name === 'context_window')) {
+      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN context_window INTEGER')
+    }
+    if (!columns.some((column) => column.name === 'context_used')) {
+      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN context_used INTEGER')
+    }
   }
 
   /** Fresh DBs already carry the harness_usage table; older dev DBs add it now. */
