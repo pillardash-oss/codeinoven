@@ -148,6 +148,8 @@ const INVOKE_CHANNELS = [
   'git:stashList',
   'git:stashPop',
   'git:stashDrop',
+  'git:stashDiff',
+  'git:stashFileDiff',
   'git:abortMerge',
   'git:abortRebase',
   'pr:create',

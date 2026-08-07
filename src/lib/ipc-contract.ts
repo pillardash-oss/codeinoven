@@ -676,6 +676,8 @@ export interface IpcInvokeContract {
   'git:stashList': Contract<[projectId: string], GitStashEntry[]>
   'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
   'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
+  'git:stashDiff': Contract<[projectId: string, id: string], GitFileChange[]>
+  'git:stashFileDiff': Contract<[projectId: string, id: string, path: string], GitDiff>
   'git:abortMerge': Contract<[projectId: string], GitStatus>
   'git:abortRebase': Contract<[projectId: string], GitStatus>
   'pr:create': Contract<[projectId: string, input: PrCreateInput], PullRequestReference>

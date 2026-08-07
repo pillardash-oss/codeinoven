@@ -2541,6 +2541,21 @@ export function registerIpcHandlers(
       validateStashId(id)
     )
   )
+  ipcMain.handle('git:stashDiff', async (_, projectId: unknown, id: unknown) =>
+    gitService.stashDiff(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id) ?? ''
+    )
+  )
+  ipcMain.handle(
+    'git:stashFileDiff',
+    async (_, projectId: unknown, id: unknown, relativePath: unknown) =>
+      gitService.stashFileDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateStashId(id) ?? '',
+        validateGitRelativePath(relativePath)
+      )
+  )
   ipcMain.handle('git:abortMerge', async (_, projectId: unknown) =>
     gitService.abortMerge(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )

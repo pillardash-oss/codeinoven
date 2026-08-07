@@ -469,6 +469,18 @@ class GitState {
     return invoke('git:commitFileDiff', projectId, hash, path)
   }
 
+  async getStashDiff(projectId: string, id: string): Promise<GitFileChange[]> {
+    try {
+      return await invoke('git:stashDiff', projectId, id)
+    } catch {
+      return []
+    }
+  }
+
+  async getStashFileDiff(projectId: string, id: string, path: string): Promise<GitDiff> {
+    return invoke('git:stashFileDiff', projectId, id, path)
+  }
+
   async amend(projectId: string, message: string): Promise<void> {
     this.markBusy('amend', true)
     this.error = null
