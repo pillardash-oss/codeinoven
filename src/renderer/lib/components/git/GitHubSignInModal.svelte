@@ -4,7 +4,8 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import type { GitHubDeviceCode } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
-  import { Check, Copy, ExternalLink, Loader2, Smartphone } from '@lucide/svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { Check, Copy, ExternalLink, Loader2, TimerOff } from '@lucide/svelte'
 
   interface Props {
     onClose: () => void
@@ -18,7 +19,27 @@
   let message = $state('')
   let copied = $state(false)
   let polling = $state(false)
+  let remaining = $state(0)
   let timer: ReturnType<typeof setTimeout> | undefined
+  let ticker: ReturnType<typeof setInterval> | undefined
+
+  /** Human-readable countdown, e.g. "14 min 59 sec" → "14:59". */
+  const countdown = $derived.by(() => {
+    const total = Math.max(0, remaining)
+    const minutes = Math.floor(total / 60)
+    const seconds = total % 60
+    if (minutes === 0) return `${seconds} second${seconds === 1 ? '' : 's'}`
+    return `${minutes}:${String(seconds).padStart(2, '0')}`
+  })
+
+  function startCountdown(seconds: number): void {
+    if (ticker) clearInterval(ticker)
+    remaining = seconds
+    ticker = setInterval(() => {
+      remaining = Math.max(0, remaining - 1)
+      if (remaining === 0 && ticker) clearInterval(ticker)
+    }, 1000)
+  }
 
   async function startFlow(): Promise<void> {
     phase = 'starting'
@@ -30,6 +51,7 @@
     }
     device = result
     phase = 'waiting'
+    startCountdown(result.expiresIn)
     void poll()
   }
 
@@ -80,6 +102,7 @@
 
   onDestroy(() => {
     if (timer) clearTimeout(timer)
+    if (ticker) clearInterval(ticker)
   })
 </script>
 
@@ -91,7 +114,8 @@
     </div>
   {:else if phase === 'waiting' && device}
     <div class="space-y-4">
-      <p class="text-xs leading-relaxed text-muted">
+      <p class="flex items-start gap-2 text-xs leading-relaxed text-muted">
+        <VendorIcon name="GitHub" size={14} class="mt-0.5 text-foreground" />
         Enter this code on GitHub to connect your account. No password is shared with CodeInOven.
       </p>
 
@@ -132,7 +156,11 @@
 
       <p class="flex items-center justify-center gap-1.5 text-[10px] text-dimmed">
         <Loader2 size={11} class="animate-spin" />
-        Waiting for you to authorize… (code expires in {device.expiresIn}s)
+        {#if remaining > 0}
+          Waiting for you to authorize… code expires in {countdown}
+        {:else}
+          Waiting for you to authorize…
+        {/if}
       </p>
     </div>
   {:else if phase === 'authorized'}
@@ -155,7 +183,7 @@
   {:else if phase === 'expired'}
     <div class="flex flex-col items-center justify-center py-8 text-center">
       <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-warning/10">
-        <Smartphone size={18} class="text-warning" />
+        <TimerOff size={18} class="text-warning" />
       </div>
       <p class="text-xs font-medium text-foreground">Code expired</p>
       <p class="mt-1 max-w-[30ch] text-[10px] leading-relaxed text-dimmed">

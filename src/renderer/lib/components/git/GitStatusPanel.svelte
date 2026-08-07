@@ -1327,8 +1327,9 @@
     <GitHubSignInModal
       onClose={() => (showGitHubSignIn = false)}
       onConnected={() => {
-        githubConnected = true
-        showGitHubSignIn = false
+        // Reload the full status so the avatar/name land in the branch picker
+        // instead of leaving a stale "Sign in" button behind.
+        void loadGitHubAuth()
       }}
     />
   {/if}

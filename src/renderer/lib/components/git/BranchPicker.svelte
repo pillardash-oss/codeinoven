@@ -6,11 +6,15 @@
     Plus,
     Search,
     Trash2,
-    LogIn,
     LogOut,
-    GitFork
+    GitFork,
+    ExternalLink,
+    ChevronRight,
+    User
   } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import type { GitBranchInfo, GitHubAuthStatus } from '$shared/types'
 
   interface Props {
@@ -57,6 +61,21 @@
   const remoteBranches = $derived(filtered.filter((b) => b.remote))
 
   const githubUser = $derived(github.user ?? null)
+
+  /** Browsable https URL for the remote, from either an ssh or https origin. */
+  const remoteWebUrl = $derived.by(() => {
+    const url = primaryRemote?.url?.trim()
+    if (!url) return null
+    const ssh = /^(?:ssh:\/\/)?git@([^:/]+)[:/](.+?)(?:\.git)?$/.exec(url)
+    if (ssh) return `https://${ssh[1]}/${ssh[2]}`
+    if (/^https?:\/\//.test(url)) return url.replace(/\.git$/, '')
+    return null
+  })
+
+  async function openUrl(url: string): Promise<void> {
+    open = false
+    await openInBrowser(url)
+  }
 
   function handleSelect(branch: string): void {
     if (branch === currentBranch) return
@@ -133,31 +152,65 @@
       <!-- GitHub account -->
       <div class="border-b border-border px-3 py-2">
         {#if github.connected && githubUser}
-          <div class="flex items-center gap-2">
-            <img
-              src={githubUser.avatarUrl}
-              alt=""
-              class="h-6 w-6 shrink-0 rounded-full bg-elevated"
-            />
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[11px] font-medium text-foreground">
-                {githubUser.name ?? githubUser.login}
-              </p>
-              <p class="truncate text-[9px] text-dimmed">@{githubUser.login}</p>
-            </div>
-            <button
-              type="button"
-              class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              title="Sign out of GitHub"
-              aria-label="Sign out of GitHub"
-              onclick={(e: MouseEvent) => {
-                e.stopPropagation()
-                onSignOut()
-              }}
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger
+              class="flex w-full items-center gap-2 rounded-md px-1 py-1 outline-none transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
+              title="GitHub account actions"
+              aria-label="GitHub account actions"
             >
-              <LogOut size={12} />
-            </button>
-          </div>
+              <img
+                src={githubUser.avatarUrl}
+                alt=""
+                class="h-6 w-6 shrink-0 rounded-full bg-elevated"
+              />
+              <div class="min-w-0 flex-1 text-left">
+                <p class="truncate text-[11px] font-medium text-foreground">
+                  {githubUser.name ?? githubUser.login}
+                </p>
+                <p class="truncate text-[9px] text-dimmed">@{githubUser.login}</p>
+              </div>
+              <ChevronRight size={12} class="shrink-0 text-dimmed" />
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent
+              sideOffset={6}
+              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-xl"
+            >
+              {#if remoteWebUrl}
+                <DropdownMenu.Item
+                  class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                  onSelect={() => void openUrl(remoteWebUrl)}
+                >
+                  <ExternalLink size={12} class="shrink-0 text-dimmed" />
+                  Open repository on GitHub
+                </DropdownMenu.Item>
+              {/if}
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                onSelect={() => void openUrl(`https://github.com/${githubUser.login}`)}
+              >
+                <User size={12} class="shrink-0 text-dimmed" />
+                View my GitHub profile
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none transition-colors data-highlighted:bg-elevated"
+                onSelect={() => void openUrl('https://github.com/pulls')}
+              >
+                <GitFork size={12} class="shrink-0 text-dimmed" />
+                My pull requests
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator class="my-1 h-px bg-border" />
+              <DropdownMenu.Item
+                class="flex cursor-default items-center gap-2 px-3 py-1.5 text-[11px] text-danger outline-none transition-colors data-highlighted:bg-danger/10"
+                onSelect={() => {
+                  open = false
+                  onSignOut()
+                }}
+              >
+                <LogOut size={12} class="shrink-0" />
+                Sign out of GitHub
+              </DropdownMenu.Item>
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
         {:else if github.configured}
           <button
             type="button"
@@ -169,7 +222,7 @@
               onSignIn()
             }}
           >
-            <LogIn size={12} class="shrink-0" />
+            <VendorIcon name="GitHub" size={13} class="shrink-0" />
             Sign in to GitHub
           </button>
         {:else}
