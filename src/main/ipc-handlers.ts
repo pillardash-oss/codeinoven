@@ -17,6 +17,7 @@ import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
 import { DiagnosticsService } from './diagnostics-service'
+import { resolveFavicons } from './favicon-service'
 import { MemoryService, validateMemoryConfig } from './memory-service'
 import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
@@ -50,6 +51,7 @@ import {
   validatePushOptions,
   validateRemoteName,
   validateRemoteUrl,
+  validateFaviconHostnames,
   validateScopeBoard,
   validateScopeSlice,
   validateStashMessage,
@@ -2089,6 +2091,13 @@ export function registerIpcHandlers(
 
   ipcMain.handle('shell:openExternal', (_event, url: string) => {
     shell.openExternal(url)
+  })
+
+  // Resolve website favicons for external links. Hostnames are validated at the
+  // IPC boundary; data URLs returned by the resolver are image content only.
+  ipcMain.handle('web:favicon', async (_event, rawHostnames: unknown) => {
+    const hostnames = validateFaviconHostnames(rawHostnames)
+    return resolveFavicons(hostnames)
   })
 
   // Reveal a chat artifact (uploaded or agent-created file) in the system file manager.

@@ -12,6 +12,7 @@ import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
 import { linkifyFileCitations } from '$lib/agent-source-citations'
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
+import { faviconState } from '$lib/stores/favicons.svelte'
 
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
@@ -94,20 +95,45 @@ export function lexMarkdown(text: string): Token[] {
 
 // Rendered-block cache — every stream delta re-derives all tokens, but only
 // the last one's `raw` actually changes. Keyed by raw source, bounded so a
-// long session cannot grow it without limit.
+// long session cannot grow it without limit. The favicon version is folded in
+// so a resolved favicon re-renders a link with its icon (plain link before).
 const htmlCache = new Map<string, string>()
 const HTML_CACHE_LIMIT = 500
-const HTML_CACHE_VERSION = 2
+const HTML_CACHE_VERSION = 3
 
 /** Render a single non-code block token to sanitized HTML. */
 export function blockHtml(token: Token): string {
-  const cacheKey = `${HTML_CACHE_VERSION}:${token.raw}`
+  const hasExternalLink = EXTERNAL_LINK_SOURCE_PATTERN.test(token.raw)
+  // Only link-bearing blocks depend on favicon resolution, so the cache key is
+  // stable for everything else (no re-render churn as favicons resolve).
+  const cacheKey = hasExternalLink
+    ? `${HTML_CACHE_VERSION}:f${faviconState.version}:${token.raw}`
+    : `${HTML_CACHE_VERSION}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
-  const html = DOMPurify.sanitize(marked.parser([token]))
+  const sanitized = DOMPurify.sanitize(marked.parser([token]))
+  const html = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
+}
+
+const EXTERNAL_LINK_SOURCE_PATTERN = /https?:\/\//iu
+const EXTERNAL_LINK_OPEN = /<a\b[^>]*\bhref="https?:\/\/[^"]+"[^>]*>/giu
+
+/**
+ * Insert a favicon into external link anchors. The renderer CSP blocks remote
+ * images, so only already-resolved `data:` URLs are injected; unresolved links
+ * stay plain until `faviconState.version` bumps and the block re-renders.
+ */
+function injectLinkFavicons(html: string): string {
+  return html.replace(EXTERNAL_LINK_OPEN, (anchor) => {
+    const href = /\bhref="(https?:\/\/[^"]+)"/iu.exec(anchor)?.[1]
+    if (!href) return anchor
+    const dataUrl = faviconState.faviconFor(href)
+    if (!dataUrl) return anchor
+    return `${anchor}<img class="markdown-link-favicon" src="${dataUrl}" alt="" loading="lazy">`
+  })
 }
 
 function escapeHtml(value: string): string {
