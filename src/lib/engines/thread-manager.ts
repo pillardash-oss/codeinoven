@@ -148,8 +148,8 @@ export class ThreadManager {
   }
 
   async reorderThreads(projectId: string, orderedIds: string[]): Promise<Thread[]> {
-    const threads = orderedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
     this.threadRepo.batchUpdateSortOrder(orderedIds)
+    const threads = orderedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
     for (const thread of threads) {
       this.onChange?.(thread)
     }
