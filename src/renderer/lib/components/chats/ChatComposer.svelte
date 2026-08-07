@@ -322,6 +322,7 @@
   let imageDescriptorGateOpen = $state(false)
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
   let gateDonotAsk = $state(false)
+  let gateDirect = $state<boolean | undefined>(undefined)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
@@ -485,9 +486,10 @@
     )
   }
 
-  function openImageDescriptorGate(): void {
+  function openImageDescriptorGate(direct?: boolean): void {
     gateVisionSelection = imageDescriptorDefault ?? null
     gateDonotAsk = false
+    gateDirect = direct
     imageDescriptorGateOpen = true
   }
 
@@ -496,7 +498,7 @@
   }
 
   /** Persist the chosen vision model (thread + optional global default) and send. */
-  function confirmImageDescriptorGate(direct?: boolean): void {
+  function confirmImageDescriptorGate(): void {
     const selection = gateVisionSelection
     if (!selection) return
     if (onSettingsChange) onSettingsChange({ ...resolved, imageDescriptor: selection })
@@ -506,7 +508,7 @@
       onImageDescriptorAskAgainChange?.(true)
     }
     imageDescriptorGateOpen = false
-    performSend(direct)
+    performSend(gateDirect)
   }
 
   /**
@@ -683,7 +685,7 @@
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
     if (shouldInterceptImageGate()) {
-      openImageDescriptorGate()
+      openImageDescriptorGate(direct)
       return
     }
     performSend(direct)
