@@ -365,3 +365,34 @@ CREATE TABLE IF NOT EXISTS assignment_coordinator_snapshots (
   claimed_at    INTEGER NOT NULL,
   PRIMARY KEY (assignment_id, snapshot_hash)
 );`
+
+export const HARNESS_USAGE_SQL = `
+-- ─── Harness Usage Analytics ────────────────────────────────────────────
+-- Cumulative per-harness analytics for a thread's session. Rows are upserted
+-- by reconciling against agent_messages whenever a thread's messages change,
+-- so the table always mirrors persisted usage without double counting.
+CREATE TABLE IF NOT EXISTS harness_usage (
+  project_id           TEXT NOT NULL,
+  thread_id            TEXT NOT NULL,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT,
+  message_count        INTEGER NOT NULL DEFAULT 0,
+  cost_usd             REAL NOT NULL DEFAULT 0,
+  tokens_in            INTEGER NOT NULL DEFAULT 0,
+  tokens_out           INTEGER NOT NULL DEFAULT 0,
+  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
+  tokens_total         INTEGER NOT NULL DEFAULT 0,
+  duration_ms          INTEGER NOT NULL DEFAULT 0,
+  first_used_at        INTEGER NOT NULL,
+  last_used_at         INTEGER NOT NULL,
+  PRIMARY KEY (project_id, thread_id, harness_id, provider_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_thread
+  ON harness_usage(project_id, thread_id);
+
+CREATE INDEX IF NOT EXISTS idx_harness_usage_harness
+  ON harness_usage(harness_id);`

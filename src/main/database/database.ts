@@ -11,7 +11,8 @@ import {
   AGENT_MESSAGES_SQL,
   AGENT_MESSAGES_FTS_SQL,
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
-  MISC_TABLES_SQL
+  MISC_TABLES_SQL,
+  HARNESS_USAGE_SQL
 } from './schema'
 import { partsToSearchText } from './repositories/agent-message-repo'
 
@@ -50,6 +51,7 @@ export class Database {
     this.ensureThreadWorkflowSchema()
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
+    this.ensureHarnessUsageSchema()
     this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
 
     Logger.info('SQLite database initialised', { path: this.path })
@@ -155,6 +157,7 @@ export class Database {
     this.db?.exec(HISTORY_FTS_SQL)
     this.db?.exec(AGENT_MESSAGES_SQL)
     this.db?.exec(MISC_TABLES_SQL)
+    this.db?.exec(HARNESS_USAGE_SQL)
   }
 
   private ensureThreadWorkflowSchema(): void {
@@ -177,6 +180,13 @@ export class Database {
     const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
     if (!columns.some((column) => column.name === 'usage_credits_json')) {
       this.db?.exec('ALTER TABLE agent_messages ADD COLUMN usage_credits_json TEXT')
+    }
+  }
+
+  /** Fresh DBs already carry the harness_usage table; older dev DBs add it now. */
+  private ensureHarnessUsageSchema(): void {
+    if (!this.tableExists('harness_usage')) {
+      this.db?.exec(HARNESS_USAGE_SQL)
     }
   }
 

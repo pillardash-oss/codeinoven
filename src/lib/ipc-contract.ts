@@ -64,6 +64,7 @@ import type {
   GitRemoteInfo,
   GitStatus,
   GitStashEntry,
+  HarnessUsage,
   MergeSummary,
   PrCreateInput,
   PrMergeMethod,
@@ -1038,6 +1039,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, usage: ThreadContextUsage],
     void
   >
+  'thread:harnessUsage': Contract<[projectId: string, threadId: string], HarnessUsage[]>
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
   'thread:update': Contract<
     [

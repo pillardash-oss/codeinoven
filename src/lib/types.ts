@@ -1199,6 +1199,26 @@ export interface ThreadContextUsage extends AgentContextUsage {
   providerId: string
 }
 
+/** One row of cumulative per-harness analytics keyed by (thread, harness, provider). */
+export interface HarnessUsage {
+  projectId: string
+  threadId: string
+  harnessId: string
+  providerId: string
+  /** Last model observed for this harness on the thread. */
+  modelId?: string
+  /** Number of assistant messages attributed to this harness on the thread. */
+  messageCount: number
+  /** Cumulative USD cost, when the harness reports cost. */
+  costUsd: number
+  /** Cumulative token accounting across this harness's messages on the thread. */
+  tokens: AgentTokenUsage
+  /** Approximate cumulative wall-clock time spent in turns attributed to this harness, ms. */
+  durationMs: number
+  firstUsedAt: number
+  lastUsedAt: number
+}
+
 /** A selectable option within an agent question. */
 export interface AgentQuestionOption {
   label: string

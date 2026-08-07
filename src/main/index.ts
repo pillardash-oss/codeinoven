@@ -361,6 +361,7 @@ void app
     await windowStateService.load()
     Logger.initialize(storage.resolve('logs/main.jsonl'))
     Logger.info(`${APP_NAME} main process initialized`)
+    chatEngine.backfillHarnessUsage()
     await powerWakeService.start()
     setPowerWakeService(powerWakeService)
     try {

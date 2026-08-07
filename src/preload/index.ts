@@ -286,6 +286,7 @@ const INVOKE_CHANNELS = [
   'thread:setArchived',
   'thread:setPinned',
   'thread:setContextUsage',
+  'thread:harnessUsage',
   'thread:setStatus',
   'thread:update',
   'thread:updateSettings',

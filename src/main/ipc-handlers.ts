@@ -2817,6 +2817,12 @@ export function registerIpcHandlers(
       )
     }
   )
+  ipcMain.handle('thread:harnessUsage', (_, projectId: unknown, threadId: unknown) =>
+    threadManager.harnessUsageFor(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
   ipcMain.handle(
     'thread:setArchived',
     (_, projectId: unknown, threadId: unknown, archived: unknown) =>
