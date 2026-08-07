@@ -38,6 +38,7 @@ import { SecretVault } from '../secret-vault'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
+import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
@@ -1165,6 +1166,15 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
+      if (isTextAttachment(attachment)) {
+        // Some providers reject file parts whose media type they do not
+        // support (e.g. application/json), so inline text-ish content instead.
+        const content = await readTextAttachment(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatTextAsText(attachment, content) })
+          continue
+        }
+      }
       parts.push({
         type: 'file',
         mime: attachment.mime,
@@ -1228,6 +1238,15 @@ export class OpenCodeDriver implements HarnessDriver {
         const content = await readSvgAttachmentText(attachment)
         if (content !== null) {
           parts.push({ type: 'text', text: formatSvgAsText(attachment, content) })
+          continue
+        }
+      }
+      if (isTextAttachment(attachment)) {
+        // Some providers reject file parts whose media type they do not
+        // support (e.g. application/json), so inline text-ish content instead.
+        const content = await readTextAttachment(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatTextAsText(attachment, content) })
           continue
         }
       }
