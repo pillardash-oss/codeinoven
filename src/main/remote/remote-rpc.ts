@@ -178,7 +178,12 @@ export class RemoteRpcDispatcher {
       return { ok: false, message: `Channel not allowed over the remote bridge: ${invoke.channel}` }
     }
     try {
-      const result = await this.call(invoke.channel, invoke.args)
+      // The remote bridge transports args as JSON, which cannot represent
+      // `undefined` — an omitted optional argument (e.g. `presentation`,
+      // `specAction`) arrives as `null`. Normalize so optional parameters
+      // behave exactly as they do on the desktop IPC path.
+      const args = invoke.args.map((arg) => (arg === null ? undefined : arg))
+      const result = await this.call(invoke.channel, args)
       return { ok: true, result }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
