@@ -291,6 +291,14 @@ function rateLimitWindow(
   const isUsingOverage = typeof isUsingOverageValue === 'boolean' ? isUsingOverageValue : undefined
   const id = string(limit['id']) ?? limitType ?? fallbackId ?? status ?? 'claude-rate-limit'
   const label = windowLabel(limitType, windowMinutes, fallbackId)
+  // The `get_usage` rate_limits object mixes real windows (five_hour, seven_day,
+  // per-model windows) with account-state payloads (extra_usage, limits, spend,
+  // member_dashboard_available) that carry no window utilization or reset. Only
+  // surface entries that represent an actual quota window so the battery never
+  // renders meaningless "usage limit" rows.
+  if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+    return null
+  }
   return {
     id,
     label,
