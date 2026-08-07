@@ -1,7 +1,7 @@
 import type { ApplicationAgentToolDefinition } from './types'
 import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
-import { IMAGE_DESCRIPTOR_INPUT_SCHEMA, IMAGE_DESCRIPTOR_TOOL_NAME } from './image-descriptor'
+import { GATEWAY_TOOLS } from './gateway-tools'
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
@@ -277,68 +277,13 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     source: 'application',
     sentWhen: 'An isolated agent decision after each completed user-and-assistant turn'
   },
-  {
-    name: 'utility_search',
-    description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when a skill or MCP is not directly available. Only conclude something does not exist after a search returns no relevant result.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Capability or task to search for.' },
-        kinds: {
-          type: 'array',
-          items: {
-            type: 'string',
-            enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider']
-          }
-        },
-        limit: { type: 'number', minimum: 1, maximum: 20 }
-      },
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'Every agent turn; search first when a needed skill or MCP is not directly available'
-  },
-  {
-    name: 'utility_activate',
-    description:
-      'Activate one installed utility for the current turn and inspect the operations it exposes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string', description: 'Installed utility identifier.' }
-      },
-      required: ['utility_id'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After utility_search selects an installed capability'
-  },
-  {
-    name: 'utility_invoke',
-    description: 'Invoke an operation on a utility activated for the current turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string' },
-        operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
-      },
-      required: ['utility_id', 'operation'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After a utility has been activated for the current turn'
-  },
-  {
-    name: IMAGE_DESCRIPTOR_TOOL_NAME,
-    description:
-      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "part" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The tool accepts up to 8 images per call, so batch several frames at once; call it again for more. If the media is a video the model cannot read, extract frames with ffmpeg first and pass them as separate image entries. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
-    inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
-    source: 'application',
-    sentWhen:
-      'Whenever a model receives an image it cannot see directly and needs to reason about its contents'
-  },
+  ...GATEWAY_TOOLS.map(({ name, description, inputSchema, sentWhen }) => ({
+    name,
+    description,
+    inputSchema,
+    source: 'application' as const,
+    sentWhen
+  })),
   {
     name: BRAINSTORM_DOCUMENT_TOOL_NAME,
     transportName: 'StructuredOutput',
