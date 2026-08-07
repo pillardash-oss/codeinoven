@@ -154,7 +154,7 @@
     </p>
   </div>
 
-  <section class="rounded-xl border bg-surface" aria-label="Agent defaults">
+  <section class="mb-4 rounded-xl border bg-surface" aria-label="Agent defaults">
     <div class="divide-y">
       {#each roles as role (role.id)}
         {@const Icon = role.icon}
