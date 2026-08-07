@@ -537,6 +537,7 @@ const BRAINSTORM_RESEARCH_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 const BRAINSTORM_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
+const SPEC_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 
 function requireEvidenceDrivenBrainstorm(content: BrainstormContent): BrainstormContent {
   const sectionMarkdown = new Map(
@@ -732,6 +733,8 @@ interface SessionCompletionWaiter {
   resolve: (structuredOutput: unknown | undefined) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
+  refresh: () => void
 }
 
 interface PendingMemoryDecision {
@@ -6251,7 +6254,7 @@ export class ChatEngine {
       )
       const completion = this.waitForSessionCompletion(
         sessionId,
-        180_000,
+        SPEC_GENERATION_TIMEOUT_MS,
         'Specification generation'
       )
 
@@ -9914,16 +9917,22 @@ export class ChatEngine {
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.completionWaiters.delete(sessionId)
-        reject(new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`))
-      }, timeoutMs)
-      this.completionWaiters.set(sessionId, {
+      const armTimer = (): ReturnType<typeof setTimeout> =>
+        setTimeout(() => {
+          this.completionWaiters.delete(sessionId)
+          reject(new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`))
+        }, timeoutMs)
+      const waiter: SessionCompletionWaiter = {
         active: false,
         resolve,
         reject,
-        timer
-      })
+        timer: armTimer(),
+        refresh: () => {
+          clearTimeout(waiter.timer)
+          waiter.timer = armTimer()
+        }
+      }
+      this.completionWaiters.set(sessionId, waiter)
     })
   }
 
@@ -9932,6 +9941,7 @@ export class ChatEngine {
     if (!waiter) return
     if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
       waiter.active = true
+      waiter.refresh()
       return
     }
     if (event.type === 'message.completed') {
@@ -9939,6 +9949,7 @@ export class ChatEngine {
       if (event.structuredOutput !== undefined) {
         waiter.structuredOutput = event.structuredOutput
       }
+      waiter.refresh()
       return
     }
     if (event.type === 'session.error') {
