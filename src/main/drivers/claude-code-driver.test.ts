@@ -321,7 +321,11 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
               rate_limits_available: true,
               rate_limits: {
                 five_hour: { utilization: 26, resets_at: '2026-08-07T16:00:00+00:00' },
-                seven_day: { utilization: 29, resets_at: '2026-08-07T14:59:59+00:00' }
+                seven_day: { utilization: 29, resets_at: '2026-08-07T14:59:59+00:00' },
+                extra_usage: { is_enabled: false, utilization: null },
+                limits: [{ kind: 'session', percent: 100 }],
+                spend: { percent: 0, enabled: false },
+                member_dashboard_available: false
               }
             }
           }
@@ -332,6 +336,10 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
     expect(telemetry?.rateLimits).toHaveLength(2)
     const fiveHour = telemetry?.rateLimits.find((limit) => limit.id === 'five_hour')
     expect(fiveHour).toMatchObject({ label: '5-hour limit', usedPercent: 26 })
+    // Account-state keys with no window utilization/reset must be dropped.
+    expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('extra_usage')
+    expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('limits')
+    expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('spend')
   })
 
   it('returns null when plan rate limits are unavailable', async () => {
