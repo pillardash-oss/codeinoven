@@ -26,10 +26,14 @@ class TrafficLightState {
     // The full `AppBridge` type lives in the preload script; probe only the
     // fields we need so this store stays decoupled from the bridge module.
     const bridge = (typeof window !== 'undefined' ? window : null) as {
-      api?: { windowInfo?: { trafficLight?: TrafficLightInfo } }
+      api?: { windowInfo?: { platform?: string; trafficLight?: TrafficLightInfo } }
     } | null
     const info = bridge?.api?.windowInfo?.trafficLight ?? null
-    if (info) {
+    const onMac = bridge?.api?.windowInfo?.platform === 'darwin'
+    // macOS always draws its traffic lights — never render with a zero inset,
+    // even if a stale bridge reports none.
+    const usable = info && !(onMac && !info.present)
+    if (usable) {
       this.offset = info.offset
       this.side = info.side
       this.present = info.present
