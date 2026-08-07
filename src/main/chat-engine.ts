@@ -1676,25 +1676,42 @@ export class ChatEngine {
    * turn-time refresh silently failed) still show live rate-limit windows and
    * credits. Returns null when the harness cannot report quota without a turn.
    */
-  async refreshAccountUsage(
-    projectId: string,
-    threadId: string
-  ): Promise<AgentAccountUsage | null> {
+  /**
+   * Fetch the current account quota for every harness used on the thread, on
+   * demand. Used by the battery popover so old threads (whose turns predate
+   * quota capture, or where a turn-time refresh silently failed) still show live
+   * rate-limit windows and credits for each harness. The harness set comes from
+   * the dedicated `harness_usage` table, augmented with the thread's current
+   * settings harness.
+   */
+  async refreshAccountUsage(projectId: string, threadId: string): Promise<AgentAccountUsage[]> {
     const projectIdSafe = validateEntityId(projectId, 'Project ID')
     const thread = await this.threadManager.getThread(projectIdSafe, threadId)
-    if (!thread) return null
-    const harnessId = thread.settings?.harnessId ?? 'opencode'
-    const providerId = thread.settings?.providerId ?? ''
-    try {
-      const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-      if (!driver.readAccountUsage) return null
-      const telemetry = await driver.readAccountUsage(projectPath)
-      if (!telemetry || telemetry.rateLimits.length === 0) return null
-      return { harnessId, providerId, ...telemetry }
-    } catch (error) {
-      Logger.dev('On-demand account usage refresh unavailable:', error)
-      return null
+    if (!thread) return []
+    const usageRows = this.threadManager.harnessUsageFor(projectIdSafe, threadId)
+    const providerByHarness = new Map<string, string>()
+    for (const row of usageRows) {
+      providerByHarness.set(row.harnessId, row.providerId)
     }
+    const harnessIds = new Set<string>(usageRows.map((row) => row.harnessId))
+    const current = thread.settings?.harnessId
+    if (current) harnessIds.add(current)
+    const results = await Promise.all(
+      [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
+        try {
+          const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+          if (!driver.readAccountUsage) return null
+          const telemetry = await driver.readAccountUsage(projectPath)
+          if (!telemetry || telemetry.rateLimits.length === 0) return null
+          const providerId = providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? ''
+          return { harnessId, providerId, ...telemetry }
+        } catch (error) {
+          Logger.dev('On-demand account usage refresh unavailable:', error)
+          return null
+        }
+      })
+    )
+    return results.filter((entry): entry is AgentAccountUsage => entry !== null)
   }
 
   /** One app-wide discovery pass; all projects share installed harness models. */

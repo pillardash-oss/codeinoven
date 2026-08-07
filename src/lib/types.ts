@@ -1188,9 +1188,15 @@ export interface AgentHarnessUsage {
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported by this harness on the thread. */
   credits?: AgentUsageCredits
+  /** Cumulative token accounting from the harness_usage table, when available. */
+  tokens?: AgentTokenUsage
+  /** Assistant messages attributed to this harness on the thread. */
+  messageCount?: number
+  /** Approximate cumulative wall-clock time spent in turns, ms. */
+  durationMs?: number
 }
 
-/** On-demand account quota snapshot returned for the thread's current harness. */
+/** On-demand account quota snapshot for one harness used on a thread. */
 export interface AgentAccountUsage {
   harnessId: string
   providerId: string

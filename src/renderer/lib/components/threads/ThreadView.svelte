@@ -565,7 +565,9 @@
           ...(row.modelId ? { modelId: row.modelId } : {}),
           costUsd: row.costUsd,
           rateLimits: [],
-          tokens: row.tokens
+          tokens: row.tokens,
+          messageCount: row.messageCount,
+          durationMs: row.durationMs
         }))
       })
       .catch(() => {})
@@ -607,25 +609,28 @@
       if (entry) {
         entry.costUsd = stored.costUsd
         if (stored.modelId) entry.modelId = stored.modelId
+        if (stored.tokens) entry.tokens = stored.tokens
+        if (stored.messageCount !== undefined) entry.messageCount = stored.messageCount
+        if (stored.durationMs !== undefined) entry.durationMs = stored.durationMs
       } else {
         byHarness[key] = { ...stored, rateLimits: [] }
       }
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
-    if (liveAccountUsage) {
-      const key = `${liveAccountUsage.harnessId}:${liveAccountUsage.providerId}`
+    for (const usage of liveAccountUsage) {
+      const key = `${usage.harnessId}:${usage.providerId}`
       const entry = byHarness[key]
       if (entry) {
-        if (liveAccountUsage.rateLimits.length) entry.rateLimits = liveAccountUsage.rateLimits
-        if (liveAccountUsage.credits) entry.credits = liveAccountUsage.credits
+        if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
+        if (usage.credits) entry.credits = usage.credits
       } else {
         byHarness[key] = {
-          harnessId: liveAccountUsage.harnessId,
-          providerId: liveAccountUsage.providerId,
+          harnessId: usage.harnessId,
+          providerId: usage.providerId,
           costUsd: 0,
-          rateLimits: liveAccountUsage.rateLimits,
-          ...(liveAccountUsage.credits ? { credits: liveAccountUsage.credits } : {})
+          rateLimits: usage.rateLimits,
+          ...(usage.credits ? { credits: usage.credits } : {})
         }
       }
     }
@@ -682,10 +687,11 @@
     void refreshAccountUsageOnDemand()
   }
 
-  /** Live quota fetched from the harness; layered over message data so old
+  /** Live quota fetched from the harnesses; layered over message data so old
    *  threads (or threads whose turns predate quota capture) still show current
-   *  rate-limit windows and credits in the battery popover. */
-  let liveAccountUsage = $state<AgentAccountUsage | null>(null)
+   *  rate-limit windows and credits in the battery popover. One entry per
+   *  harness used on the thread. */
+  let liveAccountUsage = $state<AgentAccountUsage[]>([])
   let refreshingAccountUsage = $state(false)
   let accountUsageRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -693,9 +699,13 @@
     if (refreshingAccountUsage) return
     refreshingAccountUsage = true
     try {
-      const usage = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
-      liveAccountUsage = usage
-      if (usage) {
+      const usageList = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
+      liveAccountUsage = usageList
+      const currentUsage = usageList.find(
+        (usage) =>
+          usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
+      )
+      if (currentUsage) {
         // Persist the fresh quota with the current context snapshot so it
         // restores on the next mount without another harness round-trip.
         const merged: AgentContextUsage = {
