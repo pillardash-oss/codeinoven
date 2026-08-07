@@ -13,15 +13,28 @@
     /** Markdown source — may be an incomplete, still-streaming message. */
     text: string
     class?: string
+    /**
+     * Render raw HTML tags in the source instead of showing them as text.
+     * Only for content authored on a provider whose markdown dialect includes
+     * HTML (GitHub pull requests) — never for agent output or user input.
+     * Sanitizing still strips scripts, frames, styles, and form controls.
+     */
+    allowHtml?: boolean
     /** Fired when a file citation is clicked. */
     onCiteFile?: (path: string, line?: number) => void
     /** Fired when an annotatable Mermaid diagram requests a review comment. */
     onAnnotateMermaid?: (code: string, event: MouseEvent) => void
   }
 
-  let { text, class: className = '', onCiteFile, onAnnotateMermaid }: Props = $props()
+  let {
+    text,
+    class: className = '',
+    allowHtml = false,
+    onCiteFile,
+    onAnnotateMermaid
+  }: Props = $props()
 
-  const tokens = $derived(lexMarkdown(text))
+  const tokens = $derived(lexMarkdown(text, allowHtml))
   let tooltip = $state<{ text: string; x: number; y: number } | null>(null)
   let tooltipTimer: ReturnType<typeof setTimeout> | null = null
   let tooltipLink: HTMLAnchorElement | null = null
@@ -189,7 +202,7 @@
       </blockquote>
     {:else if token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-      {@html blockHtml(token)}
+      {@html blockHtml(token, allowHtml)}
     {/if}
   {/each}
 {/snippet}

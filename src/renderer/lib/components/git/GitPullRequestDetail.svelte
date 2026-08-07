@@ -548,7 +548,10 @@
               {/if}
               {#if entry.body.trim()}
                 <div class="px-2.5 py-2">
-                  <MarkdownView text={entry.body} class="text-[11px] leading-relaxed" />
+                  <!-- GitHub's dialect includes HTML, so PR prose needs it to
+                       read correctly; the sanitizer still strips anything
+                       executable. Agent-authored text elsewhere keeps it off. -->
+                  <MarkdownView text={entry.body} class="text-[11px] leading-relaxed" allowHtml />
                 </div>
               {/if}
             </article>

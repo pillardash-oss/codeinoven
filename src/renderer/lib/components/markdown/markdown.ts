@@ -44,22 +44,6 @@ export function fileCitationTarget(href: string): MarkdownFileCitationTarget | n
   }
 }
 
-// `breaks` keeps single newlines visible — chat prose relies on them the same
-// way the previous `whitespace-pre-wrap` rendering did.
-const marked = new Marked({ gfm: true, breaks: true })
-
-// Only markdown syntax is parsed — raw HTML tags are shown as literal text.
-marked.use({
-  tokenizer: {
-    html() {
-      return undefined
-    },
-    tag() {
-      return undefined
-    }
-  }
-})
-
 // GitHub-flavored footnotes, implemented natively because `marked-footnote`
 // keeps module-level mutable state that only resets in `walkTokens` (which the
 // app's streaming `lexer()` path never runs) and crashes on the second lex.
@@ -68,80 +52,150 @@ marked.use({
 
 const FOOTNOTE_DEF_SOURCE = /^\[\^([^\]\n]+)\]:(?:[ \t]+|$)(.*(?:\n(?![ \t]*(?:\[\^|\n|$))[^\n]*)*)/
 
-marked.use({
-  extensions: [
-    {
-      name: 'footnoteDef',
-      level: 'block',
-      childTokens: ['content'],
-      tokenizer(src: string) {
-        const match = FOOTNOTE_DEF_SOURCE.exec(src)
-        if (!match) return undefined
-        const [, label, rawContent = ''] = match
-        const content = rawContent
-          .split('\n')
-          .map((line) => line.replace(/^(?: {4}|[\t])/, ''))
-          .join('\n')
-          .trimEnd()
-        return {
-          type: 'footnoteDef',
-          raw: match[0],
-          label,
-          content: this.lexer.blockTokens(content)
+/**
+ * Build a parser instance.
+ *
+ * `breaks` keeps single newlines visible — chat prose relies on them the same
+ * way the previous `whitespace-pre-wrap` rendering did.
+ *
+ * With `allowHtml` false the HTML tokenizers are disabled outright, so raw
+ * tags are shown as literal text and never reach the DOM. That is the right
+ * default for agent output and anything typed into the app. `allowHtml` true
+ * lets the tags through to DOMPurify, which is what content authored on
+ * GitHub (pull request bodies and comments) needs to read correctly.
+ */
+function createMarked(allowHtml: boolean): Marked {
+  const instance = new Marked({ gfm: true, breaks: true })
+
+  if (!allowHtml) {
+    instance.use({
+      tokenizer: {
+        html() {
+          return undefined
+        },
+        tag() {
+          return undefined
+        }
+      }
+    })
+  }
+
+  instance.use({
+    extensions: [
+      {
+        name: 'footnoteDef',
+        level: 'block',
+        childTokens: ['content'],
+        tokenizer(src: string) {
+          const match = FOOTNOTE_DEF_SOURCE.exec(src)
+          if (!match) return undefined
+          const [, label, rawContent = ''] = match
+          const content = rawContent
+            .split('\n')
+            .map((line) => line.replace(/^(?: {4}|[\t])/, ''))
+            .join('\n')
+            .trimEnd()
+          return {
+            type: 'footnoteDef',
+            raw: match[0],
+            label,
+            content: this.lexer.blockTokens(content)
+          }
+        },
+        renderer() {
+          return ''
         }
       },
-      renderer() {
-        return ''
-      }
-    },
-    {
-      name: 'footnoteRef',
-      level: 'inline',
-      start(src: string) {
-        return src.indexOf('[^')
+      {
+        name: 'footnoteRef',
+        level: 'inline',
+        start(src: string) {
+          return src.indexOf('[^')
+        },
+        tokenizer(src: string) {
+          const match = /^\[\^([^\]\n]+)\]/.exec(src)
+          if (!match) return undefined
+          const defined = (this.lexer.tokens as Token[]).some(
+            (token) =>
+              token.type === 'footnoteDef' && (token as { label?: string }).label === match[1]
+          )
+          if (!defined) return undefined
+          return { type: 'footnoteRef', raw: match[0], label: match[1], number: 0, refIndex: 0 }
+        },
+        renderer(token: Tokens.Generic) {
+          const label = encodeURIComponent(token.label ?? '')
+          const suffix = (token.refIndex as number) > 0 ? `-${(token.refIndex as number) + 1}` : ''
+          return `<sup class="footnote-ref"><a href="#fn-${label}" id="fnref-${label}${suffix}" data-footnote-ref aria-describedby="footnote-label">${String(token.number)}</a></sup>`
+        }
       },
-      tokenizer(src: string) {
-        const match = /^\[\^([^\]\n]+)\]/.exec(src)
-        if (!match) return undefined
-        const defined = (this.lexer.tokens as Token[]).some(
-          (token) =>
-            token.type === 'footnoteDef' && (token as { label?: string }).label === match[1]
-        )
-        if (!defined) return undefined
-        return { type: 'footnoteRef', raw: match[0], label: match[1], number: 0, refIndex: 0 }
-      },
-      renderer(token: Tokens.Generic) {
-        const label = encodeURIComponent(token.label ?? '')
-        const suffix = (token.refIndex as number) > 0 ? `-${(token.refIndex as number) + 1}` : ''
-        return `<sup class="footnote-ref"><a href="#fn-${label}" id="fnref-${label}${suffix}" data-footnote-ref aria-describedby="footnote-label">${String(token.number)}</a></sup>`
+      {
+        name: 'footnotes',
+        renderer(token: Tokens.Generic) {
+          const items = (token.items ?? []) as Array<{
+            label: string
+            number: number
+            content: Token[]
+            refCount: number
+          }>
+          if (items.length === 0) return ''
+          const lis = items
+            .map((item) => {
+              const label = encodeURIComponent(item.label)
+              const content = this.parser.parse(item.content).replace(/<\/p>\s*$/, '')
+              const backrefs = Array.from({ length: item.refCount }, (_, index) => {
+                const suffix = index > 0 ? `-${index + 1}` : ''
+                return ` <a href="#fnref-${label}${suffix}" data-footnote-backref aria-label="Back to reference ${String(item.number)}">↩</a>`
+              }).join('')
+              return `<li id="fn-${label}">${content}${backrefs}${content ? '</p>' : ''}</li>`
+            })
+            .join('\n')
+          return `<section class="footnotes" data-footnotes>\n<h2 id="footnote-label" class="sr-only">Footnotes</h2>\n<ol>\n${lis}\n</ol>\n</section>`
+        }
       }
-    },
-    {
-      name: 'footnotes',
-      renderer(token: Tokens.Generic) {
-        const items = (token.items ?? []) as Array<{
-          label: string
-          number: number
-          content: Token[]
-          refCount: number
-        }>
-        if (items.length === 0) return ''
-        const lis = items
-          .map((item) => {
-            const label = encodeURIComponent(item.label)
-            const content = this.parser.parse(item.content).replace(/<\/p>\s*$/, '')
-            const backrefs = Array.from({ length: item.refCount }, (_, index) => {
-              const suffix = index > 0 ? `-${index + 1}` : ''
-              return ` <a href="#fnref-${label}${suffix}" data-footnote-backref aria-label="Back to reference ${String(item.number)}">↩</a>`
-            }).join('')
-            return `<li id="fn-${label}">${content}${backrefs}${content ? '</p>' : ''}</li>`
-          })
-          .join('\n')
-        return `<section class="footnotes" data-footnotes>\n<h2 id="footnote-label" class="sr-only">Footnotes</h2>\n<ol>\n${lis}\n</ol>\n</section>`
-      }
-    }
-  ]
-})
+    ]
+  })
+
+  return instance
+}
+
+/** Default parser: raw HTML stays literal text. */
+const marked = createMarked(false)
+/** Parser for provider-authored content, where HTML is part of the format. */
+const markedWithHtml = createMarked(true)
+
+/**
+ * Tags that never survive sanitizing, whatever the source.
+ *
+ * DOMPurify already drops `script` and every event-handler attribute, but its
+ * default allow-list still permits `style`, `form`, and form controls — enough
+ * to restyle or phish inside the panel. Naming them explicitly documents the
+ * threat model and keeps it from drifting with DOMPurify's defaults.
+ */
+const SANITIZE_CONFIG = {
+  // Keeps the string-returning `sanitize` overload; the renderer inserts the
+  // result through `{@html}`, not a Trusted Types sink.
+  RETURN_TRUSTED_TYPE: false,
+  FORBID_TAGS: [
+    'script',
+    'iframe',
+    'frame',
+    'frameset',
+    'object',
+    'embed',
+    'applet',
+    'style',
+    'link',
+    'meta',
+    'base',
+    'form',
+    'input',
+    'button',
+    'select',
+    'option',
+    'textarea'
+  ],
+  FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping']
+}
 
 // Preserve citation metadata before DOMPurify removes a legacy custom-scheme
 // href. Current fragment hrefs survive sanitization, but cached/persisted
@@ -173,9 +227,16 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 })
 
-/** Split markdown source into top-level block tokens. */
-export function lexMarkdown(text: string): Token[] {
-  const tokens = marked.lexer(
+/**
+ * Split markdown source into top-level block tokens.
+ *
+ * Pass `allowHtml` only for content that came from a source where HTML is part
+ * of the markdown dialect (GitHub pull requests). Anything the user or an
+ * agent types must keep the default.
+ */
+export function lexMarkdown(text: string, allowHtml = false): Token[] {
+  const parser = allowHtml ? markedWithHtml : marked
+  const tokens = parser.lexer(
     linkifyFileCitations(text, (path) => citationPathsState.isValidPath(path))
   )
   return resolveFootnotes(tokens)
@@ -282,17 +343,21 @@ const HTML_CACHE_LIMIT = 500
 const HTML_CACHE_VERSION = 4
 
 /** Render a single non-code block token to sanitized HTML. */
-export function blockHtml(token: Token): string {
+export function blockHtml(token: Token, allowHtml = false): string {
   const hasExternalLink = EXTERNAL_LINK_SOURCE_PATTERN.test(token.raw)
   const footnoteKey = footnoteCacheKey(token)
   // Only link-bearing blocks depend on favicon resolution, so the cache key is
-  // stable for everything else (no re-render churn as favicons resolve).
+  // stable for everything else (no re-render churn as favicons resolve). The
+  // HTML mode is part of the key so the same source never serves the other
+  // mode's output.
+  const mode = allowHtml ? 'h' : 'p'
   const cacheKey = hasExternalLink
-    ? `${HTML_CACHE_VERSION}:f${faviconState.version}:${footnoteKey}:${token.raw}`
-    : `${HTML_CACHE_VERSION}:${footnoteKey}:${token.raw}`
+    ? `${HTML_CACHE_VERSION}:${mode}:f${faviconState.version}:${footnoteKey}:${token.raw}`
+    : `${HTML_CACHE_VERSION}:${mode}:${footnoteKey}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
-  const sanitized = DOMPurify.sanitize(marked.parser([token]))
+  const parser = allowHtml ? markedWithHtml : marked
+  const sanitized = DOMPurify.sanitize(parser.parser([token]), SANITIZE_CONFIG)
   const html = hasExternalLink ? injectLinkFavicons(sanitized) : sanitized
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
