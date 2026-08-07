@@ -90,16 +90,17 @@
   )
 
   /** Install affordance in the sidebar footer — hidden once the app is installed. */
-  let showInstall = $derived(
-    !pwaInstall.installed && (pwaInstall.canInstall || pwaInstall.iosGuideAvailable)
+  let showInstall = $derived(!pwaInstall.installed)
+
+  /** Touch/phone browsers install from the browser menu rather than the address bar. */
+  let isTouchDevice = $derived(
+    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
   )
 
   function handleInstall(): void {
-    if (pwaInstall.canInstall) {
-      void pwaInstall.install()
-    } else {
-      installGuideOpen = true
-    }
+    void pwaInstall.install().then((outcome) => {
+      if (outcome === 'unsupported') installGuideOpen = true
+    })
   }
 
   // ─── Viewport height ───────────────────────────────────────────────────
@@ -853,9 +854,7 @@
             <button
               type="button"
               class="flex h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-primary text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
-              title={pwaInstall.iosGuideAvailable
-                ? 'Add CodeInOven to your home screen'
-                : 'Install CodeInOven on this device'}
+              title="Install CodeInOven on this device"
               onclick={handleInstall}
             >
               <Download size={15} />
@@ -906,35 +905,101 @@
           Install CodeInOven for a full-screen app icon and notifications that work in the
           background.
         </p>
-        <ol class="mt-4 space-y-4">
-          <li class="flex items-start gap-3">
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
-              >1</span
-            >
-            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
-              Tap the <span class="text-foreground">Share</span> button in Safari's toolbar.
-            </span>
-          </li>
-          <li class="flex items-start gap-3">
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
-              >2</span
-            >
-            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
-              Choose <span class="text-foreground">Add to Home Screen</span>.
-            </span>
-          </li>
-          <li class="flex items-start gap-3">
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
-              >3</span
-            >
-            <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
-              Tap <span class="text-foreground">Add</span>. CodeInOven opens like its own app.
-            </span>
-          </li>
-        </ol>
+        {#if pwaInstall.isIos}
+          <ol class="mt-4 space-y-4">
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >1</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Tap the <span class="text-foreground">Share</span> button in Safari's toolbar.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >2</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Choose <span class="text-foreground">Add to Home Screen</span>.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >3</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Tap <span class="text-foreground">Add</span>. CodeInOven opens like its own app.
+              </span>
+            </li>
+          </ol>
+        {:else if isTouchDevice}
+          <ol class="mt-4 space-y-4">
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >1</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Open the browser menu — the <span class="text-foreground">⋮</span> (or ⋯) button.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >2</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Choose <span class="text-foreground">Install app</span> or
+                <span class="text-foreground">Add to Home screen</span>.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >3</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Confirm <span class="text-foreground">Install</span>. CodeInOven opens like its own
+                app.
+              </span>
+            </li>
+          </ol>
+        {:else}
+          <ol class="mt-4 space-y-4">
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >1</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Click the <span class="text-foreground">install icon</span> in the browser's address bar.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >2</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                If there's no icon, open the browser menu and choose
+                <span class="text-foreground">Install CodeInOven</span>.
+              </span>
+            </li>
+            <li class="flex items-start gap-3">
+              <span
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-elevated text-[12px] font-semibold text-primary"
+                >3</span
+              >
+              <span class="min-w-0 flex-1 text-[13px] leading-relaxed text-muted">
+                Confirm <span class="text-foreground">Install</span>. CodeInOven opens like its own
+                app.
+              </span>
+            </li>
+          </ol>
+        {/if}
         <div class="mt-5 flex items-start gap-2.5 rounded-xl bg-elevated px-3.5 py-3">
           <Share size={14} class="mt-0.5 shrink-0 text-primary" />
           <p class="text-[12px] leading-relaxed text-muted">
