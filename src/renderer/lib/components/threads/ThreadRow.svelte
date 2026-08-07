@@ -712,7 +712,7 @@
 
     {#if showBottomRow}
       <!-- Bottom line: harnesses (left), scope (center), time (right) -->
-      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-2">
         {#if harnessIds.length > 0}
           <span
             {@attach captureHarnessRowElement}
@@ -731,15 +731,15 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 max-w-[10rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
             title={scopeBucket.name}
-            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
           >
             {#if scopeIconUrl}
               <img
                 src={scopeIconUrl}
                 alt=""
-                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
+                class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
                 draggable="false"
               />
             {/if}
