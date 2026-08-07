@@ -32,12 +32,21 @@ export interface ImageDescriptorResult {
   error?: string
 }
 
+/** Model selection shape used to pin the vision model. */
+export interface ImageDescriptorModelSelection {
+  harnessId: string
+  providerId: string
+  modelId: string
+}
+
 /** Request context the vision executor needs to route a harness session. */
 export interface ImageDescriptorExecutorRequest {
   images: ResolvedImageEntry[]
   projectId: string
   threadId: string
   projectPath: string
+  /** Vision model pinned by a configured image-descriptor utility, if any. */
+  pinnedSelection?: ImageDescriptorModelSelection
 }
 
 /** Executes the vision model call. Supplied by the chat engine. */

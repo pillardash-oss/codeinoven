@@ -2117,7 +2117,10 @@ export class OpenCodeDriver implements HarnessDriver {
           name: (m['name'] as string | undefined) ?? modelId,
           reasoning,
           thinkingPresets: this.modelThinkingPresets(m),
-          attachment: true,
+          // opencode reports `capabilities.attachment` (false for text-only
+          // models). Unknown state stays vision-capable so models are never
+          // hidden incorrectly.
+          attachment: capabilities['attachment'] !== false,
           toolcall: capabilities['toolcall'] === true,
           contextWindow: numberValue(limit?.['context']),
           fastSupported: Boolean(modelId && modelsById[`${modelId}-fast`])
