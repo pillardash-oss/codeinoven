@@ -1463,11 +1463,17 @@
     </div>
   {/if}
 
-  {#if repoState === 'git' && status && remotes.length > 0}
+  <!--
+    Fetch/pull/push act on the local working tree, so they only belong to the
+    working-tree tabs. On the pull request tab they sat under a PR's own
+    comment box implying they were part of reviewing it, which they are not.
+  -->
+  {#if repoState === 'git' && status && remotes.length > 0 && activeTab !== 'pulls'}
     <div class="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5">
       <button
         type="button"
-        class="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title="Fetch refs from the remote without changing the working tree"
         disabled={remotes.length === 0 || syncBusy}
         onclick={() => void gitState.fetch(projectId)}
       >
@@ -1478,7 +1484,10 @@
       </button>
       <button
         type="button"
-        class="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title={status.behind > 0
+          ? `Pull ${String(status.behind)} commit(s) from the remote`
+          : 'Pull from the remote'}
         disabled={remotes.length === 0 || syncBusy}
         onclick={() => void gitState.pull(projectId)}
       >
@@ -1489,7 +1498,10 @@
       </button>
       <button
         type="button"
-        class="flex h-7 flex-1 items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-md border border-border text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+        title={status.ahead > 0
+          ? `Push ${String(status.ahead)} commit(s) to the remote`
+          : 'Push to the remote'}
         disabled={remotes.length === 0 || syncBusy || gitState.isBusy('push')}
         onclick={() => void pushAction()}
       >
