@@ -31,6 +31,8 @@
     "verify": "bun run check && bun run lint . && bun run test",
     "verify:release": "bun run verify && bun run build:production",
     "version:bump": "bun scripts/bump-version.ts",
+    "migrate:harness-usage": "node scripts/migrate-harness-usage.mjs",
+    "migrate:harness-usage:dry": "node scripts/migrate-harness-usage.mjs --dry-run",
     "package": "bun run build:production && electron-builder --dir -c.forceCodeSigning=false -c.mac.identity=null -c.mac.notarize=false",
     "package:mac": "bun run build:production && electron-builder --mac -c.forceCodeSigning=false -c.mac.identity=null -c.mac.notarize=false",
     "package:linux": "bun run build:production && electron-builder --linux -c.forceCodeSigning=false",
