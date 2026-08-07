@@ -58,7 +58,11 @@
   import { pickColorForSeed } from '$lib/project-colors'
   import { hasProjectNameCollision } from '$lib/project-location'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatSettings,
+    chatEffectiveSettings
+  } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -66,6 +70,7 @@
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     threadSort,
     threadStatusSort,
@@ -102,6 +107,8 @@
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
   let loading = $state(true)
+  /** Remounts the empty-state chats composer to restore a failed first send. */
+  let chatsComposerRestoreKey = $state(0)
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
   // While a thread is selected, the sidebar keeps its row (and thus its
@@ -251,6 +258,9 @@
       ? (providerCatalog.cached(chatInboxId) ?? providerCatalog.allCached())
       : providerCatalog.allCached()
   )
+  /** Effective chat settings — the chat's own model when one has been picked,
+   *  else the last project model so a fresh chat starts on the model in use. */
+  let chatComposerSettings = $derived(chatEffectiveSettings())
   $effect(() => {
     if (mode !== 'chats') return
     let alive = true
@@ -1258,18 +1268,26 @@
     const msg = message.trim()
     if (!msg && files.length === 0) return
 
-    const inbox = await invoke('project:ensureInbox')
-    const thread = await invoke('thread:create', {
-      projectId: inbox.id,
-      providerId: 'opencode',
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: '',
-      settings: { ...chatSettings.lastUsed, engineeringMode: false }
-    })
-    allThreads = [thread, ...allThreads]
-    chatDraft.message = msg
-    chatDraft.attachments = files
-    workspaceState.openThread(thread, inbox)
+    try {
+      const inbox = await invoke('project:ensureInbox')
+      const thread = await invoke('thread:create', {
+        projectId: inbox.id,
+        providerId: 'opencode',
+        title: DEFAULT_THREAD_TITLE,
+        workingDirectory: '',
+        settings: chatEffectiveSettings()
+      })
+      allThreads = [thread, ...allThreads]
+      chatDraft.message = msg
+      chatDraft.attachments = files
+      workspaceState.openThread(thread, inbox)
+    } catch (error) {
+      // The thread was never created, so the message cannot appear anywhere.
+      // Put it back in the composer so the user doesn't lose their first message.
+      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
+      chatsComposerRestoreKey += 1
+      reportError(error, 'The chat could not be started.')
+    }
   }
 
   async function openThread(thread: Thread): Promise<void> {
@@ -2374,29 +2392,31 @@
             </div>
             <div class="shrink-0 px-6 pb-6">
               <div class="mx-auto w-full max-w-2xl">
-                <ChatComposer
-                  placeholder="What do you want to work on?"
-                  autofocus
-                  showEngineeringMode={false}
-                  showChatModes
-                  hidePermissionSelector
-                  settings={chatSettings.lastUsed}
-                  onSettingsChange={(settings) => chatSettings.commit(settings)}
-                  providers={chatProviders}
-                  projectId={chatInboxId}
-                  harnessId={chatSettings.lastUsed.harnessId}
-                  favoriteModels={rendererRecovery.chatFavoriteModels}
-                  onToggleFavorite={(providerId, modelId) =>
-                    rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-                  recentModels={rendererRecovery.chatRecentModels}
-                  onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-                  initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-                  onValueChange={(value) =>
-                    rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
-                  onSend={(msg, files) => void createStandaloneChat(msg, files)}
-                />
+                {#key chatsComposerRestoreKey}
+                  <ChatComposer
+                    placeholder="What do you want to work on?"
+                    autofocus
+                    showEngineeringMode={false}
+                    showChatModes
+                    hidePermissionSelector
+                    settings={chatComposerSettings}
+                    onSettingsChange={(settings) => chatSettings.commit(settings)}
+                    providers={chatProviders}
+                    projectId={chatInboxId}
+                    harnessId={chatComposerSettings.harnessId}
+                    favoriteModels={rendererRecovery.chatFavoriteModels}
+                    onToggleFavorite={(providerId, modelId) =>
+                      rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                    recentModels={rendererRecovery.chatRecentModels}
+                    onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+                    initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
+                    onValueChange={(value) =>
+                      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+                    onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  />
+                {/key}
               </div>
             </div>
           </div>
