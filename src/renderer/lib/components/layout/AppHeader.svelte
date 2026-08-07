@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
-  import { projectIconOnError } from '$lib/project-icons'
+  import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -736,24 +736,36 @@
           thread.status === 'planning' ||
           thread.status === 'executing'}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
-          {#if !chatMode && workspaceState.activeProjectIconUrl && workspaceState.activeProject}
-            <div class="pointer-events-auto shrink-0">
-              <ProjectInfoDropdown
-                project={workspaceState.activeProject}
-                iconUrl={workspaceState.activeProjectIconUrl}
-                class="group/icon relative h-5 w-5"
-                onPinToggled={handleProjectPinToggled}
-                onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
-                onError={(message) => toast.error(message)}
-              >
-                <img
-                  src={workspaceState.activeProjectIconUrl}
-                  alt=""
-                  class="h-4 w-4 object-contain"
-                  onerror={projectIconOnError(workspaceState.activeProject)}
-                />
-              </ProjectInfoDropdown>
-            </div>
+          {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
+            {@const headerProject =
+              workspaceState.activeProject ??
+              scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ??
+              null}
+            {#if headerProject}
+              {@const resolvedProjectIcon = getProjectIcon(
+                headerProject,
+                workspaceState.activeProjectIconUrl ?? undefined
+              )}
+              {#if resolvedProjectIcon}
+                <div class="pointer-events-auto shrink-0">
+                  <ProjectInfoDropdown
+                    project={headerProject}
+                    iconUrl={resolvedProjectIcon}
+                    class="group/icon relative h-5 w-5"
+                    onPinToggled={handleProjectPinToggled}
+                    onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
+                    onError={(message) => toast.error(message)}
+                  >
+                    <img
+                      src={resolvedProjectIcon}
+                      alt=""
+                      class="h-4 w-4 object-contain"
+                      onerror={projectIconOnError(headerProject)}
+                    />
+                  </ProjectInfoDropdown>
+                </div>
+              {/if}
+            {/if}
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1

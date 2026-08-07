@@ -807,9 +807,14 @@
   })
 
   // Keep the header icon in sync with the active project and icon cache.
+  // Reading activeProjectIconUrl also re-syncs after a thread switch: openThread
+  // resets the URL to null when the project has no custom icon, and switching
+  // between threads of the same project leaves activeProject unchanged, so this
+  // effect must re-run on the reset to restore the resolved fallback icon.
   $effect(() => {
     const project = workspaceState.activeProject
     if (project) {
+      void workspaceState.activeProjectIconUrl
       const storedUrl = projectIcons.get(project.id)
       workspaceState.setActiveProjectIconUrl(getProjectIcon(project, storedUrl))
     }
