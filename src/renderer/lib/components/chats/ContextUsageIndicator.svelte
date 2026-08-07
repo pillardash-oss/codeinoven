@@ -3,6 +3,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type {
     AgentContextUsage,
     AgentHarnessUsage,
@@ -188,11 +189,11 @@
     <p class="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">Models used</p>
     {#each models as model (`${model.providerId}:${model.modelId}`)}
       <div class="flex items-baseline justify-between gap-3 py-0.5 text-[10px]">
-        <span class="flex min-w-0 items-baseline gap-1.5">
-          <span class="truncate font-medium text-foreground">{model.modelId}</span>
-          {#if model.providerId && model.providerId !== model.modelId}
-            <span class="shrink-0 text-[9px] text-dimmed">via {model.providerId}</span>
+        <span class="flex min-w-0 items-center gap-1.5">
+          {#if model.providerId}
+            <VendorIcon name={model.providerId} size={11} class="shrink-0 text-dimmed" />
           {/if}
+          <span class="truncate font-medium text-foreground">{model.modelId}</span>
         </span>
         <span class="shrink-0 tabular-nums text-dimmed">
           {model.costUsd > 0
