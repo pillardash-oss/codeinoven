@@ -19,7 +19,7 @@ import { AntigravityDriver } from './drivers/antigravity-driver'
 import { PiDriver } from './drivers/pi-driver'
 import { CheckpointManager } from './checkpoint-manager'
 import { listHarnesses } from './harness-registry'
-import { CheckpointLimitError } from './change-tracking-service'
+import { CheckpointLimitError, type ProjectFingerprint } from './change-tracking-service'
 import {
   broadcastThreadUpdate,
   markNotificationAborting,
@@ -158,7 +158,7 @@ const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
 const PROVIDER_CATALOG_TTL_MS = 24 * 60 * 60 * 1000
 
 interface PersistedProviderCatalog {
-  schemaVersion: 1
+  schemaVersion: 2
   discoveredAt: number
   catalogs: ProviderCatalog[]
 }
@@ -609,6 +609,12 @@ interface SessionInfo {
   activeTurnId?: string
   changedPaths?: Set<string>
   changeFilterReliable?: boolean
+  /** Shell-like tool part ids currently in flight for the active turn. */
+  openUnboundedTools?: Set<string>
+  /** Filesystem fingerprint taken when the first of those tools started. */
+  unboundedWindowStart?: Promise<ProjectFingerprint | null>
+  /** Window-close scans that must settle before the turn checkpoint is completed. */
+  pendingWindowScans?: Set<Promise<void>>
   ephemeral?: boolean
 }
 
@@ -1758,7 +1764,7 @@ export class ChatEngine {
         .map((entry) => entry.catalogs as ProviderCatalog[])
         .flat()
     )
-    this.sharedProviderCatalog = { schemaVersion: 1, discoveredAt: Date.now(), catalogs: merged }
+    this.sharedProviderCatalog = { schemaVersion: 2, discoveredAt: Date.now(), catalogs: merged }
     this.providerCache.set(projectId, merged)
     void this.persistProviders(projectId, merged)
     // Drivers still probing when the budget expired keep working in the
@@ -1792,7 +1798,7 @@ export class ChatEngine {
       }
       if (Array.isArray(stored)) {
         this.sharedProviderCatalog = {
-          schemaVersion: 1,
+          schemaVersion: 2,
           discoveredAt: Date.now(),
           catalogs: stored
         }
@@ -1800,7 +1806,7 @@ export class ChatEngine {
         return stored
       }
       if (
-        stored?.schemaVersion === 1 &&
+        stored?.schemaVersion === 2 &&
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
@@ -1840,7 +1846,7 @@ export class ChatEngine {
       const snapshot =
         this.sharedProviderCatalog ??
         ({
-          schemaVersion: 1,
+          schemaVersion: 2,
           discoveredAt: Date.now(),
           catalogs
         } satisfies PersistedProviderCatalog)
@@ -1904,7 +1910,7 @@ export class ChatEngine {
       ...catalogs.flat()
     ])
     this.sharedProviderCatalog = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
@@ -3748,7 +3754,11 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     const config = await this.storage.getConfig()
-    const selection = thread?.settings?.imageDescriptor ?? config.agentDefaults.imageDescriptor
+    const selection =
+      request.pinnedSelection ??
+      thread?.settings?.imageDescriptor ??
+      config.agentDefaults.imageDescriptor ??
+      this.firstVisionModelFromCache(request.projectId)
     if (!selection) {
       return request.images.map((entry) => ({
         id: entry.id,
@@ -8457,7 +8467,7 @@ export class ChatEngine {
             : undefined)
         if (session?.activeTurnId) {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
-            session.changeFilterReliable = false
+            this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
           session.changedPaths ??= new Set()
           for (const path of changedPathsFromTool(session.projectPath, part)) {
@@ -9401,6 +9411,70 @@ export class ChatEngine {
     }
   }
 
+  /**
+   * Shell-like tools can write anywhere, so their edits cannot be read off the
+   * tool input. Instead of giving up on attribution for the whole turn — which
+   * lets a concurrent thread's edits leak into this turn's card — bracket the
+   * time those tools are in flight with stat-only fingerprints and attribute
+   * only the paths that moved inside that window.
+   */
+  private trackUnboundedToolWindow(
+    session: SessionInfo,
+    toolPartId: string,
+    status: Extract<AgentPart, { type: 'tool' }>['state']['status']
+  ): void {
+    const openTools = (session.openUnboundedTools ??= new Set())
+    if (status === 'pending' || status === 'running') {
+      if (openTools.has(toolPartId)) return
+      if (openTools.size === 0) {
+        session.unboundedWindowStart = this.checkpointManager
+          .fingerprint(session.projectId, session.projectPath)
+          .catch((error) => {
+            Logger.error('turn change window scan failed:', error)
+            session.changeFilterReliable = false
+            return null
+          })
+      }
+      openTools.add(toolPartId)
+      return
+    }
+    if (!openTools.delete(toolPartId) || openTools.size > 0) return
+    this.closeUnboundedToolWindow(session)
+  }
+
+  private closeUnboundedToolWindow(session: SessionInfo): void {
+    const start = session.unboundedWindowStart
+    session.unboundedWindowStart = undefined
+    session.openUnboundedTools?.clear()
+    if (!start) return
+    const turnId = session.activeTurnId
+    const pendingScans = (session.pendingWindowScans ??= new Set())
+    const scan = (async (): Promise<void> => {
+      try {
+        const before = await start
+        if (!before || session.activeTurnId !== turnId) return
+        const after = await this.checkpointManager.fingerprint(
+          session.projectId,
+          session.projectPath
+        )
+        if (session.activeTurnId !== turnId) return
+        session.changedPaths ??= new Set()
+        for (const path of this.checkpointManager.diffFingerprints(
+          session.projectId,
+          before,
+          after
+        )) {
+          session.changedPaths.add(path)
+        }
+      } catch (error) {
+        Logger.error('turn change window scan failed:', error)
+        session.changeFilterReliable = false
+      }
+    })()
+    pendingScans.add(scan)
+    void scan.finally(() => pendingScans.delete(scan))
+  }
+
   private async finishCheckpoint(
     sessionId: string,
     info: SessionInfo | undefined,
@@ -9408,6 +9482,10 @@ export class ChatEngine {
     failure?: string
   ): Promise<void> {
     if (!info?.activeTurnId) return
+    // A shell tool still in flight (interrupted turn) never emitted a terminal
+    // state, so close its window here before the after-snapshot is taken.
+    if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
+    if (info.pendingWindowScans?.size) await Promise.all([...info.pendingWindowScans])
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -9416,13 +9494,16 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        info.changeFilterReliable !== false && info.changedPaths && info.changedPaths.size > 0
-          ? info.changedPaths
-          : undefined
+        // An empty set is a real answer — the agent touched nothing this turn —
+        // so it is passed through instead of falling back to the unfiltered diff.
+        info.changeFilterReliable !== false ? (info.changedPaths ?? new Set()) : undefined
       )
       info.activeTurnId = undefined
       info.changedPaths = undefined
       info.changeFilterReliable = undefined
+      info.openUnboundedTools = undefined
+      info.unboundedWindowStart = undefined
+      info.pendingWindowScans = undefined
       this.broadcast({
         type: 'checkpoint.updated',
         sessionId,
@@ -9457,6 +9538,9 @@ export class ChatEngine {
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
+      openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
+      unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,
+      pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
       ephemeral: ephemeral ?? existing?.ephemeral
     })
     // A session re-registering means the project is in use again — make it
