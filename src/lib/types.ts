@@ -2487,6 +2487,69 @@ export interface PullRequestReference {
   title: string
 }
 
+/**
+ * Pull request as shown in the sidebar list.
+ *
+ * Avatars are deliberately absent: the renderer CSP blocks remote image hosts,
+ * so the UI renders a monogram from `authorLogin` instead of a network image.
+ */
+export interface PullRequestSummary {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  draft: boolean
+  authorLogin: string
+  headRef: string
+  baseRef: string
+  createdAt: string
+  updatedAt: string
+  /** Issue-comment count as reported by the provider (review comments excluded). */
+  comments: number
+}
+
+/** One page of pull requests, with a cursor the UI can advance. */
+export interface PullRequestPage {
+  items: PullRequestSummary[]
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+}
+
+/** Full pull request view, loaded when one is opened in the sidebar. */
+export interface PullRequestDetail extends PullRequestSummary {
+  body: string
+  /** Null when the provider has not finished computing mergeability yet. */
+  mergeable: boolean | null
+  merged: boolean
+  additions: number
+  deletions: number
+  changedFiles: number
+  commitCount: number
+}
+
+/** One commit belonging to a pull request. */
+export interface PullRequestCommit {
+  sha: string
+  /** Seven-character short sha, precomputed for display. */
+  shortSha: string
+  message: string
+  authorName: string
+  date: string
+}
+
+/** One issue comment on a pull request. */
+export interface PullRequestComment {
+  id: number
+  authorLogin: string
+  body: string
+  createdAt: string
+  url: string
+}
+
+/** Review verdict submitted from the sidebar. */
+export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
 export interface GitRepositoryIdentity {
   owner: string

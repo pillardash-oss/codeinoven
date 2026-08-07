@@ -41,6 +41,12 @@
   import GitFileRow from './GitFileRow.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
+  import GitPullRequestList from './GitPullRequestList.svelte'
+  import GitPullRequestDetail from './GitPullRequestDetail.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -50,7 +56,7 @@
   let { projectId, threadId }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches' | 'stashes'
+  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'stashes'
 
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
@@ -80,6 +86,7 @@
   let selectedCommit = $state<GitCommitInfo | null>(null)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let showGitHubSignIn = $state(false)
+  let selectedPullRequest = $state<PullRequestSummary | null>(null)
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
@@ -216,6 +223,52 @@
     githubConnected = status.connected
     githubConfigured = status.configured
     githubUser = status.user ?? null
+  }
+
+  /**
+   * Hand a pull request to an agent.
+   *
+   * The agent gets a fresh thread whose first message tells it to review the PR
+   * in a throwaway worktree and leave its report in `.cio/git/pr/<number>/`, so
+   * the working tree the user is sitting in never gets touched.
+   */
+  async function startAgentReview(pr: PullRequestSummary): Promise<void> {
+    const project = await invoke('project:get', projectId).catch(() => null)
+    if (!project) return
+    const reportDirectory = await gitState.createPrReviewWorkspace(projectId, pr.number)
+    if (!reportDirectory) return
+
+    const thread = await invoke('thread:create', {
+      projectId,
+      providerId: 'opencode',
+      title: `Review PR #${pr.number}`,
+      workingDirectory: project.path,
+      settings: { ...threadSettings.lastUsed }
+    }).catch(() => null)
+    if (!thread) return
+
+    rendererRecovery.setDraft(projectId, thread.id, agentReviewPrompt(pr, reportDirectory), [], [])
+    workspaceState.openThread(thread, project)
+  }
+
+  /** The first message the review agent receives — explicit about isolation and output. */
+  function agentReviewPrompt(pr: PullRequestSummary, reportDirectory: string): string {
+    return [
+      `Review pull request #${pr.number} — "${pr.title}" (${pr.headRef} → ${pr.baseRef}) by ${pr.authorLogin}.`,
+      `PR URL: ${pr.url}`,
+      '',
+      'Work in isolation so my current working tree is never modified:',
+      `1. \`git fetch origin pull/${pr.number}/head:pr-${pr.number}\``,
+      `2. \`git worktree add ${reportDirectory}/worktree pr-${pr.number}\``,
+      `3. Review the diff against \`${pr.baseRef}\` inside that worktree — correctness, edge cases,`,
+      '   security, test coverage, and anything that would break existing behavior.',
+      '4. Run the project checks/tests that are relevant to the changed files.',
+      '',
+      `Write your findings to \`${reportDirectory}/review.md\`: a short verdict line, then findings`,
+      'ordered most severe first with file:line references and concrete failure scenarios.',
+      `When you are done, remove the worktree with \`git worktree remove ${reportDirectory}/worktree --force\``,
+      `and delete the local branch \`pr-${pr.number}\`. Do not push anything and do not merge the PR.`
+    ].join('\n')
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -422,6 +475,14 @@
   const primaryRemote = $derived(
     remotes.find((remote) => remote.name === 'origin') ?? remotes[0] ?? null
   )
+  /** `owner/repo` when origin points at GitHub — the PR tab needs it to query. */
+  const githubIdentity = $derived.by(() => {
+    const url = primaryRemote?.url ?? ''
+    const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(url.trim())
+    const owner = match?.[1] ?? ''
+    const repo = match?.[2] ?? ''
+    return owner && repo ? { owner, repo } : null
+  })
   const needsUpstreamPush = $derived(
     Boolean(status?.branch) && !status?.detached && status?.upstream === null
   )
@@ -556,7 +617,8 @@
           count: changes.length > 0 ? changes.length : null
         },
         { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
-        { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null }
+        { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
+        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
       ]
       // Stash is just shelved work — it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
@@ -1138,6 +1200,26 @@
               </button>
             {/each}
           </div>
+        </div>
+      {:else if activeTab === 'pulls'}
+        <div class="h-full min-h-0">
+          {#if selectedPullRequest && githubIdentity}
+            <GitPullRequestDetail
+              {projectId}
+              identity={githubIdentity}
+              summary={selectedPullRequest}
+              onBack={() => (selectedPullRequest = null)}
+              onAgentReview={(pr) => void startAgentReview(pr)}
+            />
+          {:else}
+            <GitPullRequestList
+              {projectId}
+              identity={githubIdentity}
+              {githubConnected}
+              onOpen={(pr) => (selectedPullRequest = pr)}
+              onSignIn={() => (showGitHubSignIn = true)}
+            />
+          {/if}
         </div>
       {:else if activeTab === 'stashes'}
         <div class="p-2">
