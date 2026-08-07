@@ -75,8 +75,9 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { threadSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -194,11 +195,30 @@
   let sessionId = $state(thread.sessionId ?? '')
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
-  let settings = $state<ThreadSettings>(threadSettings.initialFor(thread))
+  let settings = $state<ThreadSettings>(
+    chatMode
+      ? normalizeChatSettings(chatSettings.initialFor(thread))
+      : threadSettings.initialFor(thread)
+  )
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Reactive provider catalog for this thread's project — seeded from the
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
+
+  /** Chats are for questions and research: they never inject the Engineering
+   *  workflow and always run with auto permission review. */
+  function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
+    return { ...next, engineeringMode: false, permissionLevel: 'auto_review' }
+  }
+
+  /** Commit to the chat-scoped last-used store on the Chats tab, and to the
+   *  project last-used store everywhere else, so switching a chat model never
+   *  changes the model used for project work. */
+  function commitSettings(next: ThreadSettings): void {
+    if (chatMode) chatSettings.commit(next)
+    else threadSettings.commit(next)
+  }
+
   let commands = $state<ScopedHarnessCommand[]>([])
   let pendingPermissions = $state<PermissionRequest[]>([])
   let activeTodo = $derived(latestAgentTodo(messages))
@@ -1646,7 +1666,9 @@
       olderMessagesAvailable = page.hasOlder
       initializeHistoryWindow(page.messages.length)
       if (threadData?.settings) {
-        settings = { ...threadSettings.lastUsed, ...threadData.settings }
+        settings = chatMode
+          ? normalizeChatSettings({ ...chatSettings.lastUsed, ...threadData.settings })
+          : { ...threadSettings.lastUsed, ...threadData.settings }
       }
       agentDefaults = config.agentDefaults
       auditSettings = auditSettingsForThread()
@@ -2200,7 +2222,7 @@
     idleAttentionHandled = false
 
     // Persist settings as last-used
-    threadSettings.commit(settings)
+    commitSettings(settings)
 
     errorMessage = ''
     providerStatus = null
@@ -2314,17 +2336,16 @@
           actionId(`model:${provider.harnessId}:${provider.id}:${candidate.id}`) === action.id
       )
       if (model) {
-        const defaultThinkingLevel = baseUrlProviderStore.defaultThinkingLevel(
-          provider.harnessId,
-          provider.id,
-          model.id
+        const thinkingLevel = resolveDefaultThinkingLevel(
+          model.thinkingPresets,
+          baseUrlProviderStore.defaultThinkingLevel(provider.harnessId, provider.id, model.id)
         )
         updateSettings({
           ...settings,
           harnessId: provider.harnessId,
           providerId: provider.id,
           modelId: model.id,
-          ...(defaultThinkingLevel ? { thinkingLevel: defaultThinkingLevel } : {})
+          ...(thinkingLevel ? { thinkingLevel } : {})
         })
         return
       }
@@ -2907,7 +2928,7 @@
         engineeringMode: false,
         assignmentMode: false
       }
-      threadSettings.commit(settings)
+      commitSettings(settings)
     } catch (error) {
       assignmentError =
         error instanceof Error ? error.message : 'The Assignment could not be started.'
@@ -3503,7 +3524,7 @@
     try {
       await invoke('audit:complete', thread.projectId, thread.id)
       settings = { ...settings, engineeringMode: false, loopMode: false }
-      threadSettings.commit(settings)
+      commitSettings(settings)
       await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
       await reconcileReadySpec()
@@ -3969,7 +3990,7 @@
         }
         await setActiveSpec(active)
         settings = { ...settings, engineeringMode: false }
-        threadSettings.commit(settings)
+        commitSettings(settings)
         await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
         if (active.content.assignment && settings.assignmentMode) {
           await reconcileReadySpec()
@@ -4112,11 +4133,13 @@
   }
 
   function updateSettings(updated: ThreadSettings): void {
+    // Chats never change the permission level or the engineering workflow.
+    const incoming = chatMode ? normalizeChatSettings(updated) : updated
     const seniorModelChanged =
-      settings.harnessId !== updated.harnessId ||
-      settings.providerId !== updated.providerId ||
-      settings.modelId !== updated.modelId
-    const loopJustEnabled = settings.loopMode !== true && updated.loopMode === true
+      settings.harnessId !== incoming.harnessId ||
+      settings.providerId !== incoming.providerId ||
+      settings.modelId !== incoming.modelId
+    const loopJustEnabled = settings.loopMode !== true && incoming.loopMode === true
     const loopAuditor =
       auditSettings.harnessId && auditSettings.providerId && auditSettings.modelId
         ? {
@@ -4126,7 +4149,7 @@
           }
         : undefined
     const normalized: ThreadSettings = {
-      ...updated,
+      ...incoming,
       ...(loopJustEnabled && loopAuditor ? { loopAuditor } : {})
     }
     const harnessChanged = settings.harnessId !== normalized.harnessId
@@ -4139,7 +4162,7 @@
       })
     }
     // Persist immediately so the choice survives navigation away from this view.
-    threadSettings.commit(normalized)
+    commitSettings(normalized)
     const persistence = invoke('thread:updateSettings', thread.projectId, thread.id, normalized)
     if (harnessChanged) {
       void persistence.then(refreshCommands).catch(() => {
@@ -5569,13 +5592,25 @@
               onEditReference={editResponseReference}
               onSend={sendComposerMessage}
               historyMessages={userMessageTexts}
-              favoriteModels={rendererRecovery.favoriteModels}
+              hidePermissionSelector={chatMode}
+              favoriteModels={chatMode
+                ? rendererRecovery.chatFavoriteModels
+                : rendererRecovery.favoriteModels}
               onToggleFavorite={(providerId, modelId) =>
-                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                chatMode
+                  ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
+                  : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
               onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-              recentModels={rendererRecovery.recentModels}
-              onModelUsed={(modelKey) => rendererRecovery.addRecentModel(modelKey)}
+                chatMode
+                  ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                  : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              recentModels={chatMode
+                ? rendererRecovery.chatRecentModels
+                : rendererRecovery.recentModels}
+              onModelUsed={(modelKey) =>
+                chatMode
+                  ? rendererRecovery.addChatRecentModel(modelKey)
+                  : rendererRecovery.addRecentModel(modelKey)}
             />
           {/key}
         {/if}

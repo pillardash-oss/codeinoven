@@ -31,7 +31,7 @@
     fastSelectionModelId,
     supportsFastInference
   } from '$shared/fast-inference'
-  import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
+  import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -224,9 +224,9 @@
   /** Resolved settings — uses the prop if provided, else the global last-used.
    *  Chats always run with auto permission review, so when the permission
    *  selector is hidden the level is pinned to `auto_review`. */
-  let resolved = $derived(
+  let resolved = $derived<ThreadSettings>(
     hidePermissionSelector
-      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' }
+      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' as const }
       : (settings ?? threadSettingsStore.lastUsed)
   )
 
@@ -823,22 +823,23 @@
     modelMenuOpen = false
     onModelUsed?.(`${providerId}:${modelId}`)
     const nextHarness = nextHarnessId ?? resolved.harnessId
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
     const defaultThinkingLevel = baseUrlProviderStore.defaultThinkingLevel(
       nextHarness,
       providerId,
       modelId
     )
-    const provider = providers.find(
-      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
-    )
-    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    const thinkingLevel = resolveDefaultThinkingLevel(model?.thinkingPresets, defaultThinkingLevel)
     const fastSupported = supportsFastInference(nextHarness, providerId, model?.fastSupported)
     const updated: ThreadSettings = {
       ...resolved,
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
-      ...(defaultThinkingLevel ? { thinkingLevel: defaultThinkingLevel } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
     if (onSettingsChange) onSettingsChange(updated)
