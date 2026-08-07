@@ -2414,6 +2414,17 @@
                     initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
                     onValueChange={(value) =>
                       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+                    initialAttachments={rendererRecovery.attachmentsFor(
+                      INBOX_PROJECT_ID,
+                      'new-chat'
+                    )}
+                    onAttachmentsChange={(files) =>
+                      rendererRecovery.setDraft(
+                        INBOX_PROJECT_ID,
+                        'new-chat',
+                        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+                        files
+                      )}
                     onSend={(msg, files) => void createStandaloneChat(msg, files)}
                   />
                 {/key}

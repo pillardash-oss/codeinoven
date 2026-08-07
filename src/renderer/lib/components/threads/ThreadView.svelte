@@ -2119,7 +2119,8 @@
       pendingPromptReferences,
       pendingProjectReferences,
       pendingPresentation,
-      pendingTaskReferences
+      pendingTaskReferences,
+      true
     )
   }
 
