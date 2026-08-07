@@ -1,6 +1,16 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { Clock3, FileText, Loader2, MessageSquare, RotateCcw, X } from '@lucide/svelte'
+  import {
+    Check,
+    Clock3,
+    Copy,
+    FileText,
+    GitFork,
+    Loader2,
+    MessageSquare,
+    RotateCcw,
+    X
+  } from '@lucide/svelte'
   import ChatComposer from './ChatComposer.svelte'
   import ImagePreview from './ImagePreview.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -27,9 +37,11 @@
 
   interface Props {
     tab: TemporaryChatContextTab
+    /** Promote the side chat into a regular thread, then open it. */
+    onContinueInThread?: (tab: TemporaryChatContextTab) => void | Promise<void>
   }
 
-  let { tab }: Props = $props()
+  let { tab, onContinueInThread }: Props = $props()
   /** Reactive provider catalog for the tab's project — seeded from the cache
    *  and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
@@ -76,6 +88,44 @@
 
   function workingParts(message: AgentMessage): AgentPart[] {
     return message.parts.filter((part) => part.type !== 'text' && part.type !== 'question')
+  }
+
+  // ─── Turn footer actions (Copy / Continue in a new thread) ─────────────
+
+  let copiedMessageId = $state<string | null>(null)
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+  let convertingMessageId = $state<string | null>(null)
+  let continueError = $state('')
+
+  /** A turn footer is shown on finished assistant turns only — the active
+   *  streaming turn has no output to copy yet. */
+  function turnFinished(message: AgentMessage): boolean {
+    return !tab.busy || message.completedAt != null
+  }
+
+  async function copyMessage(message: AgentMessage): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(textFor(message))
+      copiedMessageId = message.id
+      clearTimeout(copyResetTimer)
+      copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)
+    } catch {
+      tab.error = 'The message could not be copied to the clipboard.'
+    }
+  }
+
+  async function continueInThread(message: AgentMessage): Promise<void> {
+    if (!onContinueInThread || convertingMessageId) return
+    convertingMessageId = message.id
+    continueError = ''
+    try {
+      await onContinueInThread(tab)
+    } catch (error) {
+      continueError =
+        error instanceof Error ? error.message : 'The side chat could not be continued.'
+    } finally {
+      convertingMessageId = null
+    }
   }
 
   /** When the agent started working on the turn an assistant message belongs to. */
@@ -514,6 +564,37 @@
               {harnessName}
             />
           {/if}
+          {#if message.role === 'assistant' && tab.mode !== 'audit' && turnFinished(message)}
+            <div class="flex items-center gap-1.5">
+              <div class="flex items-center gap-0.5">
+                <button
+                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  aria-label="Copy message"
+                  title="Copy"
+                  onclick={() => copyMessage(message)}
+                >
+                  {#if copiedMessageId === message.id}
+                    <Check size={12} class="text-success" />
+                  {:else}
+                    <Copy size={12} />
+                  {/if}
+                </button>
+                <button
+                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Continue in a new thread"
+                  title="Continue in a new thread"
+                  disabled={convertingMessageId !== null}
+                  onclick={() => continueInThread(message)}
+                >
+                  {#if convertingMessageId === message.id}
+                    <Loader2 size={12} class="animate-spin" />
+                  {:else}
+                    <GitFork size={12} />
+                  {/if}
+                </button>
+              </div>
+            </div>
+          {/if}
         {/each}
 
         {#if tab.busy}
@@ -534,6 +615,23 @@
               title="Dismiss error"
               aria-label="Dismiss temporary chat error"
               onclick={() => (tab.error = '')}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        {/if}
+
+        {#if continueError}
+          <div
+            class="flex items-start justify-between gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+          >
+            <span>{continueError}</span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 transition-colors hover:bg-danger/10"
+              title="Dismiss error"
+              aria-label="Dismiss continue-in-thread error"
+              onclick={() => (continueError = '')}
             >
               <X size={12} />
             </button>

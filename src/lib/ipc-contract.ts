@@ -616,6 +616,16 @@ export interface IpcInvokeContract {
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
   >
+  'temporary-chat:convertToThread': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      title?: string
+    ],
+    Thread
+  >
   'agent:truncateMessages': Contract<
     [projectId: string, threadId: string, messageId: string],
     AgentMessage[]

@@ -18,9 +18,34 @@ import {
   type ThreadSettings,
   type ThreadContextUsage,
   type AgentMessage,
+  type AgentPart,
   type ThreadMessageCursor,
   type ThreadMessagePage
 } from '../types'
+
+/**
+ * Re-key copied messages and their parts so they can live in a new thread
+ * without colliding with the originals. Used when forking a thread or when
+ * promoting a temporary (quick) chat into a regular thread.
+ */
+export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map((msg) => {
+    const newId = createMessageId()
+    const remapPart = (part: AgentPart): AgentPart => {
+      if (!('messageID' in part)) return part
+      const previous = part.id.includes(msg.id)
+        ? part.id.replace(msg.id, newId)
+        : `${newId}-${part.id}`
+      return { ...part, id: previous, messageID: newId }
+    }
+    return {
+      ...msg,
+      id: newId,
+      parts: msg.parts.map(remapPart),
+      transportParts: msg.transportParts?.map(remapPart)
+    }
+  })
+}
 
 export class ThreadManager {
   private threadRepo: ThreadRepo
@@ -596,35 +621,7 @@ export class ThreadManager {
     })
 
     if (copied.length > 0) {
-      const withNewIds = copied.map((msg) => {
-        const newId = createMessageId()
-        return {
-          ...msg,
-          id: newId,
-          parts: msg.parts.map((part) =>
-            'messageID' in part
-              ? {
-                  ...part,
-                  id: part.id.includes(msg.id)
-                    ? part.id.replace(msg.id, newId)
-                    : `${newId}-${part.id}`,
-                  messageID: newId
-                }
-              : part
-          ),
-          transportParts: msg.transportParts?.map((part) =>
-            'messageID' in part
-              ? {
-                  ...part,
-                  id: part.id.includes(msg.id)
-                    ? part.id.replace(msg.id, newId)
-                    : `${newId}-${part.id}`,
-                  messageID: newId
-                }
-              : part
-          )
-        }
-      })
+      const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(projectId, forked.id, withNewIds)
     }
 
