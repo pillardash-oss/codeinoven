@@ -19,6 +19,8 @@
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import type { Thread } from '$shared/types'
 
@@ -145,6 +147,14 @@
     return getAgentIcon(id)?.name ?? id
   }
 
+  /** Provider name for the thread's current model, resolved for its vendor icon. */
+  let currentModelProviderName = $derived.by((): string | null => {
+    const providerId = thread.settings?.providerId
+    if (!providerId) return null
+    const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
+    return providers.find((provider) => provider.id === providerId)?.name ?? null
+  })
+
   $effect(() => {
     const row = harnessRowEl
     if (!row) return
@@ -164,6 +174,8 @@
         const available = row.clientWidth - PLUS
         const perIcon = ICON + GAP
         let count = Math.floor((available + GAP) / perIcon)
+        // Always show at least three harnesses before truncating to a +n chip.
+        count = Math.max(3, count)
         count = Math.max(0, Math.min(total, count))
         visibleHarnessCount = count
       })
@@ -665,21 +677,34 @@
       >
         {thread.title}
       </span>
+
+      <!-- Current working / last worked model -->
+      {#if thread.settings?.harnessId}
+        <span
+          class="flex shrink-0 items-center gap-0.5 text-dimmed"
+          title={currentModelProviderName ?? thread.settings.modelId ?? 'Model'}
+        >
+          <AgentIcon agentId={thread.settings.harnessId} size={14} />
+          {#if currentModelProviderName}
+            <VendorIcon name={currentModelProviderName} size={12} />
+          {/if}
+        </span>
+      {/if}
     </span>
 
     <!-- Bottom line: scope badge, harnesses, then time ↔ ellipsis on the right -->
     <span class="flex w-full min-w-0 items-center gap-1.5">
       {#if scopeBucket}
         <span
-          class="flex min-w-0 shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px] font-medium"
+          class="flex min-w-0 max-w-[6rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
           title={scopeBucket.name}
-          style="color: {scopeColor}; background: {scopeColor}14;"
+          style="color: {scopeColor}; background: {scopeColor}0d;"
         >
           {#if scopeIconUrl}
             <img
               src={scopeIconUrl}
               alt=""
-              class="h-2.5 w-2.5 shrink-0 object-contain"
+              class="h-2.5 w-2.5 shrink-0 object-contain opacity-70"
               draggable="false"
             />
           {/if}
