@@ -2608,15 +2608,18 @@
     if (exact) return exact
 
     // The source user message may not be paged in yet (it can live outside the
-    // initially loaded history window), so an id match alone can miss a turn
-    // until the user scrolls. Fall back to matching the checkpoint to this turn
-    // by time so the changes card mounts as soon as the checkpoint list resolves,
-    // regardless of which messages have been loaded.
+    // initially loaded history window — a single turn can span dozens of tool
+    // messages), so an id match alone can miss a turn until the user scrolls.
+    // Fall back to matching the checkpoint to this turn by time: the checkpoint
+    // is created at the turn's start and completed just after its last message,
+    // so compare its completedAt against this assistant message.
     const turnStart = sourceMessage?.createdAt ?? assistant.createdAt
     const nextUser = messages.slice(messageIndex + 1).find((message) => message.role === 'user')
     const turnEnd = nextUser?.createdAt ?? Number.POSITIVE_INFINITY
     const withinTurn = completed.filter(
-      (checkpoint) => checkpoint.createdAt >= turnStart - 5_000 && checkpoint.createdAt < turnEnd
+      (checkpoint) =>
+        (checkpoint.completedAt ?? checkpoint.createdAt) >= turnStart - 5_000 &&
+        checkpoint.createdAt < turnEnd
     )
     const targetTime = assistant.completedAt ?? assistant.createdAt
     return (
