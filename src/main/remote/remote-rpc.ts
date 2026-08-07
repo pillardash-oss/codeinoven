@@ -332,9 +332,9 @@ export class RemoteRpcDispatcher {
           this.optionalString(args[7]),
           args[8] as PromptReference[] | undefined,
           args[9] as PromptProjectReference[] | undefined,
-          (args[10] as 'user' | 'internal') ?? 'user',
-          args[11] as UserMessagePresentation | undefined,
-          args[12] as PromptAssignmentTaskReference[] | undefined
+          'user',
+          args[10] as UserMessagePresentation | undefined,
+          args[11] as PromptAssignmentTaskReference[] | undefined
         )
       case 'agent:steerPrompt':
         return chatEngine.steerPrompt(

@@ -103,4 +103,44 @@ describe('RemoteRpcDispatcher', () => {
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.message).toBe('boom')
   })
+
+  it('routes agent:sendPrompt with presentation at the same index the renderer sends it', async () => {
+    const calls: Array<unknown[]> = []
+    const chatEngine = {
+      sendPrompt: async (...args: unknown[]) => {
+        calls.push(args)
+        return { id: 'm1', role: 'assistant', parts: [], createdAt: 0 }
+      }
+    } as unknown as RemoteRpcServices['chatEngine']
+    const dispatcher = makeDispatcher({ chatEngine })
+    const presentation = { action: 'share', body: 'look here' }
+    const taskReferences = [{ taskId: 't-1' }]
+    const outcome = await dispatcher.dispatch({
+      id: 4,
+      channel: 'agent:sendPrompt',
+      args: [
+        'proj-1',
+        'thread-1',
+        { harnessId: 'opencode', model: 'gpt-5' },
+        'hello',
+        [],
+        undefined,
+        'msg-1',
+        'ctx',
+        [],
+        [],
+        presentation,
+        taskReferences
+      ]
+    })
+    expect(outcome.ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    const routed = calls[0]
+    expect(routed[0]).toBe('proj-1')
+    expect(routed[1]).toBe('thread-1')
+    expect(routed[3]).toBe('hello')
+    expect(routed[10]).toBe('user')
+    expect(routed[11]).toEqual(presentation)
+    expect(routed[12]).toEqual(taskReferences)
+  })
 })
