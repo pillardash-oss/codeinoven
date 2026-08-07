@@ -17,6 +17,7 @@ afterEach(async () => {
 function memory(): MemoryConfig {
   return {
     enabled: true,
+    chatEnabled: true,
     entries: [
       {
         id: 'formatting',
@@ -60,12 +61,13 @@ describe('MemoryService', () => {
       '## Formatting\n\nUse the project formatter only on touched files.\n\n## Another\n\nA second entry.'
     )
     const service = new MemoryService(storage)
+    const projectId = 'project-1'
 
-    await expect(service.formatCurrent()).resolves.toContain(
+    await expect(service.formatCurrent(projectId)).resolves.toContain(
       '- Formatting: Use the project formatter only on touched files.'
     )
-    await expect(service.formatCurrent()).resolves.toContain('- Another: A second entry.')
-    await expect(service.snapshotCurrent()).resolves.toContainEqual(
+    await expect(service.formatCurrent(projectId)).resolves.toContain('- Another: A second entry.')
+    await expect(service.snapshotCurrent(projectId)).resolves.toContainEqual(
       expect.objectContaining({
         type: 'memory',
         label: 'Formatting',

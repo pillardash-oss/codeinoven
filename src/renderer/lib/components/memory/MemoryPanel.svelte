@@ -15,10 +15,14 @@
 
   interface Props {
     variant?: 'settings' | 'sidebar'
+    /** The active settings tab — 'projects' or 'chats'. */
+    scope?: 'projects' | 'chats'
     projectId?: string
     threadId?: string
     memoryEnabled?: boolean
+    chatMemoryEnabled?: boolean
     onMemoryEnabledChange?: (enabled: boolean) => Promise<void>
+    onChatMemoryEnabledChange?: (enabled: boolean) => Promise<void>
     activeSection?: MemorySection
   }
 
@@ -29,12 +33,17 @@
 
   type MemorySection = 'active' | 'proposed'
 
+  type MemoryTab = 'projects' | 'chats'
+
   let {
     variant = 'settings',
+    scope = $bindable('projects'),
     projectId,
     threadId,
     memoryEnabled,
+    chatMemoryEnabled,
     onMemoryEnabledChange,
+    onChatMemoryEnabledChange,
     activeSection = $bindable('active')
   }: Props = $props()
 
@@ -44,7 +53,8 @@
   let saving = $state(false)
   let saved = $state(false)
   let error = $state('')
-  let loadedMemoryEnabled = $state(true)
+  let loadedProjectEnabled = $state(true)
+  let loadedChatEnabled = $state(true)
   let proposalBusyIds = $state<string[]>([])
   let loadRequest = 0
   let searchQuery = $state('')
@@ -66,13 +76,50 @@
     low: 'Low'
   }
 
-  let effectiveMemoryEnabled = $derived(memoryEnabled ?? loadedMemoryEnabled)
+  /** Whether this panel is managing project memory or chat memory. */
+  let contextKind = $derived<MemoryTab>(
+    variant === 'settings' ? scope : projectId === INBOX_PROJECT_ID ? 'chats' : 'projects'
+  )
+
+  let effectiveMemoryEnabled = $derived(
+    contextKind === 'chats'
+      ? (chatMemoryEnabled ?? loadedChatEnabled)
+      : (memoryEnabled ?? loadedProjectEnabled)
+  )
+
+  let headerDescription = $derived(
+    variant === 'settings'
+      ? scope === 'chats'
+        ? 'Memory that applies to standalone chats. Global preferences are shared with projects.'
+        : 'Memory that applies to project work. Global preferences are shared with chats.'
+      : projectId === INBOX_PROJECT_ID
+        ? 'Global, chat, and thread preferences active in this conversation.'
+        : 'Global, project, and thread preferences active in this conversation.'
+  )
+
   let availableScopes = $derived.by((): Array<{ value: MemoryScope; label: string }> => {
-    if (variant === 'settings') return [{ value: 'global', label: 'Global' }]
-    if (projectId === INBOX_PROJECT_ID) return [{ value: 'chat', label: 'Chat' }]
+    if (variant === 'settings') {
+      return scope === 'chats'
+        ? [
+            { value: 'global', label: 'Global' },
+            { value: 'chat', label: 'Chats' }
+          ]
+        : [
+            { value: 'global', label: 'Global' },
+            { value: 'projects', label: 'Projects' }
+          ]
+    }
+    if (projectId === INBOX_PROJECT_ID) {
+      return [
+        { value: 'global', label: 'Global' },
+        { value: 'chat', label: 'Chats' },
+        { value: 'thread', label: 'Thread' }
+      ]
+    }
     return [
       { value: 'global', label: 'Global' },
-      { value: 'project', label: 'Project' },
+      { value: 'projects', label: 'Projects' },
+      { value: 'project', label: 'Specific project' },
       { value: 'thread', label: 'Thread' }
     ]
   })
@@ -124,6 +171,17 @@
         body: 'Memories you disable will appear here.'
       }
     }
+    if (variant === 'settings') {
+      return scope === 'chats'
+        ? {
+            title: 'No chat memories yet.',
+            body: 'Add a preference you want chat agents to remember, or approve suggested ones.'
+          }
+        : {
+            title: 'No project memories yet.',
+            body: 'Explicit preferences are suggested for approval, or you can add one manually.'
+          }
+    }
     return {
       title: 'No memory entries yet.',
       body: 'Explicit preferences are suggested for approval, or you can add one manually.'
@@ -136,24 +194,44 @@
     error = ''
     try {
       const config = await invoke('config:get')
+      loadedProjectEnabled = config.memory.enabled
+      loadedChatEnabled = config.memory.chatEnabled
       let nextEntries: MemoryEntry[]
       let nextProposals: PendingProposal[]
       if (variant === 'settings') {
-        nextEntries = await invoke('memory:getEntries')
-        nextProposals = []
+        if (scope === 'chats') {
+          const [rootEntries, chatEntries, globalProposals, chatProposals] = await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getEntries', INBOX_PROJECT_ID),
+            invoke('memory:getPendingProposals'),
+            invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+          ])
+          nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
+          nextProposals = [
+            ...globalProposals.map((proposal) => ({ proposal })),
+            ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
+          ]
+        } else {
+          nextEntries = await invoke('memory:getEntries')
+          nextProposals = []
+        }
       } else if (projectId === INBOX_PROJECT_ID) {
-        const [chatEntries, globalProposals, chatProposals] = await Promise.all([
-          invoke('memory:getEntries', INBOX_PROJECT_ID),
-          invoke('memory:getPendingProposals'),
-          invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
-        ])
-        nextEntries = chatEntries
+        const [rootEntries, chatEntries, threadEntries, globalProposals, chatProposals] =
+          await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getEntries', INBOX_PROJECT_ID),
+            invoke('memory:getEntries', INBOX_PROJECT_ID, threadId),
+            invoke('memory:getPendingProposals'),
+            invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
+          ])
+        nextEntries = [
+          ...rootEntries.filter((entry) => entry.scope === 'global'),
+          ...chatEntries,
+          ...(threadId ? threadEntries : [])
+        ]
         nextProposals = [
           ...globalProposals.map((proposal) => ({ proposal })),
-          ...chatProposals.map((proposal) => ({
-            proposal,
-            queueProjectId: INBOX_PROJECT_ID
-          }))
+          ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
         ]
       } else if (projectId && threadId) {
         const [globalEntries, projectEntries, threadEntries, globalProposals, projectProposals] =
@@ -174,7 +252,6 @@
         nextProposals = []
       }
       if (request !== loadRequest) return
-      loadedMemoryEnabled = config.memory.enabled
       entries = nextEntries
       proposals = nextProposals
     } catch (e) {
@@ -190,20 +267,42 @@
     saved = false
     try {
       if (variant === 'settings') {
-        await invoke(
-          'memory:saveEntries',
-          entries.map((entry) => withScope(entry, 'global'))
-        )
+        if (scope === 'chats') {
+          const globalEntries = entries
+            .filter((entry) => entry.scope === 'global')
+            .map((entry) => withScope(entry, 'global'))
+          const chatEntries = entries
+            .filter((entry) => entry.scope === 'chat')
+            .map((entry) => withScope(entry, 'chat'))
+          await Promise.all([
+            invoke('memory:saveEntries', globalEntries),
+            invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID)
+          ])
+        } else {
+          await invoke(
+            'memory:saveEntries',
+            entries.map((entry) => withScope(entry, entry.scope))
+          )
+        }
       } else if (projectId === INBOX_PROJECT_ID) {
-        await invoke(
-          'memory:saveEntries',
-          entries.map((entry) => withScope(entry, 'chat')),
-          INBOX_PROJECT_ID
-        )
-      } else if (projectId && threadId) {
         const globalEntries = entries
           .filter((entry) => entry.scope === 'global')
           .map((entry) => withScope(entry, 'global'))
+        const chatEntries = entries
+          .filter((entry) => entry.scope === 'chat')
+          .map((entry) => withScope(entry, 'chat'))
+        const threadEntries = entries
+          .filter((entry) => entry.scope === 'thread')
+          .map((entry) => withScope(entry, 'thread'))
+        await Promise.all([
+          invoke('memory:saveEntries', globalEntries),
+          invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID),
+          invoke('memory:saveEntries', threadEntries, INBOX_PROJECT_ID, threadId)
+        ])
+      } else if (projectId && threadId) {
+        const rootEntries = entries
+          .filter((entry) => entry.scope === 'global' || entry.scope === 'projects')
+          .map((entry) => withScope(entry, entry.scope))
         const projectEntries = entries
           .filter((entry) => entry.scope === 'project')
           .map((entry) => withScope(entry, 'project'))
@@ -211,7 +310,7 @@
           .filter((entry) => entry.scope === 'thread')
           .map((entry) => withScope(entry, 'thread'))
         await Promise.all([
-          invoke('memory:saveEntries', globalEntries),
+          invoke('memory:saveEntries', rootEntries),
           invoke('memory:saveEntries', projectEntries, projectId),
           invoke('memory:saveEntries', threadEntries, projectId, threadId)
         ])
@@ -227,17 +326,17 @@
     }
   }
 
-  function withScope(entry: MemoryEntry, scope: MemoryScope): MemoryEntry {
+  function withScope(entry: MemoryEntry, entryScope: MemoryScope): MemoryEntry {
     return {
       ...entry,
-      scope,
-      projectId: scope === 'project' || scope === 'thread' ? projectId : undefined,
-      threadId: scope === 'thread' ? threadId : undefined
+      scope: entryScope,
+      projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
+      threadId: entryScope === 'thread' ? threadId : undefined
     }
   }
 
   function addEntry(): void {
-    const scope = availableScopes.at(-1)?.value ?? 'global'
+    const entryScope = availableScopes.at(-1)?.value ?? 'global'
     entries = [
       ...entries,
       {
@@ -248,10 +347,12 @@
         updatedAt: Date.now(),
         category: 'preference',
         priority: 'medium',
-        scope,
+        scope: entryScope,
         source: 'manual',
         frequency: 1,
-        lastReinforced: Date.now()
+        lastReinforced: Date.now(),
+        projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
+        threadId: entryScope === 'thread' ? threadId : undefined
       }
     ]
   }
@@ -259,14 +360,25 @@
   async function setMemoryEnabled(enabled: boolean): Promise<void> {
     error = ''
     try {
-      if (onMemoryEnabledChange) {
-        await onMemoryEnabledChange(enabled)
+      if (contextKind === 'chats') {
+        if (onChatMemoryEnabledChange) {
+          await onChatMemoryEnabledChange(enabled)
+        } else {
+          await invoke('config:update', {
+            memory: { enabled: loadedProjectEnabled, chatEnabled: enabled, entries: [] }
+          })
+        }
+        loadedChatEnabled = enabled
       } else {
-        await invoke('config:update', {
-          memory: { enabled, entries: [] }
-        })
+        if (onMemoryEnabledChange) {
+          await onMemoryEnabledChange(enabled)
+        } else {
+          await invoke('config:update', {
+            memory: { enabled, chatEnabled: loadedChatEnabled, entries: [] }
+          })
+        }
+        loadedProjectEnabled = enabled
       }
-      loadedMemoryEnabled = enabled
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to update memory.'
     }
@@ -318,7 +430,7 @@
   }
 
   $effect(() => {
-    const contextKey = `${variant}:${projectId ?? ''}:${threadId ?? ''}`
+    const contextKey = `${variant}:${scope}:${projectId ?? ''}:${threadId ?? ''}`
     if (contextKey) void load()
   })
 </script>
@@ -328,21 +440,54 @@
     ? 'mx-auto w-full max-w-3xl p-6'
     : 'p-5'}"
 >
-  <!-- Fixed header: title, global toggle, tabs -->
+  <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->
   <div class="shrink-0">
-    <div class="mb-5">
-      <h1 class="text-xl font-bold tracking-tight">Memory</h1>
-      <p class="mt-0.5 text-sm text-muted">
-        {variant === 'settings'
-          ? 'Global preferences available to every agent conversation.'
-          : 'Global, project, and thread preferences active in this conversation.'}
-      </p>
+    <div class="mb-5 flex items-start justify-between gap-4">
+      <div>
+        <h1 class="text-xl font-bold tracking-tight">Memory</h1>
+        <p class="mt-0.5 text-sm text-muted">{headerDescription}</p>
+      </div>
+
+      {#if variant === 'settings'}
+        <div
+          class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+          role="tablist"
+          aria-label="Memory scope"
+        >
+          <button
+            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {scope ===
+            'projects'
+              ? 'bg-surface text-foreground shadow-sm'
+              : 'text-muted hover:text-foreground'}"
+            role="tab"
+            aria-selected={scope === 'projects'}
+            title="Manage project memory"
+            onclick={() => (scope = 'projects')}
+          >
+            Projects
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {scope ===
+            'chats'
+              ? 'bg-surface text-foreground shadow-sm'
+              : 'text-muted hover:text-foreground'}"
+            role="tab"
+            aria-selected={scope === 'chats'}
+            title="Manage chat memory"
+            onclick={() => (scope = 'chats')}
+          >
+            Chats
+          </button>
+        </div>
+      {/if}
     </div>
 
     {#if variant === 'settings'}
       <div class="mb-5 flex items-center justify-between gap-4 rounded-xl border bg-surface p-4">
         <div>
-          <p class="text-sm font-medium text-foreground">Use persistent memory</p>
+          <p class="text-sm font-medium text-foreground">
+            Use persistent memory in {contextKind === 'chats' ? 'chats' : 'projects'}
+          </p>
           <p class="mt-0.5 text-xs text-muted">
             When disabled, saved entries remain available here but are not sent to agents.
           </p>
@@ -350,16 +495,26 @@
         <Switch
           checked={effectiveMemoryEnabled}
           onchange={() => void setMemoryEnabled(!effectiveMemoryEnabled)}
-          aria-label={effectiveMemoryEnabled
-            ? 'Disable persistent memory'
-            : 'Enable persistent memory'}
-          title={effectiveMemoryEnabled ? 'Disable persistent memory' : 'Enable persistent memory'}
+          aria-label={contextKind === 'chats'
+            ? effectiveMemoryEnabled
+              ? 'Disable persistent memory for chats'
+              : 'Enable persistent memory for chats'
+            : effectiveMemoryEnabled
+              ? 'Disable persistent memory for projects'
+              : 'Enable persistent memory for projects'}
+          title={contextKind === 'chats'
+            ? effectiveMemoryEnabled
+              ? 'Disable persistent memory for chats'
+              : 'Enable persistent memory for chats'
+            : effectiveMemoryEnabled
+              ? 'Disable persistent memory for projects'
+              : 'Enable persistent memory for projects'}
         />
       </div>
     {:else if !effectiveMemoryEnabled}
       <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
-        Persistent memory is disabled globally. Entries can be managed here but are not sent to
-        agents.
+        Persistent memory is disabled{contextKind === 'chats' ? ' for chats' : ' for projects'}.
+        Entries can be managed here but are not sent to agents.
       </p>
     {/if}
 

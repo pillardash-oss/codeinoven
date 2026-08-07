@@ -31,7 +31,7 @@ export const MEMORY_LIMITS = {
 
 const VALID_CATEGORIES: MemoryCategory[] = ['behavioral', 'project-rule', 'identity', 'preference']
 const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
-const VALID_SCOPES: MemoryScope[] = ['global', 'project', 'thread', 'chat']
+const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
 const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
@@ -205,7 +205,8 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       `Memory content exceeds ${MEMORY_LIMITS.maxAggregateCharacters} aggregate characters`
     )
   }
-  return { enabled: value.enabled, entries }
+  const chatEnabled = typeof value.chatEnabled === 'boolean' ? value.chatEnabled : true
+  return { enabled: value.enabled, chatEnabled, entries }
 }
 
 /** Migrate old config.json memory entries to memory.md — called on first read. */
@@ -224,8 +225,30 @@ async function migrateMemoryEntries(storage: StorageEngine): Promise<void> {
   }
 
   // Clear entries from config.json
-  config.memory = { enabled: config.memory.enabled, entries: [] }
+  config.memory = {
+    enabled: config.memory.enabled,
+    chatEnabled: config.memory.chatEnabled ?? true,
+    entries: []
+  }
   await storage.write('config.json', config)
+}
+
+/**
+ * Migrate legacy `global`-scoped entries to the `projects` scope.
+ *
+ * The `global` scope previously meant "everywhere". With chat memory the
+ * `global` scope now applies to both projects and chats, so one-time migrate
+ * existing global entries to `projects` (all projects only) so pre-existing
+ * preferences never leak into the newly introduced chats.
+ */
+async function migrateLegacyGlobalScope(storage: StorageEngine): Promise<void> {
+  const existingMd = (await storage.readRaw(MEMORY_FILENAME)) ?? ''
+  const entries = parseMemoryMd(existingMd)
+  if (!entries.some((entry) => entry.scope === 'global')) return
+  const migrated = entries.map((entry) =>
+    entry.scope === 'global' ? { ...entry, scope: 'projects' as const } : entry
+  )
+  await storage.writeRaw(MEMORY_FILENAME, serializeMemoryMd(migrated))
 }
 
 /** Formats only explicit enabled preferences and snapshots them for approved specs. */
@@ -233,7 +256,9 @@ export class MemoryService {
   private readonly migration: Promise<void>
 
   constructor(private readonly storage = new StorageEngine()) {
-    this.migration = migrateMemoryEntries(storage).catch(() => undefined)
+    this.migration = migrateMemoryEntries(storage)
+      .then(() => migrateLegacyGlobalScope(storage))
+      .catch(() => undefined)
   }
 
   private memoryFilePath(projectId?: string, threadId?: string): string {
@@ -242,7 +267,8 @@ export class MemoryService {
 
   private memoryDirectory(projectId?: string, threadId?: string): string {
     if (projectId === 'inbox') {
-      if (threadId !== undefined) throw new TypeError('Chat memory does not accept a thread ID')
+      const safeThreadId = optionalEntityId(threadId, 'Thread ID')
+      if (safeThreadId) return join(CHATS_CWD_DIR, THREADS_DIR, safeThreadId)
       return CHATS_CWD_DIR
     }
     const safeProjectId = optionalEntityId(projectId, 'Project ID')
@@ -268,18 +294,24 @@ export class MemoryService {
   async current(projectId?: string, threadId?: string): Promise<MemoryConfig> {
     await this.migration
     const config = await this.storage.read<AppConfig>('config.json')
+    const isChat = projectId === 'inbox'
 
     const entries: MemoryEntry[] = []
     entries.push(...(await this.getEntries()))
 
-    if (projectId === 'inbox') {
+    if (isChat) {
       entries.push(...(await this.getEntries('inbox')))
+      if (threadId) entries.push(...(await this.getEntries('inbox', threadId)))
     } else if (projectId) {
       entries.push(...(await this.getEntries(projectId)))
       if (threadId) entries.push(...(await this.getEntries(projectId, threadId)))
     }
 
-    return { enabled: config?.memory?.enabled ?? true, entries }
+    return {
+      enabled: isChat ? (config?.memory?.chatEnabled ?? true) : (config?.memory?.enabled ?? true),
+      chatEnabled: config?.memory?.chatEnabled ?? true,
+      entries
+    }
   }
 
   async saveFromMarkdown(markdown: string, projectId?: string, threadId?: string): Promise<void> {
@@ -297,17 +329,29 @@ export class MemoryService {
     return parseMemoryMd(mdContent)
   }
 
-  /** Get entries from all scopes (global, project, thread, chat), merged. */
+  /** Get entries from all scopes (global, projects, project, thread, chat), merged. */
   async getMergedEntries(projectId?: string): Promise<MemoryEntry[]> {
     const entries = await this.getEntries()
     if (!projectId) return entries
 
     if (projectId === 'inbox') {
       entries.push(...(await this.getEntries('inbox')))
+      const threadDirectory = join(CHATS_CWD_DIR, THREADS_DIR)
+      try {
+        const threadIds = await this.storage.listDirectories(threadDirectory)
+        for (const threadId of threadIds) {
+          const content = await this.storage.readRaw(
+            join(threadDirectory, threadId, MEMORY_FILENAME)
+          )
+          if (content) entries.push(...parseMemoryMd(content))
+        }
+      } catch {
+        // Threads directory may not exist
+      }
       return entries
-    } else {
-      entries.push(...(await this.getEntries(projectId)))
     }
+
+    entries.push(...(await this.getEntries(projectId)))
 
     const threadDirectory = join(
       PROJECTS_DIR,
@@ -632,10 +676,12 @@ export class MemoryService {
 
   /** Delete the thread's memory directory when a thread is removed. */
   async deleteThreadMemory(projectId: string, threadId: string): Promise<void> {
-    // Standalone Chats share one chat-scoped memory file. Deleting an individual
-    // chat must never delete that shared memory or resolve it as thread memory.
-    if (projectId === 'inbox') return
-    const dir = this.memoryDirectory(projectId, threadId)
+    // Standalone chats share one chat-scoped memory file, so deleting an
+    // individual chat only removes that chat thread's own thread-scoped
+    // memory and never the shared chat memory file.
+    const safeThreadId = optionalEntityId(threadId, 'Thread ID')
+    if (!safeThreadId) return
+    const dir = this.memoryDirectory(projectId, safeThreadId)
     try {
       await this.storage.remove(dir)
     } catch {
@@ -731,14 +777,16 @@ function locationForScope(
   projectId?: string,
   threadId?: string
 ): MemoryLocation {
-  if (scope === 'global') return {}
+  if (scope === 'global' || scope === 'projects') return {}
   if (scope === 'chat') return { projectId: 'inbox' }
 
   const safeProjectId = optionalEntityId(projectId, 'Project ID')
-  if (!safeProjectId || safeProjectId === 'inbox') {
+  if (!safeProjectId) {
     throw new TypeError(`${scope === 'thread' ? 'Thread' : 'Project'} memory requires a project ID`)
   }
   if (scope === 'project') {
+    if (safeProjectId === 'inbox')
+      throw new TypeError('Project memory does not accept the chat scope')
     if (threadId !== undefined) throw new TypeError('Project memory does not accept a thread ID')
     return { projectId: safeProjectId, entryProjectId: safeProjectId }
   }
@@ -767,6 +815,8 @@ function entryAppliesToContext(entry: MemoryEntry, projectId?: string, threadId?
   switch (entry.scope) {
     case 'global':
       return true
+    case 'projects':
+      return Boolean(projectId && projectId !== 'inbox')
     case 'project':
       return Boolean(entry.projectId && entry.projectId === projectId)
     case 'thread':

@@ -259,7 +259,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     },
     scope: {
       type: 'string',
-      enum: ['global', 'project', 'thread', 'chat'],
+      enum: ['global', 'projects', 'project', 'thread', 'chat'],
       description: 'Where the memory should apply. The extraction prompt supplies valid scopes.'
     }
   },
