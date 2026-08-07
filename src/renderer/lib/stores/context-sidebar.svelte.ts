@@ -218,17 +218,21 @@ class ContextSidebarState {
     )
   }
 
-  /** Whether the right sidebar should render at all. */
+  /**
+   * Whether the right sidebar should render at all. Independent of the bottom
+   * terminal dock: when the sidebar has no non-terminal tabs it still renders
+   * its empty/actions state so the user can add files, git, sources, etc.
+   */
   get sidebarVisible(): boolean {
-    if (!this.visible) return false
-    if (this.terminalPlacement === 'right') return true
-    return this.sidebarTabs.length > 0
+    return this.visible
   }
 
-  /** Whether the bottom terminal dock should render at all. */
+  /**
+   * Whether the bottom terminal dock should render at all. Fully independent
+   * of the right sidebar — hiding the sidebar never hides the dock.
+   */
   get terminalDockVisible(): boolean {
     return (
-      this.visible &&
       this.terminalPlacement === 'bottom' &&
       this.activeContext?.terminalDockOpen !== false &&
       this.terminalTabs.length > 0
@@ -245,9 +249,13 @@ class ContextSidebarState {
   /** Move terminals between the sidebar and the bottom dock. */
   setTerminalPlacement(placement: TerminalPlacement): void {
     this.terminalPlacement = placement
+    const context = this.activeContext
+    if (!context) return
     if (placement === 'bottom') {
-      const context = this.activeContext
-      if (context) context.terminalDockOpen = true
+      context.terminalDockOpen = true
+    } else {
+      // Terminals rejoin the sidebar — reveal it so the shell stays visible.
+      context.visible = true
     }
   }
 
@@ -933,7 +941,7 @@ class ContextSidebarState {
     if (!context.tabs.some((tab) => tab.id === id)) return
     context.activeTabId = id
     this.trackRegionActiveTab(context, id)
-    context.visible = true
+    this.revealRegion(context, id, false)
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
@@ -946,7 +954,7 @@ class ContextSidebarState {
     }
     context.activeTabId = tab.id
     this.trackRegionActiveTab(context, tab.id)
-    context.visible = true
+    this.revealRegion(context, tab.id, true)
   }
 
   /** Remember which area (sidebar vs bottom dock) owns the focused tab. */
@@ -955,9 +963,26 @@ class ContextSidebarState {
     if (!tab) return
     if (tab.kind === 'terminal') {
       context.terminalActiveTabId = id
-      if (this.terminalPlacement === 'bottom') context.terminalDockOpen = true
     } else {
       context.sidebarActiveTabId = id
+    }
+  }
+
+  /**
+   * Reveal only the region the tab belongs to, keeping the two regions
+   * independent:
+   * - Terminal tabs docked at the bottom open the dock; on a brand-new open
+   *   the sidebar is revealed too so its add-actions stay reachable.
+   * - Everything else reveals the sidebar. The dock is never touched.
+   */
+  private revealRegion(context: ThreadSidebarContext, id: string, opening: boolean): void {
+    const tab = context.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
+      context.terminalDockOpen = true
+      if (opening) context.visible = true
+    } else {
+      context.visible = true
     }
   }
 
