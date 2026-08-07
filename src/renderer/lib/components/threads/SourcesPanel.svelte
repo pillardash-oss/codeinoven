@@ -17,6 +17,7 @@
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { faviconState } from '$lib/stores/favicons.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type {
     AgentCapabilityEntry,
@@ -63,6 +64,10 @@
         void imageUrls.load(source.url, source.mime)
       }
     }
+    const webUrls = sources
+      .filter((source): source is Extract<AgentSource, { kind: 'web' }> => source.kind === 'web')
+      .map((source) => source.url as string)
+    faviconState.ensureResolved(webUrls)
   })
 
   onMount(() => {
@@ -346,10 +351,17 @@
         <div class="group border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
           <div class="flex items-start gap-3">
             {#if source.kind === 'web'}
+              {@const favicon = source.url ? faviconState.faviconFor(source.url) : null}
               <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+                class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-raised {favicon
+                  ? ''
+                  : 'text-muted'}"
               >
-                <Globe2 size={15} />
+                {#if favicon}
+                  <img src={favicon} alt="" class="h-5 w-5 rounded-sm object-contain" />
+                {:else}
+                  <Globe2 size={15} />
+                {/if}
               </span>
             {:else if source.kind === 'file-citation'}
               <span

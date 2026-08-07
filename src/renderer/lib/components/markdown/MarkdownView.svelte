@@ -7,6 +7,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
+  import { faviconState } from '$lib/stores/favicons.svelte'
 
   interface Props {
     /** Markdown source — may be an incomplete, still-streaming message. */
@@ -29,6 +30,7 @@
   // render as links. Streaming re-fires per chunk, but the store dedupes.
   $effect(() => {
     citationPathsState.ensureActiveProjectChecked(extractCitationCandidates(text))
+    faviconState.ensureResolved(faviconState.externalUrlsFromText(text))
   })
 
   onDestroy(() => {

@@ -271,6 +271,17 @@ body {
   opacity: 0.85;
 }
 
+.markdown-body a > .markdown-link-favicon {
+  height: 1em;
+  width: 1em;
+  margin-right: 0.3em;
+  vertical-align: -0.125em;
+  display: inline-block;
+  object-fit: contain;
+  border-radius: 2px;
+  max-width: 1em;
+}
+
 .markdown-body strong {
   font-weight: 600;
 }

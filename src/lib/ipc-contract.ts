@@ -878,6 +878,8 @@ export interface IpcInvokeContract {
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
+  /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
+  'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'spec:addAnnotation': Contract<
     [
       projectId: string,

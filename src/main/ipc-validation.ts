@@ -709,3 +709,36 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
 
   return { version: 1, buckets }
 }
+
+const HOSTNAME_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/iu
+
+/**
+ * Validate a list of hostnames used for favicon resolution. Each entry must be
+ * a bounded, hostname-shaped string with no scheme, path, port, or control
+ * characters. Deduplicates preserving first occurrence.
+ */
+export function validateFaviconHostnames(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Favicon hostnames must be an array')
+  if (value.length === 0 || value.length > 64) {
+    throw new TypeError('Favicon hostnames must contain between 1 and 64 entries')
+  }
+  const hostnames: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > 253 ||
+      entry.includes('\0') ||
+      entry.includes('\n') ||
+      entry.includes('\r') ||
+      !HOSTNAME_PATTERN.test(entry)
+    ) {
+      throw new TypeError(`Favicon hostname at index ${index} is invalid`)
+    }
+    const normalized = entry.toLowerCase()
+    if (!hostnames.includes(normalized)) hostnames.push(normalized)
+  }
+  return hostnames
+}
