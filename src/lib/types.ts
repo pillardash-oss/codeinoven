@@ -1142,9 +1142,25 @@ export interface AgentRateLimitWindow {
   remaining?: number
   limit?: number
   resetsAt?: number
+  /** Rolling window length in minutes (e.g. 300 for the Codex 5-hour limit). */
+  windowMinutes?: number
+  /** Model the window applies to, when the provider splits limits per model. */
+  model?: string
   overageStatus?: string
   overageDisabledReason?: string
   isUsingOverage?: boolean
+}
+
+/** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
+export interface AgentUsageCredits {
+  /** Remaining balance in the provider's credit currency, when metered. */
+  balance?: number
+  /** True when the account is metered by prepaid credits rather than a plan. */
+  hasCredits?: boolean
+  /** True when the account reports an unlimited cap. */
+  unlimited?: boolean
+  /** Provider plan identifier, such as `prolite` for Codex. */
+  planType?: string
 }
 
 /** Display-ready provider-neutral usage for the active conversation. */
@@ -1155,6 +1171,8 @@ export interface AgentContextUsage {
   costUsd: number
   tokens: AgentTokenUsage
   rateLimits: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported alongside quota windows. */
+  credits?: AgentUsageCredits
 }
 
 /** Last-known usage snapshot stored with a thread so the meter restores
@@ -1331,6 +1349,8 @@ export interface AgentMessage {
   contextUsed?: number
   /** Optional account quota windows when the provider exposes them. */
   rateLimits?: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported alongside quota windows. */
+  credits?: AgentUsageCredits
   /** Present on assistant messages that ended with an error. */
   error?: string
   /** Validated JSON-schema result returned by a harness structured-output tool. */
@@ -1432,6 +1452,8 @@ export type AgentEvent =
       contextUsed?: number
       /** Account quota windows reported after the harness refreshes usage. */
       rateLimits?: AgentRateLimitWindow[]
+      /** Prepaid-credit balance reported alongside quota windows. */
+      credits?: AgentUsageCredits
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
     }
@@ -1444,6 +1466,7 @@ export type AgentEvent =
       contextUsed?: number
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
+      credits?: AgentUsageCredits
     }
   | { type: 'session.status'; sessionId: string; status: AgentSessionStatus }
   | { type: 'session.idle'; sessionId: string }

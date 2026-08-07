@@ -77,7 +77,11 @@
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatSettings,
+    chatEffectiveSettings
+  } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -197,7 +201,7 @@
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
     chatMode
-      ? normalizeChatSettings(chatSettings.initialFor(thread))
+      ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
       : threadSettings.initialFor(thread)
   )
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
@@ -454,6 +458,7 @@
     let latestTokens: AgentContextUsage['tokens'] | undefined
     let latestContextUsed: number | undefined
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
+    let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
 
     const emptyTokens: AgentContextUsage['tokens'] = {
@@ -501,7 +506,8 @@
       const hasUsageSnapshot =
         tokens !== undefined ||
         message.contextUsed !== undefined ||
-        (message.rateLimits?.length ?? 0) > 0
+        (message.rateLimits?.length ?? 0) > 0 ||
+        message.credits !== undefined
       if (hasUsageSnapshot) {
         latestMessage = message
         // Token, context, and account quota telemetry arrive independently.
@@ -510,6 +516,7 @@
         if (tokens) latestTokens = tokens
         if (message.contextUsed !== undefined) latestContextUsed = message.contextUsed
         if (message.rateLimits?.length) latestRateLimits = message.rateLimits
+        if (message.credits) latestCredits = message.credits
       }
     }
 
@@ -532,7 +539,8 @@
         : undefined,
       costUsd,
       tokens: displayTokens,
-      rateLimits: latestRateLimits ?? []
+      rateLimits: latestRateLimits ?? [],
+      ...(latestCredits ? { credits: latestCredits } : {})
     }
   })
   /** Minimum quiet time before the rendered battery settles mid-turn. */
@@ -920,7 +928,8 @@
       promptReferences,
       projectReferences,
       undefined,
-      currentTaskReferences
+      currentTaskReferences,
+      true
     )
   }
 
@@ -1553,7 +1562,7 @@
         const files = chatDraft.attachments
         chatDraft.message = ''
         chatDraft.attachments = []
-        void sendMessage(draft, files)
+        void sendMessage(draft, files, undefined, undefined, undefined, [], [], undefined, [], true)
       }
     })
 
@@ -1672,7 +1681,7 @@
       initializeHistoryWindow(page.messages.length)
       if (threadData?.settings) {
         settings = chatMode
-          ? normalizeChatSettings({ ...chatSettings.lastUsed, ...threadData.settings })
+          ? normalizeChatSettings({ ...chatEffectiveSettings(), ...threadData.settings })
           : { ...threadSettings.lastUsed, ...threadData.settings }
       }
       agentDefaults = config.agentDefaults
@@ -2197,7 +2206,8 @@
     promptReferences: ResponseReferenceAnchor[] = [],
     projectReferences: PromptProjectReference[] = [],
     presentation?: UserMessagePresentation,
-    taskReferences: PromptAssignmentTaskReference[] = []
+    taskReferences: PromptAssignmentTaskReference[] = [],
+    restorable?: boolean
   ): Promise<void> {
     const msg = text.trim()
     if (!msg) return
@@ -2226,8 +2236,14 @@
     userScrolledAway = false
     idleAttentionHandled = false
 
-    // Persist settings as last-used
-    commitSettings(settings)
+    // Persist settings as last-used. On the Chats tab a project-model fallback
+    // must not lock itself in as the chat's own choice — explicit chat model
+    // changes are already persisted by updateSettings.
+    if (chatMode) {
+      if (chatSettings.lastUsed.modelId) chatSettings.commit(settings)
+    } else {
+      threadSettings.commit(settings)
+    }
 
     errorMessage = ''
     providerStatus = null
@@ -2273,6 +2289,23 @@
       agentRuns.setIdle(projectId, id)
       const failure = error instanceof Error ? error.message : 'The prompt could not be sent.'
       errorMessage = failure
+      // If the message never reached the conversation (the agent never started
+      // working and the optimistic copy was rolled back), put it back in the
+      // composer so the user doesn't lose what they were about to send.
+      if (
+        restorable &&
+        !threadMessages.messages(projectId, id).some((message) => message.id === userMessageId)
+      ) {
+        rendererRecovery.setDraft(
+          projectId,
+          id,
+          msg,
+          attachments,
+          projectReferences,
+          taskReferences
+        )
+        composerRestoreKey += 1
+      }
       if (promptReferences.length > 0) {
         responseReferencesState.setForThread(projectId, id, promptReferences)
         scheduleResponseHighlightRestore(promptReferences)

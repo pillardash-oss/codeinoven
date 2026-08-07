@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../lib/types'
 import { StorageEngine } from '../storage-engine'
-import { ClaudeCodeDriver } from './claude-code-driver'
+import { ClaudeCodeDriver, mapClaudeCodeRecord } from './claude-code-driver'
+import type { CliLineParseContext } from './persistent-cli-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', () => ({ spawn: spawnMock }))
@@ -210,5 +211,83 @@ describe('ClaudeCodeDriver', () => {
         parent_tool_use_id: null
       })}\n`
     )
+  })
+})
+
+describe('mapClaudeCodeRecord rate limits', () => {
+  const context: CliLineParseContext = {
+    sessionId: 'sess-1',
+    session: {
+      id: 'sess-1',
+      title: 'Test',
+      projectPathHash: 'hash',
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          parts: [],
+          createdAt: 1,
+          harnessId: 'claude-code'
+        }
+      ],
+      createdAt: 1,
+      updatedAt: 1
+    }
+  }
+
+  it('maps five_hour / seven_day windows to friendly labels with window minutes', () => {
+    const result = mapClaudeCodeRecord(
+      {
+        type: 'rate_limit_event',
+        session_id: 'native-1',
+        rate_limit_info: {
+          five_hour: {
+            status: 'allowed',
+            used_percentage: 37,
+            resets_at: 1_786_089_600,
+            window_duration_mins: 300
+          },
+          seven_day: {
+            status: 'allowed',
+            used_percentage: 64,
+            resets_at: 1_786_507_200,
+            window_duration_mins: 10_080
+          }
+        }
+      },
+      context
+    )
+    const usage = result?.events?.find((event) => event.type === 'usage.updated')
+    const rateLimits = usage && 'rateLimits' in usage ? usage.rateLimits : undefined
+    expect(rateLimits).toHaveLength(2)
+    const fiveHour = rateLimits?.find((limit) => limit.id === 'five_hour')
+    const weekly = rateLimits?.find((limit) => limit.id === 'seven_day')
+    expect(fiveHour).toMatchObject({
+      label: '5-hour limit',
+      usedPercent: 37,
+      windowMinutes: 300,
+      resetsAt: 1_786_089_600_000
+    })
+    expect(weekly).toMatchObject({
+      label: 'Weekly limit',
+      usedPercent: 64,
+      windowMinutes: 10_080
+    })
+  })
+
+  it('converts fractional utilization to a percentage', () => {
+    const result = mapClaudeCodeRecord(
+      {
+        type: 'rate_limit_event',
+        session_id: 'native-1',
+        rate_limit_info: {
+          five_hour: { status: 'allowed', utilization: 0.21 }
+        }
+      },
+      context
+    )
+    const usage = result?.events?.find((event) => event.type === 'usage.updated')
+    const rateLimits = usage && 'rateLimits' in usage ? usage.rateLimits : undefined
+    expect(rateLimits?.[0]).toMatchObject({ label: '5-hour limit', usedPercent: 21 })
   })
 })

@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import { StorageEngine } from '../storage-engine'
-import { CodexDriver } from './codex-driver'
+import { CodexDriver, mapCodexRateLimits } from './codex-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', async (importOriginal) => {
@@ -219,5 +219,88 @@ describe('CodexDriver', () => {
         attachments: [{ mime: 'image/png', url: join(root, 'missing.png') }]
       })
     ).rejects.toThrow('readable local file')
+  })
+})
+
+describe('mapCodexRateLimits', () => {
+  it('maps the backward-compatible single-bucket payload with window minutes', () => {
+    const telemetry = mapCodexRateLimits({
+      rateLimits: {
+        limitId: 'codex',
+        planType: 'prolite',
+        primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_779_459_394 },
+        secondary: { usedPercent: 18, windowDurationMins: 10_080, resetsAt: 1_779_826_837 }
+      }
+    })
+    expect(telemetry.rateLimits).toHaveLength(2)
+    const [primary, secondary] = telemetry.rateLimits
+    expect(primary).toMatchObject({
+      id: 'codex:codex:primary',
+      label: '5-hour limit',
+      usedPercent: 25,
+      windowMinutes: 300,
+      resetsAt: 1_779_459_394_000
+    })
+    expect(secondary).toMatchObject({
+      label: 'Weekly limit',
+      usedPercent: 18,
+      windowMinutes: 10_080
+    })
+  })
+
+  it('maps model-specific windows from rateLimitsByLimitId with a model suffix', () => {
+    const telemetry = mapCodexRateLimits({
+      rateLimits: {
+        limitId: 'codex',
+        primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 1 }
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: 'codex',
+          primary: { usedPercent: 10, windowDurationMins: 300, resetsAt: 1 }
+        },
+        spark: {
+          limitId: 'spark',
+          limitName: 'Codex Spark',
+          primary: { usedPercent: 8, windowDurationMins: 300, resetsAt: 2 }
+        }
+      }
+    })
+    expect(telemetry.rateLimits).toHaveLength(2)
+    const spark = telemetry.rateLimits.find((window) => window.id.startsWith('codex:spark'))
+    expect(spark).toMatchObject({
+      label: 'Codex Spark · 5-hour limit',
+      model: 'Codex Spark',
+      usedPercent: 8
+    })
+    const defaultWindow = telemetry.rateLimits.find((window) => window.id.startsWith('codex:codex'))
+    expect(defaultWindow?.model).toBeUndefined()
+  })
+
+  it('extracts credits balance (decimal string) and plan type', () => {
+    const telemetry = mapCodexRateLimits({
+      rateLimits: {
+        limitId: 'codex',
+        planType: 'prolite',
+        credits: { hasCredits: true, unlimited: false, balance: '766.76' },
+        primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1 }
+      }
+    })
+    expect(telemetry.credits).toEqual({
+      hasCredits: true,
+      unlimited: false,
+      balance: 766.76,
+      planType: 'prolite'
+    })
+  })
+
+  it('reports unlimited credits without a numeric balance', () => {
+    const telemetry = mapCodexRateLimits({
+      rateLimits: {
+        credits: { hasCredits: true, unlimited: true },
+        primary: { usedPercent: 0 }
+      }
+    })
+    expect(telemetry.credits).toEqual({ hasCredits: true, unlimited: true })
   })
 })

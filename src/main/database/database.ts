@@ -49,6 +49,7 @@ export class Database {
     this.applySchema()
     this.ensureThreadWorkflowSchema()
     this.ensureThreadSearchSchema()
+    this.ensureAgentMessageCreditsSchema()
     this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
 
     Logger.info('SQLite database initialised', { path: this.path })
@@ -169,6 +170,13 @@ export class Database {
     }
     if (!names.has('context_usage')) {
       this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
+    }
+  }
+
+  private ensureAgentMessageCreditsSchema(): void {
+    const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
+    if (!columns.some((column) => column.name === 'usage_credits_json')) {
+      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN usage_credits_json TEXT')
     }
   }
 
