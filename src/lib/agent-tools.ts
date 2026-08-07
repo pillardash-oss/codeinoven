@@ -1,6 +1,7 @@
 import type { ApplicationAgentToolDefinition } from './types'
 import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
+import { IMAGE_DESCRIPTOR_INPUT_SCHEMA, IMAGE_DESCRIPTOR_TOOL_NAME } from './image-descriptor'
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
@@ -328,6 +329,15 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     },
     source: 'application',
     sentWhen: 'After a utility has been activated for the current turn'
+  },
+  {
+    name: IMAGE_DESCRIPTOR_TOOL_NAME,
+    description:
+      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "part" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
+    inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
+    source: 'application',
+    sentWhen:
+      'Whenever a model receives an image it cannot see directly and needs to reason about its contents'
   },
   {
     name: BRAINSTORM_DOCUMENT_TOOL_NAME,
