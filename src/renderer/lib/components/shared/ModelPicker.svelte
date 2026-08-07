@@ -6,6 +6,7 @@
     ChevronRight,
     Clock,
     Cpu,
+    GripVertical,
     ListFilter,
     Search,
     Star,
@@ -41,6 +42,12 @@
     fast?: boolean
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    /** Reorders a favorite relative to another favorite; position in display order. */
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -59,7 +66,8 @@
     responsiveLabel = false,
     fast = false,
     onSelect,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   const pickerId = crypto.randomUUID()
@@ -366,6 +374,53 @@
     if (collapsedGroups.has(id)) collapsedGroups.delete(id)
     else collapsedGroups.add(id)
   }
+
+  /** Key of the favorite currently being dragged, if any. */
+  let draggingFavoriteKey = $state<string | null>(null)
+  /** Drop target + position for the favorites section, if dragging over a row. */
+  let favoriteDropTarget = $state<{ key: string; position: 'before' | 'after' } | null>(null)
+
+  function startFavoriteDrag(event: DragEvent, key: string, name: string): void {
+    if (!onReorderFavorite) return
+    event.dataTransfer!.setData('text/plain', key)
+    event.dataTransfer!.effectAllowed = 'move'
+    draggingFavoriteKey = key
+    const ghost = document.createElement('div')
+    ghost.textContent = name
+    ghost.style.cssText =
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+    document.body.appendChild(ghost)
+    event.dataTransfer!.setDragImage(ghost, 0, 0)
+    requestAnimationFrame(() => document.body.removeChild(ghost))
+  }
+
+  function favoriteDragOver(event: DragEvent, targetKey: string): void {
+    if (!onReorderFavorite) return
+    event.preventDefault()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    favoriteDropTarget = {
+      key: targetKey,
+      position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    }
+  }
+
+  function favoriteDrop(event: DragEvent, targetKey: string): void {
+    if (!onReorderFavorite) return
+    event.preventDefault()
+    const draggedKey = event.dataTransfer?.getData('text/plain')
+    const position = favoriteDropTarget?.key === targetKey ? favoriteDropTarget.position : 'after'
+    favoriteDropTarget = null
+    draggingFavoriteKey = null
+    if (!draggedKey || draggedKey === targetKey) return
+    // Display order is the reverse of storage order (favorites are stored
+    // oldest-first), so flip before/after before forwarding to the store.
+    onReorderFavorite(draggedKey, targetKey, position === 'before' ? 'after' : 'before')
+  }
+
+  function clearFavoriteDrag(): void {
+    favoriteDropTarget = null
+    draggingFavoriteKey = null
+  }
 </script>
 
 <div>
@@ -538,7 +593,43 @@
               )}
               {#if !collapsedGroups.has('favorites')}
                 {#each favoriteModelsList as entry (modelEntryKey(entry))}
-                  {@render modelRow(entry)}
+                  {@const key = modelKey(entry.provider.id, entry.model.id)}
+                  <div
+                    class="relative"
+                    role="listitem"
+                    class:opacity-50={draggingFavoriteKey === key}
+                    draggable={Boolean(onReorderFavorite)}
+                    ondragstart={(event: DragEvent) =>
+                      startFavoriteDrag(event, key, entry.model.name)}
+                    ondragover={(event: DragEvent) => favoriteDragOver(event, key)}
+                    ondrop={(event: DragEvent) => favoriteDrop(event, key)}
+                    ondragleave={clearFavoriteDrag}
+                    ondragend={clearFavoriteDrag}
+                  >
+                    {#if onReorderFavorite}
+                      <span
+                        class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
+                        aria-hidden="true"
+                      >
+                        <GripVertical size={11} />
+                      </span>
+                    {/if}
+                    <div class={onReorderFavorite ? 'pl-4' : ''}>
+                      {@render modelRow(entry)}
+                    </div>
+                    <div
+                      class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+                        key && favoriteDropTarget.position === 'before'
+                        ? 'bg-primary'
+                        : 'bg-transparent'}"
+                    ></div>
+                    <div
+                      class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+                        key && favoriteDropTarget.position === 'after'
+                        ? 'bg-primary'
+                        : 'bg-transparent'}"
+                    ></div>
+                  </div>
                 {/each}
               {/if}
               {@render divider()}

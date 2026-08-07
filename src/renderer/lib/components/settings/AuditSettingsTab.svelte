@@ -157,6 +157,8 @@
                   void selectModel(role.id, providerId, modelId, harnessId)}
                 onToggleFavorite={(providerId, modelId) =>
                   rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             </div>
             {#if selection}
