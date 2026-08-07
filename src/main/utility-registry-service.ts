@@ -13,20 +13,13 @@ import type {
   UtilitySearchOptions,
   WebToolProviderId
 } from '../lib/types'
+import { UTILITY_KIND_VALUES } from '../lib/types'
 import { generateId } from '../lib/utils'
 import type { StorageEngine } from './storage-engine'
 
 const REGISTRY_PATH = 'utilities/registry.json'
 const REGISTRY_VERSION = 1
-const UTILITY_KINDS = new Set<UtilityKind>([
-  'mcp',
-  'skill',
-  'web_search',
-  'web_fetch',
-  'computer_use',
-  'provider',
-  'image_descriptor'
-])
+const UTILITY_KINDS = new Set<UtilityKind>(UTILITY_KIND_VALUES)
 const ACTIVATIONS = new Set<UtilityActivation>(['on_demand', 'always'])
 const BINDING_STRATEGIES = new Set<HarnessUtilityBinding['strategy']>([
   'native',

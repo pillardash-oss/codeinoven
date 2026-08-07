@@ -877,6 +877,17 @@ export interface AgentToolCatalog {
 export type UtilityKind =
   'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider' | 'image_descriptor'
 
+/** Every `UtilityKind` as a runtime array — single source for schema enums and validation sets. */
+export const UTILITY_KIND_VALUES: readonly UtilityKind[] = [
+  'mcp',
+  'skill',
+  'web_search',
+  'web_fetch',
+  'computer_use',
+  'provider',
+  'image_descriptor'
+]
+
 export type UtilityActivation = 'on_demand' | 'always'
 
 /** Scope at which a utility is eligible for resolution. */

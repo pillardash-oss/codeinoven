@@ -8,10 +8,18 @@ import type {
   UtilityKind,
   PermissionLevel
 } from '../lib/types'
-import type { StorageEngine } from './storage-engine'
+import { UTILITY_KIND_VALUES } from '../lib/types'
+import { StorageEngine } from './storage-engine'
 import { SecretVault } from './secret-vault'
 import { UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
+import {
+  GATEWAY_TOOLS,
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME
+} from '../lib/gateway-tools'
+import { IMAGE_DESCRIPTOR_TOOL_NAME } from '../lib/image-descriptor'
 import {
   StdioMcpClient,
   MCP_TIMEOUT_MS,
@@ -79,6 +87,9 @@ interface TurnState {
   clients: Map<string, McpClient>
 }
 
+/** Bridge handler for one gateway route: receives state plus the parsed body. */
+type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) => Promise<unknown>
+
 /**
  * Provides one small, app-owned MCP gateway instead of eagerly injecting every
  * utility schema. Utility selection and use remain scoped to a single turn.
@@ -87,6 +98,7 @@ export class UtilityOrchestrationService {
   private readonly registry: UtilityRegistryService
   private readonly vault: SecretVault
   private readonly turns = new Map<string, { server: Server; state: TurnState }>()
+  private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
   private cuaActivityListener: ((pid: number) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   constructor(
@@ -95,6 +107,37 @@ export class UtilityOrchestrationService {
   ) {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
+    this.bridgeHandlers = this.buildBridgeHandlers()
+  }
+
+  /** Derive the route → handler map from `GATEWAY_TOOLS`, failing fast if a
+   *  catalog tool has no bridge handler so drift surfaces at startup, not at
+   *  runtime. */
+  private buildBridgeHandlers(): ReadonlyMap<string, GatewayBridgeHandler> {
+    const handlers = new Map<string, GatewayBridgeHandler>()
+    for (const tool of GATEWAY_TOOLS) {
+      const handler = this.bridgeHandlerFor(tool.name)
+      if (!handler) {
+        throw new Error(`Utility gateway tool "${tool.name}" has no bridge handler`)
+      }
+      handlers.set(tool.route, handler)
+    }
+    return handlers
+  }
+
+  private bridgeHandlerFor(name: string): GatewayBridgeHandler | null {
+    switch (name) {
+      case UTILITY_SEARCH_TOOL_NAME:
+        return (state, input) => this.search(state, input)
+      case UTILITY_ACTIVATE_TOOL_NAME:
+        return (state, input) => this.activate(state, input)
+      case UTILITY_INVOKE_TOOL_NAME:
+        return (state, input) => this.invoke(state, input)
+      case IMAGE_DESCRIPTOR_TOOL_NAME:
+        return (state, input) => this.describeImages(state, input)
+      default:
+        return null
+    }
   }
 
   /**
@@ -182,7 +225,7 @@ export class UtilityOrchestrationService {
     return {
       id,
       resolvedUtilities: [...always, gateway],
-      instructions: `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use utility_search to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with utility_activate, then use utility_invoke. Activated utilities exist only for this turn.`,
+      instructions: `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`,
       cleanup
     }
   }
@@ -218,20 +261,12 @@ export class UtilityOrchestrationService {
         return
       }
       const input = await readJsonBody(request)
-      const result =
-        request.url === '/search'
-          ? await this.search(state, input)
-          : request.url === '/activate'
-            ? await this.activate(state, input)
-            : request.url === '/invoke'
-              ? await this.invoke(state, input)
-              : request.url === '/image_descriptor'
-                ? await this.describeImages(state, input)
-                : null
-      if (result === null) {
+      const handler = this.bridgeHandlers.get(request.url)
+      if (!handler) {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
+      const result = await handler(state, input)
       this.respond(response, 200, result)
     } catch (error) {
       this.respond(response, 400, {
@@ -755,15 +790,7 @@ function optionalNumber(value: unknown): number | undefined {
 
 function optionalKinds(value: unknown): Set<UtilityKind> | null {
   if (value === undefined) return null
-  const allowed = new Set<UtilityKind>([
-    'mcp',
-    'skill',
-    'web_search',
-    'web_fetch',
-    'computer_use',
-    'provider',
-    'image_descriptor'
-  ])
+  const allowed = new Set<UtilityKind>(UTILITY_KIND_VALUES)
   if (
     !Array.isArray(value) ||
     value.some((kind) => typeof kind !== 'string' || !allowed.has(kind as UtilityKind))
@@ -782,75 +809,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const UTILITY_GATEWAY_SCRIPT = String.raw`import readline from 'node:readline'
+/** Build the stdio MCP gateway script. The tool list and the tools/call route
+ *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
+ *  matches the catalog — no hand-synchronized copy to drift. */
+function buildUtilityGatewayScript(): string {
+  const tools = GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+    name,
+    description,
+    inputSchema
+  }))
+  const routes: Record<string, string> = {}
+  for (const tool of GATEWAY_TOOLS) routes[tool.name] = tool.route
+  return String.raw`import readline from 'node:readline'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
 const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
-const tools = [
-  {
-    name: 'utility_search',
-    description: 'Search installed utilities for a skill or MCP when one is not directly available; only conclude it does not exist after a search returns no relevant result.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-        kinds: { type: 'array', items: { enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider', 'image_descriptor'] } },
-        limit: { type: 'number', minimum: 1, maximum: 20 }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'utility_activate',
-    description: 'Activate one search result for this turn and inspect its available operations.',
-    inputSchema: {
-      type: 'object',
-      properties: { utility_id: { type: 'string' } },
-      required: ['utility_id'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'utility_invoke',
-    description: 'Invoke an operation exposed by a utility activated during this turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string' },
-        operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
-      },
-      required: ['utility_id', 'operation'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'image_descriptor',
-    description: 'Describe images with a vision-capable model so a text-only model can reason about them. Provide every image entry with a unique id; each entry has a source and a type: "part" when source is a file path or URL, "binary" when source is base64 image data. Accepts up to 8 images per call (batch several frames at once; call again for more). Returns a text description per image tagged with its id.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        images: {
-          type: 'array',
-          minItems: 1,
-          maxItems: 8,
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              id: { type: 'string', minLength: 1, maxLength: 256 },
-              source: { type: 'string', minLength: 1 },
-              type: { type: 'string', enum: ['part', 'binary'] }
-            },
-            required: ['id', 'source', 'type']
-          }
-        }
-      },
-      required: ['images']
-    }
-  }
-]
+const tools = ${JSON.stringify(tools)}
+const routes = ${JSON.stringify(routes)}
 
 async function bridge(path, args) {
   if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
@@ -889,7 +864,7 @@ for await (const line of lines) {
     } else if (request.method === 'tools/call') {
       const name = request.params?.name
       const args = request.params?.arguments || {}
-      const path = name === 'utility_search' ? '/search' : name === 'utility_activate' ? '/activate' : name === 'utility_invoke' ? '/invoke' : name === 'image_descriptor' ? '/image_descriptor' : ''
+      const path = routes[name]
       if (!path) throw new Error('Unknown utility gateway tool')
       const result = await bridge(path, args)
       const content = Array.isArray(result?.content)
@@ -906,3 +881,6 @@ for await (const line of lines) {
   }
 }
 `
+}
+
+const UTILITY_GATEWAY_SCRIPT = buildUtilityGatewayScript()
