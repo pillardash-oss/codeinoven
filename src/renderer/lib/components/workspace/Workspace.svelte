@@ -499,7 +499,10 @@
 
   function openSourcesTab(): void {
     if (!selectedThread) return
-    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'sources') {
+    if (
+      contextSidebarState.sidebarVisible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'sources'
+    ) {
       contextSidebarState.hide()
       return
     }
@@ -559,19 +562,29 @@
     )
   }
 
+  /** Actions offered inside the bottom terminal dock — only new shells belong there. */
+  let terminalDockActions = $derived.by(() => {
+    if (!selectedThread) return []
+    return [
+      {
+        id: 'terminal',
+        label: 'Terminal',
+        description: 'Open a shell',
+        onSelect: openNewTerminal
+      }
+    ]
+  })
+
   let terminalFullscreenTabId = $state<string | null>(null)
-  let terminalDockedBottom = $derived(
-    contextSidebarState.visible &&
-      contextSidebarState.activeTab?.kind === 'terminal' &&
-      contextSidebarState.terminalPlacement === 'bottom'
-  )
+  let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
+  let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
   let contextPanelColumns = $derived(
-    contextSidebarState.visible && !terminalDockedBottom
+    sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
   let contextPanelRows = $derived(
-    terminalDockedBottom
+    terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
       : 'minmax(0, 1fr)'
   )
@@ -2374,7 +2387,7 @@
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
-      <div class="min-w-0 flex-1 overflow-hidden">
+      <div class="min-h-0 min-w-0 overflow-hidden" style:grid-column="1" style:grid-row="1">
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}
@@ -2446,9 +2459,9 @@
         {/if}
       </div>
 
-      {#if contextSidebarState.visible}
+      {#if sidebarVisible}
         {#snippet contextSidebarContent()}
-          {@const activeContextTab = contextSidebarState.activeTab}
+          {@const activeContextTab = contextSidebarState.sidebarActiveTab}
           {#if activeContextTab}
             {#key activeContextTab.id}
               {#if activeContextTab.kind === 'files'}
@@ -2506,24 +2519,59 @@
             {/key}
           {/if}
         {/snippet}
-        <ContextSidebar
-          tabs={contextSidebarState.tabs}
-          activeTabId={contextSidebarState.activeTabId}
-          width={contextSidebarState.width}
-          height={contextSidebarState.terminalHeight}
-          placement={terminalDockedBottom ? 'bottom' : 'right'}
-          content={contextSidebarContent}
-          actions={sidebarActions}
-          onSelect={(id) => contextSidebarState.focus(id)}
-          onClose={closeContextTab}
-          onFullscreenTab={openTabFullscreen}
-          onMoveTab={(id, targetId, position) =>
-            contextSidebarState.reorder(id, targetId, position)}
-          onWidthChange={(width) => contextSidebarState.setWidth(width)}
-          onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-          onTerminalPlacementChange={(placement) =>
-            contextSidebarState.setTerminalPlacement(placement)}
-        />
+        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+          <ContextSidebar
+            tabs={contextSidebarState.sidebarTabs}
+            activeTabId={contextSidebarState.sidebarActiveTabId}
+            width={contextSidebarState.width}
+            height={contextSidebarState.terminalHeight}
+            placement="right"
+            content={contextSidebarContent}
+            actions={sidebarActions}
+            onSelect={(id) => contextSidebarState.focus(id)}
+            onClose={closeContextTab}
+            onFullscreenTab={openTabFullscreen}
+            onMoveTab={(id, targetId, position) =>
+              contextSidebarState.reorder(id, targetId, position)}
+            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+            onTerminalPlacementChange={(placement) =>
+              contextSidebarState.setTerminalPlacement(placement)}
+          />
+        </div>
+      {/if}
+      {#if terminalDockVisible}
+        {#snippet terminalDockContent()}
+          {@const activeDockTab = contextSidebarState.terminalActiveTab}
+          {#if activeDockTab}
+            {#key activeDockTab.id}
+              <TerminalPanel
+                terminalId={activeDockTab.terminalId}
+                projectId={activeDockTab.projectId}
+              />
+            {/key}
+          {/if}
+        {/snippet}
+        <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
+          <ContextSidebar
+            tabs={contextSidebarState.terminalTabs}
+            activeTabId={contextSidebarState.terminalActiveTabId}
+            width={contextSidebarState.width}
+            height={contextSidebarState.terminalHeight}
+            placement="bottom"
+            content={terminalDockContent}
+            actions={terminalDockActions}
+            onSelect={(id) => contextSidebarState.focus(id)}
+            onClose={closeContextTab}
+            onFullscreenTab={openTabFullscreen}
+            onMoveTab={(id, targetId, position) =>
+              contextSidebarState.reorder(id, targetId, position)}
+            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+            onTerminalPlacementChange={(placement) =>
+              contextSidebarState.setTerminalPlacement(placement)}
+          />
+        </div>
       {/if}
     </div>
   </section>
