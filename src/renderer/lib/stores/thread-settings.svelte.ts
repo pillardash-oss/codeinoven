@@ -74,8 +74,10 @@ class ThreadSettingsStore {
   }
 
   /** Initial settings for a thread: its own persisted values, else the last-used ones. */
-  initialFor(thread: Thread): ThreadSettings {
-    return thread.settings ? { ...this.defaults, ...thread.settings } : { ...this.lastUsed }
+  initialFor(thread: Thread, fallback?: ThreadSettings): ThreadSettings {
+    return thread.settings
+      ? { ...this.defaults, ...thread.settings }
+      : { ...(fallback ?? this.lastUsed) }
   }
 
   /** Remember these settings as the default for future threads. */
@@ -88,3 +90,27 @@ class ThreadSettingsStore {
 export const threadSettings = new ThreadSettingsStore(THREAD_SETTINGS_KEY, DEFAULT_SETTINGS)
 
 export const chatSettings = new ThreadSettingsStore(CHAT_SETTINGS_KEY, CHAT_DEFAULT_SETTINGS)
+
+/**
+ * The effective settings for a chat: the chat's own last-used model once the
+ * user has picked one, otherwise the last project model — so a fresh chat
+ * starts on whatever model the user is already using for project work. Chats
+ * always run with auto permission review and never inject the Engineering
+ * workflow. A fallback never counts as a chat selection, so it stays live until
+ * the user explicitly chooses a chat model.
+ */
+export function chatEffectiveSettings(): ThreadSettings {
+  const project = threadSettings.lastUsed
+  const chat = chatSettings.lastUsed
+  if (chat.modelId) return { ...chat }
+  return {
+    ...project,
+    ...chat,
+    harnessId: project.harnessId,
+    providerId: project.providerId,
+    modelId: project.modelId,
+    thinkingLevel: project.thinkingLevel,
+    engineeringMode: false,
+    permissionLevel: 'auto_review'
+  }
+}
