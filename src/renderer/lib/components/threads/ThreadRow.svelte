@@ -713,8 +713,24 @@
     </span>
 
     {#if showBottomRow}
-      <!-- Bottom line: scope badge, harnesses, then time on the right -->
-      <span class="flex w-full min-w-0 items-center gap-1.5">
+      <!-- Bottom line: harnesses (left), scope (center), time (right) -->
+      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+        {#if harnessIds.length > 0}
+          <span
+            {@attach captureHarnessRowElement}
+            class="flex min-w-0 items-center gap-1 overflow-hidden"
+          >
+            {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+            {/each}
+            {#if visibleHarnessCount < harnessIds.length}
+              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+                +{harnessIds.length - visibleHarnessCount}
+              </span>
+            {/if}
+          </span>
+        {/if}
+
         {#if scopeBucket}
           <span
             class="flex min-w-0 max-w-[3.5rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
@@ -733,31 +749,15 @@
           </span>
         {/if}
 
-        {#if harnessIds.length > 0}
+        <span class="flex min-w-0 justify-end">
           <span
-            {@attach captureHarnessRowElement}
-            class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden {scopeBucket
-              ? 'justify-center'
-              : 'justify-start'}"
+            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
           >
-            {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
-              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
-            {/each}
-            {#if visibleHarnessCount < harnessIds.length}
-              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
-                +{harnessIds.length - visibleHarnessCount}
-              </span>
-            {/if}
+            {relativeTime(thread.createdAt)}
           </span>
-        {/if}
-
-        <span
-          class="ml-auto whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
-            ? 'opacity-0'
-            : 'opacity-100'}"
-          aria-hidden={hovered}
-        >
-          {relativeTime(thread.createdAt)}
         </span>
       </span>
     {/if}
