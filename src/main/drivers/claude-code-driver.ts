@@ -1169,11 +1169,22 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
     try {
       const usage = await new Promise<Record<string, unknown> | null>((resolve) => {
-        const child = spawn('claude', ['--print', '--output-format', 'stream-json'], {
-          cwd: projectPath,
-          env: buildHarnessEnvironment(),
-          stdio: ['pipe', 'pipe', 'pipe']
-        })
+        const child = spawn(
+          'claude',
+          [
+            '--print',
+            '--output-format',
+            'stream-json',
+            '--input-format',
+            'stream-json',
+            '--verbose'
+          ],
+          {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            stdio: ['pipe', 'pipe', 'pipe']
+          }
+        )
         let buffer = ''
         let settled = false
         const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)

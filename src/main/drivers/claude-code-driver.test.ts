@@ -298,6 +298,11 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const driver = new ClaudeCodeDriver(await storage())
     const promise = driver.readAccountUsage('/project')
+    expect(spawnMock).toHaveBeenCalledWith(
+      'claude',
+      ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
+      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    )
     const written = child.stdin.write.mock.calls.map(([value]) => JSON.parse(value as string))
     expect(written[0]).toMatchObject({
       type: 'control_request',
