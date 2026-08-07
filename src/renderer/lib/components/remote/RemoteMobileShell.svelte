@@ -73,6 +73,9 @@
   let selectedThread = $derived(workspaceState.selectedThread)
   let selectedProject = $derived(workspaceState.activeProject)
 
+  /** Chat threads are tagged with the inbox project — Git owns every project EXCEPT the chat view. */
+  let chatMode = $derived(selectedThread?.projectId === INBOX_PROJECT_ID)
+
   let modeLabel = $derived(
     SIDEBAR_MODES.find((entry) => entry.id === sidebarMode)?.label ?? 'Projects'
   )
@@ -397,7 +400,7 @@
               {/if}
             </DropdownMenu.Item>
 
-            {#if selectedThread}
+            {#if selectedThread && !chatMode}
               <DropdownMenu.Item
                 class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
                 onSelect={() => (gitOpen = true)}
@@ -612,7 +615,7 @@
   {/if}
 
   <!-- Git sheet — the desktop git panel, scoped to the selected thread's project. -->
-  {#if gitOpen && selectedThread}
+  {#if gitOpen && selectedThread && !chatMode}
     <div
       class="fixed inset-0 z-40 bg-black/50"
       role="presentation"
