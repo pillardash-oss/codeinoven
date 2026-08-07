@@ -712,8 +712,8 @@
             },
             rateLimits: []
           }),
-          rateLimits: usage.rateLimits,
-          ...(usage.credits ? { credits: usage.credits } : {})
+          rateLimits: currentUsage.rateLimits,
+          ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
         }
         commitContextUsage(merged)
       }

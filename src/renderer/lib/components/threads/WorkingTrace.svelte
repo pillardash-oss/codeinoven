@@ -432,16 +432,20 @@
       {/if}
     {/each}
     {#if isOpen && busy}
-      <div class="flex items-center gap-2">
-        <Loader2 size={11} class="animate-spin text-info" />
-        <span class="text-[10px] text-info/80">Agent working…</span>
-        {#if effectiveStartTime}
-          <span class="tabular-nums text-[10px] text-info/80">
-            · {formatDuration(elapsed)}
-          </span>
-        {/if}
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span class="flex min-w-0 shrink items-center gap-2">
+          <Loader2 size={11} class="shrink-0 animate-spin text-info" />
+          <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
+          {#if effectiveStartTime}
+            <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+              · {formatDuration(elapsed)}
+            </span>
+          {/if}
+        </span>
         {#if modelLabel}
-          <span class="ml-auto flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed">
+          <span
+            class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"
+          >
             {#if harnessId}
               <span class="flex shrink-0 items-center gap-1">
                 <AgentIcon agentId={harnessId} size={14} />
