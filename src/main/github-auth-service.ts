@@ -1,6 +1,15 @@
+/// <reference types="vite/client" />
 import type { GitHubAuthStatus, GitHubDeviceCode, GitHubPollResult } from '../lib/types'
 import { Logger } from './logger'
 import type { SecretVault } from './secret-vault'
+
+declare global {
+  /**
+   * GitHub App public client ID, replaced at build time by Vite's `define` from
+   * the `.env` value `MAIN_VITE_GITHUB_CLIENT_ID`. Public by design.
+   */
+  const __CODEINOVEN_GITHUB_CLIENT_ID__: string | undefined
+}
 
 /** OAuth scopes required to read and manage pull requests. */
 const GITHUB_OAUTH_SCOPES = 'repo'
@@ -28,9 +37,26 @@ const NETWORK_TIMEOUT_MS = 15_000
 export class GitHubAuthService {
   constructor(private readonly vault: SecretVault) {}
 
-  /** GitHub App public client ID — never a secret, safe to embed or configure via env. */
+  /**
+   * GitHub App public client ID — never a secret, safe to embed or configure via env.
+   *
+   * Resolution order:
+   * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__` — replaced at build time by Vite's
+   *    `define` from `.env` (`MAIN_VITE_GITHUB_CLIENT_ID`). The compile-time constant.
+   * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
+   */
+  /**
+   * GitHub App public client ID — never a secret, safe to embed or configure via env.
+   *
+   * Resolution order:
+   * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__` — replaced at build time by Vite's
+   *    `define` from `.env` (`MAIN_VITE_GITHUB_CLIENT_ID`). The compile-time constant.
+   * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
+   */
   private get clientId(): string {
-    return (process.env['CODEINOVEN_GITHUB_CLIENT_ID'] ?? '').trim()
+    const baked = typeof __CODEINOVEN_GITHUB_CLIENT_ID__ === 'string' ? __CODEINOVEN_GITHUB_CLIENT_ID__ : undefined
+    const runtime = process.env['CODEINOVEN_GITHUB_CLIENT_ID']
+    return (baked?.trim() ? baked : (runtime ?? '')).trim()
   }
 
   get configured(): boolean {
