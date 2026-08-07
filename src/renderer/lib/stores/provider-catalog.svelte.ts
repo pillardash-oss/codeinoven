@@ -33,7 +33,7 @@ const RETRY_MAX_DELAY_MS = 5 * 60 * 1000
 /** Minimum pause before a picker-open revalidation can re-probe a failing harness. */
 const RETRY_MIN_INTERVAL_MS = 20 * 1000
 /** localStorage key under which the last-known catalogs are mirrored. */
-const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror`
+const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror.v2`
 
 class ProviderCatalogStore {
   private cache = new SvelteMap<string, ProviderCatalog[]>()
