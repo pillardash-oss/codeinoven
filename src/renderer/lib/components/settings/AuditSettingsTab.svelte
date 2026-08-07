@@ -243,7 +243,9 @@
           Vision model used to describe images for text-only models that cannot see them.
         </p>
         {#if !defaults.imageDescriptor}
-          <p class="mt-1 text-[11px] text-dimmed">Not set · you'll be asked when you send an image</p>
+          <p class="mt-1 text-[11px] text-dimmed">
+            Not set · you'll be asked when you send an image
+          </p>
         {/if}
       </div>
       <div class="flex w-60 shrink-0 items-center gap-1.5">

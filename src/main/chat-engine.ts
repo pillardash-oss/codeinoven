@@ -3196,40 +3196,40 @@ export class ChatEngine {
               activeSpec.annotations
             )
           : ''
-      const behaviorPrompt = await this.getBehaviorPrompt(
-        projectId,
-        threadId,
-        projectPath,
-        'brainstorm'
-      )
-      const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
-        ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
-        : ''
-      const prompt: SendPromptOptions = {
-        sessionId,
-        settings: {
-          ...settings,
-          permissionLevel: 'auto_review'
-        },
-        text: driverText,
-        attachments,
-        systemPrompt: [
-          activeBrainstormTurn
-            ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT
-            : SPEC_BRAINSTORM_SYSTEM_PROMPT,
-          activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
-          !activeBrainstormTurn && settings.assignmentMode === true
-            ? ASSIGNMENT_GENERATION_INSTRUCTION
-            : '',
-          revisionPrompt,
-          MEMORY_SYSTEM_INSTRUCTION,
-          imageDescriptorNote,
-          behaviorPrompt,
-          utilityInstructions,
-          historyRecap
-        ]
-          .filter(Boolean)
-          .join('\n\n'),
+        const behaviorPrompt = await this.getBehaviorPrompt(
+          projectId,
+          threadId,
+          projectPath,
+          'brainstorm'
+        )
+        const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
+          ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
+          : ''
+        const prompt: SendPromptOptions = {
+          sessionId,
+          settings: {
+            ...settings,
+            permissionLevel: 'auto_review'
+          },
+          text: driverText,
+          attachments,
+          systemPrompt: [
+            activeBrainstormTurn
+              ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT
+              : SPEC_BRAINSTORM_SYSTEM_PROMPT,
+            activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
+            !activeBrainstormTurn && settings.assignmentMode === true
+              ? ASSIGNMENT_GENERATION_INSTRUCTION
+              : '',
+            revisionPrompt,
+            MEMORY_SYSTEM_INSTRUCTION,
+            imageDescriptorNote,
+            behaviorPrompt,
+            utilityInstructions,
+            historyRecap
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
           userMessageId: messageId
         }
@@ -3741,8 +3741,7 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     const config = await this.storage.getConfig()
-    const selection =
-      thread?.settings?.imageDescriptor ?? config.agentDefaults.imageDescriptor
+    const selection = thread?.settings?.imageDescriptor ?? config.agentDefaults.imageDescriptor
     if (!selection) {
       return request.images.map((entry) => ({
         id: entry.id,
@@ -8053,10 +8052,7 @@ export class ChatEngine {
 
   /** True when the selected model's catalog reports it cannot see images.
    *  Unknown catalog state fails open (treated as vision-capable). */
-  private async modelLacksVision(
-    projectId: string,
-    settings: ThreadSettings
-  ): Promise<boolean> {
+  private async modelLacksVision(projectId: string, settings: ThreadSettings): Promise<boolean> {
     const catalogs =
       this.providerCache.get(projectId) ??
       this.sharedProviderCatalog?.catalogs ??

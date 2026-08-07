@@ -125,7 +125,9 @@ export function resolveImageEntries(value: unknown): ResolvedImageEntry[] {
   if (!isRecord(value)) throw new TypeError('Image descriptor input must be an object')
   const images = value['images']
   if (!Array.isArray(images) || images.length === 0 || images.length > MAX_IMAGE_COUNT) {
-    throw new TypeError(`Image descriptor input must contain between 1 and ${MAX_IMAGE_COUNT} images`)
+    throw new TypeError(
+      `Image descriptor input must contain between 1 and ${MAX_IMAGE_COUNT} images`
+    )
   }
   const ids = new Set<string>()
   return images.map((entry, index) => {
@@ -142,17 +144,13 @@ export function resolveImageEntries(value: unknown): ResolvedImageEntry[] {
       id,
       source,
       type,
-      attachment: resolveAttachment(source, type, `Image entry ${index}`)
+      attachment: resolveAttachment(source, type)
     }
     return resolved
   })
 }
 
-function resolveAttachment(
-  source: string,
-  type: ImageDescriptorSourceType,
-  label: string
-): PromptAttachment {
+function resolveAttachment(source: string, type: ImageDescriptorSourceType): PromptAttachment {
   if (type === 'binary') {
     return {
       mime: dataUrlMime(source) ?? sniffImageMime(source) ?? 'image/png',
@@ -162,7 +160,11 @@ function resolveAttachment(
   if (source.startsWith('data:')) return { mime: dataUrlMime(source) ?? 'image/*', url: source }
   if (/^https?:\/\//u.test(source)) return { mime: 'image/*', url: source }
   const filePath = source.startsWith('file:') ? fileURLToPath(source) : source
-  return { mime: mimeFromPath(filePath), url: pathToFileUrl(filePath), filename: basename(filePath) }
+  return {
+    mime: mimeFromPath(filePath),
+    url: pathToFileUrl(filePath),
+    filename: basename(filePath)
+  }
 }
 
 function requiredString(value: unknown, label: string, maximum: number): string {

@@ -359,11 +359,7 @@ ${instructions}`
       return
     }
     const strategy: BindingStrategy =
-      draft.kind === 'skill'
-        ? 'skill'
-        : draft.kind === 'image_descriptor'
-          ? 'native'
-          : 'mcp'
+      draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp'
     draft.bindings = [
       ...draft.bindings,
       {
