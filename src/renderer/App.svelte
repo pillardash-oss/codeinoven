@@ -73,7 +73,8 @@
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
     updateChannel: 'stable',
-    keepAwakeWhileWorking: false
+    keepAwakeWhileWorking: false,
+    imageDescriptorAskAgain: false
   }
 
   let config = $state<AppConfig>(defaultConfig)

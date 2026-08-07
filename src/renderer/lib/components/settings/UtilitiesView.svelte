@@ -48,7 +48,8 @@
       { id: 'web_search', label: 'Web search' },
       { id: 'web_fetch', label: 'Web fetch' },
       { id: 'computer_use', label: 'Computer use' },
-      { id: 'provider', label: 'Provider' }
+      { id: 'provider', label: 'Provider' },
+      { id: 'image_descriptor', label: 'Image descriptor' }
     ]
     return kinds.find((item) => item.id === kind)?.label ?? kind
   }
@@ -279,6 +280,7 @@
         <option value="web_fetch">Web fetch</option>
         <option value="computer_use">Computer use</option>
         <option value="provider">Provider</option>
+        <option value="image_descriptor">Image descriptor</option>
       </select>
     </div>
 

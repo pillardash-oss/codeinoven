@@ -66,7 +66,8 @@ const defaultConfig: AppConfig = {
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
-  keepAwakeWhileWorking: false
+  keepAwakeWhileWorking: false,
+  imageDescriptorAskAgain: false
 }
 
 beforeEach(async () => {
@@ -108,8 +109,14 @@ describe('validateAppConfigPatch', () => {
             harnessId: 'opencode',
             providerId: 'openai',
             modelId: 'gpt-5.6'
+          },
+          imageDescriptor: {
+            harnessId: 'opencode',
+            providerId: 'anthropic',
+            modelId: 'claude-sonnet-4-5'
           }
         },
+        imageDescriptorAskAgain: true,
         memory
       })
     ).toMatchObject({
@@ -123,8 +130,14 @@ describe('validateAppConfigPatch', () => {
           harnessId: 'opencode',
           providerId: 'openai',
           modelId: 'gpt-5.6'
+        },
+        imageDescriptor: {
+          harnessId: 'opencode',
+          providerId: 'anthropic',
+          modelId: 'claude-sonnet-4-5'
         }
       },
+      imageDescriptorAskAgain: true,
       memory: {
         enabled: true,
         entries: [
@@ -154,6 +167,9 @@ describe('validateAppConfigPatch', () => {
     { slashCommandMode: 'both' },
     { preferredEditor: 'unknown-editor' },
     { agentDefaults: { syncFromThreadChanges: 'yes' } },
+    { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
+    { imageDescriptorAskAgain: 'yes' },
+    { imageDescriptorAskAgain: 1 },
     {
       memory: {
         enabled: true,

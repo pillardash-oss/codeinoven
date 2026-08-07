@@ -77,6 +77,9 @@
     backend: string
     providerId: string
     defaultModel: string
+    descriptorHarnessId: string
+    descriptorProviderId: string
+    descriptorModelId: string
     bindings: BindingDraft[]
   }
 
@@ -182,6 +185,14 @@
       badge: 'Web'
     },
     {
+      id: 'image-descriptor',
+      title: 'Image descriptor',
+      description:
+        'Let text-only models describe attached images using a vision-capable model from the catalog.',
+      group: 'Build your own',
+      badge: 'Vision'
+    },
+    {
       id: 'plugin-bundle',
       title: 'Import plugin bundle',
       description:
@@ -285,6 +296,9 @@ Write the skill…`
       backend: '',
       providerId: '',
       defaultModel: '',
+      descriptorHarnessId: '',
+      descriptorProviderId: '',
+      descriptorModelId: '',
       bindings: []
     }
   }
@@ -344,14 +358,23 @@ ${instructions}`
       draft.bindings = draft.bindings.filter((binding) => binding.harnessId !== harnessId)
       return
     }
-    const strategy: BindingStrategy = draft.kind === 'skill' ? 'skill' : 'mcp'
+    const strategy: BindingStrategy =
+      draft.kind === 'skill'
+        ? 'skill'
+        : draft.kind === 'image_descriptor'
+          ? 'native'
+          : 'mcp'
     draft.bindings = [
       ...draft.bindings,
       {
         harnessId,
         strategy,
         nativeCapability:
-          draft.kind === 'web_search' || draft.kind === 'web_fetch' ? draft.kind : '',
+          draft.kind === 'web_search' || draft.kind === 'web_fetch'
+            ? draft.kind
+            : draft.kind === 'image_descriptor'
+              ? 'image_descriptor'
+              : '',
         transportName:
           draft.name
             .toLowerCase()
@@ -472,6 +495,13 @@ Use current Convex conventions when working in a Convex project.
     } else if (id === 'custom-mcp') {
       draft.kind = 'mcp'
       draft.bindings = bindings('mcp', '', 'custom-mcp')
+    } else if (id === 'image-descriptor') {
+      draft.kind = 'image_descriptor'
+      draft.name = 'Image descriptor'
+      draft.description =
+        'Describes attached images with a vision model so text-only models can reason about them.'
+      draft.descriptorHarnessId = 'opencode'
+      draft.bindings = bindings('native', 'image_descriptor', 'image-descriptor')
     } else if (id === 'custom-skill') {
       draft.kind = 'skill'
       draft.instructions = `---
@@ -565,6 +595,12 @@ Write the complete workflow, rules, and examples for this skill.`
           ...(draft.endpoint.trim() ? { endpoint: draft.endpoint.trim() } : {}),
           ...(draft.defaultModel.trim() ? { defaultModel: draft.defaultModel.trim() } : {})
         }
+      case 'image_descriptor':
+        return {
+          harnessId: draft.descriptorHarnessId.trim(),
+          providerId: draft.descriptorProviderId.trim(),
+          modelId: draft.descriptorModelId.trim()
+        }
     }
   }
 
@@ -656,6 +692,11 @@ Write the complete workflow, rules, and examples for this skill.`
         next.providerId = utility.config.providerId
         next.endpoint = utility.config.endpoint ?? ''
         next.defaultModel = utility.config.defaultModel ?? ''
+        break
+      case 'image_descriptor':
+        next.descriptorHarnessId = utility.config.harnessId
+        next.descriptorProviderId = utility.config.providerId
+        next.descriptorModelId = utility.config.modelId
         break
     }
     draft = next
@@ -1123,7 +1164,9 @@ Write the complete workflow, rules, and examples for this skill.`
                   ? 'Web connection'
                   : draft.kind === 'computer_use'
                     ? 'Computer-use backend'
-                    : 'Provider connection'}
+                    : draft.kind === 'image_descriptor'
+                      ? 'Image descriptor model'
+                      : 'Provider connection'}
           </legend>
           {#if draft.kind === 'mcp'}
             <label class="block space-y-1 text-xs font-medium">
@@ -1225,6 +1268,40 @@ Write the complete workflow, rules, and examples for this skill.`
                 bind:value={draft.endpoint}
               />
             </label>
+          {:else if draft.kind === 'image_descriptor'}
+            <label class="block space-y-1 text-xs font-medium">
+              <span>Harness ID</span>
+              <input
+                class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                required
+                placeholder="opencode"
+                bind:value={draft.descriptorHarnessId}
+              />
+            </label>
+            <div class="grid grid-cols-2 gap-3">
+              <label class="space-y-1 text-xs font-medium">
+                <span>Provider ID</span>
+                <input
+                  class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                  required
+                  placeholder="anthropic"
+                  bind:value={draft.descriptorProviderId}
+                />
+              </label>
+              <label class="space-y-1 text-xs font-medium">
+                <span>Model ID (vision)</span>
+                <input
+                  class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                  required
+                  placeholder="claude-sonnet-4-5"
+                  bind:value={draft.descriptorModelId}
+                />
+              </label>
+            </div>
+            <p class="text-[11px] text-dimmed">
+              A model from the harness catalog that can see images. Text-only models call this
+              utility to describe attached images.
+            </p>
           {:else}
             <label class="block space-y-1 text-xs font-medium">
               <span>Provider ID</span>

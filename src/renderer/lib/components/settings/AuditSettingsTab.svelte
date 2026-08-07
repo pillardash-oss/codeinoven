@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { BrainCircuit, Hammer, Loader2, ShieldCheck, X } from '@lucide/svelte'
+  import { BrainCircuit, Eye, Hammer, Loader2, ShieldCheck, X } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -110,6 +110,34 @@
     await updateConfig({ agentDefaults: next })
   }
 
+  async function selectImageDescriptor(
+    providerId: string,
+    modelId: string,
+    nextHarnessId?: string
+  ): Promise<void> {
+    const provider = providers.find(
+      (candidate) =>
+        candidate.id === providerId &&
+        (nextHarnessId ? candidate.harnessId === nextHarnessId : true)
+    )
+    if (!provider) return
+    const harnessId = nextHarnessId ?? provider.harnessId
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptor: { harnessId, providerId, modelId }
+    }
+    defaults = next
+    rendererRecovery.addRecentModel(`${providerId}:${modelId}`)
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function clearImageDescriptor(): Promise<void> {
+    const next = { ...defaults }
+    delete next.imageDescriptor
+    defaults = next
+    await updateConfig({ agentDefaults: next })
+  }
+
   async function toggleThreadSync(): Promise<void> {
     const next = { ...defaults, syncFromThreadChanges: !defaults.syncFromThreadChanges }
     defaults = next
@@ -121,7 +149,8 @@
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Agents</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Choose global models for Engineering roles. A thread or Assignment can still override them.
+      Choose global models for Engineering roles and image description. A thread can still override
+      them.
     </p>
   </div>
 
@@ -202,6 +231,56 @@
         aria-label="Follow agent model changes from threads"
         disabled={!settingsReady}
       />
+    </div>
+  </section>
+
+  <section class="rounded-xl border bg-surface" aria-label="Image descriptor default">
+    <div class="flex items-center gap-4 p-4">
+      <div class="rounded-lg bg-primary/10 p-2 text-primary"><Eye size={18} /></div>
+      <div class="min-w-0 flex-1">
+        <h2 class="text-sm font-semibold text-foreground">Image descriptor</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          Vision model used to describe images for text-only models that cannot see them.
+        </p>
+        {#if !defaults.imageDescriptor}
+          <p class="mt-1 text-[11px] text-dimmed">Not set · you'll be asked when you send an image</p>
+        {/if}
+      </div>
+      <div class="flex w-60 shrink-0 items-center gap-1.5">
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            projectId={rendererRecovery.selectedProjectId}
+            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? 'opencode'}
+            providerId={defaults.imageDescriptor?.providerId ?? ''}
+            modelId={defaults.imageDescriptor?.modelId ?? ''}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            visionOnly
+            side="bottom"
+            variant="field"
+            label={defaults.imageDescriptor ? undefined : 'Choose a vision model'}
+            disabled={!settingsReady || loading || providers.length === 0}
+            onSelect={(providerId, modelId, harnessId) =>
+              void selectImageDescriptor(providerId, modelId, harnessId)}
+            onToggleFavorite={(providerId, modelId) =>
+              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+          />
+        </div>
+        {#if defaults.imageDescriptor}
+          <button
+            type="button"
+            class="rounded-lg p-2 text-dimmed hover:bg-elevated hover:text-foreground"
+            title="Clear image descriptor default"
+            aria-label="Clear image descriptor default"
+            onclick={() => void clearImageDescriptor()}
+          >
+            <X size={14} />
+          </button>
+        {/if}
+      </div>
     </div>
   </section>
 
