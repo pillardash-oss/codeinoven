@@ -56,6 +56,7 @@
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID, type ScopeBucket } from '$shared/types'
   import type { Component } from 'svelte'
@@ -510,7 +511,8 @@
 </script>
 
 <header
-  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4 pl-24"
+  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4"
+  style={trafficLightInsetStyle()}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <!-- Global navigation: back / forward -->

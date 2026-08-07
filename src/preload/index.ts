@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { readFile } from 'node:fs/promises'
 import type { AppConfig, AppConfigPatch } from '../lib/types'
+import {
+  NO_TRAFFIC_LIGHT,
+  TRAFFIC_LIGHT_ARG_PREFIX,
+  parseTrafficLight,
+  type TrafficLightInfo
+} from '../lib/traffic-light'
 import type {
   EventArgs as ContractEventArgs,
   IpcEventContract,
@@ -378,11 +384,18 @@ export interface AppBridge {
     get: () => Promise<AppConfig>
     update: (patch: AppConfigPatch) => Promise<AppConfig>
   }
+  /** Desktop window chrome for the current OS — read once at startup. */
+  windowInfo: {
+    platform: NodeJS.Platform
+    trafficLight: TrafficLightInfo
+  }
   /** Read a local file into bytes for renderer-side preview use. */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
   /** Resolve the native path of a File object dropped/pasted in the renderer. */
   getPathForFile: (file: File) => string
 }
+
+const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
 
 const bridge: AppBridge = {
   invoke: <Channel extends InvokeChannel>(
@@ -413,6 +426,11 @@ const bridge: AppBridge = {
     get: () => ipcRenderer.invoke('config:get') as Promise<AppConfig>,
     update: (patch: AppConfigPatch) =>
       ipcRenderer.invoke('config:update', patch) as Promise<AppConfig>
+  },
+  windowInfo: {
+    platform: process.platform,
+    trafficLight:
+      parseTrafficLight(trafficLightArg?.slice(TRAFFIC_LIGHT_ARG_PREFIX.length)) ?? NO_TRAFFIC_LIGHT
   },
   readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
     const buffer = await readFile(path)

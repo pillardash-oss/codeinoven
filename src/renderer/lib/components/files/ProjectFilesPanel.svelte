@@ -19,6 +19,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
@@ -713,7 +714,8 @@
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
     >
       <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3 pl-24"
+        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+        style={trafficLightInsetStyle()}
       >
         <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
           {activeTab?.path ?? 'File'}

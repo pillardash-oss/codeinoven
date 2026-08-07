@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'path'
 import { existsSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -39,6 +39,7 @@ import {
   installProductionApplicationMenu,
   lockDownProductionWindow
 } from './production-housekeeping'
+import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -219,7 +220,7 @@ function createSplashWindow(): BrowserWindow {
     fullscreenable: false,
     skipTaskbar: true,
     show: true,
-    backgroundColor: '#000000',
+    backgroundColor: '#081825',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -248,12 +249,22 @@ function closeSplash(): void {
   splashWindow = null
 }
 
+/**
+ * First-paint colour for the main window, matched to the renderer's resolved
+ * theme (mirrors `--color-app` from app.css). Without it the window can flash
+ * the default white body while the bundle boots on a slow machine.
+ */
+function getStartupBackground(): string {
+  return nativeTheme.shouldUseDarkColors ? '#0b0b0d' : '#f7f6f2'
+}
+
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     ...windowStateService.getWindowOptions(),
     minWidth: 1024,
     minHeight: 700,
     show: false,
+    backgroundColor: getStartupBackground(),
     title: APP_NAME,
     icon: getAppIconPath(),
     titleBarStyle: 'hiddenInset',
@@ -265,6 +276,9 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       devTools: !isProduction,
+      // The preload resolves the platform traffic-light layout from this flag
+      // so the renderer never flashes a wrong inset on first paint.
+      additionalArguments: [getTrafficLightArg()],
       // Built-in Chromium PDF plugin (PDFium-backed viewer, annotations,
       // forms, search) — available in Electron 29+.
       plugins: true
@@ -357,7 +371,14 @@ void app
     }
 
     // Storage and database warm-up are independent — run them concurrently.
-    await Promise.all([storage.initialize(), database.init()])
+    await Promise.all([
+      storage.initialize(),
+      database.init(),
+      // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
+      // here guarantees the flag is ready before `createWindow()` runs without
+      // serializing behind the heavier startup work.
+      warmTrafficLightDetection()
+    ])
     await windowStateService.load()
     Logger.initialize(storage.resolve('logs/main.jsonl'))
     Logger.info(`${APP_NAME} main process initialized`)

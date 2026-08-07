@@ -67,6 +67,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
@@ -2829,7 +2830,8 @@
           onEscapeKeydown={(e) => e.preventDefault()}
         >
           <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3 pl-24"
+            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+            style={trafficLightInsetStyle()}
           >
             <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {terminalTab.title}
