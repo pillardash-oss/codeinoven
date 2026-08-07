@@ -68,11 +68,12 @@
     keybindings: {},
     slashCommandMode: 'app',
     preferredEditor: 'system',
-    memory: { enabled: true, entries: [] },
+    memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
-    updateChannel: 'stable'
+    updateChannel: 'stable',
+    keepAwakeWhileWorking: false
   }
 
   let config = $state<AppConfig>(defaultConfig)

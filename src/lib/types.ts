@@ -2194,7 +2194,7 @@ export type SlashCommandMode = 'app' | 'passthrough'
 
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference'
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
-export type MemoryScope = 'global' | 'project' | 'thread' | 'chat'
+export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
 export type MemorySource = 'manual' | 'auto-detected'
 
 export interface MemoryEntry {
@@ -2214,7 +2214,10 @@ export interface MemoryEntry {
 }
 
 export interface MemoryConfig {
+  /** Whether persistent memory is sent to project agents (global + projects + project + thread). */
   enabled: boolean
+  /** Whether persistent memory is sent to chat agents (global + chat + thread). */
+  chatEnabled: boolean
   entries: MemoryEntry[]
 }
 

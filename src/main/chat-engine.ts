@@ -9445,7 +9445,9 @@ export class ChatEngine {
     settings: ThreadSettings
   ): Promise<StructuredMemoryProposal> {
     const allowedScopes: MemoryScope[] =
-      projectId === INBOX_PROJECT_ID ? ['global', 'chat'] : ['global', 'project', 'thread']
+      projectId === INBOX_PROJECT_ID
+        ? ['global', 'chat', 'thread']
+        : ['global', 'projects', 'project', 'thread']
     const proposalSchema: Record<string, unknown> = {
       ...PROPOSE_MEMORY_SCHEMA,
       properties: {
@@ -9459,8 +9461,8 @@ export class ChatEngine {
     }
     const scopeInstruction =
       projectId === INBOX_PROJECT_ID
-        ? 'This is a standalone chat. Use scope global only for cross-project user preferences, or chat only for this standalone chat.'
-        : 'This is a project thread. Use scope global for cross-project user preferences, project for repository-wide rules, or thread only for this conversation.'
+        ? 'This is a standalone chat. Use scope global only for preferences shared across both projects and chats, chats for preferences applying to every standalone chat, or thread only for this chat.'
+        : 'This is a project thread. Use scope global for preferences shared across both projects and chats, projects for repository-wide rules across all projects, project for this specific project, or thread only for this conversation.'
     const structuredOutputKey = `${driver.id}:${settings.providerId}:${settings.modelId}`
     const isZenFreeModel =
       driver.id === 'opencode' &&
@@ -9597,15 +9599,19 @@ export class ChatEngine {
         message: 'Persistent memory is disabled. No proposal was created.'
       }
     }
-    if (projectId === INBOX_PROJECT_ID && !['global', 'chat'].includes(input.scope)) {
-      throw new TypeError('Standalone chats support only global or chat memory')
+    if (projectId === INBOX_PROJECT_ID && !['global', 'chat', 'thread'].includes(input.scope)) {
+      throw new TypeError('Standalone chats support only global, chats, or thread memory')
     }
     if (projectId !== INBOX_PROJECT_ID && input.scope === 'chat') {
-      throw new TypeError('Chat-scoped memory is available only in standalone chats')
+      throw new TypeError('Chats-scoped memory is available only in standalone chats')
     }
 
     const queueProjectId =
-      input.scope === 'global' ? undefined : input.scope === 'chat' ? INBOX_PROJECT_ID : projectId
+      input.scope === 'global' || input.scope === 'projects'
+        ? undefined
+        : input.scope === 'chat'
+          ? INBOX_PROJECT_ID
+          : projectId
     const normalizedContent = input.content.trim().toLowerCase()
     const remembered = current.entries.find(
       (entry) => entry.content.trim().toLowerCase() === normalizedContent

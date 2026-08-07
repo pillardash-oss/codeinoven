@@ -32,7 +32,7 @@ const DEFAULT_CONFIG: AppConfig = {
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
-  memory: { enabled: true, entries: [] },
+  memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
@@ -92,6 +92,11 @@ export class StorageEngine {
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
+      },
+      memory: {
+        ...DEFAULT_CONFIG.memory,
+        ...(config?.memory ?? {}),
+        entries: config?.memory?.entries ?? []
       }
     }
   }

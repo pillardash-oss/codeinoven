@@ -494,7 +494,15 @@
       <SettingsMemoryTab
         variant="settings"
         memoryEnabled={config.memory.enabled}
-        onMemoryEnabledChange={(enabled) => updateConfig({ memory: { enabled, entries: [] } })}
+        chatMemoryEnabled={config.memory.chatEnabled}
+        onMemoryEnabledChange={(enabled) =>
+          updateConfig({
+            memory: { enabled, chatEnabled: config.memory.chatEnabled, entries: [] }
+          })}
+        onChatMemoryEnabledChange={(enabled) =>
+          updateConfig({
+            memory: { enabled: config.memory.enabled, chatEnabled: enabled, entries: [] }
+          })}
       />
     {:else if section === 'harnesses'}
       <ProvidersView />
