@@ -17,6 +17,8 @@
     title?: string
     ariaLabel?: string
     onOpen?: () => void
+    /** Fired when the menu closes — lets a touch reveal undo itself. */
+    onClose?: () => void
     open?: boolean
   }
 
@@ -25,6 +27,7 @@
     title = 'Thread actions',
     ariaLabel = 'Thread actions',
     onOpen = () => undefined,
+    onClose = () => undefined,
     open = $bindable(false)
   }: Props = $props()
 </script>
@@ -33,6 +36,7 @@
   bind:open
   onOpenChange={(o) => {
     if (o) onOpen()
+    else onClose()
   }}
 >
   <DropdownMenu.Trigger
@@ -63,7 +67,7 @@
           <DropdownMenu.Item
             disabled={item.disabled}
             class={[
-              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors max-md:py-2.5',
               item.danger
                 ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
                 : 'text-foreground hover:bg-elevated focus:bg-elevated',

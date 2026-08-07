@@ -6,7 +6,6 @@
     History,
     MessageSquare,
     MessageSquarePlus,
-    PanelLeft,
     Pencil,
     Save,
     X
@@ -148,10 +147,6 @@
     canonicalSections.filter(
       ({ id }) => id !== 'additional_info' || Boolean(sectionFor(id)?.markdown.trim())
     )
-  )
-
-  const selectedSectionLabel = $derived(
-    visibleSections.find((section) => section.id === selectedSection)?.title ?? 'Sections'
   )
 
   const openAnnotationCount = $derived(
@@ -529,22 +524,14 @@
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="brainstorm sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           onOpenBrainstorm={() => undefined}
           onOpenSpec={specAvailable ? onOpenSpec : undefined}
           {onOpenAssignment}
           {onOpenAudit}
         />
-        <!-- The section rail is a drawer on a phone; this is its handle. -->
-        <button
-          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
-          aria-label="Open the section list"
-          title="Open the section list"
-          aria-expanded={sectionsOpen}
-          onclick={() => (sectionsOpen = true)}
-        >
-          <PanelLeft size={13} class="shrink-0" />
-          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
-        </button>
       </div>
 
       <div

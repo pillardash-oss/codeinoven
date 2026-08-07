@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, MessageSquareText } from '@lucide/svelte'
+  import { ArrowLeft, MessageSquareText, PanelLeft } from '@lucide/svelte'
 
   type StudioDocument = 'brainstorm' | 'spec' | 'assignment' | 'audit'
 
@@ -10,8 +10,13 @@
     assignmentAvailable?: boolean
     auditAvailable?: boolean
     agentMessagesOpen?: boolean
+    /** Whether the studio's section rail is currently showing. */
+    sectionsOpen?: boolean
+    /** The section rail this label belongs to, for the toggle's accessible name. */
+    sectionsLabel?: string
     onBack: () => void
     onToggleAgentMessages: () => void
+    onToggleSections?: () => void
     onOpenBrainstorm?: () => void
     onOpenSpec?: () => void
     onOpenAssignment?: () => void
@@ -25,8 +30,11 @@
     assignmentAvailable = false,
     auditAvailable = false,
     agentMessagesOpen = false,
+    sectionsOpen = false,
+    sectionsLabel = 'sections',
     onBack,
     onToggleAgentMessages,
+    onToggleSections,
     onOpenBrainstorm,
     onOpenSpec,
     onOpenAssignment,
@@ -44,8 +52,22 @@
     <ArrowLeft size={13} class="shrink-0" />
     <span class="max-md:hidden">Conversation</span>
   </button>
-  <!-- The agent-message rail lives in the desktop sidebar, which the phone
-       shell never mounts — so the toggle would be a dead control there. -->
+  <!-- Show/hide the studio's own section rail. On a phone it stands in for the
+       agent-messages button below, whose rail lives in the desktop sidebar that
+       the remote shell never mounts. -->
+  {#if onToggleSections}
+    <button
+      class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md md:hidden {sectionsOpen
+        ? 'bg-elevated text-foreground'
+        : 'text-muted hover:bg-elevated hover:text-foreground'}"
+      aria-pressed={sectionsOpen}
+      aria-label={sectionsOpen ? `Hide ${sectionsLabel}` : `Show ${sectionsLabel}`}
+      title={sectionsOpen ? `Hide ${sectionsLabel}` : `Show ${sectionsLabel}`}
+      onclick={onToggleSections}
+    >
+      <PanelLeft size={13} />
+    </button>
+  {/if}
   <button
     class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md max-md:hidden {agentMessagesOpen
       ? 'bg-elevated text-foreground'

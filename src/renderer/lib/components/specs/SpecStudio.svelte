@@ -10,7 +10,6 @@
     MessageSquare,
     MessageSquarePlus,
     MessageSquareText,
-    PanelLeft,
     Paperclip,
     Plus,
     Save,
@@ -246,9 +245,6 @@
   const currentValidation = $derived(dirty ? validateEngineeringSpec(draft) : validation)
   const selectedSectionIssues = $derived(
     currentValidation.issues.filter((issue) => issue.section === selectedSection)
-  )
-  const selectedSectionLabel = $derived(
-    sections.find((section) => section.id === selectedSection)?.label ?? 'Sections'
   )
   const selectedContextPaths = $derived(
     new Set(
@@ -898,26 +894,13 @@
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="spec sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
           {onOpenAssignment}
           {onOpenAudit}
         />
-        <!-- The section rail is a drawer on a phone; this is its handle. -->
-        <button
-          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
-          aria-label="Open sections, validation gaps and annotations"
-          title="Open sections, validation gaps and annotations"
-          aria-expanded={sectionsOpen}
-          onclick={() => (sectionsOpen = true)}
-        >
-          <PanelLeft size={13} class="shrink-0" />
-          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
-          {#if currentValidation.issues.length}
-            <span class="rounded-full bg-danger/10 px-1.5 text-[10px] text-danger">
-              {currentValidation.issues.length}
-            </span>
-          {/if}
-        </button>
       </div>
 
       <div

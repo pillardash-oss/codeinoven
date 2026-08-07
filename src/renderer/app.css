@@ -501,3 +501,16 @@ body {
   background-color: color-mix(in srgb, var(--color-primary) 52%, transparent);
   color: inherit;
 }
+
+/* ─── Touch affordances ──────────────────────────────────────────────────── */
+/*
+ * A finger cannot hover. Every control that only fades in on `group-hover`
+ * would otherwise be unreachable on the phone client, so on a device with no
+ * hover they are simply visible. Long-press covers the cases driven by JS
+ * state instead of CSS (see `long-press.svelte.ts`).
+ */
+@media (hover: none) {
+  [class~='group-hover:opacity-100'] {
+    opacity: 1;
+  }
+}

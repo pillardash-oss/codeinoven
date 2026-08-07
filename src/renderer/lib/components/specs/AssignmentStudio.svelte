@@ -7,7 +7,6 @@
     FileText,
     MessageSquare,
     Network,
-    PanelLeft,
     Save,
     X
   } from '@lucide/svelte'
@@ -70,6 +69,11 @@
       selection: AssignmentModelSelection
     ) => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onAddAnnotation?: (
       section: string,
       body: string,
@@ -114,6 +118,7 @@
     onWorkerModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     onAddAnnotation,
     onUpdateAnnotation,
     onResolveAnnotation
@@ -181,9 +186,6 @@
     }))
   ])
 
-  const selectedSectionLabel = $derived(
-    sections.find((section) => section.id === selectedSection)?.label ?? 'Sections'
-  )
   function annotationCount(section: string): number {
     return annotations.filter(
       (annotation) => annotation.section === section && annotation.status === 'open'
@@ -476,21 +478,13 @@
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="assignment sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
           {onOpenSpec}
           {onOpenAudit}
         />
-        <!-- The section rail is a drawer on a phone; this is its handle. -->
-        <button
-          class="ml-auto flex h-9 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium text-muted md:hidden"
-          aria-label="Open the section list"
-          title="Open the section list"
-          aria-expanded={sectionsOpen}
-          onclick={() => (sectionsOpen = true)}
-        >
-          <PanelLeft size={13} class="shrink-0" />
-          <span class="max-w-24 truncate">{selectedSectionLabel}</span>
-        </button>
       </div>
 
       <div
@@ -740,6 +734,7 @@
           {onWorkerModelChange}
           {onTaskModelChange}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       </div>
     </main>

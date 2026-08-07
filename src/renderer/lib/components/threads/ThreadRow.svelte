@@ -15,6 +15,7 @@
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { projectIdentityTitle, remoteOriginLabel } from '$lib/project-location'
+  import { longPress } from '$lib/long-press.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
   import type { Thread } from '$shared/types'
@@ -109,6 +110,8 @@
   }
 
   let hovered = $state(false)
+  /** The ellipsis was revealed by a long press, so closing the menu hides it again. */
+  let touchRevealed = $state(false)
   let showMenu = $state(false)
   let showPopover = $state(false)
   let rowEl = $state<HTMLDivElement>()
@@ -394,6 +397,18 @@
     showPopover = false
   }
 
+  /**
+   * Touch has no hover and no right click, so a long press stands in for both:
+   * it reveals the row's ellipsis and opens the same actions menu.
+   */
+  function openActionsByTouch(): void {
+    touchRevealed = true
+    hovered = true
+    showPopover = false
+    clearTimeout(popoverTimer)
+    showMenu = true
+  }
+
   /** Right-click anywhere on the row opens the actions menu. */
   function openContextMenu(e: MouseEvent): void {
     e.preventDefault()
@@ -485,6 +500,7 @@
 
 <div
   {@attach captureRowElement}
+  {@attach longPress({ onLongPress: openActionsByTouch, enabled: !picker })}
   class="relative {picker ? 'hidden' : ''}"
   role="listitem"
   data-thread-row={thread.id}
@@ -613,6 +629,11 @@
           onOpen={() => {
             showPopover = false
             clearTimeout(popoverTimer)
+          }}
+          onClose={() => {
+            if (!touchRevealed) return
+            touchRevealed = false
+            hovered = false
           }}
         />
       </span>
