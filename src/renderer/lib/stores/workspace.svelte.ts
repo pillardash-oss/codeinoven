@@ -194,6 +194,13 @@ class WorkspaceState {
     this.focusComposerCount++
   }
 
+  /** Incremented to focus the composer editor in place (no remount). */
+  focusComposerEditorCount = $state(0)
+
+  requestFocusComposerEditor(): void {
+    this.focusComposerEditorCount++
+  }
+
   requestCreateThread(scopeBucketId?: string): void {
     this.requestCreateThreadCount++
     this.pendingScopeBucketId = scopeBucketId ?? null
