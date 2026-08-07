@@ -4,6 +4,7 @@ import type { AppConfig, AppConfigPatch } from '../lib/types'
 import {
   NO_TRAFFIC_LIGHT,
   TRAFFIC_LIGHT_ARG_PREFIX,
+  TRAFFIC_LIGHT_OFFSET,
   parseTrafficLight,
   type TrafficLightInfo
 } from '../lib/traffic-light'
@@ -256,6 +257,7 @@ const INVOKE_CHANNELS = [
   'repository:remoteOrigin',
   'shell:openExternal',
   'shell:revealPath',
+  'web:favicon',
   'spec:addAnnotation',
   'spec:addDecisionComment',
   'spec:approve',
@@ -397,6 +399,18 @@ export interface AppBridge {
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
 
+/**
+ * Platform truth the flag is only an enhancement for. macOS always draws its
+ * traffic lights inset on the left — never fall back to "none" there, even if
+ * the `additionalArguments` flag is missing (e.g. a partial build), otherwise
+ * the header content would slide under the window controls.
+ */
+function defaultTrafficLight(platform: NodeJS.Platform): TrafficLightInfo {
+  return platform === 'darwin'
+    ? { present: true, side: 'left', offset: TRAFFIC_LIGHT_OFFSET }
+    : NO_TRAFFIC_LIGHT
+}
+
 const bridge: AppBridge = {
   invoke: <Channel extends InvokeChannel>(
     channel: Channel,
@@ -430,7 +444,8 @@ const bridge: AppBridge = {
   windowInfo: {
     platform: process.platform,
     trafficLight:
-      parseTrafficLight(trafficLightArg?.slice(TRAFFIC_LIGHT_ARG_PREFIX.length)) ?? NO_TRAFFIC_LIGHT
+      parseTrafficLight(trafficLightArg?.slice(TRAFFIC_LIGHT_ARG_PREFIX.length)) ??
+      defaultTrafficLight(process.platform)
   },
   readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
     const buffer = await readFile(path)
