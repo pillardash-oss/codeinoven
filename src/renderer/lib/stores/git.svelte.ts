@@ -16,7 +16,12 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrMergeMethod,
+  PrReviewEvent,
   PrState,
+  PullRequestComment,
+  PullRequestCommit,
+  PullRequestDetail,
+  PullRequestPage,
   PullRequestReference
 } from '$shared/types'
 
@@ -42,6 +47,8 @@ export type GitOperation =
   | 'abortRebase'
   | 'pr-create'
   | 'pr-merge'
+  | 'pr-comment'
+  | 'pr-review'
 
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
@@ -362,11 +369,11 @@ class GitState {
     }
   }
 
-  async stash(projectId: string, message?: string): Promise<void> {
+  async stash(projectId: string, message?: string, paths?: string[]): Promise<void> {
     this.markBusy('stash', true)
     this.error = null
     try {
-      this.status = await invoke('git:stash', projectId, message)
+      this.status = await invoke('git:stash', projectId, message, paths)
       this.stashes = await invoke('git:stashList', projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash failed')
@@ -446,6 +453,114 @@ class GitState {
       return await invoke('pr:list', projectId, owner, repo, state)
     } catch {
       return []
+    }
+  }
+
+  /** One page of pull requests; returns an empty page when signed out. */
+  async listPullRequestPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number
+  ): Promise<PullRequestPage> {
+    try {
+      return await invoke('pr:page', projectId, owner, repo, state, page)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull requests could not be loaded')
+      return { items: [], page, hasMore: false }
+    }
+  }
+
+  async getPullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestDetail | null> {
+    try {
+      return await invoke('pr:get', projectId, owner, repo, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be loaded')
+      return null
+    }
+  }
+
+  async listPullRequestCommits(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestCommit[]> {
+    try {
+      return await invoke('pr:commits', projectId, owner, repo, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request commits could not be loaded')
+      return []
+    }
+  }
+
+  async listPullRequestComments(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestComment[]> {
+    try {
+      return await invoke('pr:comments', projectId, owner, repo, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request comments could not be loaded')
+      return []
+    }
+  }
+
+  async commentOnPullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    body: string
+  ): Promise<PullRequestComment | null> {
+    this.markBusy('pr-comment', true)
+    this.error = null
+    try {
+      return await invoke('pr:comment', projectId, owner, repo, pullNumber, body)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The comment could not be posted')
+      return null
+    } finally {
+      this.markBusy('pr-comment', false)
+    }
+  }
+
+  async reviewPullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    event: PrReviewEvent,
+    body: string
+  ): Promise<boolean> {
+    this.markBusy('pr-review', true)
+    this.error = null
+    try {
+      await invoke('pr:review', projectId, owner, repo, pullNumber, event, body)
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The review could not be submitted')
+      return false
+    } finally {
+      this.markBusy('pr-review', false)
+    }
+  }
+
+  /** Create `.cio/git/pr/<number>/` so an agent has somewhere to write its report. */
+  async createPrReviewWorkspace(projectId: string, pullNumber: number): Promise<string | null> {
+    try {
+      return await invoke('pr:reviewWorkspace', projectId, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The review workspace could not be created')
+      return null
     }
   }
 

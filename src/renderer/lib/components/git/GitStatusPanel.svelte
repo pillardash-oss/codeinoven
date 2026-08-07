@@ -37,6 +37,7 @@
   import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
+  import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
@@ -65,12 +66,14 @@
   let showIntegrateModal = $state(false)
   let showStashModal = $state(false)
   let stashMessage = $state('')
+  let stashPaths = $state<string[] | null>(null)
   let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
   let activeTab = $state<TabId>('changes')
+  let changesView = $state<'list' | 'tree'>('list')
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let commitMessage = $state('')
@@ -483,12 +486,27 @@
   }
 
   async function stashChanges(): Promise<void> {
-    await gitState.stash(projectId, stashMessage.trim() || undefined)
+    await gitState.stash(projectId, stashMessage.trim() || undefined, stashPaths ?? undefined)
     if (!gitState.error) {
       stashMessage = ''
+      stashPaths = null
       showStashModal = false
       activeTab = 'stashes'
       void refreshStatus()
+    }
+  }
+
+  function requestStashFor(paths: string[]): void {
+    stashPaths = paths
+    stashMessage = ''
+    showStashModal = true
+  }
+
+  async function stagePathsAction(paths: string[], staged: boolean): Promise<void> {
+    if (staged) {
+      await gitState.unstage(projectId, paths)
+    } else {
+      await gitState.stage(projectId, paths)
     }
   }
 
@@ -965,7 +983,57 @@
                 </p>
               </div>
             {:else if status}
-              {#if fileSections.length > 0}
+              {#if changes.length > 0}
+                <div class="mb-2 flex items-center justify-end">
+                  <div
+                    class="flex items-center rounded-md bg-elevated/50 p-0.5"
+                    role="group"
+                    aria-label="Changes view"
+                  >
+                    <button
+                      type="button"
+                      class={[
+                        'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                        changesView === 'list'
+                          ? 'bg-surface text-foreground shadow-sm'
+                          : 'text-dimmed hover:text-foreground'
+                      ]}
+                      aria-pressed={changesView === 'list'}
+                      onclick={() => (changesView = 'list')}
+                    >
+                      List
+                    </button>
+                    <button
+                      type="button"
+                      class={[
+                        'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                        changesView === 'tree'
+                          ? 'bg-surface text-foreground shadow-sm'
+                          : 'text-dimmed hover:text-foreground'
+                      ]}
+                      aria-pressed={changesView === 'tree'}
+                      onclick={() => (changesView = 'tree')}
+                    >
+                      Tree
+                    </button>
+                  </div>
+                </div>
+              {/if}
+
+              {#if changesView === 'tree' && fileSections.length > 0}
+                <GitChangesTree
+                  sections={fileSections}
+                  {diffs}
+                  {expanded}
+                  {loadingDiff}
+                  {diffErrors}
+                  onToggleDiff={(change) => void toggleDiff(change)}
+                  onToggleStage={(change) => void toggleStage(change)}
+                  onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
+                  onStashPaths={(paths) => requestStashFor(paths)}
+                  onOpenInEditor={(path) => void openInEditor(path)}
+                />
+              {:else if fileSections.length > 0}
                 <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
                   {#each fileSections as section, si (section.title)}
                     {#if si > 0}<div class="border-t border-border"></div>{/if}
@@ -1345,12 +1413,30 @@
   {/if}
 
   {#if showStashModal}
-    <Modal open title="Stash changes" onClose={() => (showStashModal = false)}>
+    <Modal
+      open
+      title={stashPaths ? 'Stash selected changes' : 'Stash changes'}
+      onClose={() => (showStashModal = false)}
+    >
       <div class="space-y-2">
-        <p class="text-[11px] leading-relaxed text-muted">
-          Shelves your staged and unstaged changes so you can switch work. Restore them any time
-          from the Stashes tab.
-        </p>
+        {#if stashPaths}
+          <div class="rounded-lg border border-border bg-elevated/50 px-3 py-2">
+            <p class="text-[10px] font-medium text-foreground">
+              {stashPaths.length}
+              {stashPaths.length === 1 ? 'file' : 'files'} to stash
+            </p>
+            <div class="mt-1 max-h-24 overflow-auto">
+              {#each stashPaths as path (path)}
+                <p class="truncate font-mono text-[9px] text-dimmed">{path}</p>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <p class="text-[11px] leading-relaxed text-muted">
+            Shelves your staged and unstaged changes so you can switch work. Restore them any time
+            from the Stashes tab.
+          </p>
+        {/if}
         <input
           class="h-8 w-full rounded-md border border-border bg-elevated px-2.5 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Describe this stash (optional)"
@@ -1362,7 +1448,10 @@
           <button
             type="button"
             class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-            onclick={() => (showStashModal = false)}
+            onclick={() => {
+              showStashModal = false
+              stashPaths = null
+            }}
           >
             Cancel
           </button>
@@ -1375,7 +1464,7 @@
             {#if gitState.isBusy('stash')}
               <Loader2 size={12} class="animate-spin" />
             {/if}
-            Stash changes
+            {stashPaths ? 'Stash selected' : 'Stash changes'}
           </button>
         </div>
       {/snippet}

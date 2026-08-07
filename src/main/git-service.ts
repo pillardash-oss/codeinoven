@@ -555,12 +555,18 @@ export class GitService {
     })
   }
 
-  async stash(projectPath: string, message?: string): Promise<GitStatus> {
+  async stash(projectPath: string, message?: string, paths?: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        const args = message ? ['push', '-m', message] : ['push']
-        await this.client(directory).stash(args)
+        if (paths && paths.length > 0) {
+          const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+          const args = message ? ['push', '-m', message] : ['push']
+          await this.client(directory).stash([...args, '--', ...safePaths])
+        } else {
+          const args = message ? ['push', '-m', message] : ['push']
+          await this.client(directory).stash(args)
+        }
       })
       return this.readStatus(directory)
     })

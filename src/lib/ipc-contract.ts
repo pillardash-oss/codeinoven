@@ -68,6 +68,12 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrMergeMethod,
+  PrReviewEvent,
+  PrState,
+  PullRequestComment,
+  PullRequestCommit,
+  PullRequestDetail,
+  PullRequestPage,
   PullRequestReference,
   PromptAttachment,
   PromptAssignmentTaskReference,
@@ -678,7 +684,7 @@ export interface IpcInvokeContract {
   'git:removeCredential': Contract<[projectId: string], GitCredentialStatus>
   'git:merge': Contract<[projectId: string, target: string], MergeSummary>
   'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
-  'git:stash': Contract<[projectId: string, message?: string], GitStatus>
+  'git:stash': Contract<[projectId: string, message?: string, paths?: string[]], GitStatus>
   'git:stashList': Contract<[projectId: string], GitStashEntry[]>
   'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
   'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
@@ -695,6 +701,39 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number, method: PrMergeMethod],
     PullRequestReference
   >
+  'pr:page': Contract<
+    [projectId: string, owner: string, repo: string, state: PrState, page: number],
+    PullRequestPage
+  >
+  'pr:get': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestDetail
+  >
+  'pr:commits': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestCommit[]
+  >
+  'pr:comments': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestComment[]
+  >
+  'pr:comment': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
+    PullRequestComment
+  >
+  'pr:review': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      event: PrReviewEvent,
+      body: string
+    ],
+    void
+  >
+  /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
+  'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number], string>
   'github:authStatus': Contract<[], GitHubAuthStatus>
   'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
   'github:poll': Contract<[deviceCode: string], GitHubPollResult>

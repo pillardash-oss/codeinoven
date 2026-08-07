@@ -1,5 +1,5 @@
 import { app, ipcMain, dialog, shell, clipboard, BrowserWindow } from 'electron'
-import { readFile, writeFile, mkdtemp } from 'fs/promises'
+import { readFile, writeFile, mkdtemp, mkdir } from 'fs/promises'
 import { tmpdir, release } from 'os'
 import { basename, dirname, extname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -44,6 +44,9 @@ import {
   validatePrCreateInput,
   validatePrNumber,
   validatePrState,
+  validatePrPage,
+  validatePrReviewEvent,
+  validatePrCommentBody,
   validatePushOptions,
   validateRemoteName,
   validateRemoteUrl,
@@ -117,6 +120,8 @@ import type {
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
 const THEMES = new Set(['light', 'dark', 'system'])
+/** Pull requests fetched per sidebar page. */
+const PR_PAGE_SIZE = 20
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -2520,10 +2525,11 @@ export function registerIpcHandlers(
       validateMergeTarget(target)
     )
   )
-  ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown) =>
+  ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown, paths?: unknown) =>
     gitService.stash(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateStashMessage(message)
+      validateStashMessage(message),
+      paths === undefined ? undefined : validateGitPathArray(paths)
     )
   )
   ipcMain.handle('git:stashList', async (_, projectId: unknown) =>
@@ -2629,6 +2635,110 @@ export function registerIpcHandlers(
       })
     }
   )
+
+  /** Shared preamble for every single-PR channel: provider + validated target. */
+  const pullRequestTarget = async (
+    projectId: unknown,
+    owner: unknown,
+    repo: unknown,
+    pullNumber: unknown
+  ): Promise<{ provider: GitProvider; owner: string; repo: string; pullNumber: number }> => {
+    const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+    if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+    return {
+      provider,
+      owner: validateBoundedString(owner, 'PR owner', 1, 128),
+      repo: validateBoundedString(repo, 'PR repository', 1, 128),
+      pullNumber: validatePrNumber(pullNumber)
+    }
+  }
+
+  ipcMain.handle(
+    'pr:page',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      const safePage = validatePrPage(page)
+      if (!provider) return { items: [], page: safePage, hasMore: false }
+      return provider.listPullRequestPage({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        state: validatePrState(state),
+        page: safePage,
+        perPage: PR_PAGE_SIZE
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:get',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.getPullRequest(target)
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commits',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.listPullRequestCommits(target)
+    }
+  )
+
+  ipcMain.handle(
+    'pr:comments',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.listPullRequestComments(target)
+    }
+  )
+
+  ipcMain.handle(
+    'pr:comment',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.createPullRequestComment({
+        ...target,
+        body: validatePrCommentBody(body)
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:review',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      event: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const verdict = validatePrReviewEvent(event)
+      const text = validatePrCommentBody(body, true)
+      // GitHub rejects a REQUEST_CHANGES or COMMENT review without a body.
+      if (verdict !== 'APPROVE' && !text.trim()) {
+        throw new Error('Leave a comment explaining the requested changes')
+      }
+      await provider.createPullRequestReview({ ...target, event: verdict, body: text })
+    }
+  )
+
+  ipcMain.handle('pr:reviewWorkspace', async (_, projectId: unknown, pullNumber: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const directory = join(projectPath, '.cio', 'git', 'pr', String(validatePrNumber(pullNumber)))
+    await mkdir(directory, { recursive: true })
+    return directory
+  })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
