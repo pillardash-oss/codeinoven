@@ -488,9 +488,16 @@
   const primaryRemote = $derived(
     remotes.find((remote) => remote.name === 'origin') ?? remotes[0] ?? null
   )
+  /**
+   * The remote URL as a plain string. `primaryRemote` is a fresh object on
+   * every 8s refresh, so deriving the identity straight off it would hand the
+   * PR components a new `identity` prop each tick and re-fire their fetch
+   * effects. A string compares by value and stops the churn here.
+   */
+  const primaryRemoteUrl = $derived(primaryRemote?.url ?? '')
   /** `owner/repo` when origin points at GitHub — the PR tab needs it to query. */
   const githubIdentity = $derived.by(() => {
-    const url = primaryRemote?.url ?? ''
+    const url = primaryRemoteUrl
     const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(url.trim())
     const owner = match?.[1] ?? ''
     const repo = match?.[2] ?? ''

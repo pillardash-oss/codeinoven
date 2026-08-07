@@ -135,6 +135,32 @@
       .sort((a, b) => Date.parse(a.at || '0') - Date.parse(b.at || '0'))
   })
 
+  type EntryKind = 'description' | 'comment' | 'review' | 'inline'
+
+  /** Human label for a conversation entry's badge. */
+  function kindLabel(kind: EntryKind, meta?: string): string {
+    if (kind === 'description') return 'description'
+    if (kind === 'inline') return 'inline review'
+    if (kind === 'review') return meta ?? 'review'
+    return 'comment'
+  }
+
+  /** Badge colour — approvals and change requests read at a glance. */
+  function kindClass(kind: EntryKind, meta?: string): string {
+    if (kind === 'review' && meta === 'approved') return 'bg-success/10 text-success'
+    if (kind === 'review' && meta === 'changes requested') return 'bg-warning/10 text-warning'
+    if (kind === 'description') return 'bg-primary/10 text-primary'
+    return 'bg-elevated text-dimmed'
+  }
+
+  /** Matching left edge on the card so the stream scans vertically. */
+  function accentClass(kind: EntryKind, meta?: string): string {
+    if (kind === 'review' && meta === 'approved') return 'border-l-2 border-l-success'
+    if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
+    if (kind === 'description') return 'border-l-2 border-l-primary'
+    return ''
+  }
+
   async function refresh(): Promise<void> {
     await gitState.ensurePullRequestBundle(projectId, identity.owner, identity.repo, number, true)
     agentReport = await gitState.loadAgentReport(projectId, number)
@@ -484,30 +510,50 @@
       {#if conversation.length === 0}
         <p class="px-4 py-8 text-center text-[11px] text-dimmed">Nothing has been said yet.</p>
       {:else}
-        {#each conversation as entry (entry.key)}
-          <div class="border-b border-border/50 px-3 py-2">
-            <p class="flex flex-wrap items-center gap-1 text-[9px] text-dimmed">
-              <span class="font-medium text-muted">{entry.author}</span>
-              {#if entry.kind === 'description'}
-                <span class="rounded bg-elevated px-1 py-px">description</span>
-              {:else if entry.kind === 'review'}
+        <div class="flex flex-col gap-2 p-2">
+          {#each conversation as entry (entry.key)}
+            <article
+              class="overflow-hidden rounded-lg border border-border bg-surface {accentClass(
+                entry.kind,
+                entry.meta
+              )}"
+            >
+              <header
+                class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
+              >
                 <span
-                  class="rounded px-1 py-px {entry.meta === 'approved'
-                    ? 'bg-success/10 text-success'
-                    : entry.meta === 'changes requested'
-                      ? 'bg-warning/10 text-warning'
-                      : 'bg-elevated'}">{entry.meta}</span
+                  class="flex size-4 shrink-0 items-center justify-center rounded-full bg-border text-[8px] font-semibold uppercase text-muted"
+                  aria-hidden="true"
                 >
-              {:else if entry.kind === 'inline'}
-                <span class="truncate rounded bg-elevated px-1 py-px font-mono">{entry.meta}</span>
+                  {entry.author.slice(0, 1)}
+                </span>
+                <span class="truncate text-[11px] font-medium text-foreground">{entry.author}</span>
+                <span
+                  class="shrink-0 rounded px-1.5 py-px text-[9px] font-medium {kindClass(
+                    entry.kind,
+                    entry.meta
+                  )}"
+                >
+                  {kindLabel(entry.kind, entry.meta)}
+                </span>
+                <span class="flex-1"></span>
+                <span class="shrink-0 text-[9px] text-dimmed">{relativeTime(entry.at)}</span>
+              </header>
+              {#if entry.kind === 'inline' && entry.meta}
+                <p
+                  class="truncate border-b border-border/40 bg-elevated/20 px-2.5 py-1 font-mono text-[9px] text-dimmed"
+                >
+                  {entry.meta}
+                </p>
               {/if}
-              <span>· {relativeTime(entry.at)}</span>
-            </p>
-            {#if entry.body.trim()}
-              <MarkdownView text={entry.body} class="mt-1 text-[11px] leading-relaxed" />
-            {/if}
-          </div>
-        {/each}
+              {#if entry.body.trim()}
+                <div class="px-2.5 py-2">
+                  <MarkdownView text={entry.body} class="text-[11px] leading-relaxed" />
+                </div>
+              {/if}
+            </article>
+          {/each}
+        </div>
       {/if}
     {:else if tab === 'commits'}
       {#if !bundle || bundle.commits.length === 0}

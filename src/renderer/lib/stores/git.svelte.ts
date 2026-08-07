@@ -56,6 +56,16 @@ export type GitOperation =
 /** How long a cached PR page or bundle is served without refetching. */
 const PR_CACHE_TTL_MS = 60_000
 
+/**
+ * How long a failed PR request is remembered before it may be tried again.
+ *
+ * A failure caches nothing, so without this the panel's periodic git refresh
+ * would re-run the same doomed request on every tick — a 404 repeats forever
+ * and GitHub answers with a secondary rate limit. Explicit refresh (`force`)
+ * always ignores the cooldown, so the user is never locked out.
+ */
+const PR_ERROR_COOLDOWN_MS = 120_000
+
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
   return error.message
@@ -481,6 +491,26 @@ export class GitState {
   prBundles: Record<string, PullRequestBundle> = $state({})
   prAgentReports: Record<string, PrAgentReport> = $state({})
 
+  /**
+   * Epoch ms of the last failure per PR cache key. Deliberately plain (not
+   * `$state`) — it only gates fetching, and making it reactive would feed the
+   * very effects that triggered the request.
+   */
+  private prFailures: Record<string, number> = {}
+
+  /** True while a key is inside its post-failure cooldown. */
+  private prCoolingDown(key: string): boolean {
+    const failedAt = this.prFailures[key]
+    if (failedAt === undefined) return false
+    if (Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return true
+    delete this.prFailures[key]
+    return false
+  }
+
+  private markPrFailure(key: string): void {
+    this.prFailures[key] = Date.now()
+  }
+
   static pageKey(owner: string, repo: string, state: PrState, page: number): string {
     return `${owner}/${repo}:${state}:${page}`
   }
@@ -506,11 +536,14 @@ export class GitState {
     const key = GitState.pageKey(owner, repo, state, page)
     const cached = this.prPages[key]
     if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    if (!force && this.prCoolingDown(key)) return
     this.markBusy('pr-list', true)
     try {
       const result = await invoke('pr:page', projectId, owner, repo, state, page)
       this.prPages = { ...this.prPages, [key]: { page: result, fetchedAt: Date.now() } }
+      delete this.prFailures[key]
     } catch (reason) {
+      this.markPrFailure(key)
       this.error = errorMessage(reason, 'Pull requests could not be loaded')
     } finally {
       this.markBusy('pr-list', false)
@@ -528,11 +561,14 @@ export class GitState {
     const key = GitState.bundleKey(owner, repo, pullNumber)
     const cached = this.prBundles[key]
     if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
+    if (!force && this.prCoolingDown(key)) return
     this.markBusy('pr-detail', true)
     try {
       const bundle = await invoke('pr:bundle', projectId, owner, repo, pullNumber)
       this.prBundles = { ...this.prBundles, [key]: bundle }
+      delete this.prFailures[key]
     } catch (reason) {
+      this.markPrFailure(key)
       this.error = errorMessage(reason, 'Pull request could not be loaded')
     } finally {
       this.markBusy('pr-detail', false)
