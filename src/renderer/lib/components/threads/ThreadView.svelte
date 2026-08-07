@@ -4690,6 +4690,8 @@
           onTaskModelChange={updateAssignmentTaskModel}
           onToggleFavorite={(providerId, modelId) =>
             rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+          onReorderFavorite={(draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           onAddAnnotation={addAssignmentAnnotation}
           onUpdateAnnotation={updateAssignmentAnnotation}
           onResolveAnnotation={resolveAssignmentAnnotation}
@@ -5046,6 +5048,8 @@
                             onModelChange={changeAuditModel}
                             onToggleFavorite={(providerId, modelId) =>
                               rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                            onReorderFavorite={(draggedKey, targetKey, position) =>
+                              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                             onViewReport={() => openCoordinatorAuditReport(turnAuditReport)}
                           />
                         {/if}
@@ -5355,6 +5359,8 @@
             onModelChange={changeAuditModel}
             onToggleFavorite={(providerId, modelId) =>
               rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             onViewReport={openCoordinatorAuditReport}
           />
         {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
@@ -5405,6 +5411,8 @@
             onModelChange={changeAuditModel}
             onToggleFavorite={(providerId, modelId) =>
               rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous}
           <AuditReadyCard
@@ -5422,6 +5430,8 @@
             onModelChange={changeAuditModel}
             onToggleFavorite={(providerId, modelId) =>
               rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
           {@const readyBrainstorm = brainstorm}
@@ -5449,6 +5459,8 @@
               onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
               onToggleFavorite={(providerId, modelId) =>
                 rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             />
           {/key}
         {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating}
@@ -5469,6 +5481,8 @@
             onModelChange={changeSpecModel}
             onToggleFavorite={(providerId, modelId) =>
               rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {:else}
           {#if activeTodo}
@@ -5558,6 +5572,8 @@
               favoriteModels={rendererRecovery.favoriteModels}
               onToggleFavorite={(providerId, modelId) =>
                 rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               recentModels={rendererRecovery.recentModels}
               onModelUsed={(modelKey) => rendererRecovery.addRecentModel(modelKey)}
             />
@@ -5606,6 +5622,8 @@
         onModelChange={changeAuditModel}
         onToggleFavorite={(providerId, modelId) =>
           rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+        onReorderFavorite={(draggedKey, targetKey, position) =>
+          rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
         onWidthChange={(width) => (assignmentPanelWidth = width)}
       />
     {/if}

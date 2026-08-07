@@ -18,6 +18,11 @@
     onReaudit?: (settings: ThreadSettings) => void
     onModelChange?: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -34,7 +39,8 @@
     onCancel,
     onReaudit,
     onModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
@@ -99,6 +105,7 @@
           variant="action"
           onSelect={chooseModel}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       {:else}
         <button

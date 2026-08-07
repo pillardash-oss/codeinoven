@@ -2387,6 +2387,8 @@
                   favoriteModels={rendererRecovery.favoriteModels}
                   onToggleFavorite={(providerId, modelId) =>
                     rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                   recentModels={rendererRecovery.recentModels}
                   onModelUsed={(modelKey) => rendererRecovery.addRecentModel(modelKey)}
                   initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}

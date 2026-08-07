@@ -24,6 +24,11 @@
     onResume: () => void
     onModelChange: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onWidthChange: (width: number) => void
   }
 
@@ -47,6 +52,7 @@
     onResume,
     onModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     onWidthChange
   }: Props = $props()
 
@@ -271,6 +277,7 @@
           variant="action"
           onSelect={chooseModel}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       </div>
       {#if modelLocked}

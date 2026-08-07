@@ -299,6 +299,24 @@ export class RendererRecoveryStore {
     return this.favoriteModels.includes(modelKey)
   }
 
+  /**
+   * Move a favorite to a new position relative to another favorite. The array
+   * is stored oldest-first; the picker displays it reversed, so callers should
+   * pass the position in storage order (the picker flips before forwarding).
+   */
+  reorderFavorite(draggedKey: string, targetKey: string, position: 'before' | 'after'): void {
+    if (draggedKey === targetKey) return
+    const favorites = [...this.favoriteModels]
+    const draggedIndex = favorites.indexOf(draggedKey)
+    if (draggedIndex === -1) return
+    favorites.splice(draggedIndex, 1)
+    const targetIndex = favorites.indexOf(targetKey)
+    if (targetIndex === -1) return
+    favorites.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedKey)
+    this.favoriteModels = favorites
+    this.persist()
+  }
+
   addRecentModel(modelKey: string): void {
     this.recentModels = [modelKey, ...this.recentModels.filter((k) => k !== modelKey)].slice(0, 10)
     this.persist()

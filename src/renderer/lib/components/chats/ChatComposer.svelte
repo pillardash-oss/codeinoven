@@ -146,6 +146,12 @@
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    /** Called when the user reorders a favorite relative to another favorite. */
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     /** Model keys (providerId:modelId) the user has recently used, most recent first. */
     recentModels?: string[]
     /** Called when the user selects a model — for tracking recently used. */
@@ -200,6 +206,7 @@
     allowAttachments = false,
     favoriteModels = [],
     onToggleFavorite,
+    onReorderFavorite,
     recentModels = [],
     onModelUsed,
     contextUsage,
@@ -1691,6 +1698,7 @@
       bind:open={modelMenuOpen}
       onSelect={selectModel}
       {onToggleFavorite}
+      {onReorderFavorite}
       fast={inferenceMode === 'fast'}
       responsiveLabel
     />

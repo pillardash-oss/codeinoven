@@ -16,6 +16,11 @@
     onRetry: (settings: ThreadSettings) => void
     onModelChange: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onViewReport: () => void
   }
 
@@ -32,6 +37,7 @@
     onRetry,
     onModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     onViewReport
   }: Props = $props()
 
@@ -96,6 +102,7 @@
         variant="action"
         onSelect={chooseModel}
         {onToggleFavorite}
+        {onReorderFavorite}
       />
       <button
         class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"

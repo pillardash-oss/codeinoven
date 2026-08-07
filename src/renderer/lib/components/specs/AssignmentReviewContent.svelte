@@ -29,6 +29,11 @@
       selection: AssignmentModelSelection
     ) => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     annotations?: AssignmentAnnotation[]
     onOpenAnnotation?: (annotation: AssignmentAnnotation) => void
     onAnnotateSection?: (section: string, title: string, event: MouseEvent) => void
@@ -48,6 +53,7 @@
     onWorkerModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     annotations = [],
     onOpenAnnotation,
     onAnnotateSection
@@ -340,6 +346,7 @@
               onSelect={(providerId, modelId, harnessId) =>
                 updatePhaseModel(phase.id, providerId, modelId, harnessId)}
               {onToggleFavorite}
+              {onReorderFavorite}
             />
             <select
               class="rounded-lg border bg-surface px-2 py-2 text-[11px] text-muted"
@@ -445,6 +452,7 @@
                     onSelect={(providerId, modelId, harnessId) =>
                       updateTaskModel(task.id, providerId, modelId, harnessId)}
                     {onToggleFavorite}
+                    {onReorderFavorite}
                   />
                   <select
                     class="rounded-lg border bg-elevated px-2 py-2 text-[11px] text-muted"

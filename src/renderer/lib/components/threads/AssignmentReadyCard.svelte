@@ -23,6 +23,11 @@
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -39,7 +44,8 @@
     onApprove,
     onOpenFullscreen,
     onWorkerModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   // The card owns an editable snapshot until the user explicitly saves it.
@@ -99,6 +105,7 @@
       onChange={(content) => (draft = content)}
       {onWorkerModelChange}
       {onToggleFavorite}
+      {onReorderFavorite}
     />
 
     {#if error}
