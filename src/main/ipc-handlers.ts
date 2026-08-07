@@ -149,7 +149,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoDownloadUpdates',
   'autoInstallUpdates',
   'updateChannel',
-  'keepAwakeWhileWorking'
+  'keepAwakeWhileWorking',
+  'imageDescriptorAskAgain'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -189,6 +190,7 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'seniorEngineer',
   'worker',
   'auditor',
+  'imageDescriptor',
   'syncFromThreadChanges'
 ])
 
@@ -245,7 +247,15 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
       : { worker: validateAgentModelSelection(value.worker, 'Worker default') }),
     ...(value.auditor === undefined
       ? {}
-      : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') })
+      : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') }),
+    ...(value.imageDescriptor === undefined
+      ? {}
+      : {
+          imageDescriptor: validateAgentModelSelection(
+            value.imageDescriptor,
+            'Image descriptor default'
+          )
+        })
   }
 }
 
@@ -866,6 +876,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('keepAwakeWhileWorking must be a boolean')
     }
     patch.keepAwakeWhileWorking = value.keepAwakeWhileWorking
+  }
+
+  if ('imageDescriptorAskAgain' in value) {
+    if (typeof value.imageDescriptorAskAgain !== 'boolean') {
+      throw new TypeError('imageDescriptorAskAgain must be a boolean')
+    }
+    patch.imageDescriptorAskAgain = value.imageDescriptorAskAgain
   }
 
   return patch
