@@ -4,6 +4,7 @@
   import RemoteStatus from '$lib/components/remote/RemoteStatus.svelte'
   import PeerConnect from '$lib/components/remote/PeerConnect.svelte'
   import PairingQr from '$lib/components/remote/PairingQr.svelte'
+  import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
   import { remoteSession, type RemoteConnectionTarget } from '$lib/remote/session-store.svelte'
   import { buildRemoteConfig, loadRemoteConfig, type RemoteConfig } from '$lib/remote/config'
   import {
@@ -92,6 +93,20 @@
     } else {
       remoteSession.setKeepAlive(enabled ? 'KEEP_ALIVE_ARMED' : 'IDLE')
     }
+  }
+
+  async function handleRenameDevice(deviceId: string, name: string): Promise<void> {
+    if (!desktop) return
+    try {
+      remoteStatus = await invoke('remote:renameDevice', deviceId, name)
+    } catch {
+      // The status event will resync the list if the rename failed server-side.
+    }
+  }
+
+  async function handleDisconnectDevice(deviceId: string): Promise<void> {
+    if (!desktop) return
+    await invoke('remote:disconnectDevice', deviceId)
   }
 
   async function syncRemoteStatus(): Promise<void> {
@@ -196,6 +211,15 @@
       {busy}
       onReconnect={() => void handleConnect()}
     />
+
+    {#if !pwa && desktop}
+      <ConnectedDevices
+        devices={remoteStatus?.devices ?? []}
+        {busy}
+        onRename={(deviceId, name) => void handleRenameDevice(deviceId, name)}
+        onDisconnect={(deviceId) => void handleDisconnectDevice(deviceId)}
+      />
+    {/if}
 
     {#if !embedded}
       {#if !pwa || pwaPair.length === 0}

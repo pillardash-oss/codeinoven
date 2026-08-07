@@ -47,6 +47,10 @@ export interface LanTransportOptions {
   socketFactory?: SocketFactory
   handshakeTimeoutMs?: number
   onEvent: (event: TransportEvent) => void
+  /** Stable device identity announced during the handshake. */
+  deviceId?: string
+  /** Human-readable device name announced during the handshake. */
+  deviceName?: string
 }
 
 export interface LanTransport {
@@ -62,6 +66,8 @@ interface HelloMessage {
   version: number
   nonce: string
   token: string
+  deviceId?: string
+  deviceName?: string
 }
 
 interface ReplyMessage {
@@ -144,7 +150,14 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
         const secret = options.authSecret ?? ''
         void createHandshakeToken(secret, nonce).then((token) => {
           if (settled) return
-          const hello: HelloMessage = { type: 'remote:hello', version: 1, nonce, token }
+          const hello: HelloMessage = {
+            type: 'remote:hello',
+            version: 1,
+            nonce,
+            token,
+            ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+            ...(options.deviceName ? { deviceName: options.deviceName } : {})
+          }
           socket.send(JSON.stringify(hello))
         })
         handshakeTimer = setTimeout(() => {

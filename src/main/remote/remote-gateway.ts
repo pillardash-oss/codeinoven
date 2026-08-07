@@ -44,10 +44,11 @@ import {
 } from '../../renderer/lib/remote/session-security'
 import { loadOrCreateSelfSignedCertificate } from './self-signed-cert'
 import { computePwaAssetClosure } from './pwa-asset-graph'
+import type { RemoteDeviceInfo } from './remote-types'
 
 export interface GatewayHandlers {
-  /** Called when a phone peer authenticates (live=true) or disconnects (live=false). */
-  onSessionChange: (live: boolean) => void
+  /** Called whenever the set of connected phone devices changes. */
+  onDevicesChange: (devices: RemoteDeviceInfo[]) => void
   /** Called with the decrypted plaintext of a `remote:data` frame. */
   onData?: (plaintext: string) => void
   /** Called with a decrypted remote RPC invoke; returns the result to reply. */
@@ -77,6 +78,9 @@ interface PeerConnection {
   buffer: Buffer
   authenticated: boolean
   closing: boolean
+  deviceId: string
+  deviceName: string
+  connectedAt: number
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -109,7 +113,8 @@ export class RemoteGateway {
   private httpsServer: HttpsServer | null = null
   private httpServer: Server | null = null
   private readonly peers = new Set<PeerConnection>()
-  private livePeer: PeerConnection | null = null
+  /** Authenticated live peers, keyed by device id. */
+  private readonly livePeers = new Map<string, PeerConnection>()
   private port: number
   private localPort: number
   private stopped = false
@@ -178,7 +183,7 @@ export class RemoteGateway {
       }
     }
     this.peers.clear()
-    this.livePeer = null
+    this.livePeers.clear()
 
     const servers: Array<Server | HttpsServer | null> = [this.httpsServer, this.httpServer]
     this.httpsServer = null
@@ -324,16 +329,19 @@ export class RemoteGateway {
       socket,
       buffer: Buffer.alloc(0),
       authenticated: false,
-      closing: false
+      closing: false,
+      deviceId: '',
+      deviceName: '',
+      connectedAt: 0
     }
     this.peers.add(peer)
 
     const closePeer = (): void => {
       if (!this.peers.has(peer)) return
       this.peers.delete(peer)
-      if (this.livePeer === peer) {
-        this.livePeer = null
-        this.options.handlers.onSessionChange(false)
+      if (this.livePeers.get(peer.deviceId) === peer) {
+        this.livePeers.delete(peer.deviceId)
+        this.notifyDevicesChange()
       }
     }
 
@@ -420,6 +428,8 @@ export class RemoteGateway {
       }
       const nonce = typeof record.nonce === 'string' ? record.nonce : ''
       const token = typeof record.token === 'string' ? record.token : ''
+      const deviceId = typeof record.deviceId === 'string' ? record.deviceId.trim() : ''
+      const deviceName = typeof record.deviceName === 'string' ? record.deviceName.trim() : ''
       void authenticateHandshake(this.options.peerSecret, nonce, token).then((accepted) => {
         if (this.stopped || !this.peers.has(peer)) return
         if (!accepted) {
@@ -428,17 +438,29 @@ export class RemoteGateway {
           peer.socket.end(encodeCloseFrame())
           return
         }
-        // Single-session enforcement: a second live peer is refused.
-        if (this.livePeer && this.livePeer !== peer) {
-          socketSend(peer, { type: 'remote:error', reason: 'session-live' })
-          peer.closing = true
-          peer.socket.end(encodeCloseFrame())
-          return
+        // Takeover semantics: reconnecting the same device replaces its
+        // previous socket so a re-pairing phone never leaves a ghost device.
+        const identity =
+          deviceId.length > 0
+            ? deviceId
+            : `device-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const previous = this.livePeers.get(identity)
+        if (previous && previous !== peer) {
+          previous.closing = true
+          try {
+            if (!previous.socket.destroyed) previous.socket.destroy()
+          } catch {
+            // best-effort close
+          }
+          this.peers.delete(previous)
         }
+        peer.deviceId = identity
+        peer.deviceName = deviceName.length > 0 ? deviceName : 'Phone'
+        peer.connectedAt = Date.now()
         peer.authenticated = true
-        this.livePeer = peer
+        this.livePeers.set(identity, peer)
         socketSend(peer, { type: 'remote:hello:ok' })
-        this.options.handlers.onSessionChange(true)
+        this.notifyDevicesChange()
       })
       return
     }
@@ -460,22 +482,54 @@ export class RemoteGateway {
     }
   }
 
-  /** Whether a live authenticated phone peer is currently attached. */
+  /** Whether at least one authenticated phone device is currently attached. */
   get hasLivePeer(): boolean {
-    return this.livePeer !== null && !this.livePeer.closing
+    return this.livePeers.size > 0
+  }
+
+  /** List the connected phone devices, newest first. */
+  listDevices(): RemoteDeviceInfo[] {
+    return [...this.livePeers.values()]
+      .filter((peer) => !peer.closing && !peer.socket.destroyed)
+      .sort((a, b) => b.connectedAt - a.connectedAt)
+      .map((peer) => ({
+        id: peer.deviceId,
+        name: peer.deviceName,
+        connectedAt: peer.connectedAt,
+        transport: 'lan' as const
+      }))
+  }
+
+  /** Force-disconnect a connected device by id. */
+  disconnectDevice(deviceId: string): boolean {
+    const peer = this.livePeers.get(deviceId)
+    if (!peer) return false
+    peer.closing = true
+    try {
+      if (!peer.socket.destroyed) peer.socket.destroy()
+    } catch {
+      // best-effort close; the close handler cleans up
+    }
+    return true
+  }
+
+  private notifyDevicesChange(): void {
+    this.options.handlers.onDevicesChange(this.listDevices())
   }
 
   /**
-   * Send a JSON payload to the live peer (if any) inside an encrypted
-   * `remote:data` frame. Used by the RPC bridge to deliver invoke results and
-   * forwarded live events to the phone.
+   * Send a JSON payload to every connected device inside an encrypted
+   * `remote:data` frame. Used by the RPC bridge to deliver forwarded live
+   * events to the phones.
    */
   sendToPeer(payload: unknown): void {
-    const peer = this.livePeer
-    if (!peer || peer.closing || peer.socket.destroyed) return
-    void encryptPayload(this.options.peerSecret ?? '', JSON.stringify(payload)).then((encrypted) =>
-      socketSend(peer, { type: 'remote:data', payload: encrypted })
-    )
+    const secret = this.options.peerSecret ?? ''
+    void encryptPayload(secret, JSON.stringify(payload)).then((encrypted) => {
+      for (const peer of this.livePeers.values()) {
+        if (peer.closing || peer.socket.destroyed) continue
+        socketSend(peer, { type: 'remote:data', payload: encrypted })
+      }
+    })
   }
 
   private handleData(peer: PeerConnection, plaintext: string): void {
@@ -505,10 +559,19 @@ export class RemoteGateway {
     const args = Array.isArray(record.args) ? record.args : []
     const outcome = await this.options.handlers.onRpc(channel, args)
     if (this.stopped || !this.peers.has(peer)) return
-    this.sendToPeer(
+    this.sendToPeerOnly(
+      peer,
       outcome.ok
         ? { rpc: 'result', id, result: outcome.result }
         : { rpc: 'error', id, message: outcome.message }
+    )
+  }
+
+  /** Send a JSON payload to a single peer (RPC results must not broadcast). */
+  private sendToPeerOnly(peer: PeerConnection, payload: unknown): void {
+    if (peer.closing || peer.socket.destroyed) return
+    void encryptPayload(this.options.peerSecret ?? '', JSON.stringify(payload)).then((encrypted) =>
+      socketSend(peer, { type: 'remote:data', payload: encrypted })
     )
   }
 }
