@@ -549,7 +549,27 @@
    * Unlike `contextUsage` (which only reflects the current provider), this scans
    * every assistant message so each harness's windows and thread cost are shown
    * independently in the battery popover.
+   *
+   * The per-harness billing (whole-thread cumulative cost) is sourced from the
+   * dedicated `harness_usage` table, while live quota windows and the context
+   * meter stay derived from the in-memory message stream.
    */
+  let storedHarnessUsage = $state<AgentHarnessUsage[]>([])
+  $effect(() => {
+    void invoke('thread:harnessUsage', thread.projectId, thread.id)
+      .then((rows) => {
+        storedHarnessUsage = rows.map((row) => ({
+          harnessId: row.harnessId,
+          providerId: row.providerId,
+          ...(row.modelId ? { modelId: row.modelId } : {}),
+          costUsd: row.costUsd,
+          rateLimits: [],
+          tokens: row.tokens
+        }))
+      })
+      .catch(() => {})
+  })
+
   const harnessUsage = $derived.by((): AgentHarnessUsage[] => {
     const byHarness: Record<string, AgentHarnessUsage> = {}
     for (const message of messages) {
@@ -576,6 +596,18 @@
         costUsd: message.cost ?? stepCost,
         rateLimits: message.rateLimits ?? [],
         ...(message.credits ? { credits: message.credits } : {})
+      }
+    }
+    // Prefer the whole-thread cumulative cost from the harness_usage table so
+    // the bubble reflects real billed usage, not just what's in the current view.
+    for (const stored of storedHarnessUsage) {
+      const key = `${stored.harnessId}:${stored.providerId}`
+      const entry = byHarness[key]
+      if (entry) {
+        entry.costUsd = stored.costUsd
+        if (stored.modelId) entry.modelId = stored.modelId
+      } else {
+        byHarness[key] = { ...stored, rateLimits: [] }
       }
     }
     return Object.values(byHarness).filter(

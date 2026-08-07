@@ -300,11 +300,9 @@ export class ThreadRepo {
     const placeholders = threadIds.map(() => '?').join(',')
     const rows = this.db.all<{ thread_id: string; harness_id: string }>(
       `SELECT thread_id, harness_id
-       FROM agent_messages
+       FROM harness_usage
        WHERE thread_id IN (${placeholders})
-         AND harness_id IS NOT NULL AND harness_id != ''
-       GROUP BY thread_id, harness_id
-       ORDER BY MAX(created_at) DESC`,
+       ORDER BY last_used_at DESC`,
       ...threadIds
     )
     for (const row of rows) {

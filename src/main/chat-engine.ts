@@ -1461,6 +1461,12 @@ export class ChatEngine {
     return structuredClone(pending.request)
   }
 
+  /** Backfill harness_usage analytics for pre-existing threads on first launch
+   *  of this feature. Runs once after the database is initialised. */
+  backfillHarnessUsage(): void {
+    this.threadManager.reconcileAllHarnessUsage()
+  }
+
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
     if (this.idleReaperTimer) {

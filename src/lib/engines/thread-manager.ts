@@ -6,6 +6,7 @@ import { featureSlugFromTitle } from '../project-artifacts'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { AgentMessageRepo } from '../../main/database/repositories/agent-message-repo'
+import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import type { Database } from '../../main/database/database'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -25,6 +26,7 @@ export class ThreadManager {
   private threadRepo: ThreadRepo
   private projectRepo: ProjectRepo
   private agentMessageRepo: AgentMessageRepo
+  private harnessUsageRepo: HarnessUsageRepo
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -40,6 +42,27 @@ export class ThreadManager {
     this.threadRepo = new ThreadRepo(db)
     this.projectRepo = new ProjectRepo(db)
     this.agentMessageRepo = new AgentMessageRepo(db)
+    this.harnessUsageRepo = new HarnessUsageRepo(db)
+  }
+
+  /** Distinct harness ids used across a thread's session, newest first. */
+  usedHarnessIds(threadId: string): string[] {
+    return this.harnessUsageRepo.harnessIdsFor(threadId)
+  }
+
+  /** Cumulative per-harness usage rows for a thread. */
+  harnessUsageFor(projectId: string, threadId: string): import('../types').HarnessUsage[] {
+    return this.harnessUsageRepo.listByThread(projectId, threadId)
+  }
+
+  /** Rebuild a thread's harness usage rows from its persisted messages. */
+  reconcileHarnessUsage(projectId: string, threadId: string): void {
+    this.harnessUsageRepo.reconcile(projectId, threadId)
+  }
+
+  /** Rebuild harness usage for every thread that has assistant messages. */
+  reconcileAllHarnessUsage(): void {
+    this.harnessUsageRepo.reconcileAll()
   }
 
   private getOwnedThread(projectId: string, threadId: string): Thread | null {
@@ -262,6 +285,7 @@ export class ThreadManager {
     await this.onDelete?.(thread)
     this.db.transaction(() => {
       this.agentMessageRepo.deleteByThread(threadId)
+      this.harnessUsageRepo.deleteByThread(threadId)
       this.threadRepo.delete(threadId)
     })
   }
@@ -439,6 +463,7 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId)
       }
+      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 
@@ -459,6 +484,7 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId)
       }
+      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 
@@ -498,6 +524,7 @@ export class ThreadManager {
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId, sessionId)
       }
+      this.harnessUsageRepo.reconcile(projectId, threadId)
     })
   }
 
