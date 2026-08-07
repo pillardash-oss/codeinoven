@@ -1128,6 +1128,8 @@
                         expanded={expanded[fileDiffKey(change)] ?? false}
                         onToggleDiff={() => void toggleDiff(change)}
                         onToggleStage={() => void toggleStage(change)}
+                        onStash={(path) => requestStashFor([path])}
+                        onOpenInEditor={(path) => void openInEditor(path)}
                       />
                     {/each}
                   {/each}
