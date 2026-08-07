@@ -1166,17 +1166,21 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   /**
-   * Fetch the account's current plan rate-limit windows on demand via the
-   * documented `get_usage` control request. This runs WITHOUT a model turn —
-   * `total_api_duration_ms` stays 0 — so the battery can show live quota for
-   * old threads whose turns predate quota capture. Returns null when the
-   * session has no plan limits (API key, Bedrock, Vertex) or on any failure.
+   * Fetch the account's current plan rate-limit windows and live context-window
+   * usage on demand via the `get_usage` + `get_context_usage` control requests.
+   * These run WITHOUT a model turn (`total_api_duration_ms` stays 0), so the
+   * battery can show live quota and the context percent for old threads whose
+   * turns predate capture. Returns null when the session has no plan limits
+   * (API key, Bedrock, Vertex) or on any failure.
    */
-  async readAccountUsage(
-    projectPath: string
-  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
+  async readAccountUsage(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    contextWindow?: number
+    contextUsed?: number
+  } | null> {
     try {
-      const usage = await new Promise<Record<string, unknown> | null>((resolve) => {
+      const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
         const child = spawn(
           'claude',
           [
@@ -1203,6 +1207,23 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           if (!child.killed) child.kill()
           resolve(value)
         }
+        let rateLimitsPayload: Record<string, unknown> | null = null
+        let rateLimitsResponded = false
+        let contextPayload: Record<string, unknown> | null = null
+        let contextResponded = false
+        const attemptFinish = (): void => {
+          if (settled) return
+          // If the session has no plan rate limits, stop waiting for context and
+          // report nothing. Otherwise wait for both responses so quota and
+          // context are reported together; the timeout covers a missing response.
+          if (rateLimitsResponded && rateLimitsPayload === null) {
+            finish({ rateLimits: null, context: contextPayload })
+            return
+          }
+          if (rateLimitsResponded && contextResponded) {
+            finish({ rateLimits: rateLimitsPayload, context: contextPayload })
+          }
+        }
         const consume = (line: string): void => {
           if (!line.trim()) return
           const payload = record(JSON.parse(line) as unknown)
@@ -1210,12 +1231,17 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           if (payload['type'] !== 'control_response') return
           const response = record(payload['response'])
           const inner = record(response?.['response'])
-          const rateLimits = record(inner?.['rate_limits'])
-          if (inner?.['rate_limits_available'] !== true || !rateLimits) {
-            finish(null)
-            return
+          const requestId = string(response?.['request_id'])
+          if (requestId === 'usage') {
+            rateLimitsResponded = true
+            const rateLimits = record(inner?.['rate_limits'])
+            rateLimitsPayload =
+              inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+          } else if (requestId === 'context') {
+            contextResponded = true
+            contextPayload = inner
           }
-          finish(inner)
+          attemptFinish()
         }
         child.stdout?.on('data', (chunk: Buffer) => {
           buffer += chunk.toString()
@@ -1233,7 +1259,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         child.on('exit', () => {
           if (!settled) finish(null)
         })
-        // Send the usage control request immediately; `--print` waits on stdin.
+        // Send both control requests immediately; `--print` waits on stdin.
         child.stdin?.write(
           `${JSON.stringify({
             type: 'control_request',
@@ -1241,11 +1267,28 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             request: { subtype: 'get_usage' }
           })}\n`
         )
+        child.stdin?.write(
+          `${JSON.stringify({
+            type: 'control_request',
+            request_id: 'context',
+            request: { subtype: 'get_context_usage' }
+          })}\n`
+        )
       })
-      if (!usage) return null
-      const rateLimits = rateLimitWindows(usage['rate_limits'])
-      if (rateLimits.length === 0) return null
-      return { rateLimits }
+      if (!telemetry) return null
+      const usage = record(telemetry['rateLimits'])
+      const context = record(telemetry['context'])
+      const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
+      if (rateLimits.length === 0 && !context) return null
+      const contextWindow =
+        context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
+      const contextUsed =
+        context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
+      return {
+        rateLimits,
+        ...(contextWindow === undefined ? {} : { contextWindow }),
+        ...(contextUsed === undefined ? {} : { contextUsed })
+      }
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
       return null

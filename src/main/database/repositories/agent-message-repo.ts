@@ -63,6 +63,8 @@ interface AgentMessageRow {
   tokens_json: string | null
   rate_limits_json: string | null
   usage_credits_json: string | null
+  context_window: number | null
+  context_used: number | null
   error: string | null
   structured_output: string | null
 }
@@ -95,6 +97,8 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     tokens: row.tokens_json ? JSON.parse(row.tokens_json) : undefined,
     rateLimits: row.rate_limits_json ? JSON.parse(row.rate_limits_json) : undefined,
     credits: row.usage_credits_json ? JSON.parse(row.usage_credits_json) : undefined,
+    contextWindow: row.context_window ?? undefined,
+    contextUsed: row.context_used ?? undefined,
     error: row.error ?? undefined,
     structuredOutput: row.structured_output ? JSON.parse(row.structured_output) : undefined
   }
@@ -110,7 +114,8 @@ export class AgentMessageRepo {
         model_id, provider_id, harness_id,
         references_json, project_references_json,
         created_at, completed_at, cost,
-        tokens_json, rate_limits_json, usage_credits_json, error, structured_output
+        tokens_json, rate_limits_json, usage_credits_json,
+        context_window, context_used, error, structured_output
        FROM agent_messages WHERE id = ?`,
       message.id
     )
@@ -133,6 +138,8 @@ export class AgentMessageRepo {
     const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
     const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
     const creditsJson = message.credits ? JSON.stringify(message.credits) : null
+    const contextWindow = message.contextWindow ?? null
+    const contextUsed = message.contextUsed ?? null
     const structuredOutputJson =
       message.structuredOutput !== undefined ? JSON.stringify(message.structuredOutput) : null
 
@@ -156,6 +163,8 @@ export class AgentMessageRepo {
       (existing.tokens_json ?? null) === tokensJson &&
       (existing.rate_limits_json ?? null) === rateLimitsJson &&
       (existing.usage_credits_json ?? null) === creditsJson &&
+      (existing.context_window ?? null) === contextWindow &&
+      (existing.context_used ?? null) === contextUsed &&
       (existing.error ?? null) === (message.error ?? null) &&
       (existing.structured_output ?? null) === structuredOutputJson
     ) {
@@ -169,8 +178,9 @@ export class AgentMessageRepo {
         model_id, provider_id, harness_id,
         references_json, project_references_json,
         created_at, completed_at, cost,
-        tokens_json, rate_limits_json, usage_credits_json, error, structured_output
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        tokens_json, rate_limits_json, usage_credits_json,
+        context_window, context_used, error, structured_output
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         role = excluded.role,
         origin = excluded.origin,
@@ -190,6 +200,8 @@ export class AgentMessageRepo {
         tokens_json = excluded.tokens_json,
         rate_limits_json = excluded.rate_limits_json,
         usage_credits_json = excluded.usage_credits_json,
+        context_window = excluded.context_window,
+        context_used = excluded.context_used,
         error = excluded.error,
         structured_output = excluded.structured_output`,
       message.id,
@@ -213,6 +225,8 @@ export class AgentMessageRepo {
       tokensJson,
       rateLimitsJson,
       creditsJson,
+      contextWindow,
+      contextUsed,
       message.error ?? null,
       structuredOutputJson
     )

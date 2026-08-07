@@ -332,6 +332,19 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
         })}\n`
       )
     )
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: 'context',
+            response: { maxTokens: 967000, totalTokens: 21401, model: 'claude-sonnet-5' }
+          }
+        })}\n`
+      )
+    )
     const telemetry = await promise
     expect(telemetry?.rateLimits).toHaveLength(2)
     const fiveHour = telemetry?.rateLimits.find((limit) => limit.id === 'five_hour')
@@ -340,6 +353,9 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('extra_usage')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('limits')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('spend')
+    // The get_context_usage control supplies the live context window.
+    expect(telemetry?.contextWindow).toBe(967000)
+    expect(telemetry?.contextUsed).toBe(21401)
   })
 
   it('returns null when plan rate limits are unavailable', async () => {

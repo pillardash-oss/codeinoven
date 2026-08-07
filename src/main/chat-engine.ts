@@ -1716,7 +1716,14 @@ export class ChatEngine {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
           if (!driver.readAccountUsage) return null
           const telemetry = await driver.readAccountUsage(projectPath)
-          if (!telemetry || telemetry.rateLimits.length === 0) return null
+          if (
+            !telemetry ||
+            (telemetry.rateLimits.length === 0 &&
+              telemetry.contextWindow === undefined &&
+              telemetry.contextUsed === undefined)
+          ) {
+            return null
+          }
           const providerId = providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? ''
           return { harnessId, providerId, ...telemetry }
         } catch (error) {

@@ -1220,6 +1220,10 @@ export interface AgentAccountUsage {
   providerId: string
   rateLimits: AgentRateLimitWindow[]
   credits?: AgentUsageCredits
+  /** Effective model context window (tokens) for the active session, when known. */
+  contextWindow?: number
+  /** Tokens currently occupying the model context, when known. */
+  contextUsed?: number
 }
 
 /** Last-known usage snapshot stored with a thread so the meter restores
