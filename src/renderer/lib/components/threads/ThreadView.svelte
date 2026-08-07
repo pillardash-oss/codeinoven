@@ -1421,10 +1421,15 @@
   })
 
   // After the initial restore, auto-scroll only when new content arrives and
-  // the user hasn't scrolled away from the bottom.
+  // the user hasn't scrolled away from the bottom. Messages and the file-changes
+  // cards both arrive asynchronously after mount — cards mount only once the
+  // checkpoint list resolves, which can be after the initial scroll, so without
+  // this the latest changes card would sit just above the fold until the user
+  // scrolled.
   $effect(() => {
     if (!scrollRestored) return
     void messages.length
+    void checkpoints.length
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
       scrollEl.scrollTop = scrollEl.scrollHeight
@@ -2568,13 +2573,15 @@
     )
     if (exact) return exact
 
-    const legacy = completed.filter((checkpoint) => !checkpoint.sourceMessageId)
-    if (legacy.length === 0) return null
-
+    // The source user message may not be paged in yet (it can live outside the
+    // initially loaded history window), so an id match alone can miss a turn
+    // until the user scrolls. Fall back to matching the checkpoint to this turn
+    // by time so the changes card mounts as soon as the checkpoint list resolves,
+    // regardless of which messages have been loaded.
     const turnStart = sourceMessage?.createdAt ?? assistant.createdAt
     const nextUser = messages.slice(messageIndex + 1).find((message) => message.role === 'user')
     const turnEnd = nextUser?.createdAt ?? Number.POSITIVE_INFINITY
-    const withinTurn = legacy.filter(
+    const withinTurn = completed.filter(
       (checkpoint) => checkpoint.createdAt >= turnStart - 5_000 && checkpoint.createdAt < turnEnd
     )
     const targetTime = assistant.completedAt ?? assistant.createdAt
