@@ -731,15 +731,15 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 max-w-[10rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 max-w-[3rem] shrink items-center gap-1 rounded border border-border bg-elevated px-1 pb-1 pt-0.5 text-[9px] text-muted"
             title={scopeBucket.name}
-            style="border-bottom-color: {scopeColor};"
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
             {#if scopeIconUrl}
               <img
                 src={scopeIconUrl}
                 alt=""
-                class="h-2 w-2 shrink-0 object-contain opacity-60"
+                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
                 draggable="false"
               />
             {/if}
