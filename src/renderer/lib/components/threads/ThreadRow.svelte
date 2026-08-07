@@ -731,7 +731,7 @@
 
         {#if scopeBucket}
           <span
-            class="relative flex min-w-0 max-w-[3rem] shrink items-center gap-1 rounded border border-border bg-elevated px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
           >
