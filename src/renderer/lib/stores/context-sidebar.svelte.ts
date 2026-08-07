@@ -253,6 +253,23 @@ class ContextSidebarState {
     if (!context) return
     if (placement === 'bottom') {
       context.terminalDockOpen = true
+      const sidebarTabs = context.tabs.filter((tab) => tab.kind !== 'terminal')
+      if (sidebarTabs.length === 0) {
+        // Nothing else lives in the sidebar — close it; only the dock stays.
+        context.visible = false
+      } else {
+        // Bring the remaining (last active non-terminal) tab into focus.
+        const focusId =
+          context.sidebarActiveTabId &&
+          sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
+            ? context.sidebarActiveTabId
+            : (sidebarTabs.at(-1)?.id ?? null)
+        if (focusId) {
+          context.activeTabId = focusId
+          context.sidebarActiveTabId = focusId
+        }
+        context.visible = true
+      }
     } else {
       // Terminals rejoin the sidebar — reveal it so the shell stays visible.
       context.visible = true
