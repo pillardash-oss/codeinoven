@@ -22,7 +22,9 @@
     Network,
     HardDrive,
     Zap,
-    ShieldAlert
+    ShieldAlert,
+    Eye,
+    Check
   } from '@lucide/svelte'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -71,7 +73,8 @@
     AgentContextUsage,
     AgentHarnessUsage,
     PromptReference,
-    AssignmentTask
+    AssignmentTask,
+    AgentModelSelection
   } from '$shared/types'
 
   interface Props {
@@ -172,6 +175,16 @@
     onCompact?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
+    /** Global default vision model used to describe images for text-only models. */
+    imageDescriptorDefault?: AgentModelSelection
+    /** When true, the vision-model picker card is skipped on image sends. */
+    imageDescriptorAskAgain?: boolean
+    /** Persists a new global image-descriptor default (Agents settings). */
+    onImageDescriptorDefaultChange?: (selection: AgentModelSelection) => void
+    /** Persists the "don't ask again" flag for image-descriptor picks. */
+    onImageDescriptorAskAgainChange?: (value: boolean) => void
+    /** Enables the image-to-text-only-model gate card. Off in side-chats. */
+    enableImageDescriptorGate?: boolean
   }
 
   let {
@@ -222,7 +235,12 @@
     canCompact = false,
     compacting = false,
     onCompact,
-    historyMessages = []
+    historyMessages = [],
+    imageDescriptorDefault,
+    imageDescriptorAskAgain = false,
+    onImageDescriptorDefaultChange,
+    onImageDescriptorAskAgainChange,
+    enableImageDescriptorGate = true
   }: Props = $props()
 
   /** Resolved settings — uses the prop if provided, else the global last-used.
@@ -300,6 +318,10 @@
   let previewUrls = $state<Record<string, string>>({})
   /** Decoded text content for markdown/plain-text previews, keyed by url. */
   let previewTexts = $state<Record<string, string>>({})
+  /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
+  let imageDescriptorGateOpen = $state(false)
+  let gateVisionSelection = $state<AgentModelSelection | null>(null)
+  let gateDonotAsk = $state(false)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
@@ -438,6 +460,54 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
+
+  /** True when the catalog reports this model cannot see images. */
+  let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
+  let hasImageAttachments = $derived(attachments.some(isImageAttachment))
+
+  function isImageAttachment(file: PromptAttachment): boolean {
+    if (file.mime.startsWith('image/')) return true
+    return /\.(png|jpe?g|gif|webp|bmp|avif|svg|ico)$/iu.test(file.filename ?? '')
+  }
+
+  /**
+   * Whether sending the draft should be intercepted by the vision-model gate:
+   * an image is attached, the active model cannot see it, and no image-descriptor
+   * model is set for this thread (or remembered globally).
+   */
+  function shouldInterceptImageGate(): boolean {
+    return (
+      enableImageDescriptorGate &&
+      hasImageAttachments &&
+      selectedModelLacksVision &&
+      resolved.imageDescriptor === undefined &&
+      !imageDescriptorAskAgain
+    )
+  }
+
+  function openImageDescriptorGate(): void {
+    gateVisionSelection = imageDescriptorDefault ?? null
+    gateDonotAsk = false
+    imageDescriptorGateOpen = true
+  }
+
+  function cancelImageDescriptorGate(): void {
+    imageDescriptorGateOpen = false
+  }
+
+  /** Persist the chosen vision model (thread + optional global default) and send. */
+  function confirmImageDescriptorGate(direct?: boolean): void {
+    const selection = gateVisionSelection
+    if (!selection) return
+    if (onSettingsChange) onSettingsChange({ ...resolved, imageDescriptor: selection })
+    else threadSettingsStore.commit({ ...resolved, imageDescriptor: selection })
+    if (gateDonotAsk) {
+      onImageDescriptorDefaultChange?.(selection)
+      onImageDescriptorAskAgainChange?.(true)
+    }
+    imageDescriptorGateOpen = false
+    performSend(direct)
+  }
 
   /**
    * Thinking presets declared by the selected model. While the catalog is cold
@@ -612,6 +682,15 @@
     }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
+    if (shouldInterceptImageGate()) {
+      openImageDescriptorGate()
+      return
+    }
+    performSend(direct)
+  }
+
+  function performSend(direct?: boolean): void {
+    const msg = value.trim()
     value = ''
     onValueChange?.('')
     const files = [...attachments]
@@ -1230,6 +1309,80 @@
       <div class="flex flex-col items-center gap-2 text-primary">
         <Upload size={32} />
         <span class="text-base font-medium">Drop files to attach</span>
+      </div>
+    </div>
+  {/if}
+
+  {#if imageDescriptorGateOpen}
+    <div
+      class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
+      role="dialog"
+      aria-label="Choose a vision model to describe this image"
+    >
+      <div class="flex items-start gap-2.5">
+        <div class="mt-0.5 shrink-0 rounded-lg bg-primary/10 p-1.5 text-primary">
+          <Eye size={15} />
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-foreground">
+            This model can't see images
+          </p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            You're sending an image to a model without vision capability. Pick a vision model to
+            describe the image, so {resolved.modelId || 'this model'} can work with it.
+          </p>
+        </div>
+      </div>
+      <div class="mt-3">
+        <ModelPicker
+          {providers}
+          projectId={projectId}
+          harnessId={gateVisionSelection?.harnessId ?? providers[0]?.harnessId ?? resolved.harnessId}
+          providerId={gateVisionSelection?.providerId ?? ''}
+          modelId={gateVisionSelection?.modelId ?? ''}
+          favoriteModels={favoriteModels}
+          recentModels={recentModels}
+          visionOnly
+          side="top"
+          variant="field"
+          label="Choose a vision model"
+          onSelect={(providerId, modelId, harnessId) => {
+            gateVisionSelection = { harnessId, providerId, modelId }
+          }}
+          onToggleFavorite={onToggleFavorite}
+          onReorderFavorite={onReorderFavorite}
+        />
+        {#if !gateVisionSelection}
+          <p class="mt-1.5 text-[11px] text-dimmed">
+            No vision model selected — continue will be disabled until you pick one.
+          </p>
+        {/if}
+      </div>
+      <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <Switch
+          bind:checked={gateDonotAsk}
+          label="Don't ask again"
+          aria-label="Don't ask again for this vision model"
+        />
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            title="Cancel and keep your message and attachment"
+            onclick={cancelImageDescriptorGate}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            title="Send the image and describe it with the selected vision model"
+            disabled={!gateVisionSelection}
+            onclick={() => confirmImageDescriptorGate()}
+          >
+            <Check size={13} /> Continue
+          </button>
+        </div>
       </div>
     </div>
   {/if}
