@@ -133,7 +133,17 @@ interface ThreadSidebarContext {
   threadId: string
   tabs: ContextSidebarTab[]
   activeTabId: string | null
+  /** Last active non-terminal tab — kept so the sidebar keeps a focused tab
+   * while a terminal (docked at the bottom) holds the global active tab. */
+  sidebarActiveTabId: string | null
+  /** Last active terminal tab — kept so the bottom dock keeps a focused tab
+   * while a sidebar tab holds the global active tab. */
+  terminalActiveTabId: string | null
   visible: boolean
+  /** Whether the bottom terminal dock is open. Only meaningful while
+   * `terminalPlacement === 'bottom'`; lets the dock hide independently of the
+   * sidebar (e.g. from the header terminal toggle). */
+  terminalDockOpen: boolean
   terminalSequence: number
 }
 
@@ -186,6 +196,97 @@ class ContextSidebarState {
 
   get activeTab(): ContextSidebarTab | null {
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
+  }
+
+  /**
+   * Tabs shown in the right sidebar. When the terminal is docked at the
+   * bottom, terminal tabs live in the dock and are excluded here; otherwise
+   * every tab (including terminals) renders in the sidebar.
+   */
+  get sidebarTabs(): ContextSidebarTab[] {
+    const tabs = this.activeContext?.tabs ?? EMPTY_TABS
+    return this.terminalPlacement === 'bottom'
+      ? tabs.filter((tab) => tab.kind !== 'terminal')
+      : tabs
+  }
+
+  /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
+  get terminalTabs(): TerminalContextTab[] {
+    if (this.terminalPlacement !== 'bottom') return EMPTY_TABS as TerminalContextTab[]
+    return (this.activeContext?.tabs ?? EMPTY_TABS).filter(
+      (tab): tab is TerminalContextTab => tab.kind === 'terminal'
+    )
+  }
+
+  /** Whether the right sidebar should render at all. */
+  get sidebarVisible(): boolean {
+    if (!this.visible) return false
+    if (this.terminalPlacement === 'right') return true
+    return this.sidebarTabs.length > 0
+  }
+
+  /** Whether the bottom terminal dock should render at all. */
+  get terminalDockVisible(): boolean {
+    return (
+      this.visible &&
+      this.terminalPlacement === 'bottom' &&
+      this.activeContext?.terminalDockOpen !== false &&
+      this.terminalTabs.length > 0
+    )
+  }
+
+  /** Toggle the bottom terminal dock without touching the sidebar. */
+  toggleTerminalDock(): void {
+    const context = this.activeContext
+    if (!context || this.terminalPlacement !== 'bottom') return
+    context.terminalDockOpen = !context.terminalDockOpen
+  }
+
+  /** Move terminals between the sidebar and the bottom dock. */
+  setTerminalPlacement(placement: TerminalPlacement): void {
+    this.terminalPlacement = placement
+    if (placement === 'bottom') {
+      const context = this.activeContext
+      if (context) context.terminalDockOpen = true
+    }
+  }
+
+  /** Active tab id for the right sidebar (ignores terminal tabs). */
+  get sidebarActiveTabId(): string | null {
+    if (this.terminalPlacement === 'right') return this.activeTabId
+    const context = this.activeContext
+    if (!context) return null
+    if (
+      context.sidebarActiveTabId &&
+      this.sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
+    ) {
+      return context.sidebarActiveTabId
+    }
+    return this.sidebarTabs.at(-1)?.id ?? null
+  }
+
+  /** Active tab id for the bottom terminal dock. */
+  get terminalActiveTabId(): string | null {
+    if (this.terminalPlacement !== 'bottom') return null
+    const context = this.activeContext
+    if (!context) return null
+    if (
+      context.terminalActiveTabId &&
+      this.terminalTabs.some((tab) => tab.id === context.terminalActiveTabId)
+    ) {
+      return context.terminalActiveTabId
+    }
+    return this.terminalTabs.at(-1)?.id ?? null
+  }
+
+  /** The tab the sidebar content should render for. */
+  get sidebarActiveTab(): ContextSidebarTab | null {
+    return this.sidebarTabs.find((tab) => tab.id === this.sidebarActiveTabId) ?? null
+  }
+
+  /** The terminal the dock content should render for. */
+  get terminalActiveTab(): TerminalContextTab | null {
+    return this.terminalTabs.find((tab) => tab.id === this.terminalActiveTabId) ?? null
   }
 
   threadIdForProject(projectId: string): string | null {
@@ -461,7 +562,10 @@ class ContextSidebarState {
         threadId: '',
         tabs: [],
         activeTabId: null,
+        sidebarActiveTabId: null,
+        terminalActiveTabId: null,
         visible: false,
+        terminalDockOpen: false,
         terminalSequence: 0
       }
       this.contexts[globalKey] = global
@@ -746,10 +850,20 @@ class ContextSidebarState {
     if (tab.kind === 'temporary-chat') {
       this.clearTemporaryChatExpiry(tab.temporaryChatId)
     }
+    const closedKind = tab.kind
     context.tabs = context.tabs.filter((tab) => tab.id !== id)
     if (context.activeTabId === id) {
       const replacement = context.tabs[Math.min(index, context.tabs.length - 1)]
       context.activeTabId = replacement?.id ?? null
+    }
+    if (closedKind === 'terminal') {
+      if (context.terminalActiveTabId === id) {
+        const replacement = context.tabs.filter((t) => t.kind === 'terminal').at(-1)
+        context.terminalActiveTabId = replacement?.id ?? null
+      }
+    } else if (context.sidebarActiveTabId === id) {
+      const replacement = context.tabs.filter((t) => t.kind !== 'terminal').at(-1)
+      context.sidebarActiveTabId = replacement?.id ?? null
     }
     if (context.tabs.length === 0) {
       context.visible = false
@@ -780,10 +894,6 @@ class ContextSidebarState {
     )
   }
 
-  setTerminalPlacement(placement: TerminalPlacement): void {
-    this.terminalPlacement = placement
-  }
-
   private get activeContext(): ThreadSidebarContext | null {
     return this.activeKey ? (this.contexts[this.activeKey] ?? null) : null
   }
@@ -809,7 +919,10 @@ class ContextSidebarState {
       threadId,
       tabs: [],
       activeTabId: null,
+      sidebarActiveTabId: null,
+      terminalActiveTabId: null,
       visible: false,
+      terminalDockOpen: false,
       terminalSequence: 0
     }
     this.contexts[key] = context
@@ -819,6 +932,7 @@ class ContextSidebarState {
   private focusInContext(context: ThreadSidebarContext, id: string): void {
     if (!context.tabs.some((tab) => tab.id === id)) return
     context.activeTabId = id
+    this.trackRegionActiveTab(context, id)
     context.visible = true
   }
 
@@ -831,7 +945,20 @@ class ContextSidebarState {
       context.tabs = [...context.tabs, tab]
     }
     context.activeTabId = tab.id
+    this.trackRegionActiveTab(context, tab.id)
     context.visible = true
+  }
+
+  /** Remember which area (sidebar vs bottom dock) owns the focused tab. */
+  private trackRegionActiveTab(context: ThreadSidebarContext, id: string): void {
+    const tab = context.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'terminal') {
+      context.terminalActiveTabId = id
+      if (this.terminalPlacement === 'bottom') context.terminalDockOpen = true
+    } else {
+      context.sidebarActiveTabId = id
+    }
   }
 
   private scheduleTemporaryChatExpiry(tab: TemporaryChatContextTab): void {

@@ -320,7 +320,7 @@
     const thread = workspaceState.selectedThread
     if (!thread) return
     showHistory = false
-    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'memory') {
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'memory') {
       contextSidebarState.hide()
       return
     }
@@ -372,7 +372,13 @@
       tab.projectId === thread.projectId &&
       tab.threadId === thread.id
     ) {
-      contextSidebarState.hide()
+      // When the terminal lives in its own bottom dock, toggle just the dock
+      // so an open sidebar (files, git, …) stays put.
+      if (contextSidebarState.terminalPlacement === 'bottom') {
+        contextSidebarState.toggleTerminalDock()
+      } else {
+        contextSidebarState.hide()
+      }
     } else {
       contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
     }
@@ -397,7 +403,7 @@
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
     if (!thread) return
-    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'git') {
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git') {
       contextSidebarState.hide()
     } else {
       contextSidebarState.openGit(thread.projectId, thread.id)

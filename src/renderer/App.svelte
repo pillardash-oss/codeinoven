@@ -470,7 +470,10 @@
       case 'app:memory': {
         const thread = workspaceState.selectedThread
         if (!thread) return
-        if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'memory') {
+        if (
+          contextSidebarState.sidebarVisible &&
+          contextSidebarState.sidebarActiveTab?.kind === 'memory'
+        ) {
           contextSidebarState.hide()
         } else {
           contextSidebarState.openMemory(thread.projectId, thread.id)
@@ -480,7 +483,10 @@
       case 'app:sources': {
         const thread = workspaceState.selectedThread
         if (!thread) return
-        if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'sources') {
+        if (
+          contextSidebarState.sidebarVisible &&
+          contextSidebarState.sidebarActiveTab?.kind === 'sources'
+        ) {
           contextSidebarState.hide()
         } else {
           contextSidebarState.openSources(thread.projectId, thread.id)
@@ -981,7 +987,7 @@
     <HarnessRunModal />
   {/if}
 
-  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.activeTab?.kind === 'notifications' && contextSidebarState.visible}
+  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
     >

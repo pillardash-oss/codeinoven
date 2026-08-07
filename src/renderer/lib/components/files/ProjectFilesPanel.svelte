@@ -43,7 +43,9 @@
   let { projectId, projectName, projectIconUrl = null }: Props = $props()
 
   let contextTab = $derived(
-    contextSidebarState.activeTab?.kind === 'files' ? contextSidebarState.activeTab : null
+    contextSidebarState.sidebarActiveTab?.kind === 'files'
+      ? contextSidebarState.sidebarActiveTab
+      : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
   let projectState = $derived(projectFilesWorkspace.getState(projectId))
