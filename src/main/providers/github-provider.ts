@@ -1,8 +1,21 @@
-import type { GitRepositoryIdentity, PrDraft, PullRequestReference } from '../../lib/types'
 import type {
+  GitRepositoryIdentity,
+  PrDraft,
+  PullRequestComment,
+  PullRequestCommit,
+  PullRequestDetail,
+  PullRequestPage,
+  PullRequestReference,
+  PullRequestSummary
+} from '../../lib/types'
+import type {
+  CreatePrCommentInput,
+  CreatePrReviewInput,
   GitProvider,
+  ListPullRequestPageInput,
   ListPullRequestsInput,
-  MergePullRequestInput
+  MergePullRequestInput,
+  PullRequestTarget
 } from '../git-provider.interface'
 import { Logger } from '../logger'
 
@@ -82,6 +95,99 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
+  async listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage> {
+    const state = input.state ?? 'open'
+    // Ask for one extra item so `hasMore` needs no extra round trip.
+    const perPage = Math.min(Math.max(input.perPage, 1), 50)
+    const query = `?state=${encodeURIComponent(state)}&per_page=${perPage + 1}&page=${input.page}&sort=updated&direction=desc`
+    const response = await this.request(`${this.repoPath(input)}/pulls${query}`, { method: 'GET' })
+    const items = Array.isArray(response) ? response : []
+    const summaries = items.flatMap((item) => {
+      const summary = this.toSummary(item, input.owner, input.repo)
+      return summary ? [summary] : []
+    })
+    return {
+      items: summaries.slice(0, perPage),
+      page: input.page,
+      hasMore: summaries.length > perPage
+    }
+  }
+
+  async getPullRequest(input: PullRequestTarget): Promise<PullRequestDetail> {
+    const response = await this.request(`${this.pullPath(input)}`, { method: 'GET' })
+    const record = Array.isArray(response) ? {} : response
+    const summary = this.toSummary(record, input.owner, input.repo)
+    if (!summary) throw new Error(`Pull request #${input.pullNumber} could not be read`)
+    const mergeableRaw = record['mergeable']
+    return {
+      ...summary,
+      body: this.readString(record, 'body') ?? '',
+      mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null,
+      merged: record['merged'] === true,
+      additions: this.readNumber(record, 'additions'),
+      deletions: this.readNumber(record, 'deletions'),
+      changedFiles: this.readNumber(record, 'changed_files'),
+      commitCount: this.readNumber(record, 'commits')
+    }
+  }
+
+  async listPullRequestCommits(input: PullRequestTarget): Promise<PullRequestCommit[]> {
+    const response = await this.request(`${this.pullPath(input)}/commits?per_page=100`, {
+      method: 'GET'
+    })
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestCommit[] => {
+      if (typeof item !== 'object' || item === null) return []
+      const record = item as Record<string, unknown>
+      const sha = this.readString(record, 'sha')
+      if (!sha) return []
+      const commit = this.readRecord(record, 'commit')
+      const author = commit ? this.readRecord(commit, 'author') : null
+      return [
+        {
+          sha,
+          shortSha: sha.slice(0, 7),
+          message: (commit ? (this.readString(commit, 'message') ?? '') : '').split('\n')[0] ?? '',
+          authorName: author ? (this.readString(author, 'name') ?? 'unknown') : 'unknown',
+          date: author ? (this.readString(author, 'date') ?? '') : ''
+        }
+      ]
+    })
+  }
+
+  async listPullRequestComments(input: PullRequestTarget): Promise<PullRequestComment[]> {
+    // PR conversation comments live on the issues endpoint in the GitHub API.
+    const response = await this.request(
+      `${this.repoPath(input)}/issues/${input.pullNumber}/comments?per_page=100`,
+      { method: 'GET' }
+    )
+    const items = Array.isArray(response) ? response : []
+    return items.flatMap((item): PullRequestComment[] => {
+      const comment = this.toComment(item)
+      return comment ? [comment] : []
+    })
+  }
+
+  async createPullRequestComment(input: CreatePrCommentInput): Promise<PullRequestComment> {
+    const response = await this.request(
+      `${this.repoPath(input)}/issues/${input.pullNumber}/comments`,
+      { method: 'POST', body: JSON.stringify({ body: input.body }) }
+    )
+    const comment = this.toComment(response)
+    if (!comment) throw new Error('The comment was posted but could not be read back')
+    return comment
+  }
+
+  async createPullRequestReview(input: CreatePrReviewInput): Promise<void> {
+    await this.request(`${this.pullPath(input)}/reviews`, {
+      method: 'POST',
+      body: JSON.stringify({
+        event: input.event,
+        ...(input.body ? { body: input.body } : {})
+      })
+    })
+  }
+
   resolveRepositoryIdentity(remoteUrl: string): GitRepositoryIdentity | null {
     const url = remoteUrl.trim()
     if (!url) return null
@@ -153,6 +259,63 @@ export class GitHubProvider implements GitProvider {
       url,
       title: this.readString(record, 'title') ?? (number > 0 ? `Pull request #${number}` : '')
     }
+  }
+
+  private repoPath(input: { owner: string; repo: string }): string {
+    return `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}`
+  }
+
+  private pullPath(input: PullRequestTarget): string {
+    return `${this.repoPath(input)}/pulls/${input.pullNumber}`
+  }
+
+  /** Map a GitHub pull payload to the renderer-safe summary, or null if unusable. */
+  private toSummary(payload: unknown, owner: string, repo: string): PullRequestSummary | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    const head = this.readRecord(record, 'head')
+    const base = this.readRecord(record, 'base')
+    const user = this.readRecord(record, 'user')
+    const rawState = this.readString(record, 'state') ?? 'open'
+    const merged = record['merged'] === true || this.readString(record, 'merged_at') !== null
+    return {
+      number,
+      title: this.readString(record, 'title') ?? `Pull request #${number}`,
+      url:
+        this.readString(record, 'html_url') ?? `https://github.com/${owner}/${repo}/pull/${number}`,
+      state: merged ? 'merged' : rawState === 'closed' ? 'closed' : 'open',
+      draft: record['draft'] === true,
+      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      headRef: head ? (this.readString(head, 'ref') ?? '') : '',
+      baseRef: base ? (this.readString(base, 'ref') ?? '') : '',
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at') ?? '',
+      comments: this.readNumber(record, 'comments')
+    }
+  }
+
+  private toComment(payload: unknown): PullRequestComment | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const user = this.readRecord(record, 'user')
+    return {
+      id,
+      authorLogin: user ? (this.readString(user, 'login') ?? 'unknown') : 'unknown',
+      body: this.readString(record, 'body') ?? '',
+      createdAt: this.readString(record, 'created_at') ?? '',
+      url: this.readString(record, 'html_url') ?? ''
+    }
+  }
+
+  private readRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
+    const value = record[key]
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null
   }
 
   private readString(record: Record<string, unknown>, key: string): string | null {

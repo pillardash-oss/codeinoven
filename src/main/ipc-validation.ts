@@ -188,6 +188,11 @@ export function validateRemoteUrl(value: unknown): string {
 
 const MERGE_METHODS = new Set<import('../lib/types').PrMergeMethod>(['merge', 'squash', 'rebase'])
 const PR_STATES = new Set<import('../lib/types').PrState>(['open', 'closed', 'all'])
+const PR_REVIEW_EVENTS = new Set<import('../lib/types').PrReviewEvent>([
+  'APPROVE',
+  'REQUEST_CHANGES',
+  'COMMENT'
+])
 
 /** Validate a PR merge method (merge|squash|rebase). */
 export function validateMergeMethod(value: unknown): import('../lib/types').PrMergeMethod {
@@ -279,6 +284,22 @@ export function validatePushOptions(value: unknown): {
 /** Validate a PR list state filter. */
 export function validatePrState(value: unknown): import('../lib/types').PrState {
   return assertEnum(value, PR_STATES, 'PR state')
+}
+
+/** Validate a PR review verdict. */
+export function validatePrReviewEvent(value: unknown): import('../lib/types').PrReviewEvent {
+  return assertEnum(value, PR_REVIEW_EVENTS, 'PR review event')
+}
+
+/** Validate a 1-based PR listing page number. */
+export function validatePrPage(value: unknown): number {
+  return validateBoundedInteger(value, 'Pull request page', 1, 1000)
+}
+
+/** Validate a PR comment or review body (GitHub caps bodies around 64k). */
+export function validatePrCommentBody(value: unknown, allowEmpty = false): string {
+  const body = validateBoundedString(value, 'Comment body', allowEmpty ? 0 : 1, 65_536)
+  return body
 }
 
 /** Validate an optional stash message. */
