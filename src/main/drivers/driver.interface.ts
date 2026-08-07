@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentQuestionRequest,
+  AgentRateLimitWindow,
+  AgentUsageCredits,
   PromptAttachment,
   ThreadSettings,
   ProviderCatalog,
@@ -255,6 +257,16 @@ export interface HarnessDriver {
 
   /** Read the harness's current authentication state without changing it. */
   getAuthStatus?(projectPath: string): Promise<HarnessAuthStatus>
+
+  /**
+   * Fetch the account's current quota telemetry on demand (rate-limit windows,
+   * prepaid credits). Used by the battery popover so old threads — whose turns
+   * predate quota capture — can still show live quota. Returns null when the
+   * harness cannot report quota without a turn.
+   */
+  readAccountUsage?(
+    projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null>
 
   /** Build, but do not execute, an interactive login handoff. */
   beginLogin?(projectPath: string, options?: HarnessLoginOptions): Promise<HarnessLoginHandoff>

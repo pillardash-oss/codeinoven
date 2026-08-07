@@ -9,6 +9,7 @@ import type {
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentTokenUsage,
+  AgentUsageCredits,
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
@@ -54,6 +55,7 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 ]
 
 const CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
+const CLAUDE_USAGE_TIMEOUT_MS = 12_000
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -1153,6 +1155,82 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       if (apiKey) env['ANTHROPIC_AUTH_TOKEN'] = apiKey
     }
     return env
+  }
+
+  /**
+   * Fetch the account's current plan rate-limit windows on demand via the
+   * documented `get_usage` control request. This runs WITHOUT a model turn —
+   * `total_api_duration_ms` stays 0 — so the battery can show live quota for
+   * old threads whose turns predate quota capture. Returns null when the
+   * session has no plan limits (API key, Bedrock, Vertex) or on any failure.
+   */
+  async readAccountUsage(
+    projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
+    try {
+      const usage = await new Promise<Record<string, unknown> | null>((resolve) => {
+        const child = spawn('claude', ['--print', '--output-format', 'stream-json'], {
+          cwd: projectPath,
+          env: buildHarnessEnvironment(),
+          stdio: ['pipe', 'pipe', 'pipe']
+        })
+        let buffer = ''
+        let settled = false
+        const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
+        const finish = (value: Record<string, unknown> | null): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          if (!child.killed) child.kill()
+          resolve(value)
+        }
+        const consume = (line: string): void => {
+          if (!line.trim()) return
+          const payload = record(JSON.parse(line) as unknown)
+          if (!payload) return
+          if (payload['type'] !== 'control_response') return
+          const response = record(payload['response'])
+          const inner = record(response?.['response'])
+          const rateLimits = record(inner?.['rate_limits'])
+          if (inner?.['rate_limits_available'] !== true || !rateLimits) {
+            finish(null)
+            return
+          }
+          finish(inner)
+        }
+        child.stdout?.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString()
+          const lines = buffer.split(/\r?\n/u)
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            try {
+              consume(line)
+            } catch {
+              // Ignore malformed side-channel output.
+            }
+          }
+        })
+        child.on('error', () => finish(null))
+        child.on('exit', () => {
+          if (!settled) finish(null)
+        })
+        // Send the usage control request immediately; `--print` waits on stdin.
+        child.stdin?.write(
+          `${JSON.stringify({
+            type: 'control_request',
+            request_id: 'usage',
+            request: { subtype: 'get_usage' }
+          })}\n`
+        )
+      })
+      if (!usage) return null
+      const rateLimits = rateLimitWindows(usage['rate_limits'])
+      if (rateLimits.length === 0) return null
+      return { rateLimits }
+    } catch (error) {
+      Logger.dev('Claude on-demand account usage refresh unavailable:', error)
+      return null
+    }
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {

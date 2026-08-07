@@ -97,6 +97,7 @@ import type {
   SpecValidationResult,
   Thread,
   ThreadContextUsage,
+  AgentAccountUsage,
   ThreadMessageCursor,
   ThreadMessagePage,
   ThreadSettings,
@@ -496,6 +497,10 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
+  'agent:refreshAccountUsage': Contract<
+    [projectId: string, threadId: string],
+    AgentAccountUsage | null
+  >
   'agent:listTools': Contract<
     [projectId?: string, harnessId?: string, providerId?: string, modelId?: string],
     AgentToolCatalog

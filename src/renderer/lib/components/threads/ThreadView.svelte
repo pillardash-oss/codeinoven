@@ -114,6 +114,7 @@
     AgentEvent,
     AgentContextUsage,
     AgentHarnessUsage,
+    AgentAccountUsage,
     AgentProviderIssue,
     AgentSessionStatus,
     AgentDefaultsConfig,
@@ -610,6 +611,24 @@
         byHarness[key] = { ...stored, rateLimits: [] }
       }
     }
+    // Layer the live account quota over the matching harness so the battery
+    // shows current windows/credits even for old threads with no message data.
+    if (liveAccountUsage) {
+      const key = `${liveAccountUsage.harnessId}:${liveAccountUsage.providerId}`
+      const entry = byHarness[key]
+      if (entry) {
+        if (liveAccountUsage.rateLimits.length) entry.rateLimits = liveAccountUsage.rateLimits
+        if (liveAccountUsage.credits) entry.credits = liveAccountUsage.credits
+      } else {
+        byHarness[key] = {
+          harnessId: liveAccountUsage.harnessId,
+          providerId: liveAccountUsage.providerId,
+          costUsd: 0,
+          rateLimits: liveAccountUsage.rateLimits,
+          ...(liveAccountUsage.credits ? { credits: liveAccountUsage.credits } : {})
+        }
+      }
+    }
     return Object.values(byHarness).filter(
       (entry) => entry.rateLimits.length > 0 || entry.credits || entry.costUsd > 0
     )
@@ -660,7 +679,67 @@
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
+    void refreshAccountUsageOnDemand()
   }
+
+  /** Live quota fetched from the harness; layered over message data so old
+   *  threads (or threads whose turns predate quota capture) still show current
+   *  rate-limit windows and credits in the battery popover. */
+  let liveAccountUsage = $state<AgentAccountUsage | null>(null)
+  let refreshingAccountUsage = $state(false)
+  let accountUsageRefreshTimer: ReturnType<typeof setTimeout> | undefined
+
+  async function refreshAccountUsageOnDemand(): Promise<void> {
+    if (refreshingAccountUsage) return
+    refreshingAccountUsage = true
+    try {
+      const usage = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
+      liveAccountUsage = usage
+      if (usage) {
+        // Persist the fresh quota with the current context snapshot so it
+        // restores on the next mount without another harness round-trip.
+        const merged: AgentContextUsage = {
+          ...(contextUsageDisplay ?? {
+            contextUsed: 0,
+            costUsd: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0
+            },
+            rateLimits: []
+          }),
+          rateLimits: usage.rateLimits,
+          ...(usage.credits ? { credits: usage.credits } : {})
+        }
+        commitContextUsage(merged)
+      }
+    } catch {
+      // Best-effort quota refresh — never surface a transient harness failure.
+    } finally {
+      refreshingAccountUsage = false
+    }
+  }
+
+  $effect(() => {
+    // Refresh quota once per thread mount so an old thread's battery is
+    // populated without waiting for the user to hover. Debounce a little to let
+    // the thread/messages settle first.
+    if (accountUsageRefreshTimer !== undefined) return
+    accountUsageRefreshTimer = setTimeout(() => {
+      accountUsageRefreshTimer = undefined
+      void refreshAccountUsageOnDemand()
+    }, 400)
+    return () => {
+      if (accountUsageRefreshTimer !== undefined) {
+        clearTimeout(accountUsageRefreshTimer)
+        accountUsageRefreshTimer = undefined
+      }
+    }
+  })
 
   $effect(() => {
     const latest = contextUsage

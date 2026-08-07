@@ -45,6 +45,7 @@ import {
   type UtilityTurnGateway
 } from './utility-orchestration-service'
 import type {
+  AgentAccountUsage,
   AgentEvent,
   AgentMessage,
   AgentPart,
@@ -976,6 +977,9 @@ export class ChatEngine {
     ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string) =>
       this.listProviders(projectId, true)
     )
+    ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
+      this.refreshAccountUsage(projectId, threadId)
+    )
     ipcMain.handle(
       'agent:listTools',
       (_, projectId?: string, harnessId?: string, providerId?: string, modelId?: string) =>
@@ -1663,6 +1667,33 @@ export class ChatEngine {
       return await discovery
     } finally {
       if (this.providerDiscovery === discovery) this.providerDiscovery = null
+    }
+  }
+
+  /**
+   * Fetch the current account quota for the thread's harness on demand. Used by
+   * the battery popover so threads whose turns predate quota capture (or where a
+   * turn-time refresh silently failed) still show live rate-limit windows and
+   * credits. Returns null when the harness cannot report quota without a turn.
+   */
+  async refreshAccountUsage(
+    projectId: string,
+    threadId: string
+  ): Promise<AgentAccountUsage | null> {
+    const projectIdSafe = validateEntityId(projectId, 'Project ID')
+    const thread = await this.threadManager.getThread(projectIdSafe, threadId)
+    if (!thread) return null
+    const harnessId = thread.settings?.harnessId ?? 'opencode'
+    const providerId = thread.settings?.providerId ?? ''
+    try {
+      const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
+      if (!driver.readAccountUsage) return null
+      const telemetry = await driver.readAccountUsage(projectPath)
+      if (!telemetry || telemetry.rateLimits.length === 0) return null
+      return { harnessId, providerId, ...telemetry }
+    } catch (error) {
+      Logger.dev('On-demand account usage refresh unavailable:', error)
+      return null
     }
   }
 

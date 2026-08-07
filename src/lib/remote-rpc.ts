@@ -74,6 +74,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:loadSessionMessages',
   'agent:listProviderSnapshot',
   'agent:refreshProviderCatalog',
+  'agent:refreshAccountUsage',
   'agent:getSessionStatus',
   'agent:ensureSession',
   'agent:sendPrompt',

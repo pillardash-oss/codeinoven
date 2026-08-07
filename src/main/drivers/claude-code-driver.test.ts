@@ -291,3 +291,62 @@ describe('mapClaudeCodeRecord rate limits', () => {
     expect(rateLimits?.[0]).toMatchObject({ label: '5-hour limit', usedPercent: 21 })
   })
 })
+
+describe('ClaudeCodeDriver readAccountUsage', () => {
+  it('maps the get_usage control response to rate-limit windows', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const promise = driver.readAccountUsage('/project')
+    const written = child.stdin.write.mock.calls.map(([value]) => JSON.parse(value as string))
+    expect(written[0]).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'get_usage' }
+    })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: 'usage',
+            response: {
+              subscription_type: 'pro',
+              rate_limits_available: true,
+              rate_limits: {
+                five_hour: { utilization: 26, resets_at: '2026-08-07T16:00:00+00:00' },
+                seven_day: { utilization: 29, resets_at: '2026-08-07T14:59:59+00:00' }
+              }
+            }
+          }
+        })}\n`
+      )
+    )
+    const telemetry = await promise
+    expect(telemetry?.rateLimits).toHaveLength(2)
+    const fiveHour = telemetry?.rateLimits.find((limit) => limit.id === 'five_hour')
+    expect(fiveHour).toMatchObject({ label: '5-hour limit', usedPercent: 26 })
+  })
+
+  it('returns null when plan rate limits are unavailable', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const promise = driver.readAccountUsage('/project')
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: 'usage',
+            response: { rate_limits_available: false, rate_limits: null }
+          }
+        })}\n`
+      )
+    )
+    await expect(promise).resolves.toBeNull()
+  })
+})
