@@ -585,7 +585,7 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
+    class="mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
       ? 'border-foreground bg-elevated'
@@ -702,7 +702,7 @@
     {#if harnessIds.length > 0}
       <span
         {@attach captureHarnessRowElement}
-        class="flex min-w-0 items-center gap-1 overflow-hidden"
+        class="flex min-w-0 items-center justify-center gap-1 overflow-hidden"
       >
         {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
           <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
