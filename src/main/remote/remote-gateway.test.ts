@@ -7,6 +7,7 @@ import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import { request as httpsRequest } from 'node:https'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
+import type { RemoteDeviceInfo } from './remote-types'
 
 const SECRET = 'shared-peer-secret'
 
@@ -18,7 +19,7 @@ async function makeGateway(
   gateway: RemoteGateway
   port: number
   localPort: number
-  sessions: boolean[]
+  devices: RemoteDeviceInfo[][]
   staticRoot: string
 }> {
   const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-'))
@@ -31,9 +32,9 @@ async function makeGateway(
   await writeFile(join(staticRoot, 'service-worker.js'), 'self.onfetch=()=>{}', 'utf8')
   if (beforeStart) await beforeStart(staticRoot)
 
-  const sessions: boolean[] = []
+  const devices: RemoteDeviceInfo[][] = []
   const handlers: GatewayHandlers = {
-    onSessionChange: (live) => sessions.push(live)
+    onDevicesChange: (next) => devices.push(next)
   }
   const gateway = new RemoteGateway({
     port: 0,
@@ -45,7 +46,7 @@ async function makeGateway(
     ...overrides
   })
   const { port, localPort } = await gateway.start()
-  return { gateway, port, localPort, sessions, staticRoot }
+  return { gateway, port, localPort, devices, staticRoot }
 }
 
 function waitForMessage(events: TransportEvent[], data: string, timeoutMs = 3_000): Promise<void> {
@@ -215,54 +216,60 @@ describe('RemoteGateway', () => {
   })
 
   it('accepts a loopback WebSocket session with the correct PEER_SECRET_AUTH', async () => {
-    const { gateway, localPort, sessions } = await makeGateway()
+    const { gateway, localPort, devices } = await makeGateway()
     try {
       const events: TransportEvent[] = []
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
         onEvent: (event) => events.push(event)
       })
       const result = await transport.connect()
       expect(result).toBe('open')
-      expect(sessions).toContain(true)
+      expect(devices[devices.length - 1]?.some((device) => device.id === 'phone-1')).toBe(true)
 
       await transport.send(JSON.stringify({ type: 'ping' }))
       await waitForMessage(events, JSON.stringify({ type: 'pong' }))
 
       transport.close()
       await new Promise((resolve) => setTimeout(resolve, 50))
-      expect(sessions[sessions.length - 1]).toBe(false)
+      expect(devices[devices.length - 1]?.some((device) => device.id === 'phone-1')).toBe(false)
     } finally {
       await gateway.stop()
     }
   })
 
   it('rejects a WebSocket session with a wrong PEER_SECRET_AUTH', async () => {
-    const { gateway, localPort, sessions } = await makeGateway()
+    const { gateway, localPort, devices } = await makeGateway()
     try {
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: 'wrong-secret',
         scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
         onEvent: () => undefined
       })
       const result = await transport.connect()
       expect(result).toBe('rejected')
-      expect(sessions).not.toContain(true)
+      expect(devices.every((snapshot) => snapshot.length === 0)).toBe(true)
     } finally {
       await gateway.stop()
     }
   })
 
-  it('enforces single-session takeover: a second live peer is rejected', async () => {
-    const { gateway, localPort, sessions } = await makeGateway()
+  it('allows multiple simultaneous phone devices', async () => {
+    const { gateway, localPort, devices } = await makeGateway()
     try {
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
         onEvent: () => undefined
       })
       await expect(first.connect()).resolves.toBe('open')
@@ -271,16 +278,100 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        deviceId: 'phone-2',
+        deviceName: 'Android phone',
         onEvent: () => undefined
       })
-      await expect(second.connect()).resolves.toBe('rejected')
+      await expect(second.connect()).resolves.toBe('open')
 
-      // Exactly one live transition despite two handshakes.
-      expect(sessions.filter((live) => live)).toHaveLength(1)
+      const live = gateway.listDevices()
+      expect(live.map((device) => device.id).sort()).toEqual(['phone-1', 'phone-2'])
+      expect(live.map((device) => device.name).sort()).toEqual(['Android phone', 'iPhone'])
 
+      // Both stay live when the first disconnects.
       first.close()
       await new Promise((resolve) => setTimeout(resolve, 50))
-      expect(sessions[sessions.length - 1]).toBe(false)
+      expect(gateway.listDevices().map((device) => device.id)).toEqual(['phone-2'])
+      expect(devices[devices.length - 1]?.some((device) => device.id === 'phone-2')).toBe(true)
+
+      second.close()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(gateway.listDevices()).toEqual([])
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('takes over a reconnect from the same device id', async () => {
+    const { gateway, localPort } = await makeGateway()
+    try {
+      const first = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
+        onEvent: () => undefined
+      })
+      await expect(first.connect()).resolves.toBe('open')
+
+      const second = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
+        onEvent: () => undefined
+      })
+      await expect(second.connect()).resolves.toBe('open')
+
+      // Exactly one live device for the shared id — the old socket was replaced.
+      const live = gateway.listDevices()
+      expect(live).toHaveLength(1)
+      expect(live[0]?.id).toBe('phone-1')
+      expect(live[0]?.name).toBe('iPhone')
+
+      first.close()
+      second.close()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(gateway.listDevices()).toEqual([])
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('disconnects a specific device on request', async () => {
+    const { gateway, localPort } = await makeGateway()
+    try {
+      const first = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
+        onEvent: () => undefined
+      })
+      await expect(first.connect()).resolves.toBe('open')
+
+      const second = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        deviceId: 'phone-2',
+        deviceName: 'Android phone',
+        onEvent: () => undefined
+      })
+      await expect(second.connect()).resolves.toBe('open')
+
+      expect(gateway.disconnectDevice('phone-1')).toBe(true)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(gateway.listDevices().map((device) => device.id)).toEqual(['phone-2'])
+
+      // Unknown ids are a no-op.
+      expect(gateway.disconnectDevice('ghost')).toBe(false)
+      second.close()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(gateway.listDevices()).toEqual([])
     } finally {
       await gateway.stop()
     }
@@ -314,16 +405,19 @@ describe('RemoteGateway', () => {
   })
 
   it('accepts a null-origin (desktop renderer) upgrade', async () => {
-    const { gateway, localPort, sessions } = await makeGateway()
+    const { gateway, localPort, devices } = await makeGateway()
     try {
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        deviceId: 'phone-1',
+        deviceName: 'iPhone',
         onEvent: () => undefined
       })
       await expect(transport.connect()).resolves.toBe('open')
-      expect(sessions).toContain(true)
+      expect(gateway.listDevices().some((device) => device.id === 'phone-1')).toBe(true)
+      expect(devices[devices.length - 1]?.length).toBeGreaterThan(0)
     } finally {
       await gateway.stop()
     }
@@ -437,7 +531,7 @@ describe('RemoteGateway', () => {
       peerSecret: SECRET,
       certificateDir: join(dir, 'cert'),
       staticRoot: join(dir, 'renderer'),
-      handlers: { onSessionChange: () => undefined }
+      handlers: { onDevicesChange: () => undefined }
     })
     expect(gateway.info().pairingUrl).toBeNull()
     expect(gateway.info().url).toBeNull()
@@ -447,7 +541,7 @@ describe('RemoteGateway', () => {
     const received: string[] = []
     const { gateway, localPort } = await makeGateway(SECRET, {
       handlers: {
-        onSessionChange: () => undefined,
+        onDevicesChange: () => undefined,
         onRpc: async (channel, args) => {
           received.push(`${channel}:${args.join(',')}`)
           return { ok: true, result: { echo: channel } }
@@ -502,7 +596,7 @@ describe('RemoteGateway', () => {
 
   it('delivers forwarded events to the live peer via sendToPeer', async () => {
     const { gateway, localPort } = await makeGateway(SECRET, {
-      handlers: { onSessionChange: () => undefined }
+      handlers: { onDevicesChange: () => undefined }
     })
     try {
       const events: TransportEvent[] = []

@@ -13,12 +13,17 @@ import { join } from 'node:path'
 import { Logger } from '../logger'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
-import type { RemoteModeStatus } from './remote-types'
+import type { RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { loadOrCreatePeerSecret } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
-import { readRemoteModeState, writeRemoteModeState } from './remote-state'
+import {
+  readRemoteDeviceNames,
+  readRemoteModeState,
+  writeRemoteDeviceName,
+  writeRemoteModeState
+} from './remote-state'
 
 export interface RemoteModeOptions {
   lanPort: number
@@ -59,6 +64,10 @@ export class RemoteModeController {
   private readonly iconPath: string
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage-engine').StorageEngine | null
+  /** Connected devices, newest first (source of truth = the gateway). */
+  private devices: RemoteDeviceInfo[] = []
+  /** Persisted device-name overrides, keyed by device id. */
+  private deviceNames: Record<string, string> = {}
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -70,6 +79,16 @@ export class RemoteModeController {
     this.storage = options.storage ?? null
   }
 
+  /** Load persisted device names so renames survive restarts. */
+  private async loadDeviceNames(): Promise<void> {
+    if (!this.storage) return
+    try {
+      this.deviceNames = await readRemoteDeviceNames(this.storage)
+    } catch (error) {
+      Logger.error('Could not load remote device names:', error)
+    }
+  }
+
   /**
    * Restore remote mode at startup if it was enabled before the app quit, so a
    * desktop restart never silently breaks the phone connection. Only starts the
@@ -79,6 +98,7 @@ export class RemoteModeController {
     if (this.remoteModeActive) return
     const enabled = await this.readPersistedEnabled()
     if (!enabled) return
+    await this.loadDeviceNames()
     this.keepAlive.dispatch({ type: 'arm' })
     await this.startGateway()
     this.ensureTray()
@@ -133,7 +153,8 @@ export class RemoteModeController {
         port: this.lanPort,
         url: null,
         pairingUrl: null
-      }
+      },
+      devices: this.devices
     }
   }
 
@@ -178,13 +199,19 @@ export class RemoteModeController {
     return this.status
   }
 
-  /** Called by the gateway when a phone peer authenticates or disconnects. */
-  onSessionChange(live: boolean): void {
-    if (live) {
+  /** Called by the gateway whenever the connected device set changes. */
+  onDevicesChange(devices: RemoteDeviceInfo[]): void {
+    const wasLive = this.devices.length > 0
+    this.devices = devices.map((device) => ({
+      ...device,
+      name: this.deviceNames[device.id] ?? device.name
+    }))
+    const isLive = this.devices.length > 0
+    if (isLive && !wasLive) {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
       this.installEventForwarder()
-    } else {
+    } else if (!isLive && wasLive) {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
       setRemoteEventForwarder(null)
@@ -193,7 +220,28 @@ export class RemoteModeController {
     this.broadcast()
   }
 
-  /** Forward live desktop events to the connected phone peer. */
+  /** Rename a connected device; the override is persisted for reconnects. */
+  async renameDevice(deviceId: string, name: string): Promise<RemoteModeStatus> {
+    const trimmed = name.trim().slice(0, 100)
+    if (trimmed.length === 0) throw new TypeError('Device name cannot be empty')
+    this.deviceNames = { ...this.deviceNames, [deviceId]: trimmed }
+    if (this.storage) {
+      await writeRemoteDeviceName(this.storage, deviceId, trimmed)
+    }
+    this.devices = this.devices.map((device) =>
+      device.id === deviceId ? { ...device, name: trimmed } : device
+    )
+    this.syncTray()
+    this.broadcast()
+    return this.status
+  }
+
+  /** Disconnect a connected device by id. */
+  disconnectDevice(deviceId: string): void {
+    this.gateway?.disconnectDevice(deviceId)
+  }
+
+  /** Forward live desktop events to every connected phone peer. */
   private installEventForwarder(): void {
     setRemoteEventForwarder((channel, payload) => {
       this.gateway?.sendToPeer({ rpc: 'event', channel, payload })
@@ -228,6 +276,22 @@ export class RemoteModeController {
         return this.toggleRemoteMode(Boolean(enabled))
       }
     )
+    ipcMain.handle(
+      'remote:listDevices',
+      (): RemoteDeviceInfo[] => this.gateway?.listDevices() ?? []
+    )
+    ipcMain.handle(
+      'remote:disconnectDevice',
+      (_event: IpcMainInvokeEvent, deviceId: string): void => {
+        this.disconnectDevice(typeof deviceId === 'string' ? deviceId : '')
+      }
+    )
+    ipcMain.handle(
+      'remote:renameDevice',
+      (_event: IpcMainInvokeEvent, deviceId: string, name: string): Promise<RemoteModeStatus> => {
+        return this.renameDevice(typeof deviceId === 'string' ? deviceId : '', String(name))
+      }
+    )
   }
 
   private async startGateway(): Promise<void> {
@@ -236,6 +300,7 @@ export class RemoteModeController {
       Logger.error('Remote gateway not started: renderer static root is not set')
       return
     }
+    await this.loadDeviceNames()
     const peerSecret = await this.resolvePeerSecret()
     const gateway = new RemoteGateway({
       port: this.lanPort,
@@ -244,7 +309,7 @@ export class RemoteModeController {
       certificateDir: join(app.getPath('userData'), 'remote-gateway'),
       staticRoot: this.staticRoot,
       handlers: {
-        onSessionChange: (live) => this.onSessionChange(live),
+        onDevicesChange: (devices) => this.onDevicesChange(devices),
         onRpc: this.rpc
           ? async (channel, args) =>
               this.rpc?.dispatch({ id: 0, channel, args }) ?? {

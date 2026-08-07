@@ -19,6 +19,7 @@ import { discoverPeers, type DiscoveredPeer } from './discovery'
 import { createLanTransport, type LanTransport } from './transport'
 import { createRelayClient, type RelayClient } from './relay'
 import { remoteLog } from './logger'
+import { loadDeviceIdentity, type DeviceIdentity } from './device-identity'
 import { SvelteSet } from 'svelte/reactivity'
 
 const LAN_HANDSHAKE_TIMEOUT_MS = 3_000
@@ -38,6 +39,7 @@ export class RemoteSessionStore {
   private lanTransport: LanTransport | null = null
   private relayClient: RelayClient | null = null
   private messageListeners = new SvelteSet<(plaintext: string) => void>()
+  private identity: DeviceIdentity = loadDeviceIdentity()
 
   dispatch(action: SessionAction): void {
     this.snapshot = applySessionAction(this.snapshot, action)
@@ -93,6 +95,8 @@ export class RemoteSessionStore {
           authSecret: secret,
           scheme,
           handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
+          deviceId: this.identity.id,
+          deviceName: this.identity.name,
           onEvent: () => undefined
         })
         const outcome = await probe.connect()
@@ -156,6 +160,8 @@ export class RemoteSessionStore {
       authSecret: secret,
       scheme,
       handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
+      deviceId: this.identity.id,
+      deviceName: this.identity.name,
       onEvent: (event) => {
         if (event.kind === 'message') {
           this.routeMessage(event.data)

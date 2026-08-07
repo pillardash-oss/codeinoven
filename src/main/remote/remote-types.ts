@@ -20,9 +20,20 @@ export interface RemoteGatewayInfo {
   pairingUrl: string | null
 }
 
+/** A phone device currently connected to the desktop gateway. */
+export interface RemoteDeviceInfo {
+  id: string
+  /** Human-readable device name (reported by the phone or renamed on desktop). */
+  name: string
+  connectedAt: number
+  transport: 'lan' | 'relay'
+}
+
 export interface RemoteModeStatus {
   remoteMode: boolean
   phase: RemoteModePhase
   blockedQuit: boolean
   gateway: RemoteGatewayInfo
+  /** Connected phone devices, newest first. */
+  devices: RemoteDeviceInfo[]
 }

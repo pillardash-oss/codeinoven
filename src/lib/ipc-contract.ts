@@ -1067,6 +1067,9 @@ export interface IpcInvokeContract {
   'remote:getStatus': Contract<[], RemoteModeStatus>
   'remote:ensureGateway': Contract<[], RemoteModeStatus>
   'remote:toggle': Contract<[enabled: boolean], RemoteModeStatus>
+  'remote:listDevices': Contract<[], RemoteDeviceInfo[]>
+  'remote:disconnectDevice': Contract<[deviceId: string], void>
+  'remote:renameDevice': Contract<[deviceId: string, name: string], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
 }
 
@@ -1125,11 +1128,22 @@ export interface RemoteGatewayInfo {
   pairingUrl: string | null
 }
 
+/** A phone device currently connected to the desktop gateway. */
+export interface RemoteDeviceInfo {
+  id: string
+  /** Human-readable device name (reported by the phone or renamed on desktop). */
+  name: string
+  connectedAt: number
+  transport: 'lan' | 'relay'
+}
+
 export interface RemoteModeStatus {
   remoteMode: boolean
   phase: RemoteModePhase
   blockedQuit: boolean
   gateway: RemoteGatewayInfo
+  /** Connected phone devices, newest first. */
+  devices: RemoteDeviceInfo[]
 }
 
 export interface IpcEventContract {
