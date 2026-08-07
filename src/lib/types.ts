@@ -736,6 +736,31 @@ export interface PermissionRequest {
   }
 }
 
+/** How the user resolved a failed image-descriptor vision-model call. */
+export type ImageDescriptorReplyAction = 'retry' | 'ignore'
+
+/**
+ * A failed image-descriptor vision-model call that needs a user decision.
+ * Surfaced by the renderer so the user can change the model, retry, or send
+ * whatever partial output exists to the text-only model.
+ */
+export interface ImageDescriptorErrorRequest {
+  id: string
+  sessionId: string
+  projectId: string
+  threadId: string
+  /** The actual error reported by the vision model / harness session. */
+  error: string
+  /** Vision model that produced the failure. */
+  selection: AgentModelSelection
+  /** Partial description generated before the failure, if any. */
+  partialOutput: string
+  /** Number of images that failed in this descriptor call. */
+  imageCount: number
+  /** When the failure was surfaced. */
+  createdAt: number
+}
+
 /** A file attached to an outgoing prompt. */
 export interface PromptAttachment {
   mime: string
@@ -1633,6 +1658,19 @@ export type AgentEvent =
       type: 'providerCatalog.updated'
       projectId: string
       catalogs: ProviderCatalog[]
+    }
+  | {
+      type: 'imageDescriptor.error'
+      sessionId: string
+      projectId: string
+      threadId: string
+      request: ImageDescriptorErrorRequest
+    }
+  | {
+      type: 'imageDescriptor.resolved'
+      sessionId: string
+      requestId: string
+      action: ImageDescriptorReplyAction
     }
 
 /**

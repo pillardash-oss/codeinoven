@@ -46,6 +46,7 @@
   import AgentTodoCard from './AgentTodoCard.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
+  import ImageDescriptorErrorCard from './ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import RunChangesCard from './RunChangesCard.svelte'
   import SpecReadyCard from './SpecReadyCard.svelte'
@@ -148,6 +149,8 @@
     SpecValidationResult,
     TurnCheckpointSummary,
     PendingAgentQuestionRequest,
+    ImageDescriptorErrorRequest,
+    ImageDescriptorReplyAction,
     UserMessagePresentation
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
@@ -228,6 +231,7 @@
 
   let commands = $state<ScopedHarnessCommand[]>([])
   let pendingPermissions = $state<PermissionRequest[]>([])
+  let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
   let activeTodo = $derived(latestAgentTodo(messages))
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
@@ -1919,6 +1923,8 @@
       }
       await refreshPendingPermissions()
       if (!alive) return
+      await refreshPendingImageDescriptorError()
+      if (!alive) return
       await refreshPendingQuestions()
       if (!alive) return
       syncOpenSubagentTabs()
@@ -2044,6 +2050,7 @@
       agentRuns.setIdle(thread.projectId, thread.id)
       pendingPermissions = []
       pendingQuestionRequests = []
+      pendingImageDescriptorError = null
       setProviderError(event.issue)
       void refreshCheckpoints()
       return
@@ -2113,6 +2120,7 @@
         agentRuns.setIdle(thread.projectId, thread.id)
         pendingPermissions = []
         pendingQuestionRequests = []
+        pendingImageDescriptorError = null
         if (!userRequestedStop) {
           if (event.issue) {
             setProviderError(event.issue)
@@ -2169,6 +2177,18 @@
       case 'permission.replied': {
         if (event.sessionId !== sessionId) return
         pendingPermissions = pendingPermissions.filter((request) => request.id !== event.requestId)
+        break
+      }
+      case 'imageDescriptor.error': {
+        if (event.sessionId !== sessionId) return
+        pendingImageDescriptorError = event.request
+        break
+      }
+      case 'imageDescriptor.resolved': {
+        if (event.sessionId !== sessionId) return
+        if (pendingImageDescriptorError?.id === event.requestId) {
+          pendingImageDescriptorError = null
+        }
         break
       }
       case 'question.asked': {
@@ -2247,12 +2267,50 @@
     }
   }
 
+  /** Rehydrate a pending image-descriptor error card after a renderer remount. */
+  async function refreshPendingImageDescriptorError(): Promise<void> {
+    const { projectId, id } = thread
+    try {
+      const pending = await invoke('agent:listImageDescriptorErrors', projectId, id)
+      pendingImageDescriptorError = pending[0] ?? null
+    } catch {
+      // Non-fatal — the card re-appears on the next imageDescriptor.error event.
+    }
+  }
+
+  /** Resolve a pending image-descriptor error card: retry with a (possibly new)
+   *  vision model, or ignore and send whatever partial output exists onward. */
+  async function replyImageDescriptor(
+    requestId: string,
+    action: ImageDescriptorReplyAction,
+    selection?: AgentModelSelection
+  ): Promise<void> {
+    const { projectId, id } = thread
+    try {
+      await invoke('agent:replyImageDescriptor', projectId, id, requestId, action, selection)
+      pendingImageDescriptorError = null
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The image descriptor could not be retried.'
+    }
+  }
+
   async function handleIdleAttention(): Promise<void> {
     const { projectId, id } = thread
     try {
       pendingPermissions = await invoke('agent:listPermissions', projectId, id)
       if (!alive) return
       if (pendingPermissions.length > 0) return
+      const pendingImageDescriptorErrors = await invoke(
+        'agent:listImageDescriptorErrors',
+        projectId,
+        id
+      )
+      if (!alive) return
+      if (pendingImageDescriptorErrors.length > 0) {
+        pendingImageDescriptorError = pendingImageDescriptorErrors[0]
+        return
+      }
       const pending = await invoke('agent:listQuestions', projectId, id)
       if (!alive) return
       pendingQuestionRequests = pending.filter(
@@ -5628,6 +5686,24 @@
               onAllowAlways={allowPermissionAlways}
               onReject={rejectPermission}
               onAlternative={providePermissionAlternative}
+            />
+          {/key}
+        {:else if pendingImageDescriptorError && !achievementAutonomous}
+          {#key pendingImageDescriptorError.id}
+            <ImageDescriptorErrorCard
+              request={pendingImageDescriptorError}
+              {providers}
+              projectId={thread.projectId}
+              favoriteModels={rendererRecovery.favoriteModels}
+              recentModels={rendererRecovery.recentModels}
+              {busy}
+              onRetry={(requestId, selection) =>
+                void replyImageDescriptor(requestId, 'retry', selection)}
+              onIgnore={(requestId) => void replyImageDescriptor(requestId, 'ignore')}
+              onToggleFavorite={(providerId, modelId) =>
+                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             />
           {/key}
         {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}

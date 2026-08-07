@@ -46,6 +46,8 @@ export interface ImageDescriptorExecutorRequest {
   projectId: string
   threadId: string
   projectPath: string
+  /** Main thread session that invoked the tool, for user-decision events. */
+  sessionId: string
   /** Vision model pinned by a configured image-descriptor utility, if any. */
   pinnedSelection?: ImageDescriptorModelSelection
 }

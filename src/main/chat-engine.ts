@@ -86,6 +86,8 @@ import type {
   EngineeringSpecContent,
   HarnessCommand,
   HarnessCommandSource,
+  ImageDescriptorErrorRequest,
+  ImageDescriptorReplyAction,
   MemoryCategory,
   MemoryPriority,
   MemoryScope,
@@ -195,6 +197,8 @@ interface StructuredMemoryProposal {
 const ACTIONABLE_AUDIT_SEVERITIES = new Set(['critical', 'high', 'medium', 'low'])
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 300_000
+/** How long an image-descriptor failure waits for a user decision before auto-ignoring. */
+const IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS = 300_000
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_PIPELINE_VERSION = 7
 const MUTATING_FILE_TOOLS = new Set([
@@ -708,6 +712,20 @@ interface PendingQuestionInfo {
   answers?: string[][]
 }
 
+/** How the user resolved a failed image-descriptor call. */
+type ImageDescriptorUserDecision =
+  { action: 'retry'; selection?: AgentModelSelection } | { action: 'ignore' }
+
+/** A blocked image-descriptor tool call awaiting a user decision. */
+interface PendingImageDescriptorDecision {
+  sessionId: string
+  projectId: string
+  threadId: string
+  request: ImageDescriptorErrorRequest
+  resolve: (decision: ImageDescriptorUserDecision) => void
+  timer?: ReturnType<typeof setTimeout>
+}
+
 interface SessionCompletionWaiter {
   active: boolean
   structuredOutput?: unknown
@@ -772,6 +790,7 @@ export class ChatEngine {
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
   private pendingPermissions = new Map<string, PendingPermissionInfo>()
   private pendingQuestions = new Map<string, PendingQuestionInfo>()
+  private pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
   private completionWaiters = new Map<string, SessionCompletionWaiter>()
   private pendingMemoryDecisions = new Map<string, PendingMemoryDecision>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
@@ -1213,6 +1232,20 @@ export class ChatEngine {
     ipcMain.handle('agent:listPermissions', (_, projectId: string, threadId: string) =>
       this.listPermissions(projectId, threadId)
     )
+    ipcMain.handle('agent:listImageDescriptorErrors', (_, projectId: string, threadId: string) =>
+      this.listImageDescriptorErrors(projectId, threadId)
+    )
+    ipcMain.handle(
+      'agent:replyImageDescriptor',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        requestId: string,
+        action: ImageDescriptorReplyAction,
+        selection?: AgentModelSelection
+      ) => this.replyImageDescriptor(projectId, threadId, requestId, action, selection)
+    )
     ipcMain.handle(
       'agent:answerQuestion',
       (_, projectId: string, threadId: string, requestId: string, answers: string[][]) =>
@@ -1526,6 +1559,11 @@ export class ChatEngine {
       clearTimeout(pending.timer)
     }
     this.pendingQuestions.clear()
+    for (const pending of this.pendingImageDescriptorDecisions.values()) {
+      if (pending.timer !== undefined) clearTimeout(pending.timer)
+      pending.resolve({ action: 'ignore' })
+    }
+    this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
       clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
@@ -1586,6 +1624,7 @@ export class ChatEngine {
         harnessId: driver.id,
         projectId,
         threadId,
+        sessionId,
         projectPath,
         nativeCapabilities,
         permissionLevel
@@ -2272,6 +2311,7 @@ export class ChatEngine {
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
+    this.clearPendingImageDescriptorDecisionsForSession(sessionId)
   }
 
   /** Load the conversation, preferring the live driver and falling back to the mirror. */
@@ -3771,6 +3811,27 @@ export class ChatEngine {
     }
     const results: ImageDescriptorResult[] = []
     for (const image of request.images) {
+      const outcome = await this.describeWithImageDescriptorRecovery(request, selection, image)
+      results.push(outcome)
+    }
+    return results
+  }
+
+  /**
+   * Describe one image with the vision model. When the vision call fails, the
+   * first attempt surfaces a user decision card (change model / retry / ignore)
+   * instead of silently handing the error to the text-only model. The decision
+   * drives the retry: a new selection is persisted to the thread, and `ignore`
+   * forwards whatever partial output exists (usually nothing) plus the error so
+   * the text-only model can work with it or explain what is missing.
+   */
+  private async describeWithImageDescriptorRecovery(
+    request: ImageDescriptorExecutorRequest,
+    initialSelection: AgentModelSelection,
+    image: ResolvedImageEntry
+  ): Promise<ImageDescriptorResult> {
+    let selection = initialSelection
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const description = await this.describeImageOnVisionModel(
           request.projectId,
@@ -3779,22 +3840,119 @@ export class ChatEngine {
           selection,
           image
         )
-        results.push({ id: image.id, source: image.source, type: image.type, description })
+        return { id: image.id, source: image.source, type: image.type, description }
       } catch (error) {
+        const message = error instanceof Error ? error.message : 'Image description failed'
         Logger.dev('Image description failed', {
           harnessId: selection.harnessId,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         })
-        results.push({
+        if (attempt === 0) {
+          const decision = await this.requestImageDescriptorDecision(request, selection, message)
+          if (decision.action === 'retry') {
+            if (decision.selection) {
+              selection = decision.selection
+              await this.persistImageDescriptorSelection(
+                request.projectId,
+                request.threadId,
+                selection
+              )
+            }
+            continue
+          }
+          return {
+            id: image.id,
+            source: image.source,
+            type: image.type,
+            description: '',
+            error: `Image description failed and you chose to continue: ${message}. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
+          }
+        }
+        return {
           id: image.id,
           source: image.source,
           type: image.type,
           description: '',
-          error: error instanceof Error ? error.message : 'Image description failed'
-        })
+          error: `Image description failed after retry: ${message}. Tell the user what is missing and suggest how to fix it.`
+        }
       }
     }
-    return results
+    return {
+      id: image.id,
+      source: image.source,
+      type: image.type,
+      description: '',
+      error: 'Image description failed after retry'
+    }
+  }
+
+  /**
+   * Surface an image-descriptor failure to the renderer and await the user's
+   * decision. The gateway HTTP request stays open while the user picks, so the
+   * text-only model's tool call blocks exactly like a permission prompt. On
+   * timeout the decision auto-resolves as `ignore` so the turn never hangs.
+   */
+  private requestImageDescriptorDecision(
+    request: ImageDescriptorExecutorRequest,
+    selection: AgentModelSelection,
+    error: string
+  ): Promise<ImageDescriptorUserDecision> {
+    const id = generateId()
+    this.clearSessionWatchdog(request.sessionId)
+    this.markProjectActive(request.projectId)
+    return new Promise<ImageDescriptorUserDecision>((resolve) => {
+      const requestForCard: ImageDescriptorErrorRequest = {
+        id,
+        sessionId: request.sessionId,
+        projectId: request.projectId,
+        threadId: request.threadId,
+        error,
+        selection,
+        partialOutput: '',
+        imageCount: request.images.length,
+        createdAt: Date.now()
+      }
+      const pending: PendingImageDescriptorDecision = {
+        sessionId: request.sessionId,
+        projectId: request.projectId,
+        threadId: request.threadId,
+        request: requestForCard,
+        resolve,
+        timer: setTimeout(() => {
+          this.pendingImageDescriptorDecisions.delete(id)
+          this.startSessionWatchdog(request.sessionId)
+          resolve({ action: 'ignore' })
+        }, IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS)
+      }
+      this.pendingImageDescriptorDecisions.set(id, pending)
+      this.broadcast({
+        type: 'imageDescriptor.error',
+        sessionId: request.sessionId,
+        projectId: request.projectId,
+        threadId: request.threadId,
+        request: requestForCard
+      })
+    })
+  }
+
+  /** Persist the image-descriptor vision model to the thread so retries and
+   *  future sends in the same thread use it. Best-effort: a missing thread
+   *  (e.g. ephemeral standalone chat) simply skips persistence. */
+  private async persistImageDescriptorSelection(
+    projectId: string,
+    threadId: string,
+    selection: AgentModelSelection
+  ): Promise<void> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread?.settings) return
+      await this.threadManager.updateSettings(projectId, threadId, {
+        ...thread.settings,
+        imageDescriptor: selection
+      })
+    } catch (error) {
+      Logger.dev('Image descriptor selection persistence failed:', error)
+    }
   }
 
   /** Describe one image in a disposable harness session on the vision model. */
@@ -4403,6 +4561,77 @@ export class ChatEngine {
           pending.session.projectId === projectId && pending.session.threadId === threadId
       )
       .map((pending) => pending.request)
+  }
+
+  /** List unresolved image-descriptor errors for renderer reconnect recovery. */
+  async listImageDescriptorErrors(
+    projectId: string,
+    threadId: string
+  ): Promise<ImageDescriptorErrorRequest[]> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    return [...this.pendingImageDescriptorDecisions.values()]
+      .filter((pending) => pending.projectId === projectId && pending.threadId === threadId)
+      .map((pending) => pending.request)
+  }
+
+  /**
+   * Resolve a pending image-descriptor error card. `retry` re-runs the vision
+   * model (with the supplied selection, persisting it to the thread when it
+   * differs); `ignore` forwards whatever partial output exists to the text-only
+   * model so it can work with it or explain what is missing.
+   */
+  async replyImageDescriptor(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    action: ImageDescriptorReplyAction,
+    selection?: AgentModelSelection
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    requestId = validateEntityId(requestId, 'Image descriptor request ID', 256)
+    if (action !== 'retry' && action !== 'ignore') {
+      throw new TypeError('Invalid image descriptor reply')
+    }
+    if (action === 'retry' && selection !== undefined) {
+      selection = {
+        harnessId: validateBoundedString(
+          selection.harnessId,
+          'Image descriptor harness ID',
+          1,
+          256
+        ),
+        providerId: validateBoundedString(
+          selection.providerId,
+          'Image descriptor provider ID',
+          1,
+          256
+        ),
+        modelId: validateBoundedString(selection.modelId, 'Image descriptor model ID', 1, 256)
+      }
+    }
+    const pending = this.pendingImageDescriptorDecisions.get(requestId)
+    if (!pending || pending.projectId !== projectId || pending.threadId !== threadId) {
+      throw new Error(`Image descriptor request is no longer pending: ${requestId}`)
+    }
+    if (pending.timer !== undefined) {
+      clearTimeout(pending.timer)
+    }
+    this.pendingImageDescriptorDecisions.delete(requestId)
+    this.startSessionWatchdog(pending.sessionId)
+    this.broadcast({
+      type: 'imageDescriptor.resolved',
+      sessionId: pending.sessionId,
+      requestId,
+      action
+    })
+    pending.resolve(
+      action === 'retry'
+        ? { action: 'retry', selection: selection ?? undefined }
+        : { action: 'ignore' }
+    )
   }
 
   /** List slash commands exposed by the thread's active harness. */
@@ -8341,6 +8570,18 @@ export class ChatEngine {
       if (pending.request.sessionId === sessionId) {
         this.clearPendingQuestion(requestId)
       }
+    }
+  }
+
+  /** Resolve (as ignore) every image-descriptor decision bound to a session that
+   *  is being torn down, so blocked gateway tool calls return partial output
+   *  instead of hanging forever. */
+  private clearPendingImageDescriptorDecisionsForSession(sessionId: string): void {
+    for (const [requestId, pending] of this.pendingImageDescriptorDecisions) {
+      if (pending.sessionId !== sessionId) continue
+      if (pending.timer !== undefined) clearTimeout(pending.timer)
+      this.pendingImageDescriptorDecisions.delete(requestId)
+      pending.resolve({ action: 'ignore' })
     }
   }
 
