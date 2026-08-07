@@ -199,7 +199,7 @@
     })
   })
 
-  const THREADS_PER_PAGE = 10
+  const THREADS_PER_PAGE = 5
 
   const threadShowCount = new SvelteMap<string, number>()
 
