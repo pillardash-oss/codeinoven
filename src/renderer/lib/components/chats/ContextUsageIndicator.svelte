@@ -186,9 +186,14 @@
 {#snippet modelRows(models: HarnessModelUsage[])}
   <div class="rounded-md border border-border bg-app/40 p-2">
     <p class="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">Models used</p>
-    {#each models as model (model.modelId)}
+    {#each models as model (`${model.providerId}:${model.modelId}`)}
       <div class="flex items-baseline justify-between gap-3 py-0.5 text-[10px]">
-        <span class="min-w-0 truncate font-medium text-foreground">{model.modelId}</span>
+        <span class="flex min-w-0 items-baseline gap-1.5">
+          <span class="truncate font-medium text-foreground">{model.modelId}</span>
+          {#if model.providerId && model.providerId !== model.modelId}
+            <span class="shrink-0 text-[9px] text-dimmed">via {model.providerId}</span>
+          {/if}
+        </span>
         <span class="shrink-0 tabular-nums text-dimmed">
           {model.costUsd > 0
             ? `${formatMoney(model.costUsd)} · ${compactNumber(model.tokens.total)} tok`
