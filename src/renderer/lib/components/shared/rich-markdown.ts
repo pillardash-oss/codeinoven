@@ -474,6 +474,61 @@ function createCodeBlockElement(language: string): HTMLElement {
   return wrapper
 }
 
+function childIndexOf(parent: Node, child: Node): number {
+  const children = parent.childNodes
+  for (let index = 0; index < children.length; index += 1) {
+    if (children[index] === child) return index
+  }
+  return -1
+}
+
+/** True when a node contributes real content to its block. Soft breaks (`<br>`)
+ *  are treated as whitespace so a caret sitting before a trailing break or after
+ *  a leading one still resolves to a block boundary. */
+function hasVisibleContent(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? '').replace(/[\u200b\u00a0]/g, '').length > 0
+  }
+  if (node instanceof HTMLBRElement) return false
+  if (node instanceof HTMLElement) {
+    return Array.from(node.childNodes).some(hasVisibleContent)
+  }
+  return false
+}
+
+/** Whether there is visible content before (`before`) or after (`after`) a
+ *  position inside `block`. The scan is scoped to the block so a caret at a
+ *  block boundary never counts siblings in neighbouring blocks. */
+function hasContentAt(
+  block: HTMLElement,
+  container: Node,
+  offset: number,
+  before: boolean
+): boolean {
+  if (container.nodeType === Node.TEXT_NODE) {
+    const text = container.textContent ?? ''
+    const slice = before ? text.slice(0, offset) : text.slice(offset)
+    if (slice.replace(/[\u200b\u00a0]/g, '').length > 0) return true
+    const parent = container.parentNode
+    if (!parent) return false
+    return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
+  }
+  const children = Array.from(container.childNodes)
+  if (before) {
+    for (let index = offset - 1; index >= 0; index -= 1) {
+      if (hasVisibleContent(children[index] ?? block)) return true
+    }
+  } else {
+    for (let index = offset; index < children.length; index += 1) {
+      if (hasVisibleContent(children[index] ?? block)) return true
+    }
+  }
+  if (container === block) return false
+  const parent = container.parentNode
+  if (!parent) return false
+  return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
+}
+
 function applyCodeFenceRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -493,15 +548,37 @@ function applyCodeFenceRule(root: HTMLElement): boolean {
 
   const fenceStart = cleanBefore.length - fence[0].length
   textNode.deleteData(fenceStart, caretOffset - fenceStart)
+  // Deleting the fence shifts any text after it left; the caret boundary now sits
+  // at `fenceStart` inside the node.
+  const boundaryOffset = fenceStart
 
   const wrapper = createCodeBlockElement(fence[1] ?? '')
   const code = wrapper.querySelector('code')
-  const blockHasText = (block.textContent ?? '').trim().length > 0
-  if (blockHasText) {
+  const hasBefore = hasContentAt(block, textNode, boundaryOffset, true)
+  const hasAfter = hasContentAt(block, textNode, boundaryOffset, false)
+
+  if (hasBefore && hasAfter && textNode.parentElement === block) {
+    // The caret is mid-paragraph (e.g. across a soft break). Split the block:
+    // keep the text before the caret, insert the code block exactly there, and
+    // move the text after the caret into its own paragraph.
+    const range = document.createRange()
+    range.setStart(textNode, boundaryOffset)
+    range.setEnd(block, block.childNodes.length)
+    const fragment = range.extractContents()
+    if (fragment.firstChild instanceof HTMLBRElement) fragment.firstChild.remove()
+    if (block.lastChild instanceof HTMLBRElement) block.lastChild.remove()
     block.after(wrapper)
+    const paragraph = document.createElement('p')
+    paragraph.append(fragment)
+    wrapper.after(paragraph)
+  } else if (hasBefore) {
+    block.after(wrapper)
+  } else if (hasAfter) {
+    block.before(wrapper)
   } else {
     block.replaceWith(wrapper)
   }
+
   if (code) placeCaretInside(code)
   return true
 }
