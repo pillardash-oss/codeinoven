@@ -24,6 +24,12 @@ import {
   WEB_TOOL_OUTPUT_SCHEMAS,
   executeWebTool
 } from './web-tool-providers'
+import {
+  IMAGE_DESCRIPTOR_INPUT_SCHEMA,
+  IMAGE_DESCRIPTOR_OUTPUT_SCHEMA,
+  resolveImageEntries,
+  type ImageDescriptorExecutor
+} from './image-descriptor-provider'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const MAX_REQUEST_BYTES = 1_000_000
@@ -80,12 +86,22 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<string, { server: Server; state: TurnState }>()
   private cuaActivityListener: ((pid: number) => void) | null = null
+  private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
     private readonly cuaBridge = new CuaBridgeService(storage)
   ) {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
+  }
+
+  /**
+   * Register the executor that runs a vision model for `image_descriptor`
+   * utilities. The chat engine supplies it because it owns driver sessions
+   * and the resolved image-descriptor model selection.
+   */
+  setImageDescriptorExecutor(executor: ImageDescriptorExecutor | null): void {
+    this.imageDescriptorExecutor = executor
   }
 
   /**
@@ -277,6 +293,12 @@ export class UtilityOrchestrationService {
         inputSchema: WEB_TOOL_INPUT_SCHEMAS[resolved.utility.kind],
         outputSchema: WEB_TOOL_OUTPUT_SCHEMAS[resolved.utility.kind]
       }
+    } else if (resolved.utility.kind === 'image_descriptor') {
+      capability = {
+        operations: ['describe'],
+        inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
+        outputSchema: IMAGE_DESCRIPTOR_OUTPUT_SCHEMA
+      }
     } else {
       capability = {
         note: 'Provider activation changes launch configuration and cannot safely mutate a running turn.'
@@ -314,6 +336,22 @@ export class UtilityOrchestrationService {
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(resolved.utility, operationInput)
+    } else if (resolved.utility.kind === 'image_descriptor') {
+      if (operation !== 'describe') {
+        throw new Error(`Image descriptor does not expose the operation "${operation}"`)
+      }
+      const executor = this.imageDescriptorExecutor
+      if (!executor) {
+        throw new Error('The image descriptor vision model is not configured')
+      }
+      result = {
+        results: await executor({
+          images: resolveImageEntries(operationInput),
+          projectId: state.request.projectId,
+          threadId: state.request.threadId,
+          projectPath: state.request.projectPath
+        })
+      }
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
@@ -588,6 +626,11 @@ function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): str
     )
   }
   if (kind === 'provider') aliases.push('provider model api inference')
+  if (kind === 'image_descriptor') {
+    aliases.push(
+      'image descriptor describe vision picture photo screenshot see look visual ocr caption alt text'
+    )
+  }
   return aliases.join(' ')
 }
 
@@ -671,7 +714,8 @@ function optionalKinds(value: unknown): Set<UtilityKind> | null {
     'web_search',
     'web_fetch',
     'computer_use',
-    'provider'
+    'provider',
+    'image_descriptor'
   ])
   if (
     !Array.isArray(value) ||
@@ -703,7 +747,7 @@ const tools = [
       type: 'object',
       properties: {
         query: { type: 'string' },
-        kinds: { type: 'array', items: { enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider'] } },
+        kinds: { type: 'array', items: { enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider', 'image_descriptor'] } },
         limit: { type: 'number', minimum: 1, maximum: 20 }
       },
       additionalProperties: false

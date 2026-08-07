@@ -44,10 +44,17 @@ import {
   UtilityOrchestrationService,
   type UtilityTurnGateway
 } from './utility-orchestration-service'
+import {
+  IMAGE_DESCRIPTOR_PROMPT,
+  type ImageDescriptorExecutorRequest,
+  type ImageDescriptorResult,
+  type ResolvedImageEntry
+} from './image-descriptor-provider'
 import type {
   AgentAccountUsage,
   AgentEvent,
   AgentMessage,
+  AgentModelSelection,
   AgentPart,
   AgentQuestion,
   AgentQuestionRequest,
@@ -932,6 +939,9 @@ export class ChatEngine {
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
     this.utilityOrchestration = new UtilityOrchestrationService(storage)
+    this.utilityOrchestration.setImageDescriptorExecutor((request) =>
+      this.executeImageDescriptor(request)
+    )
     if (this.computerUsePip) {
       this.utilityOrchestration.onCuaActivity((pid) => {
         void this.computerUsePip?.track(pid)
@@ -3705,6 +3715,143 @@ export class ChatEngine {
       Logger.dev('Temporary chat deletion was incomplete:', error)
     }
     return true
+  }
+
+  // ─── Image descriptor — vision model for text-only models ──────────────
+
+  /**
+   * Run the image descriptor agent: resolve the thread's (or global) vision
+   * model selection and describe every requested image through a disposable
+   * harness session, tagging each description with the entry's id.
+   */
+  private async executeImageDescriptor(
+    request: ImageDescriptorExecutorRequest
+  ): Promise<ImageDescriptorResult[]> {
+    const thread = await this.threadManager.getThread(request.projectId, request.threadId)
+    const config = await this.storage.getConfig()
+    const selection =
+      thread?.settings?.imageDescriptor ?? config.agentDefaults.imageDescriptor
+    if (!selection) {
+      return request.images.map((entry) => ({
+        id: entry.id,
+        source: entry.source,
+        type: entry.type,
+        description: '',
+        error:
+          'No vision model is configured for image description. Choose a vision model on the Agents settings page, or pick one when sending an image.'
+      }))
+    }
+    const results: ImageDescriptorResult[] = []
+    for (const image of request.images) {
+      try {
+        const description = await this.describeImageOnVisionModel(
+          request.projectId,
+          request.threadId,
+          request.projectPath,
+          selection,
+          image
+        )
+        results.push({ id: image.id, source: image.source, type: image.type, description })
+      } catch (error) {
+        Logger.dev('Image description failed', {
+          harnessId: selection.harnessId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        results.push({
+          id: image.id,
+          source: image.source,
+          type: image.type,
+          description: '',
+          error: error instanceof Error ? error.message : 'Image description failed'
+        })
+      }
+    }
+    return results
+  }
+
+  /** Describe one image in a disposable harness session on the vision model. */
+  private async describeImageOnVisionModel(
+    projectId: string,
+    threadId: string,
+    projectPath: string,
+    selection: AgentModelSelection,
+    image: ResolvedImageEntry
+  ): Promise<string> {
+    const { driver } = await this.resolve(projectId, selection.harnessId, threadId)
+    const settings: ThreadSettings = {
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      thinkingLevel: 'low',
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    }
+    const isolated =
+      driver instanceof OpenCodeDriver
+        ? await driver.createIsolatedSession(projectPath, 'Image description')
+        : undefined
+    const sessionId =
+      isolated?.sessionId ?? (await driver.createSession(projectPath, 'Image description'))
+    this.registerSession(
+      sessionId,
+      projectId,
+      threadId,
+      projectPath,
+      'auto_review',
+      selection.harnessId,
+      undefined,
+      true
+    )
+    try {
+      const completion = this.waitForSessionCompletion(sessionId, 180_000, 'Image description')
+      const request: SendPromptOptions = {
+        sessionId,
+        settings,
+        text: IMAGE_DESCRIPTOR_PROMPT,
+        attachments: [image.attachment],
+        readOnly: true,
+        allowedTools: [],
+        userMessageId: createMessageId()
+      }
+      if (isolated && driver instanceof OpenCodeDriver) {
+        await driver.sendPrompt(projectPath, request, isolated)
+      } else {
+        await driver.sendPrompt(projectPath, request)
+      }
+      await completion
+      const messages =
+        isolated && driver instanceof OpenCodeDriver
+          ? await driver.loadMessages(projectPath, sessionId, isolated)
+          : await driver.loadMessages(projectPath, sessionId)
+      const response = [...messages].reverse().find((message) => message.role === 'assistant')
+      if (!response) throw new Error('The vision model returned no description')
+      if (response.error) throw new Error(response.error)
+      const text = response.parts
+        .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n')
+        .trim()
+      if (!text) throw new Error('The vision model returned an empty description')
+      return text
+    } finally {
+      this.clearCompletionWaiter(sessionId)
+      this.clearSessionWatchdog(sessionId)
+      this.sessionRegistry.delete(sessionId)
+      this.sessionStatuses.delete(sessionId)
+      this.reasoningTimes.delete(sessionId)
+      this.toolTimes.delete(sessionId)
+      if (isolated && driver instanceof OpenCodeDriver) {
+        driver.disposeIsolatedSession(isolated)
+      } else {
+        try {
+          await driver.deleteSession?.(projectPath, sessionId)
+        } catch (error) {
+          Logger.dev('Image descriptor session deletion was incomplete:', error)
+        }
+      }
+    }
   }
 
   /**
