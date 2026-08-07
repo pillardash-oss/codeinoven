@@ -167,16 +167,20 @@
           visibleHarnessCount = 0
           return
         }
-        // Each icon is 14px with a 4px gap; reserve room for the "+n" chip.
+        // Each icon is 14px with a 4px gap. Show as many harness icons as fit,
+        // favouring icons over a +n number; only reserve space for the +n chip
+        // once something actually overflows.
         const ICON = 14
         const GAP = 4
         const PLUS = 22
-        const available = row.clientWidth - PLUS
         const perIcon = ICON + GAP
-        let count = Math.floor((available + GAP) / perIcon)
-        // Always show at least three harnesses before truncating to a +n chip.
+        let count = Math.floor((row.clientWidth + GAP) / perIcon)
         count = Math.max(3, count)
-        count = Math.max(0, Math.min(total, count))
+        count = Math.min(total, count)
+        if (count < total) {
+          const withPlus = Math.floor((row.clientWidth - PLUS + GAP) / perIcon)
+          count = Math.max(3, Math.min(total, withPlus))
+        }
         visibleHarnessCount = count
       })
     }
@@ -616,7 +620,7 @@
     }}
     oncontextmenu={openContextMenu}
   >
-    <span class="flex w-full min-w-0 items-center gap-2 pr-6">
+    <span class="flex w-full min-w-0 items-center gap-2">
       <!-- Project icon -->
       {#if projectIconUrl}
         <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
@@ -695,7 +699,13 @@
       {:else}
         <!-- Current working / last worked model — provider icon alone -->
         {#if currentModelProviderName}
-          <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+          <span
+            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={thread.settings?.modelId ?? 'Model'}
+          >
             <VendorIcon name={currentModelProviderName} size={13} />
           </span>
         {/if}
@@ -704,10 +714,10 @@
 
     {#if showBottomRow}
       <!-- Bottom line: scope badge, harnesses, then time on the right -->
-      <span class="flex w-full min-w-0 items-center gap-1.5 pr-6">
+      <span class="flex w-full min-w-0 items-center gap-1.5">
         {#if scopeBucket}
           <span
-            class="flex min-w-0 max-w-[6rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
+            class="flex min-w-0 max-w-[3.5rem] shrink items-center gap-1 rounded-md px-1 py-0.5 text-[10px]"
             title={scopeBucket.name}
             style="color: {scopeColor}; background: {scopeColor}0d;"
           >
@@ -726,8 +736,8 @@
         {#if harnessIds.length > 0}
           <span
             {@attach captureHarnessRowElement}
-            class="flex min-w-0 items-center gap-1 overflow-hidden {scopeBucket
-              ? 'flex-1 justify-center'
+            class="flex min-w-0 flex-1 items-center gap-1 overflow-hidden {scopeBucket
+              ? 'justify-center'
               : 'justify-start'}"
           >
             {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
