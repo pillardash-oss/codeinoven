@@ -464,7 +464,9 @@ class ThreadMessagesStore {
     compaction = false,
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
-    contextUsed?: number
+    contextUsed?: number,
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -476,6 +478,8 @@ class ThreadMessagesStore {
     if (tokens) doneMsg.tokens = tokens
     if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
     if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (rateLimits) doneMsg.rateLimits = rateLimits
+    if (credits) doneMsg.credits = credits
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -507,7 +511,8 @@ class ThreadMessagesStore {
     contextWindow?: number,
     contextUsed?: number,
     cost?: number,
-    rateLimits?: AgentMessage['rateLimits']
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -518,6 +523,7 @@ class ThreadMessagesStore {
     if (contextUsed !== undefined) message.contextUsed = contextUsed
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
+    if (credits) message.credits = credits
     entry.messages = [...entry.messages]
     this.#notify()
   }
@@ -580,7 +586,9 @@ class ThreadMessagesStore {
           event.compaction,
           event.tokens,
           event.contextWindow,
-          event.contextUsed
+          event.contextUsed,
+          event.rateLimits,
+          event.credits
         )
         break
       case 'usage.updated':
@@ -593,7 +601,8 @@ class ThreadMessagesStore {
           event.contextWindow,
           event.contextUsed,
           event.cost,
-          event.rateLimits
+          event.rateLimits,
+          event.credits
         )
         break
       case 'session.status':

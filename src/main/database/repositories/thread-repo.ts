@@ -83,6 +83,19 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   const rateLimits = Array.isArray(record.rateLimits)
     ? (record.rateLimits as AgentRateLimitWindow[])
     : []
+  const creditsRecord = record.credits
+  const credits =
+    creditsRecord && typeof creditsRecord === 'object'
+      ? (() => {
+          const raw = creditsRecord as Record<string, unknown>
+          return {
+            ...(typeof raw.balance === 'number' ? { balance: raw.balance } : {}),
+            ...(typeof raw.hasCredits === 'boolean' ? { hasCredits: raw.hasCredits } : {}),
+            ...(typeof raw.unlimited === 'boolean' ? { unlimited: raw.unlimited } : {}),
+            ...(typeof raw.planType === 'string' ? { planType: raw.planType } : {})
+          }
+        })()
+      : undefined
   return {
     harnessId: record.harnessId,
     providerId: record.providerId,
@@ -91,7 +104,8 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
     contextWindow: typeof record.contextWindow === 'number' ? record.contextWindow : undefined,
     costUsd: record.costUsd,
     tokens: tokens as unknown as AgentTokenUsage,
-    rateLimits
+    rateLimits,
+    ...(credits && Object.keys(credits).length > 0 ? { credits } : {})
   }
 }
 

@@ -281,23 +281,45 @@ function rateLimitWindow(
   const usedPercent =
     utilization === undefined ? undefined : utilization <= 1 ? utilization * 100 : utilization
   const resetsAt = epochMilliseconds(limit['resetsAt'] ?? limit['resets_at'])
+  const windowMinutes = numberProperty(limit, 'window_duration_mins', 'windowDurationMins')
   const overageStatus = string(limit['overageStatus']) ?? string(limit['overage_status'])
   const overageDisabledReason =
     string(limit['overageDisabledReason']) ?? string(limit['overage_disabled_reason'])
   const isUsingOverageValue = limit['isUsingOverage'] ?? limit['is_using_overage']
   const isUsingOverage = typeof isUsingOverageValue === 'boolean' ? isUsingOverageValue : undefined
-  const id = string(limit['id']) ?? limitType ?? status ?? fallbackId
-  const windowLabel = limitType ? limitType.replaceAll('_', ' ') : 'usage limit'
+  const id = string(limit['id']) ?? limitType ?? fallbackId ?? status ?? 'claude-rate-limit'
+  const label = windowLabel(limitType, windowMinutes, fallbackId)
   return {
     id,
-    label: `Claude ${windowLabel}`,
+    label,
     ...(status === undefined ? {} : { status }),
     ...(usedPercent === undefined ? {} : { usedPercent: Math.min(100, usedPercent) }),
     ...(resetsAt === undefined ? {} : { resetsAt }),
+    ...(windowMinutes === undefined ? {} : { windowMinutes }),
     ...(overageStatus === undefined ? {} : { overageStatus }),
     ...(overageDisabledReason === undefined ? {} : { overageDisabledReason }),
     ...(isUsingOverage === undefined ? {} : { isUsingOverage })
   }
+}
+
+/** Human label for a Claude rate-limit type, e.g. `five_hour` → `5-hour`. */
+function windowLabel(
+  limitType: string | undefined,
+  windowMinutes: number | undefined,
+  fallbackId?: string
+): string {
+  if (windowMinutes !== undefined) {
+    if (windowMinutes === 300) return '5-hour limit'
+    if (windowMinutes === 10_080) return 'Weekly limit'
+    if (windowMinutes % 1_440 === 0) return `${windowMinutes / 1_440}-day limit`
+    if (windowMinutes % 60 === 0) return `${windowMinutes / 60}-hour limit`
+    return `${windowMinutes}-minute limit`
+  }
+  const type = (limitType ?? fallbackId)?.toLowerCase()
+  if (type === 'five_hour' || type === '5h' || type === '5hour') return '5-hour limit'
+  if (type === 'seven_day' || type === '7day' || type === 'weekly') return 'Weekly limit'
+  if (limitType) return limitType.replaceAll('_', ' ')
+  return 'usage limit'
 }
 
 function rateLimitWindows(value: unknown): AgentRateLimitWindow[] {

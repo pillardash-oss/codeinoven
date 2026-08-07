@@ -628,6 +628,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
         if (event.rateLimits) message.rateLimits = event.rateLimits
+        if (event.credits) message.credits = event.credits
       }
     }
     if (event.type === 'usage.updated') {
@@ -638,6 +639,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
+        if (event.credits) message.credits = event.credits
       }
     }
   }

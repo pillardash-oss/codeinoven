@@ -6,6 +6,7 @@ import { promisify } from 'util'
 import type {
   AgentEvent,
   AgentRateLimitWindow,
+  AgentUsageCredits,
   AgentMessage,
   AgentPart,
   AgentTokenUsage,
@@ -731,16 +732,17 @@ export class CodexDriver extends PersistentCliDriver {
     if (!error) {
       try {
         const result = await this.appServerRequest(active, 'account/rateLimits/read')
-        const rateLimits = mapCodexRateLimits(result)
+        const telemetry = mapCodexRateLimits(result)
         const finalMessage = [...active.session.messages]
           .reverse()
           .find((message) => message.role === 'assistant')
-        if (rateLimits.length > 0 && finalMessage) {
+        if ((telemetry.rateLimits.length > 0 || telemetry.credits) && finalMessage) {
           const event: AgentEvent = {
             type: 'usage.updated',
             sessionId: active.session.id,
             messageId: finalMessage.id,
-            rateLimits
+            ...(telemetry.rateLimits.length > 0 ? { rateLimits: telemetry.rateLimits } : {}),
+            ...(telemetry.credits ? { credits: telemetry.credits } : {})
           }
           this.applyEventToSession(active.session, event)
           this.emit(event)
@@ -1091,7 +1093,10 @@ export class CodexDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     messageId: string
   ): Promise<void> {
-    const rateLimits = await new Promise<AgentRateLimitWindow[]>((resolve) => {
+    const telemetry = await new Promise<{
+      rateLimits: AgentRateLimitWindow[]
+      credits?: AgentUsageCredits
+    }>((resolve) => {
       const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
         cwd: projectPath,
         env: buildHarnessEnvironment(),
@@ -1099,9 +1104,12 @@ export class CodexDriver extends PersistentCliDriver {
       })
       let buffer = ''
       let settled = false
-      const timer = setTimeout(() => finish([]), CODEX_USAGE_TIMEOUT_MS)
+      const timer = setTimeout(() => finish({ rateLimits: [] }), CODEX_USAGE_TIMEOUT_MS)
 
-      const finish = (value: AgentRateLimitWindow[]): void => {
+      const finish = (value: {
+        rateLimits: AgentRateLimitWindow[]
+        credits?: AgentUsageCredits
+      }): void => {
         if (settled) return
         settled = true
         clearTimeout(timer)
@@ -1122,7 +1130,7 @@ export class CodexDriver extends PersistentCliDriver {
         }
         if (payload['id'] === 2) {
           if (payload['error']) {
-            finish([])
+            finish({ rateLimits: [] })
             return
           }
           finish(mapCodexRateLimits(payload['result']))
@@ -1140,9 +1148,9 @@ export class CodexDriver extends PersistentCliDriver {
           }
         }
       })
-      child.on('error', () => finish([]))
+      child.on('error', () => finish({ rateLimits: [] }))
       child.on('exit', () => {
-        if (!settled) finish([])
+        if (!settled) finish({ rateLimits: [] })
       })
       send({
         id: 1,
@@ -1154,12 +1162,13 @@ export class CodexDriver extends PersistentCliDriver {
       })
     })
 
-    if (rateLimits.length === 0) return
+    if (telemetry.rateLimits.length === 0 && !telemetry.credits) return
     const event: AgentEvent = {
       type: 'usage.updated',
       sessionId: session.id,
       messageId,
-      rateLimits
+      ...(telemetry.rateLimits.length > 0 ? { rateLimits: telemetry.rateLimits } : {}),
+      ...(telemetry.credits ? { credits: telemetry.credits } : {})
     }
     this.applyEventToSession(session, event)
     this.emit(event)
@@ -1752,25 +1761,102 @@ function rateLimitLabel(window: Record<string, unknown>, fallback: string): stri
   return fallback
 }
 
-function mapCodexRateLimits(value: unknown): AgentRateLimitWindow[] {
-  const result = recordValue(value)
-  const limits = recordValue(result?.['rateLimits'])
-  if (!limits) return []
+/**
+ * Normalize one Codex `RateLimitSnapshot` window (primary/secondary) plus the
+ * per-limit metadata (window length, credits, plan) into the shared shape.
+ * `credits.balance` is a decimal string from the server; it is parsed to a
+ * number so the battery can render it.
+ */
+function mapCodexRateLimitSnapshot(
+  limitId: string,
+  snapshot: Record<string, unknown>,
+  modelSuffix: string | undefined
+): { rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } {
   const mapped: AgentRateLimitWindow[] = []
-  for (const [key, raw] of Object.entries(limits)) {
-    const window = recordValue(raw)
+  const primary = recordValue(snapshot['primary'])
+  const secondary = recordValue(snapshot['secondary'])
+  const windows: Array<[string, Record<string, unknown> | null, string]> = [
+    ['primary', primary, 'Primary limit'],
+    ['secondary', secondary, 'Secondary limit']
+  ]
+  for (const [key, window, fallback] of windows) {
     if (!window) continue
     const usedPercent = numberValue(window['usedPercent'])
     const resetsAt = numberValue(window['resetsAt'])
+    const windowMinutes = numberValue(window['windowDurationMins'])
     if (usedPercent === undefined && resetsAt === undefined) continue
+    const baseLabel = rateLimitLabel(window, fallback)
     mapped.push({
-      id: `codex:${key}`,
-      label: rateLimitLabel(window, key === 'primary' ? 'Primary limit' : 'Secondary limit'),
-      ...(usedPercent === undefined ? {} : { usedPercent }),
-      ...(resetsAt === undefined ? {} : { resetsAt: resetsAt * 1_000 })
+      id: `codex:${limitId}:${key}`,
+      label: modelSuffix ? `${modelSuffix} · ${baseLabel}` : baseLabel,
+      ...(usedPercent === undefined
+        ? {}
+        : { usedPercent: Math.max(0, Math.min(100, usedPercent)) }),
+      ...(resetsAt === undefined ? {} : { resetsAt: resetsAt * 1_000 }),
+      ...(windowMinutes === undefined ? {} : { windowMinutes }),
+      ...(modelSuffix === undefined ? {} : { model: modelSuffix })
     })
   }
-  return mapped
+
+  const creditsValue = recordValue(snapshot['credits'])
+  let credits: AgentUsageCredits | undefined
+  if (creditsValue) {
+    const hasCredits = creditsValue['hasCredits'] === true
+    const unlimited = creditsValue['unlimited'] === true
+    const rawBalance = creditsValue['balance']
+    const balance =
+      typeof rawBalance === 'string' ? Number.parseFloat(rawBalance) : numberValue(rawBalance)
+    if (hasCredits || unlimited || balance !== undefined) {
+      credits = {
+        ...(typeof creditsValue['hasCredits'] === 'boolean' ? { hasCredits } : {}),
+        ...(typeof creditsValue['unlimited'] === 'boolean' ? { unlimited } : {}),
+        ...(balance !== undefined && Number.isFinite(balance) ? { balance } : {})
+      }
+    }
+  }
+
+  return { rateLimits: mapped, ...(credits ? { credits } : {}) }
+}
+
+/**
+ * Map Codex's `account/rateLimits/read` payload into display windows. The
+ * response carries a backward-compatible single-bucket `rateLimits` view plus a
+ * `rateLimitsByLimitId` map for model-specific quotas (e.g. a separate
+ * GPT-Codex-Spark limit). Prefer the per-limit map when present so model-scoped
+ * windows are never collapsed into the default buckets.
+ */
+export function mapCodexRateLimits(value: unknown): {
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+} {
+  const result = recordValue(value)
+  if (!result) return { rateLimits: [] }
+  const byLimitId = recordValue(result['rateLimitsByLimitId'])
+  const limits = recordValue(result['rateLimits'])
+  const mapped: AgentRateLimitWindow[] = []
+  let credits: AgentUsageCredits | undefined
+
+  if (byLimitId && Object.keys(byLimitId).length > 0) {
+    for (const [limitId, raw] of Object.entries(byLimitId)) {
+      const snapshot = recordValue(raw)
+      if (!snapshot) continue
+      const limitName = stringValue(snapshot['limitName']) ?? limitId
+      const modelSuffix = limitId === 'codex' ? undefined : limitName
+      const mappedSnapshot = mapCodexRateLimitSnapshot(limitId, snapshot, modelSuffix)
+      mapped.push(...mappedSnapshot.rateLimits)
+      if (mappedSnapshot.credits) credits = mappedSnapshot.credits
+    }
+  } else if (limits) {
+    const mappedSnapshot = mapCodexRateLimitSnapshot('codex', limits, undefined)
+    mapped.push(...mappedSnapshot.rateLimits)
+    if (mappedSnapshot.credits) credits = mappedSnapshot.credits
+  }
+
+  if (credits) {
+    const planType = stringValue(limits?.['planType']) ?? stringValue(result['planType'])
+    if (planType) credits = { ...credits, planType }
+  }
+  return { rateLimits: mapped, ...(credits ? { credits } : {}) }
 }
 
 /**

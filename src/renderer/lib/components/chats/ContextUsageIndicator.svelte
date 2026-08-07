@@ -61,6 +61,17 @@
 
   function formatReset(value: number | undefined): string {
     if (!value) return 'Reset time unavailable'
+    const now = Date.now()
+    if (value > now) {
+      const minutes = Math.max(1, Math.round((value - now) / 60_000))
+      const duration =
+        minutes >= 1_440
+          ? `${Math.round(minutes / 1_440)}d ${Math.round((minutes % 1_440) / 60)}h`
+          : minutes >= 60
+            ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+            : `${minutes}m`
+      return `Resets in ${duration}`
+    }
     return `Resets ${new Intl.DateTimeFormat(undefined, {
       month: 'short',
       day: 'numeric',
@@ -94,6 +105,15 @@
     return limit.overageDisabledReason
       ? `${status} · ${readableStatus(limit.overageDisabledReason).toLowerCase()}`
       : status
+  }
+
+  function creditsLine(usage: AgentContextUsage): string | undefined {
+    const credits = usage.credits
+    if (!credits) return undefined
+    if (credits.unlimited) return 'Unlimited'
+    if (credits.balance !== undefined) return `${formatMoney(credits.balance)} credits`
+    if (credits.hasCredits) return 'Credits active'
+    return undefined
   }
 </script>
 
@@ -129,7 +149,14 @@
           {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
         </p>
       </div>
-      <BatteryMedium size={15} class={iconClass} />
+      <div class="flex items-center gap-2">
+        {#if usage && creditsLine(usage)}
+          <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+            {creditsLine(usage)}
+          </span>
+        {/if}
+        <BatteryMedium size={15} class={iconClass} />
+      </div>
     </div>
 
     {#if usage && usage.rateLimits.length > 0}
