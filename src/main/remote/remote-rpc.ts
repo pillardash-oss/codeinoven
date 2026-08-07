@@ -91,6 +91,7 @@ export interface RemoteRpcServices {
     | 'updateQuestion'
     | 'listContextCapabilities'
     | 'listProviders'
+    | 'refreshAccountUsage'
     | 'loadSessionMessages'
     | 'getChildSessionStatus'
     | 'retryChildSession'
@@ -331,6 +332,8 @@ export class RemoteRpcDispatcher {
         return chatEngine.listProviderSnapshot(this.string(args[0]))
       case 'agent:refreshProviderCatalog':
         return chatEngine.listProviders(this.string(args[0]), true)
+      case 'agent:refreshAccountUsage':
+        return chatEngine.refreshAccountUsage(this.string(args[0]), this.string(args[1]))
       case 'agent:getSessionStatus':
         return chatEngine.getSessionStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:ensureSession':

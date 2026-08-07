@@ -1175,6 +1175,84 @@ export class CodexDriver extends PersistentCliDriver {
     await this.persistSession(session)
   }
 
+  /**
+   * Fetch the account's current quota telemetry on demand. Unlike
+   * `refreshRateLimits` this needs no live session: it spawns a fresh app-server
+   * and calls `account/rateLimits/read`, so the battery can show current quota
+   * for old threads whose turns predate quota capture.
+   */
+  async readAccountUsage(
+    projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
+    try {
+      const result = await new Promise<Record<string, unknown> | null>((resolve) => {
+        const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
+          cwd: projectPath,
+          env: buildHarnessEnvironment(),
+          stdio: ['pipe', 'pipe', 'pipe']
+        })
+        let buffer = ''
+        let settled = false
+        const timer = setTimeout(() => finish(null), CODEX_USAGE_TIMEOUT_MS)
+        const finish = (value: Record<string, unknown> | null): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          if (!child.killed) child.kill()
+          resolve(value)
+        }
+        const send = (payload: Record<string, unknown>): void => {
+          child.stdin?.write(`${JSON.stringify(payload)}\n`)
+        }
+        const consume = (line: string): void => {
+          if (!line.trim()) return
+          const payload = recordValue(JSON.parse(line) as unknown)
+          if (!payload) return
+          if (payload['id'] === 1) {
+            send({ method: 'initialized' })
+            send({ id: 2, method: 'account/rateLimits/read' })
+            return
+          }
+          if (payload['id'] === 2) {
+            if (payload['error']) finish(null)
+            else finish(recordValue(payload['result']))
+          }
+        }
+        child.stdout?.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString()
+          const lines = buffer.split(/\r?\n/u)
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            try {
+              consume(line)
+            } catch {
+              // Ignore malformed side-channel output.
+            }
+          }
+        })
+        child.on('error', () => finish(null))
+        child.on('exit', () => {
+          if (!settled) finish(null)
+        })
+        send({
+          id: 1,
+          method: 'initialize',
+          params: {
+            clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+            capabilities: { experimentalApi: true }
+          }
+        })
+      })
+      if (!result) return null
+      const telemetry = mapCodexRateLimits(result)
+      if (telemetry.rateLimits.length === 0 && !telemetry.credits) return null
+      return telemetry
+    } catch (error) {
+      Logger.dev('Codex on-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
   /** Read persisted thread usage that `codex exec --json` does not stream. */
   private async refreshContextUsage(
     projectPath: string,

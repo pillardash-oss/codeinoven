@@ -304,3 +304,60 @@ describe('mapCodexRateLimits', () => {
     expect(telemetry.credits).toEqual({ hasCredits: true, unlimited: true })
   })
 })
+
+describe('CodexDriver readAccountUsage', () => {
+  it('fetches account quota on demand via account/rateLimits/read', async () => {
+    const child = new FakeChild()
+    child.stdin.write.mockImplementation((value: string) => {
+      const payload = JSON.parse(value) as Record<string, unknown>
+      const id = typeof payload['id'] === 'number' ? payload['id'] : undefined
+      const method = typeof payload['method'] === 'string' ? payload['method'] : undefined
+      if (id === 1) {
+        child.emitPayload({ id, result: { userAgent: 'probe' } })
+        return true
+      }
+      if (id === 2 && method === 'account/rateLimits/read') {
+        child.emitPayload({
+          id,
+          result: {
+            rateLimits: {
+              limitId: 'codex',
+              primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_779_459_394 },
+              credits: { hasCredits: true, unlimited: false, balance: '766.76' },
+              planType: 'prolite'
+            },
+            rateLimitsByLimitId: {
+              codex: {
+                primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_779_459_394 },
+                credits: { hasCredits: true, unlimited: false, balance: '766.76' },
+                planType: 'prolite'
+              },
+              spark: {
+                limitId: 'spark',
+                limitName: 'GPT-5.3-Codex-Spark',
+                primary: { usedPercent: 8, windowDurationMins: 300, resetsAt: 1_779_459_394 }
+              }
+            }
+          }
+        })
+        return true
+      }
+      return true
+    })
+    spawnMock.mockReturnValueOnce(child as unknown as ChildProcess)
+    const driver = new CodexDriver(await storage())
+    const telemetry = await driver.readAccountUsage('/project')
+    expect(telemetry?.rateLimits.length).toBeGreaterThan(0)
+    const spark = telemetry?.rateLimits.find((window) => window.id.startsWith('codex:spark'))
+    expect(spark).toMatchObject({
+      label: 'GPT-5.3-Codex-Spark · 5-hour limit',
+      usedPercent: 8
+    })
+    expect(telemetry?.credits).toEqual({
+      hasCredits: true,
+      unlimited: false,
+      balance: 766.76,
+      planType: 'prolite'
+    })
+  })
+})

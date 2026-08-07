@@ -1190,6 +1190,14 @@ export interface AgentHarnessUsage {
   credits?: AgentUsageCredits
 }
 
+/** On-demand account quota snapshot returned for the thread's current harness. */
+export interface AgentAccountUsage {
+  harnessId: string
+  providerId: string
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+}
+
 /** Last-known usage snapshot stored with a thread so the meter restores
  *  instantly on mount and is evacuated automatically when the thread row is
  *  deleted. The harness/provider pair guard against showing usage from a
