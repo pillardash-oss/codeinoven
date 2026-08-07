@@ -1632,15 +1632,7 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
-    {:else if hidePermissionSelector}
-      <span
-        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[11px] text-muted"
-        title="Chats always run with auto permission review — every permission that is not explicitly denied is auto-approved"
-      >
-        <ShieldCheck size={12} class="text-info" />
-        <span class="composer-control-label">Auto</span>
-      </span>
-    {:else}
+    {:else if !hidePermissionSelector}
       <div class="relative">
         <button
           type="button"
