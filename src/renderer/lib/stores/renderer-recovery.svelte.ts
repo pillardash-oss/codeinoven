@@ -50,6 +50,8 @@ export class RendererRecoveryStore {
   collapsedFolders = $state<string[]>([])
   favoriteModels = $state<string[]>([])
   recentModels = $state<string[]>([])
+  chatFavoriteModels = $state<string[]>([])
+  chatRecentModels = $state<string[]>([])
   auditModelKey = $state<string | undefined>(undefined)
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
   private queuedMessages = $state<Record<string, QueuedMessageEntry>>({})
@@ -62,6 +64,8 @@ export class RendererRecoveryStore {
     this.collapsedFolders = saved.collapsedFolders
     this.favoriteModels = saved.favoriteModels
     this.recentModels = saved.recentModels
+    this.chatFavoriteModels = saved.chatFavoriteModels
+    this.chatRecentModels = saved.chatRecentModels
     this.auditModelKey = saved.auditModelKey
     this.composerDrafts = saved.composerDrafts
     this.queuedMessages = saved.queuedMessages
@@ -91,6 +95,8 @@ export class RendererRecoveryStore {
       collapsedFolders: [...this.collapsedFolders],
       favoriteModels: [...this.favoriteModels],
       recentModels: [...this.recentModels],
+      chatFavoriteModels: [...this.chatFavoriteModels],
+      chatRecentModels: [...this.chatRecentModels],
       auditModelKey: this.auditModelKey
     }
   }
@@ -319,6 +325,46 @@ export class RendererRecoveryStore {
 
   addRecentModel(modelKey: string): void {
     this.recentModels = [modelKey, ...this.recentModels.filter((k) => k !== modelKey)].slice(0, 10)
+    this.persist()
+  }
+
+  toggleChatFavorite(modelKey: string): void {
+    const idx = this.chatFavoriteModels.indexOf(modelKey)
+    if (idx === -1) {
+      this.chatFavoriteModels = [...this.chatFavoriteModels, modelKey]
+    } else {
+      this.chatFavoriteModels = this.chatFavoriteModels.filter((k) => k !== modelKey)
+    }
+    this.persist()
+  }
+
+  isChatFavorite(modelKey: string): boolean {
+    return this.chatFavoriteModels.includes(modelKey)
+  }
+
+  /**
+   * Move a chat favorite to a new position relative to another chat favorite.
+   * The array is stored oldest-first; the picker displays it reversed, so
+   * callers should pass the position in storage order.
+   */
+  reorderChatFavorite(draggedKey: string, targetKey: string, position: 'before' | 'after'): void {
+    if (draggedKey === targetKey) return
+    const favorites = [...this.chatFavoriteModels]
+    const draggedIndex = favorites.indexOf(draggedKey)
+    if (draggedIndex === -1) return
+    favorites.splice(draggedIndex, 1)
+    const targetIndex = favorites.indexOf(targetKey)
+    if (targetIndex === -1) return
+    favorites.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedKey)
+    this.chatFavoriteModels = favorites
+    this.persist()
+  }
+
+  addChatRecentModel(modelKey: string): void {
+    this.chatRecentModels = [
+      modelKey,
+      ...this.chatRecentModels.filter((k) => k !== modelKey)
+    ].slice(0, 10)
     this.persist()
   }
 

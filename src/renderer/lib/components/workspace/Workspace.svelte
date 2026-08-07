@@ -58,7 +58,7 @@
   import { pickColorForSeed } from '$lib/project-colors'
   import { hasProjectNameCollision } from '$lib/project-location'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { threadSettings, chatSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -1264,7 +1264,7 @@
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: '',
-      settings: { ...threadSettings.lastUsed, engineeringMode: false }
+      settings: { ...chatSettings.lastUsed, engineeringMode: false }
     })
     allThreads = [thread, ...allThreads]
     chatDraft.message = msg
@@ -2379,18 +2379,19 @@
                   autofocus
                   showEngineeringMode={false}
                   showChatModes
-                  settings={threadSettings.lastUsed}
-                  onSettingsChange={(settings) => threadSettings.commit(settings)}
+                  hidePermissionSelector
+                  settings={chatSettings.lastUsed}
+                  onSettingsChange={(settings) => chatSettings.commit(settings)}
                   providers={chatProviders}
                   projectId={chatInboxId}
-                  harnessId={threadSettings.lastUsed.harnessId}
-                  favoriteModels={rendererRecovery.favoriteModels}
+                  harnessId={chatSettings.lastUsed.harnessId}
+                  favoriteModels={rendererRecovery.chatFavoriteModels}
                   onToggleFavorite={(providerId, modelId) =>
-                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                    rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
-                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                  recentModels={rendererRecovery.recentModels}
-                  onModelUsed={(modelKey) => rendererRecovery.addRecentModel(modelKey)}
+                    rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                  recentModels={rendererRecovery.chatRecentModels}
+                  onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
                   initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
                   onValueChange={(value) =>
                     rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}

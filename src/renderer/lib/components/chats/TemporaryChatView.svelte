@@ -14,6 +14,7 @@
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import type {
     AgentMessage,
@@ -555,6 +556,14 @@
             showEngineeringMode={false}
             readOnlyMode
             allowAttachments
+            hidePermissionSelector
+            favoriteModels={rendererRecovery.chatFavoriteModels}
+            onToggleFavorite={(providerId, modelId) =>
+              rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+            recentModels={rendererRecovery.chatRecentModels}
+            onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
             {references}
             onRemoveReference={() => (tab.selectionAttached = false)}
             initialValue={tab.draft}
