@@ -16,6 +16,7 @@
   const diagramId = `mermaid-${componentId}`
   let copied = $state(false)
   let error = $state<string>()
+  let errorDetail = $state<string>()
   let expanded = $state(false)
   let rendering = $state(true)
   let sourceVisible = $state(false)
@@ -50,14 +51,16 @@
         const renderNumber = ++currentRender
         rendering = true
         error = undefined
+        errorDetail = undefined
 
         try {
           const nextSvg = await renderMermaid(`${diagramId}-${renderNumber}`, source, readTheme())
           if (disposed || renderNumber !== currentRender) return
           svg = nextSvg
-        } catch {
+        } catch (reason) {
           if (disposed || renderNumber !== currentRender) return
           error = 'This Mermaid diagram could not be rendered.'
+          errorDetail = reason instanceof Error ? reason.message : String(reason)
         } finally {
           if (!disposed && renderNumber === currentRender) rendering = false
         }
@@ -172,7 +175,14 @@
   </div>
 
   {#if error}
-    <div class="border-b bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">{error}</div>
+    <div class="border-b bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">
+      <p>{error}</p>
+      {#if errorDetail}
+        <p class="mt-0.5 break-words font-mono text-[10px] text-danger/70" title={errorDetail}>
+          {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
+        </p>
+      {/if}
+    </div>
   {/if}
 
   {#if !error}
