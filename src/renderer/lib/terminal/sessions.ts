@@ -1,5 +1,6 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
+import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
 import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -201,6 +202,15 @@ class TerminalSessionManager {
     // (nvim, htop, tmux...). ghostty-web never does this on its own.
     subs.push(
       attachMouseTracking({ term, host }, (data) => {
+        window.api.send('pty:write', id, data)
+      })
+    )
+
+    // Multi-line paste (bracketed-paste aware, CR-normalized) and option/control
+    // +Arrow word hopping for the shell. ghostty-web's built-in handling is
+    // missing both.
+    subs.push(
+      attachTerminalInputCompat({ term, host }, (data) => {
         window.api.send('pty:write', id, data)
       })
     )

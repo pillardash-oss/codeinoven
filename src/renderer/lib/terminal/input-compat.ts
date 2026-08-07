@@ -1,0 +1,78 @@
+import type { Terminal } from 'ghostty-web'
+
+interface TerminalInputCompatOptions {
+  term: Terminal
+  host: HTMLElement
+}
+
+/**
+ * Legacy sequences zsh/readline bind by default for word navigation. ghostty-web
+ * encodes option/control+arrows as CSI-modified cursor keys (`ESC[1;3D` /
+ * `ESC[1;5D`), which vim understands but the shells' line editors do not.
+ */
+const LEGACY_BACKWARD_WORD = '\x1bb'
+const LEGACY_FORWARD_WORD = '\x1bf'
+
+const BRACKETED_PASTE_START = '\x1b[200~'
+const BRACKETED_PASTE_END = '\x1b[201~'
+
+/**
+ * Normalize pasted text the way a desktop terminal would: line separators are
+ * CR (`\r` is "Enter" in terminal semantics), never LF.
+ */
+function normalizePastedText(text: string): string {
+  return text.replaceAll('\r\n', '\r').replaceAll('\n', '\r')
+}
+
+/**
+ * Restores two behaviors ghostty-web does not provide out of the box:
+ *
+ * 1. Multi-line paste: ghostty's element-level paste handler forwards raw text
+ *    (no bracketed-paste delimiters), so shells with bracketed paste enabled
+ *    execute each pasted line immediately. This routes every paste through the
+ *    bracketed-paste wrapping the shell negotiated, exactly like a desktop
+ *    terminal, regardless of which internal element holds focus.
+ *
+ * 2. Option/control+Arrow word hopping: the WASM key encoder emits CSI-modified
+ *    cursor sequences (`ESC[1;3D`, `ESC[1;5C`, ...) which work in full-screen
+ *    apps (vim) but are unbound in zsh/readline. In plain shell mode those are
+ *    translated to the legacy `ESC b` / `ESC f` word-move sequences the line
+ *    editors bind by default. Full-screen apps that enable application cursor
+ *    keys (vim, less, tmux panes) keep the encoder's own sequences.
+ */
+export function attachTerminalInputCompat(
+  { term, host }: TerminalInputCompatOptions,
+  send: (data: string) => void
+): () => void {
+  const onKeydown = (event: KeyboardEvent): void => {
+    if (event.metaKey) return
+    const isWordMove =
+      (event.altKey || event.ctrlKey) && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
+    if (!isWordMove) return
+    // A full-screen app owns the keyboard on the alternate screen or with
+    // application cursor keys enabled (vim, less, htop...). Leave those keys
+    // for the app's own (working) bindings; only translate in a plain shell.
+    if (term.wasmTerm?.isAlternateScreen() || term.getMode(1)) return
+    event.preventDefault()
+    event.stopPropagation()
+    send(event.key === 'ArrowLeft' ? LEGACY_BACKWARD_WORD : LEGACY_FORWARD_WORD)
+  }
+  const onPaste = (event: ClipboardEvent): void => {
+    const text = event.clipboardData?.getData('text/plain')
+    if (!text) return
+    event.preventDefault()
+    event.stopPropagation()
+    const normalized = normalizePastedText(text)
+    const bracketed = term.wasmTerm?.hasBracketedPaste()
+    send(bracketed ? `${BRACKETED_PASTE_START}${normalized}${BRACKETED_PASTE_END}` : normalized)
+  }
+
+  const options: AddEventListenerOptions = { capture: true }
+  host.addEventListener('keydown', onKeydown, options)
+  host.addEventListener('paste', onPaste, options)
+
+  return () => {
+    host.removeEventListener('keydown', onKeydown, options)
+    host.removeEventListener('paste', onPaste, options)
+  }
+}
