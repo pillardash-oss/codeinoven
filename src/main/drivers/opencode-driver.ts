@@ -1365,10 +1365,10 @@ export class OpenCodeDriver implements HarnessDriver {
           name: model.name,
           reasoning: model.reasoning,
           thinkingPresets: model.thinkingPresets,
-          // Custom base-URL providers carry no capability data; conservatively
-          // treated as text-only (matches the renderer override) so the
-          // image-descriptor gate still offers a vision model.
-          attachment: false,
+          // Custom providers expose no capability data; use the user-declared
+          // vision flag and default to vision-capable so a custom vision model
+          // is never wrongly hidden or gated.
+          attachment: model.vision !== false,
           toolcall: true,
           contextWindow: model.contextWindow,
           fastSupported: false

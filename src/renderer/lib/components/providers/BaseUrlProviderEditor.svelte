@@ -41,6 +41,7 @@
     maxOutputTokens: string
     reasoning: boolean
     defaultThinkingLevel: ThinkingLevel | ''
+    vision: boolean
   }
 
   interface ProviderDraft {
@@ -150,7 +151,8 @@
               contextWindow: model.contextWindow?.toString() ?? '',
               maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
               reasoning: model.reasoning,
-              defaultThinkingLevel: model.defaultThinkingLevel ?? ''
+              defaultThinkingLevel: model.defaultThinkingLevel ?? '',
+              vision: model.vision ?? true
             }))
           : [emptyModelDraft()],
         enabled: provider.enabled
@@ -166,7 +168,8 @@
       contextWindow: '',
       maxOutputTokens: '',
       reasoning: false,
-      defaultThinkingLevel: ''
+      defaultThinkingLevel: '',
+      vision: true
     }
   }
 
@@ -201,7 +204,8 @@
         contextWindow: '',
         maxOutputTokens: '',
         reasoning: false,
-        defaultThinkingLevel: ''
+        defaultThinkingLevel: '',
+        vision: true
       }
     ]
   }
@@ -237,6 +241,7 @@
         id,
         name: model.name.trim() || id,
         reasoning: model.reasoning,
+        vision: model.vision,
         ...(model.contextWindow.trim()
           ? { contextWindow: Number.parseInt(model.contextWindow, 10) }
           : {}),
@@ -354,6 +359,7 @@
     maxOutputTokens: string
     reasoning: boolean
     defaultThinkingLevel: ThinkingLevel | ''
+    vision: boolean
   }): ModelDraft {
     return {
       id: model.id,
@@ -361,7 +367,8 @@
       contextWindow: model.contextWindow,
       maxOutputTokens: model.maxOutputTokens,
       reasoning: model.reasoning,
-      defaultThinkingLevel: model.defaultThinkingLevel
+      defaultThinkingLevel: model.defaultThinkingLevel,
+      vision: model.vision
     }
   }
 
@@ -614,6 +621,9 @@
             </label>
           </div>
           <div class="mt-2 flex items-center gap-4">
+            <Switch bind:checked={model.vision}>
+              <span class="text-[11px] font-medium">Can see images</span>
+            </Switch>
             <Switch bind:checked={model.reasoning}>
               <span class="text-[11px] font-medium">Supports reasoning</span>
             </Switch>

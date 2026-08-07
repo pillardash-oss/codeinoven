@@ -266,7 +266,7 @@ class ProviderCatalogStore {
           name: model.name,
           reasoning: model.reasoning,
           thinkingPresets: model.thinkingPresets,
-          attachment: false,
+          attachment: model.vision !== false,
           toolcall: true,
           contextWindow: model.contextWindow,
           fastSupported: false
