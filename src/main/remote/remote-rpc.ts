@@ -280,7 +280,8 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2]),
           typeof args[3] === 'string' ? args[3] : undefined,
-          typeof args[4] === 'string' ? args[4] : undefined
+          typeof args[4] === 'string' ? args[4] : undefined,
+          typeof args[5] === 'string' ? args[5] : undefined
         )
       }
       case 'thread:reorderScope':

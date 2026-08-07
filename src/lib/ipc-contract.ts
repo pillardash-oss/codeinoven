@@ -1086,7 +1086,14 @@ export interface IpcInvokeContract {
     Thread
   >
   'thread:fork': Contract<
-    [projectId: string, threadId: string, title: string, checkpointId?: string, messageId?: string],
+    [
+      projectId: string,
+      threadId: string,
+      title: string,
+      checkpointId?: string,
+      messageId?: string,
+      targetProjectId?: string
+    ],
     Thread
   >
   'thread:get': Contract<[projectId: string, threadId: string], Thread | null>

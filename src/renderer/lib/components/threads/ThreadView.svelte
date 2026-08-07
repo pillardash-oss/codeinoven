@@ -22,6 +22,7 @@
     Copy,
     Ellipsis,
     FileText,
+    FolderInput,
     GitFork,
     Info,
     Loader2,
@@ -41,6 +42,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInConversation from './FindInConversation.svelte'
+  import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
@@ -161,9 +163,25 @@
     chatMode?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
+    /** Projects the chat can be continued into (visible projects only). */
+    projects?: Project[]
+    /** Data URLs of custom project icons, keyed by project id. */
+    projectIcons?: ReadonlyMap<string, string>
+    /** Called with the new thread after the chat continues in a project. */
+    onContinueInProject?: (forked: Thread) => void
+    /** Called after a brand-new project is added from the continue modal. */
+    onProjectCreated?: (project: Project) => void | Promise<void>
   }
 
-  let { thread, chatMode = false, onForked }: Props = $props()
+  let {
+    thread,
+    chatMode = false,
+    onForked,
+    projects = [],
+    projectIcons = new SvelteMap<string, string>(),
+    onContinueInProject,
+    onProjectCreated
+  }: Props = $props()
 
   let alive = true
 
@@ -4536,6 +4554,39 @@
     }
   }
 
+  // ─── Continue a chat in a project ──────────────────────────────────────
+
+  let continueInProjectOpen = $state(false)
+  let continueInProjectBusy = $state(false)
+
+  function openContinueInProject(): void {
+    continueInProjectOpen = true
+  }
+
+  /** Continue the whole chat conversation as a new thread in the chosen project. */
+  async function continueChatInProject(project: Project): Promise<void> {
+    if (continueInProjectBusy) return
+    continueInProjectBusy = true
+    try {
+      const forked = await invoke(
+        'thread:fork',
+        thread.projectId,
+        thread.id,
+        thread.title,
+        undefined,
+        undefined,
+        project.id
+      )
+      continueInProjectOpen = false
+      onContinueInProject?.(forked)
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The chat could not be continued in a project.'
+    } finally {
+      continueInProjectBusy = false
+    }
+  }
+
   /** Edit a user message in place — the bubble itself becomes editable. */
   function editMessage(msg: AgentMessage): void {
     editingMessageId = msg.id
@@ -5402,19 +5453,30 @@
                                   <Copy size={12} />
                                 {/if}
                               </button>
-                              <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                aria-label="Fork thread from this message"
-                                title="Fork from here"
-                                disabled={forkingMessageId !== null}
-                                onclick={() => forkFromMessage(msg)}
-                              >
-                                {#if forkingMessageId === msg.id}
-                                  <Loader2 size={12} class="animate-spin" />
-                                {:else}
-                                  <GitFork size={12} />
-                                {/if}
-                              </button>
+                              {#if chatMode && onContinueInProject}
+                                <button
+                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Continue this chat in a project"
+                                  title="Continue in a project"
+                                  onclick={() => openContinueInProject()}
+                                >
+                                  <FolderInput size={12} />
+                                </button>
+                              {:else}
+                                <button
+                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Fork thread from this message"
+                                  title="Fork from here"
+                                  disabled={forkingMessageId !== null}
+                                  onclick={() => forkFromMessage(msg)}
+                                >
+                                  {#if forkingMessageId === msg.id}
+                                    <Loader2 size={12} class="animate-spin" />
+                                  {:else}
+                                    <GitFork size={12} />
+                                  {/if}
+                                </button>
+                              {/if}
                             </div>
                             <div
                               class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
@@ -5966,6 +6028,19 @@
     {/if}
   {/if}
 </div>
+
+<ContinueInProjectModal
+  open={continueInProjectOpen}
+  {projects}
+  {projectIcons}
+  busy={continueInProjectBusy}
+  onClose={() => {
+    if (continueInProjectBusy) return
+    continueInProjectOpen = false
+  }}
+  onContinue={(project) => continueChatInProject(project)}
+  onProjectCreated={(project) => void onProjectCreated?.(project)}
+/>
 
 <style>
   .thread-view {
