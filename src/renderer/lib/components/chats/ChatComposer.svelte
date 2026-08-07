@@ -137,6 +137,9 @@
     showEngineeringMode?: boolean
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
+    /** Hides the permission level selector and forces auto review — chats are
+     *  for questions and research, so they always run with auto permissions. */
+    hidePermissionSelector?: boolean
     /** Hides mutating controls and file attachment entry points. */
     readOnlyMode?: boolean
     /** Lets read-only composers still attach media files for context.
@@ -202,6 +205,7 @@
     onEditReference,
     showEngineeringMode = true,
     showChatModes = false,
+    hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
     favoriteModels = [],
@@ -217,8 +221,14 @@
     historyMessages = []
   }: Props = $props()
 
-  /** Resolved settings — uses the prop if provided, else the global last-used. */
-  let resolved = $derived(settings ?? threadSettingsStore.lastUsed)
+  /** Resolved settings — uses the prop if provided, else the global last-used.
+   *  Chats always run with auto permission review, so when the permission
+   *  selector is hidden the level is pinned to `auto_review`. */
+  let resolved = $derived(
+    hidePermissionSelector
+      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' }
+      : (settings ?? threadSettingsStore.lastUsed)
+  )
 
   function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
     return `@${reference.path}`
@@ -1621,6 +1631,14 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
+    {:else if hidePermissionSelector}
+      <span
+        class="flex items-center gap-1 rounded-lg bg-raised px-2 py-1.5 text-[11px] text-muted"
+        title="Chats always run with auto permission review — every permission that is not explicitly denied is auto-approved"
+      >
+        <ShieldCheck size={12} class="text-info" />
+        <span class="composer-control-label">Auto</span>
+      </span>
     {:else}
       <div class="relative">
         <button
@@ -1700,7 +1718,6 @@
       {onToggleFavorite}
       {onReorderFavorite}
       fast={inferenceMode === 'fast'}
-      responsiveLabel
     />
 
     <!-- Thinking level — only for models that support reasoning -->
