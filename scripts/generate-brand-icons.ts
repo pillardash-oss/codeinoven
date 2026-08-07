@@ -38,6 +38,8 @@ const vendorSlugs = [
   'ai21',
   'anthropic',
   'aws',
+  'claudecode',
+  'codex',
   'azure',
   'baichuan',
   'bedrock',
@@ -79,10 +81,19 @@ const vendorSlugs = [
   'zhipu'
 ] as const
 
+/**
+ * Provider marks that must render as theme-following monochrome (the source
+ * also ships a `-color` variant, which resolveSource would otherwise prefer).
+ * Anthropic → Claude Code, OpenAI → Codex: the harness marks are their canonical
+ * provider icons, so the mono variant keeps them inheriting the surrounding
+ * text color like the vendor icons they replace.
+ */
+const monoOnlyVendors = new Set<string>(['claudecode', 'codex'])
+
 /** Source path for a slug, preferring the brand-colored variant. */
 function resolveSource(slug: string): string | null {
   const colorSource = join(sourceDir, `${slug}-color.svg`)
-  if (existsSync(colorSource)) return colorSource
+  if (!monoOnlyVendors.has(slug) && existsSync(colorSource)) return colorSource
   const monoSource = join(sourceDir, `${slug}.svg`)
   if (existsSync(monoSource)) return monoSource
   return null
