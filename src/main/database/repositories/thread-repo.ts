@@ -290,7 +290,11 @@ export class ThreadRepo {
 
   get(id: string): Thread | null {
     const row = this.db.get<ThreadRow>('SELECT * FROM threads WHERE id = ?', id)
-    return row ? rowToThread(row) : null
+    if (!row) return null
+    const thread = rowToThread(row)
+    const used = this.usedHarnessesFor([thread.id])
+    thread.usedHarnessIds = used.get(thread.id)
+    return thread
   }
 
   /** Map of thread id → distinct harness ids used in its session, newest first. */
