@@ -590,14 +590,25 @@ export class ThreadManager {
     return this.threadRepo.search(query, options)
   }
 
+  /**
+   * Fork a thread into a new conversation. When `targetProjectId` is provided
+   * the fork is created in that project instead of the source project — used to
+   * continue a standalone chat inside a real project.
+   */
   async forkThread(
     projectId: string,
     threadId: string,
     title: string,
     checkpointId?: string,
-    messageId?: string
+    messageId?: string,
+    targetProjectId?: string
   ): Promise<Thread> {
     const parent = this.requireOwnedThread(projectId, threadId)
+    const destinationProjectId = targetProjectId ?? projectId
+    if (destinationProjectId !== projectId) {
+      const destination = this.projectRepo.get(destinationProjectId)
+      if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
+    }
     const parentMessages = this.agentMessageRepo.loadAllByThread(threadId)
     let copied = parentMessages
     if (messageId) {
@@ -608,21 +619,27 @@ export class ThreadManager {
       copied = parentMessages.slice(0, cutoff + 1)
     }
 
-    const featureSlug = parent.featureSlug ?? featureSlugFromTitle(parent.title)
+    const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forked = await this.createThread({
-      projectId,
+      projectId: destinationProjectId,
       providerId: parent.providerId,
       title,
       titleSource: 'manual',
       settings: parent.settings,
-      featureSlug,
-      scopeBucketId: parent.scopeBucketId,
-      workingDirectory: parent.workingDirectory
+      // Forks into another project (e.g. a chat continued in a project) never
+      // inherit the parent's feature work-directory or scope bucket.
+      featureSlug:
+        destinationProjectId === projectId
+          ? (parent.featureSlug ?? featureSlugFromTitle(parent.title))
+          : undefined,
+      scopeBucketId: destinationProjectId === projectId ? parent.scopeBucketId : undefined,
+      workingDirectory:
+        destinationProjectId === projectId ? parent.workingDirectory : destinationPath
     })
 
     if (copied.length > 0) {
       const withNewIds = remapCopiedMessages(copied)
-      await this.saveMessages(projectId, forked.id, withNewIds)
+      await this.saveMessages(destinationProjectId, forked.id, withNewIds)
     }
 
     // Link fork to parent via branch metadata
@@ -633,7 +650,14 @@ export class ThreadManager {
       forkedAt: Date.now()
     }
 
-    const branchDir = join(getConfigRoot(), 'projects', projectId, 'threads', forked.id, 'branches')
+    const branchDir = join(
+      getConfigRoot(),
+      'projects',
+      destinationProjectId,
+      'threads',
+      forked.id,
+      'branches'
+    )
     await mkdir(branchDir, { recursive: true })
     await writeFile(join(branchDir, 'origin.json'), JSON.stringify(branchMeta, null, 2))
 

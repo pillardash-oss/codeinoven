@@ -3069,7 +3069,8 @@ export function registerIpcHandlers(
       threadId: unknown,
       title: unknown,
       checkpointId?: unknown,
-      messageId?: unknown
+      messageId?: unknown,
+      targetProjectId?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
@@ -3080,13 +3081,18 @@ export function registerIpcHandlers(
           : validateEntityId(checkpointId, 'Checkpoint ID', 256)
       const safeMessageId =
         messageId === undefined ? undefined : validateEntityId(messageId, 'Message ID', 256)
+      const safeTargetProjectId =
+        targetProjectId === undefined
+          ? undefined
+          : validateEntityId(targetProjectId, 'Target project ID')
       await chatEngine?.loadMessages(safeProjectId, safeThreadId)
       const forked = await threadManager.forkThread(
         safeProjectId,
         safeThreadId,
         safeTitle,
         safeCheckpointId,
-        safeMessageId
+        safeMessageId,
+        safeTargetProjectId
       )
       if (forked.workingDirectory) {
         const branch = await repositoryService.getCurrentBranch(forked.workingDirectory)

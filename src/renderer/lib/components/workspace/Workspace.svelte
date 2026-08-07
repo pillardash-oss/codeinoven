@@ -1435,6 +1435,28 @@
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
+  /** A chat was continued into a project — register the thread and open it there. */
+  function handleContinuedInProject(forked: Thread): void {
+    allThreads = [forked, ...allThreads]
+    scopeState.updateThread(forked)
+    if (forked.projectId === INBOX_PROJECT_ID) navigate('chats')
+    else if (mode === 'chats') navigate('projects')
+    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
+  /** Register a freshly added project without landing in a new thread — used by
+   *  the continue-chat-in-project flow which creates its own thread. */
+  async function handleChatProjectCreated(project: Project): Promise<void> {
+    projects = [project, ...projects]
+    expandedFolders.add(project.id)
+    if (project.icon) {
+      const url = await invoke('project:getIcon', project.id)
+      if (url) projectIcons.set(project.id, url)
+    } else {
+      projectIcons.delete(project.id)
+    }
+  }
+
   /**
    * Promote a side chat (quick chat) into a regular thread: the conversation
    * is persisted as a new thread and opened so the user can keep prompting.
@@ -2424,6 +2446,10 @@
                 thread={selectedThread}
                 chatMode={mode === 'chats'}
                 onForked={handleForkedThread}
+                projects={visibleProjects}
+                {projectIcons}
+                onContinueInProject={handleContinuedInProject}
+                onProjectCreated={handleChatProjectCreated}
               />
             {/key}
           </div>
