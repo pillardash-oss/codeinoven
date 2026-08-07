@@ -67,7 +67,7 @@
   }
 
   function harnessKey(entry: AgentHarnessUsage): string {
-    return `${entry.harnessId}:${entry.providerId}`
+    return entry.harnessId
   }
 
   function compactNumber(value: number): string {

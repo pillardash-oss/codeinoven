@@ -580,12 +580,11 @@
       if (message.role !== 'assistant') continue
       const harnessId = message.harnessId ?? settings.harnessId
       const providerId = message.providerId ?? settings.providerId
-      const key = `${harnessId}:${providerId}`
       const stepCost = message.parts.reduce(
         (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
         0
       )
-      const entry = byHarness[key]
+      const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd += message.cost ?? stepCost
         if (message.rateLimits?.length) entry.rateLimits = message.rateLimits
@@ -593,7 +592,7 @@
         if (message.modelId) entry.modelId = message.modelId
         continue
       }
-      byHarness[key] = {
+      byHarness[harnessId] = {
         harnessId,
         providerId,
         ...(message.modelId ? { modelId: message.modelId } : {}),
@@ -602,11 +601,36 @@
         ...(message.credits ? { credits: message.credits } : {})
       }
     }
-    // Prefer the whole-thread cumulative cost from the harness_usage table so
-    // the bubble reflects real billed usage, not just what's in the current view.
+    // Merge the whole-thread cumulative analytics from the harness_usage table
+    // into a single per-harness entry (all providers combined). Cost, tokens,
+    // message count, and duration are summed; per-model rows are concatenated.
+    const tableByHarness: Record<string, AgentHarnessUsage> = {}
     for (const stored of storedHarnessUsage) {
-      const key = `${stored.harnessId}:${stored.providerId}`
-      const entry = byHarness[key]
+      const entry = tableByHarness[stored.harnessId]
+      if (entry) {
+        entry.costUsd += stored.costUsd
+        if (stored.tokens) {
+          entry.tokens = {
+            input: (entry.tokens?.input ?? 0) + stored.tokens.input,
+            output: (entry.tokens?.output ?? 0) + stored.tokens.output,
+            reasoning: (entry.tokens?.reasoning ?? 0) + stored.tokens.reasoning,
+            cacheRead: (entry.tokens?.cacheRead ?? 0) + stored.tokens.cacheRead,
+            cacheWrite: (entry.tokens?.cacheWrite ?? 0) + stored.tokens.cacheWrite,
+            total: (entry.tokens?.total ?? 0) + stored.tokens.total
+          }
+        }
+        if (stored.messageCount !== undefined)
+          entry.messageCount = (entry.messageCount ?? 0) + stored.messageCount
+        if (stored.durationMs !== undefined)
+          entry.durationMs = (entry.durationMs ?? 0) + stored.durationMs
+        if (stored.models?.length) entry.models = [...(entry.models ?? []), ...stored.models]
+        if (stored.modelId) entry.modelId = stored.modelId
+      } else {
+        tableByHarness[stored.harnessId] = { ...stored, rateLimits: [] }
+      }
+    }
+    for (const [harnessId, stored] of Object.entries(tableByHarness)) {
+      const entry = byHarness[harnessId]
       if (entry) {
         entry.costUsd = stored.costUsd
         if (stored.modelId) entry.modelId = stored.modelId
@@ -615,19 +639,18 @@
         if (stored.durationMs !== undefined) entry.durationMs = stored.durationMs
         if (stored.models?.length) entry.models = stored.models
       } else {
-        byHarness[key] = { ...stored, rateLimits: [] }
+        byHarness[harnessId] = stored
       }
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
     for (const usage of liveAccountUsage ?? []) {
-      const key = `${usage.harnessId}:${usage.providerId}`
-      const entry = byHarness[key]
+      const entry = byHarness[usage.harnessId]
       if (entry) {
         if (usage.rateLimits.length) entry.rateLimits = usage.rateLimits
         if (usage.credits) entry.credits = usage.credits
       } else {
-        byHarness[key] = {
+        byHarness[usage.harnessId] = {
           harnessId: usage.harnessId,
           providerId: usage.providerId,
           costUsd: 0,
