@@ -473,21 +473,21 @@
 
   /**
    * Whether sending the draft should be intercepted by the vision-model gate:
-   * an image is attached, the active model cannot see it, and no image-descriptor
-   * model is set for this thread (or remembered globally).
+   * an image is attached, the active model cannot see it, and the user has not
+   * opted into "don't ask again". The card is shown on every such send; the
+   * thread or global default merely pre-fills the picker.
    */
   function shouldInterceptImageGate(): boolean {
     return (
       enableImageDescriptorGate &&
       hasImageAttachments &&
       selectedModelLacksVision &&
-      resolved.imageDescriptor === undefined &&
       !imageDescriptorAskAgain
     )
   }
 
   function openImageDescriptorGate(direct?: boolean): void {
-    gateVisionSelection = imageDescriptorDefault ?? null
+    gateVisionSelection = resolved.imageDescriptor ?? imageDescriptorDefault ?? null
     gateDonotAsk = false
     gateDirect = direct
     imageDescriptorGateOpen = true
@@ -1319,7 +1319,7 @@
     <div
       class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
       role="dialog"
-      aria-label="Choose a vision model to describe this image"
+      aria-label="Pick a vision model to describe this image"
     >
       <div class="flex items-start gap-2.5">
         <div class="mt-0.5 shrink-0 rounded-lg bg-primary/10 p-1.5 text-primary">
@@ -1328,63 +1328,64 @@
         <div class="min-w-0 flex-1">
           <p class="text-sm font-semibold text-foreground">This model can't see images</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            You're sending an image to a model without vision capability. Pick a vision model to
-            describe the image, so {resolved.modelId || 'this model'} can work with it.
+            You're about to send an image to a model without vision capability. Image Descriptor is
+            a tool the model can call to describe the image for it — but you need to pick the vision
+            model that does the describing.
           </p>
         </div>
       </div>
-      <div class="mt-3">
-        <ModelPicker
-          {providers}
-          {projectId}
-          harnessId={gateVisionSelection?.harnessId ??
-            providers[0]?.harnessId ??
-            resolved.harnessId}
-          providerId={gateVisionSelection?.providerId ?? ''}
-          modelId={gateVisionSelection?.modelId ?? ''}
-          {favoriteModels}
-          {recentModels}
-          visionOnly
-          side="top"
-          variant="field"
-          label="Choose a vision model"
-          onSelect={(providerId, modelId, harnessId) => {
-            gateVisionSelection = { harnessId, providerId, modelId }
-          }}
-          {onToggleFavorite}
-          {onReorderFavorite}
-        />
-        {#if !gateVisionSelection}
-          <p class="mt-1.5 text-[11px] text-dimmed">
-            No vision model selected — continue will be disabled until you pick one.
-          </p>
-        {/if}
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          title="Cancel and keep your message and attachment"
+          onclick={cancelImageDescriptorGate}
+        >
+          Cancel
+        </button>
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={gateVisionSelection?.harnessId ??
+              providers[0]?.harnessId ??
+              resolved.harnessId}
+            providerId={gateVisionSelection?.providerId ?? ''}
+            modelId={gateVisionSelection?.modelId ?? ''}
+            {favoriteModels}
+            {recentModels}
+            visionOnly
+            side="top"
+            variant="field"
+            label={gateVisionSelection ? undefined : 'Choose a vision model'}
+            onSelect={(providerId, modelId, harnessId) => {
+              gateVisionSelection = { harnessId, providerId, modelId }
+            }}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
+        </div>
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          title="Send the image and describe it with the selected vision model"
+          disabled={!gateVisionSelection}
+          onclick={() => confirmImageDescriptorGate()}
+        >
+          <Check size={13} /> Continue
+        </button>
       </div>
-      <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+      {#if !gateVisionSelection}
+        <p class="mt-1.5 text-[11px] text-dimmed">
+          No vision model selected — Continue is disabled until you pick one.
+        </p>
+      {/if}
+      <div class="mt-3 flex justify-start">
         <Switch
           bind:checked={gateDonotAsk}
           label="Don't ask again"
           aria-label="Don't ask again for this vision model"
         />
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-            title="Cancel and keep your message and attachment"
-            onclick={cancelImageDescriptorGate}
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            title="Send the image and describe it with the selected vision model"
-            disabled={!gateVisionSelection}
-            onclick={() => confirmImageDescriptorGate()}
-          >
-            <Check size={13} /> Continue
-          </button>
-        </div>
       </div>
     </div>
   {/if}

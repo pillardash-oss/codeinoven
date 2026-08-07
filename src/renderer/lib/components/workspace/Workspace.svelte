@@ -86,6 +86,8 @@
   import { APP_NAME } from '$shared/brand'
   import type {
     AgentPart,
+    AppConfig,
+    AppConfigPatch,
     Project,
     PromptAttachment,
     ScopeBucket,
@@ -101,9 +103,12 @@
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
     navigate: (view: MainView) => void
+    /** Global app config — drives the image-descriptor default + ask-again flag. */
+    config?: AppConfig
+    updateConfig?: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { mode, active = true, navigate }: Props = $props()
+  let { mode, active = true, navigate, config, updateConfig }: Props = $props()
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
@@ -2430,6 +2435,17 @@
                       rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
                     recentModels={rendererRecovery.chatRecentModels}
                     onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+                    imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
+                    imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
+                    onImageDescriptorDefaultChange={(selection) =>
+                      void updateConfig?.({
+                        agentDefaults: {
+                          ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
+                          imageDescriptor: selection
+                        }
+                      })}
+                    onImageDescriptorAskAgainChange={(value) =>
+                      void updateConfig?.({ imageDescriptorAskAgain: value })}
                     initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
                     onValueChange={(value) =>
                       rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
