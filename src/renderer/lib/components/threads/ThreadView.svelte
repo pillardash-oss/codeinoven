@@ -2527,7 +2527,8 @@
       if (model) {
         const thinkingLevel = resolveDefaultThinkingLevel(
           model.thinkingPresets,
-          baseUrlProviderStore.defaultThinkingLevel(provider.harnessId, provider.id, model.id)
+          baseUrlProviderStore.defaultThinkingLevel(provider.harnessId, provider.id, model.id),
+          settings.thinkingLevel
         )
         updateSettings({
           ...settings,
