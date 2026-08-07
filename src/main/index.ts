@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
@@ -356,6 +356,13 @@ void app
     // Show the splash before any awaited work so the app feels instant.
     createSplashWindow()
 
+    // Wire the durable log sink before any fallible startup work. The error
+    // dialog tells the user to "export diagnostics after the app opens", which
+    // only works if startup failures are actually persisted — so the log path
+    // must be known before `database.init()` can abort the startup chain.
+    mkdirSync(dirname(storage.resolve('logs/main.jsonl')), { recursive: true })
+    Logger.initialize(storage.resolve('logs/main.jsonl'))
+
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)
     }
@@ -380,7 +387,6 @@ void app
       warmTrafficLightDetection()
     ])
     await windowStateService.load()
-    Logger.initialize(storage.resolve('logs/main.jsonl'))
     Logger.info(`${APP_NAME} main process initialized`)
     chatEngine.backfillHarnessUsage()
     await powerWakeService.start()
@@ -432,7 +438,10 @@ void app
 
     // Failsafe: never let the splash outlive the app even if the renderer
     // never paints (e.g. a script error) — dismiss it on ready or on close.
-    const splashFailsafe = setTimeout(closeSplash, 15_000)
+    // The budget is generous (60s) because on a low-end machine the renderer
+    // legitimately takes a long time to boot; closing early would drop the
+    // user onto a bare window while it still loads.
+    const splashFailsafe = setTimeout(closeSplash, 60_000)
     window.once('ready-to-show', () => {
       clearTimeout(splashFailsafe)
       closeSplash()
@@ -451,10 +460,13 @@ void app
       }
     })
   })
-  .catch((error: unknown) => {
+  .catch(async (error: unknown) => {
     closeSplash()
     const message = error instanceof Error ? error.message : String(error)
     Logger.error(`${APP_NAME} startup failed`, error)
+    // Flush so the failure is persisted before the app exits — the user is
+    // told to export diagnostics, which reads this exact file.
+    await Logger.flush().catch(() => undefined)
     dialog.showErrorBox(
       `${APP_NAME} could not start`,
       `${message}\n\nRestart ${APP_NAME}. If the problem continues, export diagnostics after the app opens.`

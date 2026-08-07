@@ -1,3 +1,5 @@
+import { mkdirSync } from 'fs'
+import { dirname } from 'path'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
@@ -38,6 +40,12 @@ export class Database {
   /** Initialise the database: open connection, apply schema, set WAL mode. */
   async init(): Promise<void> {
     if (this.db) return
+
+    // On a fresh install the config root does not exist yet and
+    // `storage.initialize()` runs concurrently with this call, so create the
+    // parent directory first — otherwise SQLite aborts with
+    // "cannot open database because the directory does not exist".
+    mkdirSync(dirname(this.path), { recursive: true })
 
     this.db = new DatabaseConstructor(this.path)
 
