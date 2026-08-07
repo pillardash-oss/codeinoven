@@ -82,6 +82,18 @@ export interface SnapshotOptions {
   includeGitMetadata?: boolean
 }
 
+/**
+ * A stat-only view of the project used to attribute mutations to the window in
+ * which a tool ran. It stores no content, so it is cheap enough to take around
+ * every shell command instead of only at turn boundaries.
+ */
+export interface ProjectFingerprint {
+  projectRoot: string
+  capturedAt: number
+  /** Project-relative path → `${mtimeMs}:${size}`. */
+  files: Record<string, string>
+}
+
 const DEFAULT_LIMITS: CheckpointLimits = {
   maxFiles: 10_000,
   maxFileBytes: 16 * 1024 * 1024,
@@ -156,6 +168,63 @@ export class ChangeTrackingService {
       fileCount += 1
     }
 
+    for (const path of await this.listCandidateFiles(projectRoot, gitPaths)) {
+      await captureFile(path)
+    }
+    return {
+      id: randomUUID(),
+      projectRoot,
+      createdAt: Date.now(),
+      files,
+      ...(git ? { git } : {})
+    }
+  }
+
+  /**
+   * Records path, size, and modification time for every tracked file without
+   * reading or storing content. Used to bound an unbounded tool (a shell
+   * command) to the files it touched while it was running.
+   */
+  async fingerprint(projectPath: string): Promise<ProjectFingerprint> {
+    const projectRoot = await this.resolveProjectRoot(projectPath)
+    const git = await this.readGitMetadata(projectRoot)
+    const gitPaths = git
+      ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
+      : undefined
+    const files: Record<string, string> = {}
+    for (const absolutePath of await this.listCandidateFiles(projectRoot, gitPaths)) {
+      let metadata
+      try {
+        metadata = await lstat(absolutePath)
+      } catch (error) {
+        if (isMissing(error)) continue
+        throw error
+      }
+      if (!metadata.isFile()) continue
+      const relativePath = relative(projectRoot, absolutePath)
+      if (!relativePath || relativePath.startsWith(`..${sep}`)) continue
+      files[relativePath] = `${metadata.mtimeMs}:${metadata.size}`
+    }
+    return { projectRoot, capturedAt: Date.now(), files }
+  }
+
+  /** Project-relative paths created, modified, or deleted between two fingerprints. */
+  diffFingerprints(before: ProjectFingerprint, after: ProjectFingerprint): string[] {
+    if (before.projectRoot !== after.projectRoot) {
+      throw new CheckpointSafetyError('Cannot compare fingerprints from different project roots')
+    }
+    const paths = new Set([...Object.keys(before.files), ...Object.keys(after.files)])
+    return [...paths].filter((path) => before.files[path] !== after.files[path]).sort()
+  }
+
+  private async listCandidateFiles(
+    projectRoot: string,
+    gitPaths: string[] | undefined
+  ): Promise<string[]> {
+    if (gitPaths) {
+      return gitPaths.map((path) => this.resolveTrackedPath(projectRoot, path))
+    }
+    const paths: string[] = []
     const visit = async (directory: string): Promise<void> => {
       const entries = await readdir(directory, { withFileTypes: true })
       for (const entry of entries) {
@@ -165,26 +234,12 @@ export class ChangeTrackingService {
           }
           continue
         }
-
         if (!entry.isFile()) continue
-        await captureFile(join(directory, entry.name))
+        paths.push(join(directory, entry.name))
       }
     }
-
-    if (gitPaths) {
-      for (const path of gitPaths) {
-        await captureFile(this.resolveTrackedPath(projectRoot, path))
-      }
-    } else {
-      await visit(projectRoot)
-    }
-    return {
-      id: randomUUID(),
-      projectRoot,
-      createdAt: Date.now(),
-      files,
-      ...(git ? { git } : {})
-    }
+    await visit(projectRoot)
+    return paths
   }
 
   calculateChanges(before: ProjectCheckpoint, after: ProjectCheckpoint): CheckpointChange[] {

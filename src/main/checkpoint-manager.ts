@@ -13,7 +13,8 @@ import {
   ChangeTrackingService,
   type CheckpointBlobStore,
   type CheckpointChange,
-  type ProjectCheckpoint
+  type ProjectCheckpoint,
+  type ProjectFingerprint
 } from './change-tracking-service'
 
 export interface TurnCheckpoint {
@@ -121,6 +122,22 @@ export class CheckpointManager {
       id
     )
     return checkpoint
+  }
+
+  /** Stat-only project scan used to attribute shell-command mutations to their run window. */
+  fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
+    assertId(projectId)
+    return this.tracker(projectId).fingerprint(projectPath)
+  }
+
+  /** Project-relative paths that changed between two fingerprints. */
+  diffFingerprints(
+    projectId: string,
+    before: ProjectFingerprint,
+    after: ProjectFingerprint
+  ): string[] {
+    assertId(projectId)
+    return this.tracker(projectId).diffFingerprints(before, after)
   }
 
   async completeTurn(
