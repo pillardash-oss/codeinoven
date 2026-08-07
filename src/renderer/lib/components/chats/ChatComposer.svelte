@@ -836,7 +836,11 @@
       providerId,
       modelId
     )
-    const thinkingLevel = resolveDefaultThinkingLevel(model?.thinkingPresets, defaultThinkingLevel)
+    const thinkingLevel = resolveDefaultThinkingLevel(
+      model?.thinkingPresets,
+      defaultThinkingLevel,
+      resolved.thinkingLevel
+    )
     const fastSupported = supportsFastInference(nextHarness, providerId, model?.fastSupported)
     const updated: ThreadSettings = {
       ...resolved,
