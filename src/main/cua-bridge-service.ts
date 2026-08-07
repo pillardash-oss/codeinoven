@@ -27,6 +27,11 @@ const CUA_UPDATE_URL = 'https://cua.ai/docs/how-to-guides/driver/update'
 const CUA_PERMISSIONS_URL = 'https://cua.ai/docs/reference/cua-driver/macos-permissions'
 const CUA_REPOSITORY_URL = 'https://github.com/trycua/cua'
 const CUA_UTILITY_ID = 'codeinoven:cua-driver'
+const PERMISSION_CACHE_TTL_MS = 20_000
+const DAEMON_START_TIMEOUT_MS = 8_000
+const DAEMON_WAIT_STEP_MS = 300
+
+let permissionCache: { status: CuaPermissionStatus; at: number } | null = null
 
 interface CuaBridgeConfig {
   enabled: boolean
@@ -66,9 +71,9 @@ export class CuaBridgeService {
     try {
       const version = selected.version
       const compatible = selected.compatible
-      const [mcpAvailable, permissionStatus, daemonRunning] = await Promise.all([
+      const permissionStatus = await this.permissionStatus(binaryPath, platform)
+      const [mcpAvailable, daemonRunning] = await Promise.all([
         this.hasMcpSurface(binaryPath),
-        this.permissionStatus(binaryPath, platform),
         this.daemonRunning(binaryPath)
       ])
       const platformReady =
@@ -103,7 +108,7 @@ export class CuaBridgeService {
                   : platform === 'macos' && permissionStatus !== 'granted'
                     ? {
                         detail:
-                          'Cua Driver permissions could not be verified. Run cua-driver permissions grant, then refresh.'
+                          'Cua Driver permissions could not be verified. Start the Cua Driver daemon (cua-driver serve), then refresh.'
                       }
                     : platform !== 'macos' && !daemonRunning
                       ? {
@@ -207,19 +212,67 @@ export class CuaBridgeService {
     platform: CuaBridgeStatus['platform']
   ): Promise<CuaPermissionStatus> {
     if (platform !== 'macos') return 'not_required'
+    const running = await this.daemonRunning(binaryPath)
+    if (running) return this.readPermissionStatus(binaryPath)
+    const cached = permissionCache
+    if (cached && Date.now() - cached.at < PERMISSION_CACHE_TTL_MS) return cached.status
+    const started = await this.startDaemonTransiently(binaryPath)
+    if (!started) return 'unknown'
     try {
-      const { stdout, stderr } = await execFileAsync(binaryPath, ['permissions', 'status'], {
-        timeout: 8_000,
-        maxBuffer: 256_000
-      })
-      const output = `${stdout}\n${stderr}`.toLocaleLowerCase()
-      const accessibilityGranted = /accessibility[^\n]*(granted|✅)/u.test(output)
-      const screenRecordingGranted = /screen recording[^\n]*(granted|✅)/u.test(output)
-      if (accessibilityGranted && screenRecordingGranted) return 'granted'
-      if (/(denied|not granted|missing|❌)/u.test(output)) return 'missing'
-      return 'unknown'
+      const status = await this.readPermissionStatus(binaryPath)
+      permissionCache = { status, at: Date.now() }
+      return status
+    } finally {
+      await this.stopDaemon(binaryPath)
+    }
+  }
+
+  private async readPermissionStatus(binaryPath: string): Promise<CuaPermissionStatus> {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        binaryPath,
+        ['permissions', 'status', '--json'],
+        {
+          timeout: 8_000,
+          maxBuffer: 256_000
+        }
+      )
+      const payload = parsePermissionJson(`${stdout}\n${stderr}`)
+      if (payload !== null) {
+        if (payload.daemon_running === false) return 'unknown'
+        if (payload.accessibility !== undefined && payload.screen_recording !== undefined) {
+          return payload.accessibility && payload.screen_recording ? 'granted' : 'missing'
+        }
+      }
+      return parseTextPermissionStatus(`${stdout}\n${stderr}`)
     } catch {
       return 'unknown'
+    }
+  }
+
+  private async startDaemonTransiently(binaryPath: string): Promise<boolean> {
+    const appRoot = appBundleRoot(binaryPath)
+    const args = appRoot
+      ? ['-n', '-g', appRoot, '--args', 'serve']
+      : ['-n', '-g', '-a', 'CuaDriver', '--args', 'serve']
+    try {
+      await execFileAsync('open', args, { timeout: 8_000, maxBuffer: 128_000 })
+    } catch {
+      return false
+    }
+    const deadline = Date.now() + DAEMON_START_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (await this.daemonRunning(binaryPath)) return true
+      await sleep(DAEMON_WAIT_STEP_MS)
+    }
+    return false
+  }
+
+  private async stopDaemon(binaryPath: string): Promise<void> {
+    try {
+      await execFileAsync(binaryPath, ['stop'], { timeout: 8_000, maxBuffer: 128_000 })
+    } catch {
+      // The transient daemon may already be gone.
     }
   }
 
@@ -481,4 +534,51 @@ function updateCommand(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+interface PermissionStatusJson {
+  daemon_running?: boolean
+  accessibility?: boolean
+  screen_recording?: boolean
+}
+
+function parsePermissionJson(output: string): PermissionStatusJson | null {
+  const start = output.indexOf('{')
+  if (start < 0) return null
+  try {
+    const value = JSON.parse(output.slice(start)) as unknown
+    if (!isRecord(value)) return null
+    const payload: PermissionStatusJson = {}
+    if (typeof value['daemon_running'] === 'boolean') {
+      payload.daemon_running = value['daemon_running']
+    }
+    if (typeof value['accessibility'] === 'boolean') {
+      payload.accessibility = value['accessibility']
+    }
+    if (typeof value['screen_recording'] === 'boolean') {
+      payload.screen_recording = value['screen_recording']
+    }
+    return payload
+  } catch {
+    return null
+  }
+}
+
+function parseTextPermissionStatus(output: string): CuaPermissionStatus {
+  const lower = output.toLocaleLowerCase()
+  const accessibilityGranted = /accessibility[^\n]*(granted|✅)/u.test(lower)
+  const screenRecordingGranted = /screen recording[^\n]*(granted|✅)/u.test(lower)
+  if (accessibilityGranted && screenRecordingGranted) return 'granted'
+  if (/(denied|not granted|missing|❌)/u.test(lower)) return 'missing'
+  return 'unknown'
+}
+
+function appBundleRoot(binaryPath: string): string | null {
+  const marker = '/Contents/MacOS/'
+  const index = binaryPath.indexOf(marker)
+  return index < 0 ? null : binaryPath.slice(0, index)
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
