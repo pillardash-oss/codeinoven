@@ -38,6 +38,9 @@ import { SpecContextService } from '../spec-context-service'
 import { CheckpointManager } from '../checkpoint-manager'
 import { MemoryService } from '../memory-service'
 import { RepositoryService } from '../repository-service'
+import { GitService } from '../git-service'
+import { SecretVault } from '../secret-vault'
+import { GitHubAuthService } from '../github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { StorageEngine } from '../storage-engine'
 import { validateScopeBoard, validateScopeSlice } from '../ipc-validation'
@@ -49,6 +52,7 @@ import type {
   BrainstormEntryChoice,
   CreateThreadInput,
   EngineeringSpecContent,
+  GitResetMode,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -135,6 +139,9 @@ export class RemoteRpcDispatcher {
   private readonly checkpointManager: CheckpointManager
   private readonly memoryService: MemoryService
   private readonly repositoryService: RepositoryService
+  private readonly gitService: GitService
+  private readonly vault: SecretVault
+  private readonly githubAuthService: GitHubAuthService
   private readonly storage: StorageEngine
 
   constructor(private readonly services: RemoteRpcServices) {
@@ -155,6 +162,9 @@ export class RemoteRpcDispatcher {
     this.checkpointManager = new CheckpointManager(services.database)
     this.memoryService = new MemoryService(this.storage)
     this.repositoryService = new RepositoryService()
+    this.gitService = new GitService()
+    this.vault = new SecretVault(this.storage)
+    this.githubAuthService = new GitHubAuthService(this.vault)
   }
 
   /** Whether a channel is callable over the remote bridge. */
@@ -859,6 +869,182 @@ export class RemoteRpcDispatcher {
       // ─── Repo metadata ──────────────────────────────────────────────────
       case 'repository:remoteOrigin':
         return this.repositoryService.getRemoteOrigin(this.string(args[0]))
+      case 'repository:preflight':
+        return this.repositoryService.preflight(this.string(args[0]))
+
+      // ─── Git management ─────────────────────────────────────────────────
+      // The phone drives the same read/write git surface the desktop sidebar
+      // uses. A paired phone already commands an agent with full repository
+      // access over this bridge, so git mutations do not widen trust. Only the
+      // credential store stays desktop-owned: the PAT lives in the main-process
+      // vault and never crosses the bridge (it is resolved here for push), and
+      // GitHub device-flow sign-in + pull-request creation are desktop-only.
+      case 'git:status':
+        return this.gitService.getStatus(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:diff':
+        return this.gitService.getDiff(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          Boolean(args[2])
+        )
+      case 'git:stage':
+        return this.gitService.stage(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.stringArray(args[1], 'Git paths')
+        )
+      case 'git:unstage':
+        return this.gitService.unstage(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.stringArray(args[1], 'Git paths')
+        )
+      case 'git:commit':
+        return this.gitService.commit(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:amend':
+        return this.gitService.amend(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:init':
+        return this.gitService.initialize(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:branches':
+        return this.gitService.listBranches(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:checkout':
+        return this.syncBranchAfterCheckout(
+          this.string(args[0]),
+          await this.gitService.checkout(
+            await this.resolveProjectPath(this.string(args[0])),
+            this.string(args[1])
+          )
+        )
+      case 'git:createBranch':
+        return this.syncBranchAfterCheckout(
+          this.string(args[0]),
+          await this.gitService.createBranch(
+            await this.resolveProjectPath(this.string(args[0])),
+            this.string(args[1])
+          )
+        )
+      case 'git:deleteBranch':
+        return this.gitService.deleteBranch(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:log':
+        return this.gitService.log(
+          await this.resolveProjectPath(this.string(args[0])),
+          typeof args[1] === 'number' ? args[1] : undefined
+        )
+      case 'git:commitDiff':
+        return this.gitService.commitDiff(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:commitFileDiff':
+        return this.gitService.commitFileDiff(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'git:reset':
+        return this.syncBranchAfterCheckout(
+          this.string(args[0]),
+          await this.gitService.reset(
+            await this.resolveProjectPath(this.string(args[0])),
+            this.string(args[1]) as GitResetMode,
+            typeof args[2] === 'string' ? args[2] : undefined
+          )
+        )
+      case 'git:getIdentity':
+        return this.gitService.getIdentity(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:setIdentity': {
+        const projectId = this.string(args[0])
+        const identity = args[1] as { name?: string; email?: string } | undefined
+        return this.gitService.setIdentity(
+          await this.resolveProjectPath(projectId),
+          this.string(identity?.name),
+          this.string(identity?.email)
+        )
+      }
+      case 'git:remotes':
+        return this.gitService.listRemotes(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:addRemote':
+        return this.gitService.addRemote(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'git:removeRemote':
+        return this.gitService.removeRemote(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:fetch':
+        return this.gitService.fetch(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:pull':
+        return this.gitService.pull(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:push': {
+        const projectId = this.string(args[0])
+        const options = (args[1] ?? {}) as {
+          setUpstream?: boolean
+          remote?: string
+          branch?: string
+        }
+        const tokenRef = `git_pat_${projectId}`
+        const token = (await this.vault.exists(tokenRef))
+          ? await this.vault.resolve(tokenRef)
+          : undefined
+        return this.gitService.push(await this.resolveProjectPath(projectId), {
+          setUpstream: Boolean(options.setUpstream),
+          remote: typeof options.remote === 'string' ? options.remote : undefined,
+          branch: typeof options.branch === 'string' ? options.branch : undefined,
+          token
+        })
+      }
+      case 'git:getCredentialStatus': {
+        const projectId = this.string(args[0])
+        return {
+          configured: await this.vault.exists(`git_pat_${projectId}`),
+          secureStorageAvailable: this.vault.isAvailable()
+        }
+      }
+      case 'git:merge':
+        return this.gitService.merge(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:rebase':
+        return this.gitService.rebase(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:stash':
+        return this.gitService.stash(
+          await this.resolveProjectPath(this.string(args[0])),
+          typeof args[1] === 'string' ? args[1] : undefined
+        )
+      case 'git:stashList':
+        return this.gitService.listStashes(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:stashPop':
+        return this.gitService.popStash(
+          await this.resolveProjectPath(this.string(args[0])),
+          typeof args[1] === 'string' ? args[1] : undefined
+        )
+      case 'git:stashDrop':
+        return this.gitService.dropStash(
+          await this.resolveProjectPath(this.string(args[0])),
+          typeof args[1] === 'string' ? args[1] : undefined
+        )
+      case 'git:abortMerge':
+        return this.gitService.abortMerge(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:abortRebase':
+        return this.gitService.abortRebase(await this.resolveProjectPath(this.string(args[0])))
+
+      // ─── GitHub read-only auth status (device flow stays desktop-only) ──
+      case 'github:authStatus':
+        return this.githubAuthService.status()
 
       // ─── Electron-only helpers — the phone cannot use these, but the
       //     shared components call them; return a graceful no-op. ─────────
@@ -872,6 +1058,28 @@ export class RemoteRpcDispatcher {
       default:
         throw new Error(`Unknown remote channel: ${channel}`)
     }
+  }
+
+  /** Resolve a project id to its validated absolute path (git operates on paths). */
+  private async resolveProjectPath(projectId: string): Promise<string> {
+    const project = await this.projectManager.getProject(projectId)
+    if (!project?.path) throw new Error(`Project not found: ${projectId}`)
+    return project.path
+  }
+
+  /**
+   * A checkout/create-branch/reset moves the branch, so keep every owned
+   * thread whose working directory is this project coherent — mirroring the
+   * desktop git IPC handler.
+   */
+  private async syncBranchAfterCheckout<T>(projectId: string, result: T): Promise<T> {
+    const threads = await this.threadManager.listThreads(projectId)
+    for (const thread of threads) {
+      if (!thread.workingDirectory) continue
+      const branchName = await this.repositoryService.getCurrentBranch(thread.workingDirectory)
+      if (branchName) await this.threadManager.setBranch(projectId, thread.id, branchName)
+    }
+    return result
   }
 
   private string(value: unknown): string {

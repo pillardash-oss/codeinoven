@@ -8,6 +8,7 @@
     Check,
     ChevronDown,
     FileText,
+    GitBranch,
     History,
     Loader2,
     MessageSquare,
@@ -23,7 +24,10 @@
   import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import NotificationPanel from '$lib/components/notifications/NotificationPanel.svelte'
   import MemoryPanel from '$lib/components/memory/MemoryPanel.svelte'
+  import GitStatusPanel from '$lib/components/git/GitStatusPanel.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
+  import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { workspaceState, threadSort } from '$lib/stores/workspace.svelte'
@@ -65,7 +69,7 @@
   let notificationsOpen = $state(false)
   let memoryOpen = $state(false)
   let historyOpen = $state(false)
-
+  let gitOpen = $state(false)
   let selectedThread = $derived(workspaceState.selectedThread)
   let selectedProject = $derived(workspaceState.activeProject)
 
@@ -244,6 +248,20 @@
     scopeState.updateThread(updated)
   }
 
+  /** A tapped system notification opens the referenced thread. */
+  async function openThreadById(projectId: string, threadId: string): Promise<void> {
+    const thread = allThreads.find(
+      (t) => t.id === threadId && t.projectId === projectId && !t.archived
+    )
+    if (!thread) {
+      await loadData()
+      const reloaded = allThreads.find((t) => t.id === threadId && t.projectId === projectId)
+      if (reloaded) await openThread(reloaded)
+      return
+    }
+    await openThread(thread)
+  }
+
   async function handleRename(thread: Thread, newName: string): Promise<void> {
     const updated = await invoke('thread:update', thread.projectId, thread.id, {
       title: newName,
@@ -293,6 +311,21 @@
 
   onMount(() => {
     void loadData()
+    mobileNotifications.init()
+    mobileNotifications.setOpenHandler(
+      (projectId, threadId) => void openThreadById(projectId, threadId)
+    )
+    const onServiceWorkerMessage = (event: MessageEvent): void => {
+      const record = event.data
+      if (record?.type === 'notification:open' && record.projectId && record.threadId) {
+        void openThreadById(String(record.projectId), String(record.threadId))
+      }
+    }
+    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
+    return () => {
+      navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
+      mobileNotifications.setOpenHandler(null)
+    }
   })
 </script>
 
@@ -363,6 +396,16 @@
                 <StatusBadge kind="attention" title="Memory proposals needing attention" />
               {/if}
             </DropdownMenu.Item>
+
+            {#if selectedThread}
+              <DropdownMenu.Item
+                class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (gitOpen = true)}
+              >
+                <GitBranch size={16} />
+                <span class="flex-1 text-left">Git</span>
+              </DropdownMenu.Item>
+            {/if}
 
             {#if selectedThread && workspaceState.specStudioAvailable}
               <DropdownMenu.Item
@@ -501,6 +544,35 @@
         </button>
       </div>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div class="border-b border-border/60 px-4 py-3">
+          <Switch
+            checked={mobileNotifications.enabled}
+            disabled={mobileNotifications.permission === 'unsupported'}
+            onchange={(enabled) => {
+              if (enabled) {
+                void mobileNotifications.enable()
+              } else {
+                mobileNotifications.disable()
+              }
+            }}
+            label="System notifications"
+            aria-label="System notifications"
+          />
+          {#if mobileNotifications.permission === 'denied'}
+            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+              Notifications are blocked for this site. Allow them in your browser's site settings.
+            </p>
+          {:else if mobileNotifications.permission === 'unsupported'}
+            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+              System notifications are not supported on this browser.
+            </p>
+          {:else}
+            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+              Get a system alert when a thread wants your attention, even when the app is in the
+              background.
+            </p>
+          {/if}
+        </div>
         <NotificationPanel />
       </div>
     </aside>
@@ -535,6 +607,42 @@
           projectId={selectedThread?.projectId ?? selectedProject?.id}
           threadId={selectedThread?.id}
         />
+      </div>
+    </aside>
+  {/if}
+
+  <!-- Git sheet — the desktop git panel, scoped to the selected thread's project. -->
+  {#if gitOpen && selectedThread}
+    <div
+      class="fixed inset-0 z-40 bg-black/50"
+      role="presentation"
+      onclick={() => (gitOpen = false)}
+    ></div>
+    <aside
+      class="fixed right-0 bottom-0 left-0 z-50 flex h-[85dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-app pb-[env(safe-area-inset-bottom)] shadow-2xl"
+      aria-label="Git"
+    >
+      <div
+        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4"
+      >
+        <p
+          class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed"
+        >
+          <GitBranch size={13} />
+          Git
+        </p>
+        <button
+          type="button"
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
+          aria-label="Close git"
+          title="Close git"
+          onclick={() => (gitOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-hidden">
+        <GitStatusPanel projectId={selectedThread.projectId} threadId={selectedThread.id} />
       </div>
     </aside>
   {/if}

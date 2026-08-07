@@ -162,6 +162,46 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'projectFiles:search',
   // Repo metadata (thread hover popover)
   'repository:remoteOrigin',
+  // Git management — the same surface the desktop git sidebar drives. The
+  // phone is a paired, authenticated extension of the user's own desktop and
+  // already commands an agent with full repository access, so read/write git
+  // is not a widening of trust. GitHub device-flow sign-in and pull-request
+  // creation stay desktop-only; only the read-only auth status is exposed so
+  // the panel can render without erroring.
+  'repository:preflight',
+  'git:status',
+  'git:diff',
+  'git:stage',
+  'git:unstage',
+  'git:commit',
+  'git:amend',
+  'git:init',
+  'git:branches',
+  'git:checkout',
+  'git:createBranch',
+  'git:deleteBranch',
+  'git:log',
+  'git:commitDiff',
+  'git:commitFileDiff',
+  'git:reset',
+  'git:getIdentity',
+  'git:setIdentity',
+  'git:remotes',
+  'git:addRemote',
+  'git:removeRemote',
+  'git:fetch',
+  'git:pull',
+  'git:push',
+  'git:getCredentialStatus',
+  'git:merge',
+  'git:rebase',
+  'git:stash',
+  'git:stashList',
+  'git:stashPop',
+  'git:stashDrop',
+  'git:abortMerge',
+  'git:abortRebase',
+  'github:authStatus',
   // Electron-only helpers — allowed so the shared components never error,
   // but dispatched to no-op handlers on the phone.
   'dialog:pickFile',

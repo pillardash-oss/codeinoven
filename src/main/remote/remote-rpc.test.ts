@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import { simpleGit } from 'simple-git'
 import { RemoteRpcDispatcher, type RemoteRpcServices } from './remote-rpc'
 import type { Database } from '../database/database'
+import { ProjectRepo } from '../database/repositories/project-repo'
+import { createTestDb, destroyTestDb } from '../database/test-helper'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 
 const coreAllowed = new Set([
@@ -61,14 +67,15 @@ describe('RemoteRpcDispatcher', () => {
       expect(dispatcher.isAllowed(channel)).toBe(true)
     }
     expect(dispatcher.isAllowed('ipcMain:any')).toBe(false)
-    expect(dispatcher.isAllowed('git:status')).toBe(false)
+    expect(dispatcher.isAllowed('git:status')).toBe(true)
+    expect(dispatcher.isAllowed('git:setCredential')).toBe(false)
     expect(dispatcher.isAllowed('editors:detect')).toBe(false)
     expect(dispatcher.isAllowed('providerAccounts:beginLogin')).toBe(false)
   })
 
   it('rejects disallowed channels before touching any service', async () => {
     const dispatcher = makeDispatcher()
-    const outcome = await dispatcher.dispatch({ id: 1, channel: 'git:status', args: [] })
+    const outcome = await dispatcher.dispatch({ id: 1, channel: 'git:setCredential', args: [] })
     expect(outcome.ok).toBe(false)
     if (!outcome.ok) expect(outcome.message).toContain('not allowed')
   })
@@ -142,5 +149,54 @@ describe('RemoteRpcDispatcher', () => {
     expect(routed[10]).toBe('user')
     expect(routed[11]).toEqual(presentation)
     expect(routed[12]).toEqual(taskReferences)
+  })
+
+  it('routes git:status to the shared GitService for a real repository', async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), 'codeinoven-remote-git-'))
+    const db = await createTestDb()
+    try {
+      const repo = simpleGit(gitDir)
+      await repo.init()
+      await writeFile(join(gitDir, 'file.txt'), 'hello\n', 'utf-8')
+      await repo.add('.')
+      await repo.commit('initial')
+
+      const now = Date.now()
+      new ProjectRepo(db).upsert({
+        id: 'git-project',
+        name: 'Git project',
+        path: gitDir,
+        source: 'local',
+        providerId: 'openai',
+        workflowId: 'default',
+        threadLimit: 70,
+        changeTrackingMode: 'git',
+        createdAt: now,
+        updatedAt: now
+      })
+
+      const dispatcher = makeDispatcher({ database: db })
+      const outcome = await dispatcher.dispatch({
+        id: 9,
+        channel: 'git:status',
+        args: ['git-project']
+      })
+      expect(outcome.ok).toBe(true)
+      if (outcome.ok) expect(outcome.result).toMatchObject({ branch: 'main' })
+    } finally {
+      destroyTestDb(db)
+      await rm(gitDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects git:setCredential over the bridge — the vault stays desktop-only', async () => {
+    const dispatcher = makeDispatcher()
+    const outcome = await dispatcher.dispatch({
+      id: 10,
+      channel: 'git:setCredential',
+      args: ['git-project', 'ghp_secret']
+    })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.message).toContain('not allowed')
   })
 })
