@@ -85,23 +85,23 @@
 
   function formatReset(value: number | undefined): string {
     if (!value) return 'Reset time unavailable'
-    const now = Date.now()
-    if (value > now) {
-      const minutes = Math.max(1, Math.round((value - now) / 60_000))
-      const duration =
-        minutes >= 1_440
-          ? `${Math.round(minutes / 1_440)}d ${Math.round((minutes % 1_440) / 60)}h`
-          : minutes >= 60
-            ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-            : `${minutes}m`
-      return `Resets in ${duration}`
-    }
-    return `Resets ${new Intl.DateTimeFormat(undefined, {
+    const date = new Intl.DateTimeFormat(undefined, {
+      weekday: 'short',
       month: 'short',
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit'
-    }).format(value)}`
+    }).format(value)
+    const now = Date.now()
+    if (value <= now) return `Reset ${date}`
+    const minutes = Math.max(1, Math.round((value - now) / 60_000))
+    const duration =
+      minutes >= 1_440
+        ? `${Math.round(minutes / 1_440)}d ${Math.round((minutes % 1_440) / 60)}h`
+        : minutes >= 60
+          ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+          : `${minutes}m`
+    return `Resets in ${duration} · ${date}`
   }
 
   function readableStatus(value: string | undefined): string {
@@ -204,9 +204,17 @@
     </button>
     {#if !collapsed}
       <div class="space-y-2.5 px-2.5 pb-2.5">
+        {#if entry.tokens && entry.tokens.total > 0}
+          <p class="text-[9px] text-dimmed">
+            Consumed {compactNumber(entry.tokens.total)} tokens
+            {#if entry.messageCount}
+              · {entry.messageCount} turn{entry.messageCount === 1 ? '' : 's'}
+            {/if}
+          </p>
+        {/if}
         {#if entry.rateLimits.length > 0}
           {@render limitRows(entry.rateLimits)}
-        {:else if !creditsLine(entry)}
+        {:else if !creditsLine(entry) && !entry.tokens}
           <p class="text-[10px] text-dimmed">No quota reported for this harness.</p>
         {/if}
         {#if creditsLine(entry)}
