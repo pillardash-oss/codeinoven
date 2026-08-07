@@ -196,7 +196,9 @@
           words.length === 0
             ? provider.models.filter(passesVisionFilter)
             : provider.models.filter(
-                (model) => passesVisionFilter(model) && words.every((word) => modelHaystack(provider, model).includes(word))
+                (model) =>
+                  passesVisionFilter(model) &&
+                  words.every((word) => modelHaystack(provider, model).includes(word))
               )
       }))
       .filter(

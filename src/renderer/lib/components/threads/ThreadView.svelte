@@ -20,7 +20,6 @@
     Check,
     ChevronDown,
     Copy,
-    Download,
     Ellipsis,
     FileText,
     GitFork,
@@ -155,7 +154,7 @@
 
   interface Props {
     thread: Thread
-    /** True on the Chats tab — hides engineering tooling, enables the artifacts panel. */
+    /** True on the Chats tab — hides engineering tooling. */
     chatMode?: boolean
     /** Called with the new thread after a fork from a message succeeds. */
     onForked?: (forked: Thread) => void
@@ -805,7 +804,6 @@
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
   let showSpecStudio = $state(false)
-  let showArtifacts = $state(false)
   let previewFile = $state<{ url: string; filename: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
 
@@ -1394,13 +1392,7 @@
     }
   })
 
-  /** Files uploaded to or produced in this chat — the artifacts panel content. */
-  let artifacts = $derived(
-    messages.flatMap((m) =>
-      m.parts.filter((p): p is Extract<AgentPart, { type: 'file' }> => p.type === 'file')
-    )
-  )
-
+  /** Files uploaded to or produced in this chat — surfaced via the Sources panel. */
   let sources = $derived(
     collectAgentSources(messages).filter((source) => {
       if (source.kind !== 'file-citation') return true
@@ -1483,24 +1475,6 @@
     workspaceState.specStudioFormulating = specFormulating
     workspaceState.specStudioError = specError
     if (!showSpecStudio) workspaceState.specAgentSidebarOpen = false
-  })
-
-  // Feed the header's Artifacts button — chat mode only, count drives visibility.
-  $effect(() => {
-    workspaceState.artifactsCount = chatMode ? artifacts.length : 0
-    workspaceState.artifactsOpen = showArtifacts
-  })
-
-  // Register the header's Artifacts toggle; cleared when the thread view unmounts.
-  $effect(() => {
-    workspaceState.toggleArtifacts = () => {
-      showArtifacts = !showArtifacts
-    }
-    return () => {
-      workspaceState.toggleArtifacts = null
-      workspaceState.artifactsCount = 0
-      workspaceState.artifactsOpen = false
-    }
   })
 
   // Register the header's Spec toggle; cleared when the thread view unmounts.
@@ -2744,28 +2718,7 @@
     clearQueuedState()
   }
 
-  // ─── Artifacts ─────────────────────────────────────────────────────────────────
-
-  /** Display name for an artifact row — falls back to the path tail. */
-  function artifactName(part: Extract<AgentPart, { type: 'file' }>): string {
-    return part.filename ?? part.url.split('/').pop() ?? 'file'
-  }
-
-  /** Best-effort image detection — uploads often arrive with a generic mime. */
-  function isImageArtifact(part: Extract<AgentPart, { type: 'file' }>): boolean {
-    return (
-      part.mime.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(artifactName(part))
-    )
-  }
-
-  /** "Download" for a local artifact — reveals the file in the system file manager. */
-  async function revealArtifact(url: string): Promise<void> {
-    try {
-      await invoke('shell:revealPath', url)
-    } catch {
-      errorMessage = 'The file could not be revealed.'
-    }
-  }
+  // ─── Permissions ───────────────────────────────────────────────────────
 
   async function allowPermissionOnce(requestId: string): Promise<void> {
     await invoke('agent:replyPermission', thread.projectId, requestId, 'once')
@@ -5875,7 +5828,7 @@
                   ? rendererRecovery.addChatRecentModel(modelKey)
                   : rendererRecovery.addRecentModel(modelKey)}
               imageDescriptorDefault={agentDefaults.imageDescriptor}
-              imageDescriptorAskAgain={imageDescriptorAskAgain}
+              {imageDescriptorAskAgain}
               onImageDescriptorDefaultChange={setImageDescriptorDefault}
               onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
             />
@@ -5931,111 +5884,7 @@
     {/if}
   {/if}
 
-  <!-- Artifacts panel — files shared in this chat (chat mode only) -->
-  {#if chatMode && showArtifacts}
-    <aside
-      class="absolute inset-y-0 right-0 z-20 flex w-72 flex-col border-l border-border bg-surface shadow-lg"
-      aria-label="Chat artifacts"
-    >
-      <div class="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
-        <h2 class="text-[12px] font-semibold text-foreground">Artifacts</h2>
-        <button
-          class="flex h-6 w-6 items-center justify-center rounded text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Close artifacts"
-          title="Close artifacts"
-          onclick={() => (showArtifacts = false)}
-        >
-          <X size={14} />
-        </button>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto p-2">
-        {#each artifacts as artifact (artifact.id)}
-          {@const imageFile = isImageArtifact(artifact)}
-          {#if imageFile}
-            <button
-              type="button"
-              class="group flex w-full items-center gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-elevated"
-              title="Preview image"
-              onclick={() =>
-                (previewFile = {
-                  url: imageUrls.getUrl(artifact.url),
-                  filename: artifactName(artifact)
-                })}
-            >
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
-              >
-                <img
-                  src={imageUrls.getUrl(artifact.url)}
-                  alt={artifactName(artifact)}
-                  class="h-8 w-8 rounded-md object-cover"
-                  onerror={(e: Event) =>
-                    void imageUrls.bindImage(
-                      artifact.url,
-                      artifact.mime,
-                      e.currentTarget as HTMLImageElement
-                    )}
-                />
-              </span>
-              <span
-                class="min-w-0 flex-1 truncate text-[12px] text-foreground"
-                title={artifactName(artifact)}
-              >
-                {artifactName(artifact)}
-              </span>
-              <span
-                role="button"
-                tabindex="0"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-all hover:text-foreground group-hover:opacity-100"
-                aria-label="Download {artifactName(artifact)}"
-                title="Download {artifactName(artifact)}"
-                onclick={(e: MouseEvent) => {
-                  e.stopPropagation()
-                  void revealArtifact(artifact.url)
-                }}
-                onkeydown={(e: KeyboardEvent) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.stopPropagation()
-                    void revealArtifact(artifact.url)
-                  }
-                }}
-              >
-                <Download size={14} />
-              </span>
-            </button>
-          {:else}
-            <div
-              class="group flex items-center gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-elevated"
-            >
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-elevated text-muted"
-              >
-                <FileText size={15} />
-              </span>
-              <span
-                class="min-w-0 flex-1 truncate text-[12px] text-foreground"
-                title={artifactName(artifact)}
-              >
-                {artifactName(artifact)}
-              </span>
-              <button
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-0 transition-all hover:text-foreground group-hover:opacity-100"
-                aria-label="Download {artifactName(artifact)}"
-                title="Download {artifactName(artifact)}"
-                onclick={() => void revealArtifact(artifact.url)}
-              >
-                <Download size={14} />
-              </button>
-            </div>
-          {/if}
-        {:else}
-          <p class="px-2 py-4 text-center text-[11px] text-dimmed">
-            Files you upload or the agent creates will appear here.
-          </p>
-        {/each}
-      </div>
-    </aside>
-  {/if}
+  <!-- Artifacts & sources are unified in the Sources panel — nothing here. -->
 </div>
 
 <style>

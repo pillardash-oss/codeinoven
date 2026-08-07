@@ -1324,9 +1324,7 @@
           <Eye size={15} />
         </div>
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-semibold text-foreground">
-            This model can't see images
-          </p>
+          <p class="text-sm font-semibold text-foreground">This model can't see images</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
             You're sending an image to a model without vision capability. Pick a vision model to
             describe the image, so {resolved.modelId || 'this model'} can work with it.
@@ -1336,12 +1334,14 @@
       <div class="mt-3">
         <ModelPicker
           {providers}
-          projectId={projectId}
-          harnessId={gateVisionSelection?.harnessId ?? providers[0]?.harnessId ?? resolved.harnessId}
+          {projectId}
+          harnessId={gateVisionSelection?.harnessId ??
+            providers[0]?.harnessId ??
+            resolved.harnessId}
           providerId={gateVisionSelection?.providerId ?? ''}
           modelId={gateVisionSelection?.modelId ?? ''}
-          favoriteModels={favoriteModels}
-          recentModels={recentModels}
+          {favoriteModels}
+          {recentModels}
           visionOnly
           side="top"
           variant="field"
@@ -1349,8 +1349,8 @@
           onSelect={(providerId, modelId, harnessId) => {
             gateVisionSelection = { harnessId, providerId, modelId }
           }}
-          onToggleFavorite={onToggleFavorite}
-          onReorderFavorite={onReorderFavorite}
+          {onToggleFavorite}
+          {onReorderFavorite}
         />
         {#if !gateVisionSelection}
           <p class="mt-1.5 text-[11px] text-dimmed">

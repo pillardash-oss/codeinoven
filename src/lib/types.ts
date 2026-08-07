@@ -850,13 +850,7 @@ export interface AgentToolCatalog {
 
 /** Additional capabilities CodeInOven can expose when a harness lacks them. */
 export type UtilityKind =
-  | 'mcp'
-  | 'skill'
-  | 'web_search'
-  | 'web_fetch'
-  | 'computer_use'
-  | 'provider'
-  | 'image_descriptor'
+  'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider' | 'image_descriptor'
 
 export type UtilityActivation = 'on_demand' | 'always'
 
