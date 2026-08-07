@@ -151,6 +151,10 @@ const MEMORY_SYSTEM_INSTRUCTION = [
   'Do not claim the memory is already persisted because proposals require user approval.'
 ].join(' ')
 
+/** Guidance injected for models that cannot see images (attachment: false). */
+const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
+  'You cannot see images. When the user (or a discovered file) provides an image, use the image descriptor utility to obtain a text description of it before proceeding. Search the utilities for "image descriptor", activate it, and invoke its describe operation with the image file path or binary data.'
+
 const PROVIDER_CATALOG_TTL_MS = 24 * 60 * 60 * 1000
 
 interface PersistedProviderCatalog {
@@ -3192,36 +3196,40 @@ export class ChatEngine {
               activeSpec.annotations
             )
           : ''
-        const behaviorPrompt = await this.getBehaviorPrompt(
-          projectId,
-          threadId,
-          projectPath,
-          'brainstorm'
-        )
-        const prompt: SendPromptOptions = {
-          sessionId,
-          settings: {
-            ...settings,
-            permissionLevel: 'auto_review'
-          },
-          text: driverText,
-          attachments,
-          systemPrompt: [
-            activeBrainstormTurn
-              ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT
-              : SPEC_BRAINSTORM_SYSTEM_PROMPT,
-            activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
-            !activeBrainstormTurn && settings.assignmentMode === true
-              ? ASSIGNMENT_GENERATION_INSTRUCTION
-              : '',
-            revisionPrompt,
-            MEMORY_SYSTEM_INSTRUCTION,
-            behaviorPrompt,
-            utilityInstructions,
-            historyRecap
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+      const behaviorPrompt = await this.getBehaviorPrompt(
+        projectId,
+        threadId,
+        projectPath,
+        'brainstorm'
+      )
+      const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
+        ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
+        : ''
+      const prompt: SendPromptOptions = {
+        sessionId,
+        settings: {
+          ...settings,
+          permissionLevel: 'auto_review'
+        },
+        text: driverText,
+        attachments,
+        systemPrompt: [
+          activeBrainstormTurn
+            ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT
+            : SPEC_BRAINSTORM_SYSTEM_PROMPT,
+          activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
+          !activeBrainstormTurn && settings.assignmentMode === true
+            ? ASSIGNMENT_GENERATION_INSTRUCTION
+            : '',
+          revisionPrompt,
+          MEMORY_SYSTEM_INSTRUCTION,
+          imageDescriptorNote,
+          behaviorPrompt,
+          utilityInstructions,
+          historyRecap
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
           allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
           userMessageId: messageId
         }
@@ -3300,6 +3308,9 @@ export class ChatEngine {
         projectPath,
         specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
       )
+      const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
+        ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
+        : ''
       // Chat threads (standalone Chats-tab conversations) behave like a plain
       // browser chatbot: no file-system tools, internet-first answers. File
       // operations are granted only when the user explicitly enables the
@@ -3318,6 +3329,7 @@ export class ChatEngine {
                 : CHAT_SYSTEM_PROMPT
               : '',
             MEMORY_SYSTEM_INSTRUCTION,
+            imageDescriptorNote,
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
@@ -8037,6 +8049,25 @@ export class ChatEngine {
     }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
+  }
+
+  /** True when the selected model's catalog reports it cannot see images.
+   *  Unknown catalog state fails open (treated as vision-capable). */
+  private async modelLacksVision(
+    projectId: string,
+    settings: ThreadSettings
+  ): Promise<boolean> {
+    const catalogs =
+      this.providerCache.get(projectId) ??
+      this.sharedProviderCatalog?.catalogs ??
+      (await this.loadPersistedProviders(projectId))
+    const provider =
+      catalogs?.find(
+        (candidate) =>
+          candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
+      ) ?? catalogs?.find((candidate) => candidate.id === settings.providerId)
+    const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
+    return model?.attachment === false
   }
 
   // ─── Event handling ───────────────────────────────────────────────────────
