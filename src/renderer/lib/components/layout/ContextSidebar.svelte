@@ -39,6 +39,9 @@
     placement?: TerminalPlacement
     content: Snippet
     actions: SidebarAction[]
+    /** Hide the "+" add-tab button and the empty-state action grid. Used in
+     *  chat mode where everything openable lives on the app header. */
+    hideAddButton?: boolean
     onSelect: (id: string) => void
     onClose: (id: string) => void
     onFullscreenTab?: (id: string) => void
@@ -57,6 +60,7 @@
     placement = 'right',
     content,
     actions,
+    hideAddButton = false,
     onSelect,
     onClose,
     onFullscreenTab,
@@ -283,98 +287,108 @@
           {/if}
         </button>
       {/if}
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Add sidebar tab"
-          title="Add tab"
-          disabled={actions.length === 0}
-        >
-          <Plus size={13} />
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            side="bottom"
-            align="end"
-            sideOffset={6}
-            class="z-50 min-w-48 rounded-lg border border-border bg-surface p-1 shadow-lg"
+      {#if !hideAddButton}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Add sidebar tab"
+            title="Add tab"
+            disabled={actions.length === 0}
           >
-            {#each actions as action (action.id)}
-              <DropdownMenu.Item
-                class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-                textValue={action.label}
-                onSelect={action.onSelect}
-              >
-                {#if action.id === 'files'}
-                  <Files size={14} class="shrink-0 text-muted" />
-                {:else if action.id === 'diff'}
-                  <FileDiff size={14} class="shrink-0 text-muted" />
-                {:else if action.id === 'terminal'}
-                  <SquareTerminal size={14} class="shrink-0 text-muted" />
-                {:else if action.id === 'debugger'}
-                  <Bug size={14} class="shrink-0 text-muted" />
-                {:else if action.id === 'sources'}
-                  <Info size={14} class="shrink-0 text-muted" />
-                {/if}
-                <span class="min-w-0">
-                  <span class="block text-xs font-medium text-foreground">
-                    {action.label}
+            <Plus size={13} />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              class="z-50 min-w-48 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              {#each actions as action (action.id)}
+                <DropdownMenu.Item
+                  class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
+                  textValue={action.label}
+                  onSelect={action.onSelect}
+                >
+                  {#if action.id === 'files'}
+                    <Files size={14} class="shrink-0 text-muted" />
+                  {:else if action.id === 'diff'}
+                    <FileDiff size={14} class="shrink-0 text-muted" />
+                  {:else if action.id === 'terminal'}
+                    <SquareTerminal size={14} class="shrink-0 text-muted" />
+                  {:else if action.id === 'debugger'}
+                    <Bug size={14} class="shrink-0 text-muted" />
+                  {:else if action.id === 'sources'}
+                    <Info size={14} class="shrink-0 text-muted" />
+                  {/if}
+                  <span class="min-w-0">
+                    <span class="block text-xs font-medium text-foreground">
+                      {action.label}
+                    </span>
+                    <span class="block text-[10px] text-dimmed">
+                      {action.description}
+                    </span>
                   </span>
-                  <span class="block text-[10px] text-dimmed">
-                    {action.description}
-                  </span>
-                </span>
-              </DropdownMenu.Item>
-            {/each}
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {/if}
     </div>
   </div>
 
   <div class="min-h-0 flex-1 overflow-hidden">
     {#if tabs.length === 0}
       <div class="flex h-full items-center justify-center px-6">
-        <div class="w-full max-w-64">
+        {#if hideAddButton}
           <p
-            class="mb-3 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            class="max-w-64 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
           >
-            Open in sidebar
+            Nothing open
           </p>
-          <div class="grid gap-2">
-            {#each actions as action (action.id)}
-              <button
-                type="button"
-                class="flex min-h-10 w-full items-center gap-3 rounded-lg border border-border bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-overlay"
-                onclick={action.onSelect}
-              >
-                <span
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-raised text-muted"
+        {:else}
+          <div class="w-full max-w-64">
+            <p
+              class="mb-3 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              Open in sidebar
+            </p>
+            <div class="grid gap-2">
+              {#each actions as action (action.id)}
+                <button
+                  type="button"
+                  class="flex min-h-10 w-full items-center gap-3 rounded-lg border border-border bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-overlay"
+                  onclick={action.onSelect}
                 >
-                  {#if action.id === 'files'}
-                    <Files size={14} />
-                  {:else if action.id === 'diff'}
-                    <FileDiff size={14} />
-                  {:else if action.id === 'terminal'}
-                    <SquareTerminal size={14} />
-                  {:else if action.id === 'debugger'}
-                    <Bug size={14} />
-                  {:else if action.id === 'sources'}
-                    <Info size={14} />
-                  {/if}
-                </span>
-                <span class="min-w-0">
-                  <span class="block text-xs font-medium text-foreground">
-                    {action.label}
+                  <span
+                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-raised text-muted"
+                  >
+                    {#if action.id === 'files'}
+                      <Files size={14} />
+                    {:else if action.id === 'diff'}
+                      <FileDiff size={14} />
+                    {:else if action.id === 'terminal'}
+                      <SquareTerminal size={14} />
+                    {:else if action.id === 'debugger'}
+                      <Bug size={14} />
+                    {:else if action.id === 'sources'}
+                      <Info size={14} />
+                    {/if}
                   </span>
-                  <span class="block text-[10px] text-dimmed">
-                    {action.description}
+                  <span class="min-w-0">
+                    <span class="block text-xs font-medium text-foreground">
+                      {action.label}
+                    </span>
+                    <span class="block text-[10px] text-dimmed">
+                      {action.description}
+                    </span>
                   </span>
-                </span>
-              </button>
-            {/each}
+                </button>
+              {/each}
+            </div>
           </div>
-        </div>
+        {/if}
       </div>
     {:else}
       {@render content()}

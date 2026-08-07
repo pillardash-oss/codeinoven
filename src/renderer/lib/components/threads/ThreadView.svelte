@@ -5883,8 +5883,6 @@
       />
     {/if}
   {/if}
-
-  <!-- Artifacts & sources are unified in the Sources panel — nothing here. -->
 </div>
 
 <style>

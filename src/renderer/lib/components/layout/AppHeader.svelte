@@ -24,16 +24,17 @@
   import {
     AppWindow,
     Bell,
+    Bug,
     Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
-    Files,
     FileText,
     FolderKanban,
     GitBranch,
     GitFork,
     History,
+    Info,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -328,6 +329,31 @@
     contextSidebarState.openMemory(thread.projectId, thread.id)
   }
 
+  /** Toggle the Sources panel for the selected thread (chat mode header button). */
+  function toggleSources(): void {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    showHistory = false
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'sources') {
+      contextSidebarState.hide()
+      return
+    }
+    contextSidebarState.openSources(thread.projectId, thread.id)
+  }
+
+  /** Toggle the agent debugger panel — dev-only. */
+  function toggleDebugger(): void {
+    if (!import.meta.env.DEV) return
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    showHistory = false
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'debugger') {
+      contextSidebarState.hide()
+      return
+    }
+    contextSidebarState.openDebugger(thread.projectId, thread.id)
+  }
+
   $effect(() => {
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
   })
@@ -361,6 +387,25 @@
 
   let contextSidebarOpen = $derived(
     Boolean(workspaceState.selectedThread && contextSidebarState.visible)
+  )
+
+  /** True while the sources panel is the active sidebar tab. */
+  let sourcesOpen = $derived(
+    Boolean(
+      workspaceState.selectedThread &&
+      contextSidebarState.visible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'sources'
+    )
+  )
+
+  /** True while the agent debugger is the active sidebar tab. */
+  let debuggerOpen = $derived(
+    Boolean(
+      import.meta.env.DEV &&
+      workspaceState.selectedThread &&
+      contextSidebarState.visible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'debugger'
+    )
   )
 
   /** Whether the terminal area is currently visible (dock at the bottom, or a
@@ -1137,24 +1182,6 @@
       </div>
     {/if}
 
-    <!-- Artifacts — chat mode only, appears once the chat has files -->
-    {#if chatMode && workspaceState.selectedThread && workspaceState.artifactsCount > 0}
-      <button
-        class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.artifactsOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={workspaceState.artifactsOpen ? 'Close artifacts' : 'Open artifacts'}
-        title={workspaceState.artifactsOpen ? 'Close artifacts' : 'Show the files in this chat'}
-        onclick={() => workspaceState.toggleArtifacts?.()}
-      >
-        <Files size={15} />
-        <span class="header-control-label text-[11px] font-medium">Artifacts</span>
-        <span class="header-control-label text-[11px] font-medium tabular-nums text-dimmed"
-          >{workspaceState.artifactsCount}</span
-        >
-      </button>
-    {/if}
-
     <!-- Spec studio — only for engineering-mode threads, never in chat mode -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
@@ -1241,14 +1268,48 @@
       </button>
     {/if}
 
-    <button
-      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-      aria-label="Open command palette"
-      title="Open command palette (Ctrl+K)"
-      onclick={onCommandPaletteOpen}
-    >
-      <Search size={14} aria-hidden="true" />
-    </button>
+    {#if chatMode}
+      {#if workspaceState.selectedThread}
+        <!-- Sources — chat mode surfaces the sources panel on the header -->
+        <button
+          class="relative flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {sourcesOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          aria-label={sourcesOpen ? 'Close sources' : 'Open sources'}
+          title={sourcesOpen ? 'Close sources' : 'Show sources for this chat'}
+          onclick={toggleSources}
+        >
+          <Info size={15} />
+          <span class="header-control-label text-[11px] font-medium">Sources</span>
+          {#if workspaceState.sources.length > 0}
+            <span class="header-control-label text-[11px] font-medium tabular-nums text-dimmed"
+              >{workspaceState.sources.length}</span
+            >
+          {/if}
+        </button>
+        {#if import.meta.env.DEV}
+          <button
+            class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150 {debuggerOpen
+              ? 'bg-elevated text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-label={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
+            title={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
+            onclick={toggleDebugger}
+          >
+            <Bug size={16} />
+          </button>
+        {/if}
+      {/if}
+    {:else}
+      <button
+        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+        aria-label="Open command palette"
+        title="Open command palette (Ctrl+K)"
+        onclick={onCommandPaletteOpen}
+      >
+        <Search size={14} aria-hidden="true" />
+      </button>
+    {/if}
 
     <!-- Notification bell — available in all views -->
     <button
@@ -1273,7 +1334,7 @@
       {/if}
     </button>
 
-    {#if !onSettings && !onScope && workspaceState.selectedThread}
+    {#if !chatMode && !onSettings && !onScope && workspaceState.selectedThread}
       <button
         class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {contextSidebarOpen
           ? 'bg-elevated text-foreground'

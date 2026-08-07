@@ -2529,6 +2529,7 @@
             placement="right"
             content={contextSidebarContent}
             actions={sidebarActions}
+            hideAddButton={mode === 'chats'}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}

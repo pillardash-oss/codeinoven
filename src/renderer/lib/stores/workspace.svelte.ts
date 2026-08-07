@@ -96,12 +96,6 @@ class WorkspaceState {
   specAgentResponses: SpecAgentResponse[] = $state([])
   pendingThreadStudioOpen: ThreadStudioOpenRequest | null = $state(null)
 
-  // ─── Artifacts (fed by ThreadView, chat mode only) ─────────────────────
-  /** Number of files uploaded to or produced in the active chat. */
-  artifactsCount = $state(0)
-  artifactsOpen = $state(false)
-  toggleArtifacts: (() => void) | null = null
-
   // ─── Navigation (set by App.svelte) ────────────────────────────────────
   navigateToSettings: ((tab?: string) => void) | null = null
   navigateToContent: (() => void) | null = null
@@ -288,9 +282,6 @@ class WorkspaceState {
     this.specAgentSidebarOpen = false
     this.toggleSpecStudio = null
     this.specAgentResponses = []
-    this.artifactsCount = 0
-    this.artifactsOpen = false
-    this.toggleArtifacts = null
     rendererRecovery.clearSelectedThread()
   }
 }
