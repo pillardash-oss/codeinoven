@@ -468,6 +468,9 @@ export interface BaseUrlProviderModel {
   thinkingPresets?: ThinkingPreset[]
   /** Default thinking level applied when this model is first selected. */
   defaultThinkingLevel?: ThinkingLevel
+  /** Whether the model can see images. Unspecified is treated as vision-capable
+   *  so a custom model is never wrongly hidden or gated. */
+  vision?: boolean
 }
 
 /** A custom provider defined by base URL, stored and vaulted by CodeInOven. */
