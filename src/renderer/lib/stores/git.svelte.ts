@@ -104,6 +104,10 @@ export class GitState {
   }
 
   markBusy(operation: GitOperation, busy: boolean): void {
+    // No-op when the value is unchanged, so a repeated mark during an in-flight
+    // async load never rewrites `busy` (which would re-trigger dependents and
+    // can escalate into an effect_update_depth_exceeded loop).
+    if (this.busy[operation] === busy) return
     this.busy = { ...this.busy, [operation]: busy }
   }
 

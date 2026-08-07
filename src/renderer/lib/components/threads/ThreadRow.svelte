@@ -125,7 +125,10 @@
 
   /** Distinct harnesses used in this thread's session, newest first. */
   let harnessIds = $derived.by((): string[] => {
-    const ids = thread.usedHarnessIds ?? []
+    // Defensive dedupe: a harness may appear more than once in the source data
+    // (legacy rows before the usage table grouped by harness), and a keyed each
+    // block over it must never see the same key twice.
+    const ids = Array.from(new Set(thread.usedHarnessIds ?? []))
     if (thread.settings?.harnessId && !ids.includes(thread.settings.harnessId)) {
       return [...ids, thread.settings.harnessId]
     }

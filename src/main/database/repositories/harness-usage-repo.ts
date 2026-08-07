@@ -87,7 +87,8 @@ export class HarnessUsageRepo {
     const rows = this.db.all<{ harness_id: string }>(
       `SELECT harness_id FROM harness_usage
        WHERE thread_id = ?
-       ORDER BY last_used_at DESC`,
+       GROUP BY harness_id
+       ORDER BY MAX(last_used_at) DESC`,
       threadId
     )
     return rows.map((row) => row.harness_id)

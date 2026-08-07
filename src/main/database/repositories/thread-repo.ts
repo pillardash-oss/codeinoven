@@ -302,11 +302,15 @@ export class ThreadRepo {
     const result = new Map<string, string[]>()
     if (threadIds.length === 0) return result
     const placeholders = threadIds.map(() => '?').join(',')
+    // The PK is (project_id, thread_id, harness_id, provider_id), so one harness
+    // can legitimately own several rows across providers. Group by harness to
+    // return it once, keeping its most recent activity time.
     const rows = this.db.all<{ thread_id: string; harness_id: string }>(
       `SELECT thread_id, harness_id
        FROM harness_usage
        WHERE thread_id IN (${placeholders})
-       ORDER BY last_used_at DESC`,
+       GROUP BY thread_id, harness_id
+       ORDER BY MAX(last_used_at) DESC`,
       ...threadIds
     )
     for (const row of rows) {
