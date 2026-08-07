@@ -7,6 +7,7 @@
   import { pickColorForSeed } from '$lib/project-colors'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
@@ -132,6 +133,10 @@
     restoreFocusOnClose = false
     open = false
     await onSelect(thread)
+    // Focus the new thread's composer editor in place after the dialog is fully
+    // closed — the mount-time autofocus alone loses the race with the closing
+    // focus scope. Focuses directly; it never remounts the composer.
+    workspaceState.requestFocusComposerEditor()
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {

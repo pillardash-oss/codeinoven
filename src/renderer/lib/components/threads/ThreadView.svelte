@@ -620,7 +620,7 @@
     }
     // Layer the live account quota over the matching harness so the battery
     // shows current windows/credits even for old threads with no message data.
-    for (const usage of liveAccountUsage) {
+    for (const usage of liveAccountUsage ?? []) {
       const key = `${usage.harnessId}:${usage.providerId}`
       const entry = byHarness[key]
       if (entry) {
@@ -702,6 +702,10 @@
     refreshingAccountUsage = true
     try {
       const usageList = await invoke('agent:refreshAccountUsage', thread.projectId, thread.id)
+      // Guard against a stale/partial main process resolving the call with a
+      // non-array; an undefined `liveAccountUsage` crashes the battery derived
+      // on every render flush and freezes the thread view.
+      if (!Array.isArray(usageList)) return
       liveAccountUsage = usageList
       const currentUsage = usageList.find(
         (usage) =>
@@ -2341,6 +2345,18 @@
       prevFocusComposerCount = current
       composerRestoreKey += 1
     }
+  })
+
+  /** The mounted composer, used to focus the editor in place (no remount). */
+  let composer: ChatComposer | undefined = $state(undefined)
+  /** Baseline captured at mount so only new requests focus — opening a thread
+   *  via the sidebar must not steal focus from wherever the user clicked. */
+  let focusComposerEditorBaseline = $state(workspaceState.focusComposerEditorCount)
+  $effect(() => {
+    const current = workspaceState.focusComposerEditorCount
+    if (current === focusComposerEditorBaseline) return
+    focusComposerEditorBaseline = current
+    composer?.focusComposerAtEnd()
   })
 
   /** Send or queue a message. When the agent is busy the text is queued and
@@ -5720,6 +5736,7 @@
           {/if}
           {#key composerRestoreKey}
             <ChatComposer
+              bind:this={composer}
               placeholder={activePlanningEntry === 'brainstorm'
                 ? 'Sr. Engineer is preparing the Brainstorm…'
                 : activePlanningEntry === 'spec'

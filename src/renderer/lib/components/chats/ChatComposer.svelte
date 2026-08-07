@@ -536,7 +536,8 @@
     )
   }
 
-  function focusComposerAtEnd(): void {
+  /** Focus the composer editor and place the caret at the end, in place. */
+  export function focusComposerAtEnd(): void {
     void tick().then(() => {
       const editor = document.getElementById(composerEditorId)
       if (!(editor instanceof HTMLDivElement)) return
