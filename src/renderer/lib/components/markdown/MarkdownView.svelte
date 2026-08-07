@@ -74,7 +74,11 @@
   function destinationForLink(link: HTMLAnchorElement): string | null {
     const citation = citationFromLink(link)
     if (citation) return `${citation.path}${citation.line ? `:${citation.line}` : ''}`
-    return link.getAttribute('href')
+    const href = link.getAttribute('href')
+    // Fragment links (footnotes, section anchors) stay inside the document —
+    // no external destination to preview, so no tooltip.
+    if (!href || href.startsWith('#')) return null
+    return href
   }
 
   function clearTooltip(): void {

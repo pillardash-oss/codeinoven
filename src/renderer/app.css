@@ -367,6 +367,33 @@ body {
   border-radius: 8px;
 }
 
+/* Footnote references and the footnotes section (GFM flavor). */
+.markdown-body .footnote-ref a {
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.markdown-body .footnotes {
+  margin-top: 1.25em;
+  padding-top: 0.75em;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+
+.markdown-body .footnotes ol {
+  padding-left: 1.375em;
+}
+
+.markdown-body .footnotes p {
+  margin-block: 0.25em;
+}
+
+.markdown-body .footnote-backref {
+  text-decoration: none;
+  margin-left: 0.25em;
+}
+
 /* ─── Syntax highlighting (chat code blocks) ────────────────────────────── */
 /* Calm dual-theme palette mapped onto highlight.js token classes. */
 

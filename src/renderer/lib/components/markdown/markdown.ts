@@ -7,7 +7,7 @@
  * ``` fence is lexed as a code block, which means code streams live into a
  * highlighted block instead of flashing as plain text first.
  */
-import { Marked, type Token } from 'marked'
+import { Marked, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
 import { linkifyFileCitations } from '$lib/agent-source-citations'
@@ -60,6 +60,89 @@ marked.use({
   }
 })
 
+// GitHub-flavored footnotes, implemented natively because `marked-footnote`
+// keeps module-level mutable state that only resets in `walkTokens` (which the
+// app's streaming `lexer()` path never runs) and crashes on the second lex.
+// Definitions become a single `footnotes` section hoisted to the bottom;
+// references become superscript links. Undefined references stay literal text.
+
+const FOOTNOTE_DEF_SOURCE = /^\[\^([^\]\n]+)\]:(?:[ \t]+|$)(.*(?:\n(?![ \t]*(?:\[\^|\n|$))[^\n]*)*)/
+
+marked.use({
+  extensions: [
+    {
+      name: 'footnoteDef',
+      level: 'block',
+      childTokens: ['content'],
+      tokenizer(src: string) {
+        const match = FOOTNOTE_DEF_SOURCE.exec(src)
+        if (!match) return undefined
+        const [, label, rawContent = ''] = match
+        const content = rawContent
+          .split('\n')
+          .map((line) => line.replace(/^(?: {4}|[\t])/, ''))
+          .join('\n')
+          .trimEnd()
+        return {
+          type: 'footnoteDef',
+          raw: match[0],
+          label,
+          content: this.lexer.blockTokens(content)
+        }
+      },
+      renderer() {
+        return ''
+      }
+    },
+    {
+      name: 'footnoteRef',
+      level: 'inline',
+      start(src: string) {
+        return src.indexOf('[^')
+      },
+      tokenizer(src: string) {
+        const match = /^\[\^([^\]\n]+)\]/.exec(src)
+        if (!match) return undefined
+        const defined = (this.lexer.tokens as Token[]).some(
+          (token) =>
+            token.type === 'footnoteDef' && (token as { label?: string }).label === match[1]
+        )
+        if (!defined) return undefined
+        return { type: 'footnoteRef', raw: match[0], label: match[1], number: 0, refIndex: 0 }
+      },
+      renderer(token: Tokens.Generic) {
+        const label = encodeURIComponent(token.label ?? '')
+        const suffix = (token.refIndex as number) > 0 ? `-${(token.refIndex as number) + 1}` : ''
+        return `<sup class="footnote-ref"><a href="#fn-${label}" id="fnref-${label}${suffix}" data-footnote-ref aria-describedby="footnote-label">${String(token.number)}</a></sup>`
+      }
+    },
+    {
+      name: 'footnotes',
+      renderer(token: Tokens.Generic) {
+        const items = (token.items ?? []) as Array<{
+          label: string
+          number: number
+          content: Token[]
+          refCount: number
+        }>
+        if (items.length === 0) return ''
+        const lis = items
+          .map((item) => {
+            const label = encodeURIComponent(item.label)
+            const content = this.parser.parse(item.content).replace(/<\/p>\s*$/, '')
+            const backrefs = Array.from({ length: item.refCount }, (_, index) => {
+              const suffix = index > 0 ? `-${index + 1}` : ''
+              return ` <a href="#fnref-${label}${suffix}" data-footnote-backref aria-label="Back to reference ${String(item.number)}">↩</a>`
+            }).join('')
+            return `<li id="fn-${label}">${content}${backrefs}${content ? '</p>' : ''}</li>`
+          })
+          .join('\n')
+        return `<section class="footnotes" data-footnotes>\n<h2 id="footnote-label" class="sr-only">Footnotes</h2>\n<ol>\n${lis}\n</ol>\n</section>`
+      }
+    }
+  ]
+})
+
 // Preserve citation metadata before DOMPurify removes a legacy custom-scheme
 // href. Current fragment hrefs survive sanitization, but cached/persisted
 // Markdown from the previous scheme must remain clickable too.
@@ -77,9 +160,11 @@ DOMPurify.addHook('beforeSanitizeAttributes', (node) => {
 // `target="_blank"` routes clicks into the main process window-open handler,
 // which denies the window and calls `shell.openExternal` instead.
 // Citation links are handled through click delegation in MarkdownView.
+// Fragment links (footnotes, section anchors) stay inside the document.
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName !== 'A') return
-  if (node.getAttribute('data-citation-path')) {
+  const href = node.getAttribute('href')
+  if (node.getAttribute('data-citation-path') || (href && href.startsWith('#'))) {
     node.removeAttribute('target')
     node.removeAttribute('rel')
   } else {
@@ -90,7 +175,102 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 
 /** Split markdown source into top-level block tokens. */
 export function lexMarkdown(text: string): Token[] {
-  return marked.lexer(linkifyFileCitations(text, (path) => citationPathsState.isValidPath(path)))
+  const tokens = marked.lexer(
+    linkifyFileCitations(text, (path) => citationPathsState.isValidPath(path))
+  )
+  return resolveFootnotes(tokens)
+}
+
+// ─── Footnote resolution ────────────────────────────────────────────────────
+// Runs after lexing over the whole document so definitions anywhere can back
+// references elsewhere. Numbering follows GitHub: order of first reference.
+// Defined labels render as superscript links; a reference with no matching
+// definition stays literal text. Definitions are removed from the flow and
+// hoisted into a single `footnotes` section token appended at the end.
+
+interface FootnoteRefToken extends Tokens.Generic {
+  type: 'footnoteRef'
+  label: string
+  defined: boolean
+  number: number
+  refIndex: number
+}
+
+interface FootnoteDefToken extends Tokens.Generic {
+  type: 'footnoteDef'
+  label: string
+  content: Token[]
+}
+
+interface FootnoteSectionToken extends Tokens.Generic {
+  type: 'footnotes'
+  items: Array<{
+    label: string
+    number: number
+    refCount: number
+    content: Token[]
+  }>
+}
+
+function isFootnoteRef(token: Token): token is FootnoteRefToken {
+  return token.type === 'footnoteRef'
+}
+
+function isFootnoteDef(token: Token): token is FootnoteDefToken {
+  return token.type === 'footnoteDef'
+}
+
+function resolveFootnotes(tokens: Token[]): Token[] {
+  const defs = new Map<string, FootnoteDefToken>()
+  const refs: FootnoteRefToken[] = []
+  const body: Token[] = []
+
+  for (const token of tokens) {
+    if (isFootnoteDef(token)) {
+      if (!defs.has(token.label)) defs.set(token.label, token)
+    } else {
+      body.push(token)
+    }
+  }
+
+  if (defs.size === 0) return body
+
+  // Number every reference in document order; a label gets its number at its
+  // first reference and all later refs to it share that number.
+  let nextNumber = 1
+  const numberByLabel = new Map<string, number>()
+  const countByLabel = new Map<string, number>()
+  marked.walkTokens(body, (token) => {
+    if (!isFootnoteRef(token)) return
+    token.defined = defs.has(token.label)
+    if (!token.defined) return
+    if (!numberByLabel.has(token.label)) numberByLabel.set(token.label, nextNumber++)
+    token.number = numberByLabel.get(token.label) ?? 0
+    token.refIndex = countByLabel.get(token.label) ?? 0
+    countByLabel.set(token.label, (countByLabel.get(token.label) ?? 0) + 1)
+    refs.push(token)
+  })
+
+  if (refs.length === 0) return body
+
+  const items = [...numberByLabel.entries()]
+    .sort((left, right) => left[1] - right[1])
+    .map(([label, number]) => ({
+      label,
+      number,
+      refCount: countByLabel.get(label) ?? 1,
+      content: defs.get(label)?.content ?? []
+    }))
+
+  const section: FootnoteSectionToken = {
+    type: 'footnotes',
+    // The raw folds the definition sources in so the block cache re-renders as
+    // definitions stream in (labels/numbers alone would stay cached forever).
+    raw: items.map((item) => defs.get(item.label)?.raw ?? '').join('\n'),
+    items
+  }
+  body.push(section)
+  return body
 }
 
 // Rendered-block cache — every stream delta re-derives all tokens, but only
@@ -99,16 +279,17 @@ export function lexMarkdown(text: string): Token[] {
 // so a resolved favicon re-renders a link with its icon (plain link before).
 const htmlCache = new Map<string, string>()
 const HTML_CACHE_LIMIT = 500
-const HTML_CACHE_VERSION = 3
+const HTML_CACHE_VERSION = 4
 
 /** Render a single non-code block token to sanitized HTML. */
 export function blockHtml(token: Token): string {
   const hasExternalLink = EXTERNAL_LINK_SOURCE_PATTERN.test(token.raw)
+  const footnoteKey = footnoteCacheKey(token)
   // Only link-bearing blocks depend on favicon resolution, so the cache key is
   // stable for everything else (no re-render churn as favicons resolve).
   const cacheKey = hasExternalLink
-    ? `${HTML_CACHE_VERSION}:f${faviconState.version}:${token.raw}`
-    : `${HTML_CACHE_VERSION}:${token.raw}`
+    ? `${HTML_CACHE_VERSION}:f${faviconState.version}:${footnoteKey}:${token.raw}`
+    : `${HTML_CACHE_VERSION}:${footnoteKey}:${token.raw}`
   const cached = htmlCache.get(cacheKey)
   if (cached !== undefined) return cached
   const sanitized = DOMPurify.sanitize(marked.parser([token]))
@@ -116,6 +297,31 @@ export function blockHtml(token: Token): string {
   if (htmlCache.size >= HTML_CACHE_LIMIT) htmlCache.clear()
   htmlCache.set(cacheKey, html)
   return html
+}
+
+/**
+ * Footnote resolution depends on the whole document (a reference is a link
+ * only when its definition exists anywhere). That state changes mid-stream, so
+ * it must be part of the cache key — otherwise a paragraph lexed before its
+ * footnote definition arrives would keep the literal `[^2]` forever.
+ */
+function footnoteCacheKey(token: Token): string {
+  if (!token.raw.includes('[^')) return ''
+  const parts: string[] = []
+  collectFootnoteRefs(token, (ref) => {
+    parts.push(`${ref.label}:${ref.defined ? '1' : '0'}:${ref.number}:${ref.refIndex}`)
+  })
+  return parts.length > 0 ? `n${parts.join('|')}` : ''
+}
+
+function collectFootnoteRefs(token: Token, visit: (ref: FootnoteRefToken) => void): void {
+  if (isFootnoteRef(token)) {
+    visit(token)
+    return
+  }
+  const children = (token as { tokens?: Token[] }).tokens
+  if (!Array.isArray(children)) return
+  for (const child of children) collectFootnoteRefs(child, visit)
 }
 
 const EXTERNAL_LINK_SOURCE_PATTERN = /https?:\/\//iu
