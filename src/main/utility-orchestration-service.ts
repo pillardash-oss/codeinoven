@@ -223,7 +223,9 @@ export class UtilityOrchestrationService {
             ? await this.activate(state, input)
             : request.url === '/invoke'
               ? await this.invoke(state, input)
-              : null
+              : request.url === '/image_descriptor'
+                ? await this.describeImages(state, input)
+                : null
       if (result === null) {
         this.respond(response, 404, { error: 'Not found' })
         return
@@ -349,7 +351,8 @@ export class UtilityOrchestrationService {
           images: resolveImageEntries(operationInput),
           projectId: state.request.projectId,
           threadId: state.request.threadId,
-          projectPath: state.request.projectPath
+          projectPath: state.request.projectPath,
+          pinnedSelection: this.pinnedImageDescriptorSelection(state)
         })
       }
     } else {
@@ -357,6 +360,46 @@ export class UtilityOrchestrationService {
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
     return result
+  }
+
+  /**
+   * Direct `image_descriptor` tool handler. Unlike the on-demand utility path
+   * this is always exposed by the gateway, so text-only models can describe
+   * images without any registry configuration.
+   */
+  private async describeImages(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.imageDescriptorExecutor
+    if (!executor) {
+      throw new Error('The image descriptor vision model is not configured')
+    }
+    const results = await executor({
+      images: resolveImageEntries(input),
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      pinnedSelection: this.pinnedImageDescriptorSelection(state)
+    })
+    await this.audit(state, 'utility.invoked', {
+      utilityId: 'codeinoven:image-descriptor',
+      operation: 'describe'
+    })
+    return { results }
+  }
+
+  /** Vision model pinned by an eligible, configured image-descriptor utility. */
+  private pinnedImageDescriptorSelection(
+    state: TurnState
+  ): { harnessId: string; providerId: string; modelId: string } | undefined {
+    for (const { utility } of state.eligible.values()) {
+      if (utility.kind !== 'image_descriptor') continue
+      if (!utility.config.providerId || !utility.config.modelId) continue
+      return {
+        harnessId: utility.config.harnessId,
+        providerId: utility.config.providerId,
+        modelId: utility.config.modelId
+      }
+    }
+    return undefined
   }
 
   private isComputerUseUtility(resolved: ResolvedUtility): boolean {

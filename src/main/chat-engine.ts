@@ -8083,6 +8083,18 @@ export class ChatEngine {
     return model?.attachment === false
   }
 
+  /** Last-resort image-descriptor model: the first vision-capable model in the
+   *  cached catalog, so the tool works even when nothing was configured. */
+  private firstVisionModelFromCache(projectId: string): AgentModelSelection | undefined {
+    const catalogs =
+      this.providerCache.get(projectId) ?? this.sharedProviderCatalog?.catalogs ?? null
+    for (const catalog of catalogs ?? []) {
+      const model = catalog.models.find((candidate) => candidate.attachment === true)
+      if (model) return { harnessId: catalog.harnessId, providerId: catalog.id, modelId: model.id }
+    }
+    return undefined
+  }
+
   // ─── Event handling ───────────────────────────────────────────────────────
 
   private requirePendingQuestion(
