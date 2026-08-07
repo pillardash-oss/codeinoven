@@ -1,9 +1,14 @@
 <script lang="ts">
-  import { Archive, BatteryMedium, Loader2 } from '@lucide/svelte'
-  import type { AgentContextUsage, AgentRateLimitWindow } from '$shared/types'
+  import { Archive, BatteryMedium, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import { SvelteSet } from 'svelte/reactivity'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import type { AgentContextUsage, AgentHarnessUsage, AgentRateLimitWindow } from '$shared/types'
 
   interface Props {
     usage?: AgentContextUsage
+    /** Per-harness quota telemetry when a thread used more than one harness. */
+    harnessUsage?: AgentHarnessUsage[]
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
@@ -11,7 +16,14 @@
     onReveal?: () => void
   }
 
-  let { usage, canCompact = false, compacting = false, onCompact, onReveal }: Props = $props()
+  let {
+    usage,
+    harnessUsage = [],
+    canCompact = false,
+    compacting = false,
+    onCompact,
+    onReveal
+  }: Props = $props()
 
   const boundedPercent = $derived(
     usage?.contextPercent === undefined
@@ -39,6 +51,18 @@
   const percentLabel = $derived(
     boundedPercent === undefined ? '' : `${Math.round(boundedPercent)}%`
   )
+  const multiHarness = $derived(harnessUsage.length > 1)
+
+  /** Collapsed harness sections — sections are open by default. */
+  const collapsedHarnesses = new SvelteSet<string>()
+  function toggleHarness(id: string): void {
+    if (collapsedHarnesses.has(id)) collapsedHarnesses.delete(id)
+    else collapsedHarnesses.add(id)
+  }
+
+  function harnessKey(entry: AgentHarnessUsage): string {
+    return `${entry.harnessId}:${entry.providerId}`
+  }
 
   function compactNumber(value: number): string {
     const absolute = Math.abs(value)
@@ -107,7 +131,7 @@
       : status
   }
 
-  function creditsLine(usage: AgentContextUsage): string | undefined {
+  function creditsLine(usage: AgentContextUsage | AgentHarnessUsage): string | undefined {
     const credits = usage.credits
     if (!credits) return undefined
     if (credits.unlimited) return 'Unlimited'
@@ -116,6 +140,82 @@
     return undefined
   }
 </script>
+
+{#snippet limitRows(limits: AgentRateLimitWindow[])}
+  {#each limits as limit (limit.id)}
+    {@const percent = quotaPercent(limit)}
+    {@const overage = overageLabel(limit)}
+    <div>
+      <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
+        <span class="font-medium text-muted">{limit.label}</span>
+        <span class="tabular-nums text-dimmed">
+          {#if limit.remaining !== undefined && limit.limit !== undefined}
+            {compactNumber(limit.remaining)} of {compactNumber(limit.limit)} left
+          {:else if percent !== undefined}
+            {Math.round(percent)}% used
+          {:else}
+            {readableStatus(limit.status)}
+          {/if}
+        </span>
+      </div>
+      {#if percent !== undefined}
+        <div
+          class="h-1.5 overflow-hidden rounded-full bg-overlay"
+          role="progressbar"
+          aria-label={`${limit.label} usage`}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow={Math.round(percent)}
+        >
+          <div class="h-full rounded-full bg-info" style={`width: ${percent}%`}></div>
+        </div>
+      {/if}
+      <p class="mt-1 text-[9px] text-dimmed">{formatReset(limit.resetsAt)}</p>
+      {#if overage}
+        <p class="mt-0.5 text-[9px] text-dimmed">{overage}</p>
+      {/if}
+    </div>
+  {/each}
+{/snippet}
+
+{#snippet harnessSection(entry: AgentHarnessUsage)}
+  {@const key = harnessKey(entry)}
+  {@const collapsed = collapsedHarnesses.has(key)}
+  {@const icon = getAgentIcon(entry.harnessId)}
+  {@const name = icon?.name ?? entry.harnessId}
+  <div class="overflow-hidden rounded-lg border border-border bg-elevated">
+    <button
+      type="button"
+      class="flex h-9 w-full items-center gap-1.5 rounded-lg px-2 text-left transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      aria-expanded={!collapsed}
+      title={collapsed ? `Expand ${name} quota` : `Collapse ${name} quota`}
+      onclick={() => toggleHarness(key)}
+    >
+      {#if collapsed}
+        <ChevronRight size={13} class="shrink-0 text-dimmed" />
+      {:else}
+        <ChevronDown size={13} class="shrink-0 text-dimmed" />
+      {/if}
+      <AgentIcon agentId={entry.harnessId} size={16} />
+      <span class="min-w-0 truncate text-[10px] font-medium text-foreground">{name}</span>
+      <span class="ml-auto shrink-0 tabular-nums text-[10px] text-dimmed">
+        {entry.costUsd > 0 ? `${formatMoney(entry.costUsd)} consumed` : 'Cost not reported'}
+      </span>
+    </button>
+    {#if !collapsed}
+      <div class="space-y-2.5 px-2.5 pb-2.5">
+        {#if entry.rateLimits.length > 0}
+          {@render limitRows(entry.rateLimits)}
+        {:else if !creditsLine(entry)}
+          <p class="text-[10px] text-dimmed">No quota reported for this harness.</p>
+        {/if}
+        {#if creditsLine(entry)}
+          <p class="text-[9px] text-dimmed">Credits: {creditsLine(entry)}</p>
+        {/if}
+      </div>
+    {/if}
+  </div>
+{/snippet}
 
 <div class="group relative">
   <button
@@ -159,42 +259,18 @@
       </div>
     </div>
 
-    {#if usage && usage.rateLimits.length > 0}
-      <div class="mt-3 space-y-2.5 border-t border-border pt-3">
-        {#each usage.rateLimits as limit (limit.id)}
-          {@const percent = quotaPercent(limit)}
-          {@const overage = overageLabel(limit)}
-          <div>
-            <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
-              <span class="font-medium text-muted">{limit.label}</span>
-              <span class="tabular-nums text-dimmed">
-                {#if limit.remaining !== undefined && limit.limit !== undefined}
-                  {compactNumber(limit.remaining)} of {compactNumber(limit.limit)} left
-                {:else if percent !== undefined}
-                  {Math.round(percent)}% used
-                {:else}
-                  {readableStatus(limit.status)}
-                {/if}
-              </span>
-            </div>
-            {#if percent !== undefined}
-              <div
-                class="h-1.5 overflow-hidden rounded-full bg-overlay"
-                role="progressbar"
-                aria-label={`${limit.label} usage`}
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow={Math.round(percent)}
-              >
-                <div class="h-full rounded-full bg-info" style={`width: ${percent}%`}></div>
-              </div>
-            {/if}
-            <p class="mt-1 text-[9px] text-dimmed">{formatReset(limit.resetsAt)}</p>
-            {#if overage}
-              <p class="mt-0.5 text-[9px] text-dimmed">{overage}</p>
-            {/if}
-          </div>
+    {#if multiHarness}
+      <div
+        class="mt-3 max-h-64 space-y-2 overflow-y-auto border-t border-border pt-3"
+        aria-label="Per-harness quota"
+      >
+        {#each harnessUsage as entry (harnessKey(entry))}
+          {@render harnessSection(entry)}
         {/each}
+      </div>
+    {:else if usage && usage.rateLimits.length > 0}
+      <div class="mt-3 space-y-2.5 border-t border-border pt-3">
+        {@render limitRows(usage.rateLimits)}
       </div>
     {/if}
 

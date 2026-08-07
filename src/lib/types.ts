@@ -1175,6 +1175,19 @@ export interface AgentContextUsage {
   credits?: AgentUsageCredits
 }
 
+/** Per-harness quota telemetry for threads that used more than one harness. */
+export interface AgentHarnessUsage {
+  harnessId: string
+  providerId: string
+  modelId?: string
+  /** Total USD this harness consumed on the thread, when the harness reports cost. */
+  costUsd: number
+  /** Latest quota windows reported by this harness on the thread. */
+  rateLimits: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported by this harness on the thread. */
+  credits?: AgentUsageCredits
+}
+
 /** Last-known usage snapshot stored with a thread so the meter restores
  *  instantly on mount and is evacuated automatically when the thread row is
  *  deleted. The harness/provider pair guard against showing usage from a
