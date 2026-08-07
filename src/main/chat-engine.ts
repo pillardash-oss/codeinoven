@@ -766,6 +766,13 @@ interface PendingInitialSpecGeneration {
   brainstormId?: string
   brainstormVersion?: number
   brainstormInputHash?: string
+  /**
+   * When true, the generation source is explicit (e.g. a Brainstorm document) and the
+   * engine must not try to read a spec submission from the planning session. Brainstorm
+   * derived specs always generate fresh; consulting the planning session there just
+   * produces a misleading "invalid JSON" recovery log.
+   */
+  skipSubmittedRead?: boolean
 }
 
 /**
@@ -5643,7 +5650,8 @@ export class ChatEngine {
           threadId,
           sessionId: thread.sessionId ?? '',
           source: 'Generate the engineering specification from the user request and conversation.',
-          settings: thread.settings
+          settings: thread.settings,
+          skipSubmittedRead: true
         })
         return this.runPendingInitialSpec(projectId, threadId)
       }
@@ -5827,7 +5835,8 @@ export class ChatEngine {
           .filter(Boolean)
           .join('\n\n'),
         settings: thread.settings,
-        brainstorm: finalized
+        brainstorm: finalized,
+        skipSubmittedRead: true
       })
       const generated = await this.runPendingInitialSpec(projectId, threadId)
       if (!generated) throw new Error('The finalized Brainstorm did not produce a specification')
@@ -7873,6 +7882,7 @@ export class ChatEngine {
     source: string
     settings: ThreadSettings
     brainstorm?: BrainstormDocument
+    skipSubmittedRead?: boolean
   }): Promise<void> {
     const existing = await this.readPendingInitialSpec(input.projectId, input.threadId)
     const now = Date.now()
@@ -7890,6 +7900,7 @@ export class ChatEngine {
             brainstormId: input.brainstorm?.id,
             brainstormVersion: input.brainstorm?.version,
             brainstormInputHash: input.brainstorm?.finalizedInputHash,
+            skipSubmittedRead: input.skipSubmittedRead ?? false,
             updatedAt: now
           }
         : {
@@ -7903,6 +7914,7 @@ export class ChatEngine {
             brainstormId: input.brainstorm?.id,
             brainstormVersion: input.brainstorm?.version,
             brainstormInputHash: input.brainstorm?.finalizedInputHash,
+            skipSubmittedRead: input.skipSubmittedRead ?? false,
             state: 'pending',
             attempts: 0,
             createdAt: now,
@@ -8032,7 +8044,9 @@ export class ChatEngine {
       }
       await this.writePendingInitialSpec(pending)
       try {
-        const submittedContent = await this.readSubmittedSpecContent(pending)
+        const submittedContent = pending.skipSubmittedRead
+          ? null
+          : await this.readSubmittedSpecContent(pending)
         const content =
           submittedContent ??
           (await this.generateSpec(projectId, threadId, {
