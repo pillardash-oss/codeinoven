@@ -207,6 +207,8 @@
       : threadSettings.initialFor(thread)
   )
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
+  /** Global "don't ask again" flag for the image-descriptor vision model picker. */
+  let imageDescriptorAskAgain = $state(false)
   /** Reactive provider catalog for this thread's project — seeded from the
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
@@ -1874,6 +1876,7 @@
           : { ...threadSettings.lastUsed, ...threadData.settings }
       }
       agentDefaults = config.agentDefaults
+      imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
       auditSettings = auditSettingsForThread()
       // Merge the newest mirror page with optimistic messages and any older
       // pages already loaded for this thread.
@@ -4433,6 +4436,18 @@
     }
   }
 
+  /** Persist the global image-descriptor default chosen from the composer card. */
+  function setImageDescriptorDefault(selection: AgentModelSelection): void {
+    agentDefaults = { ...agentDefaults, imageDescriptor: selection }
+    void invoke('config:update', { agentDefaults }).catch(() => undefined)
+  }
+
+  /** Persist the "don't ask again" flag for the image-descriptor vision picker. */
+  function setImageDescriptorAskAgain(value: boolean): void {
+    imageDescriptorAskAgain = value
+    void invoke('config:update', { imageDescriptorAskAgain: value }).catch(() => undefined)
+  }
+
   /** Extract display text only; transport instructions never enter `parts`. */
   function rawMessageText(msg: AgentMessage): string {
     return msg.parts
@@ -5859,6 +5874,10 @@
                 chatMode
                   ? rendererRecovery.addChatRecentModel(modelKey)
                   : rendererRecovery.addRecentModel(modelKey)}
+              imageDescriptorDefault={agentDefaults.imageDescriptor}
+              imageDescriptorAskAgain={imageDescriptorAskAgain}
+              onImageDescriptorDefaultChange={setImageDescriptorDefault}
+              onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
             />
           {/key}
         {/if}

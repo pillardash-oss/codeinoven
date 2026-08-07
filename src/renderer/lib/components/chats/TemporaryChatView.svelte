@@ -557,6 +557,7 @@
             readOnlyMode
             allowAttachments
             hidePermissionSelector
+            enableImageDescriptorGate={false}
             favoriteModels={rendererRecovery.chatFavoriteModels}
             onToggleFavorite={(providerId, modelId) =>
               rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}

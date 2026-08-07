@@ -39,6 +39,8 @@
     label?: string
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
+    /** When true, only models that report vision capability are shown. */
+    visionOnly?: boolean
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
@@ -63,6 +65,7 @@
     variant = 'compact',
     label,
     fast = false,
+    visionOnly = false,
     onSelect,
     onToggleFavorite,
     onReorderFavorite
@@ -160,7 +163,7 @@
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
           const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry ?? null
+          return entry && passesVisionFilter(entry.model) ? entry : null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
       search
@@ -173,7 +176,11 @@
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
           const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
+          return entry &&
+            passesHarnessFilter(entry.provider.harnessId) &&
+            passesVisionFilter(entry.model)
+            ? entry
+            : null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
       search
@@ -187,9 +194,9 @@
         ...provider,
         models:
           words.length === 0
-            ? provider.models
-            : provider.models.filter((model) =>
-                words.every((word) => modelHaystack(provider, model).includes(word))
+            ? provider.models.filter(passesVisionFilter)
+            : provider.models.filter(
+                (model) => passesVisionFilter(model) && words.every((word) => modelHaystack(provider, model).includes(word))
               )
       }))
       .filter(
@@ -301,6 +308,13 @@
 
   function modelHaystack(provider: ProviderCatalog, model: ProviderModel): string {
     return `${harnessName(provider.harnessId)} ${provider.name} ${model.name} ${model.id}`.toLowerCase()
+  }
+
+  /** Models able to see images. When the catalog does not report the flag,
+   *  the model is treated as vision-capable so it is never hidden incorrectly. */
+  function passesVisionFilter(model: ProviderModel): boolean {
+    if (!visionOnly) return true
+    return model.attachment !== false
   }
 
   function filterEntries(entries: ModelEntry[], value: string): ModelEntry[] {
@@ -576,7 +590,9 @@
             <p class="px-2 py-2 text-[11px] text-dimmed">
               {search
                 ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
-                : 'No models in the selected harnesses'}
+                : visionOnly
+                  ? 'No vision-capable models found'
+                  : 'No models in the selected harnesses'}
             </p>
           {:else}
             {#if favoriteModelsList.length > 0}
