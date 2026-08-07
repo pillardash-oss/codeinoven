@@ -48,6 +48,8 @@ describe('RendererRecoveryStore', () => {
     persistRendererRecoveryState(storage, {
       version: 1,
       activeView: 'chats',
+      lastContentView: 'chats',
+      lastViewBeforeSettings: 'chats',
       selectedProjectId: 'project-1',
       selectedThread: { projectId: 'project-1', threadId: 'thread-1' },
       composerDrafts: {
@@ -90,6 +92,8 @@ describe('RendererRecoveryStore', () => {
 
     const restored = loadRendererRecoveryState(storage)
     expect(restored.activeView).toBe('chats')
+    expect(restored.lastContentView).toBe('chats')
+    expect(restored.lastViewBeforeSettings).toBe('chats')
     expect(restored.selectedProjectId).toBe('project-1')
     expect(restored.selectedThread).toEqual({
       projectId: 'project-1',
@@ -132,6 +136,8 @@ describe('RendererRecoveryStore', () => {
     persistRendererRecoveryState(storage, {
       version: 1,
       activeView: 'projects',
+      lastContentView: 'projects',
+      lastViewBeforeSettings: 'projects',
       selectedProjectId: null,
       selectedThread: null,
       composerDrafts: { [draftKey]: 'Legacy draft' as unknown as ComposerDraftEntry },
@@ -158,6 +164,8 @@ describe('RendererRecoveryStore', () => {
       JSON.stringify({
         version: 1,
         activeView: 'invalid',
+        lastContentView: 'threads',
+        lastViewBeforeSettings: 'scope',
         selectedProjectId: 42,
         selectedThread: { projectId: 'project-1', threadId: '' },
         composerDrafts: {
@@ -169,6 +177,8 @@ describe('RendererRecoveryStore', () => {
     )
 
     expect(parsed.activeView).toBe('projects')
+    expect(parsed.lastContentView).toBe('threads')
+    expect(parsed.lastViewBeforeSettings).toBe('scope')
     expect(parsed.selectedProjectId).toBeNull()
     expect(parsed.selectedThread).toBeNull()
     expect(parsed.composerDrafts).toEqual({

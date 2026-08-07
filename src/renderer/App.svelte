@@ -287,19 +287,13 @@
     ...actionContext.actions
   ])
 
-  /** Content view to return to when leaving Settings or Scope. */
-  let lastContentView = $state<'projects' | 'chats' | 'threads'>(
-    rendererRecovery.activeView === 'chats'
-      ? 'chats'
-      : rendererRecovery.activeView === 'threads'
-        ? 'threads'
-        : 'projects'
-  )
+  /** Content view to return to when leaving Settings or Scope — persisted in the
+   *  recovery snapshot so a restart made while on a Settings page or the Scope
+   *  view still returns to the previous content view instead of resetting to Projects. */
+  let lastContentView = $derived(rendererRecovery.lastContentView)
 
   /** The view the user was on before opening Settings — the Settings back button returns here. */
-  let lastViewBeforeSettings = $state<View>(
-    isSettingsView(rendererRecovery.activeView) ? 'projects' : rendererRecovery.activeView
-  )
+  let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
 
   let effectiveTheme = $derived(
     config.theme === 'system' ? (systemDark ? 'dark' : 'light') : config.theme
@@ -365,14 +359,10 @@
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
     }
-    if (view === 'projects' || view === 'chats' || view === 'threads') {
-      lastContentView = view
-    }
-    // Remember the last non-settings view so the Settings back button can return to it.
-    if (!isSettingsView(view)) {
-      lastViewBeforeSettings = view
-    }
     activeView = view
+    // Persists the view and tracks the last content / non-settings views, so
+    // returning from Settings (even across a restart) lands back where the user
+    // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
   }
 
