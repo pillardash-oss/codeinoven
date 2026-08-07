@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import { Logger } from './logger'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { StorageEngine } from './storage-engine'
 import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
@@ -238,6 +239,7 @@ export class NotificationService {
         window.webContents.send('notification:show', payload)
       }
     }
+    forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
     const soundDispatched = this.dispatchNotificationSound(windows)
@@ -322,6 +324,7 @@ export class NotificationService {
         window.webContents.send('notification:show', payload)
       }
     }
+    forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
     const soundDispatched = this.dispatchNotificationSound(windows)

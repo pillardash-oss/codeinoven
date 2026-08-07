@@ -42,6 +42,36 @@ self.addEventListener('activate', (event) => {
   )
 })
 
+/**
+ * A tapped phone notification focuses the client and asks it to open the
+ * thread. The desktop pushes `notification:show` over the bridge and the page
+ * posts it through the service worker, so `notificationclick` runs here; the
+ * page listens for the `notification:open` message to route to the thread.
+ */
+self.addEventListener('notificationclick', (event) => {
+  const notification = event.notification
+  const data = notification.data || {}
+  notification.close()
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ('focus' in client) {
+          client.focus()
+          if (data.projectId && data.threadId) {
+            client.postMessage({
+              type: 'notification:open',
+              projectId: data.projectId,
+              threadId: data.threadId
+            })
+          }
+          return
+        }
+      }
+      return self.clients.openWindow('./remote.html')
+    })
+  )
+})
+
 /** Cache a successful response without blocking the response handed back. */
 function cacheSuccess(request, response) {
   if (!response || !response.ok || response.type === 'opaque') return
