@@ -83,11 +83,16 @@ export async function authenticateHandshake(
   return verifyHandshakeToken(secret, nonce, token)
 }
 
+/** Derived keys are deterministic per secret, so cache them per session. */
+const KEY_CACHE = new Map<string, CryptoKey>()
+
 async function deriveAesGcmKey(secret: string): Promise<CryptoKey> {
+  const cached = KEY_CACHE.get(secret)
+  if (cached) return cached
   const material = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, [
     'deriveKey'
   ])
-  return crypto.subtle.deriveKey(
+  const key = await crypto.subtle.deriveKey(
     {
       name: 'PBKDF2',
       salt: SALT,
@@ -99,6 +104,8 @@ async function deriveAesGcmKey(secret: string): Promise<CryptoKey> {
     false,
     ['encrypt', 'decrypt']
   )
+  KEY_CACHE.set(secret, key)
+  return key
 }
 
 /** Encrypt a payload, returning `base64(iv):base64(ciphertext)`. */
