@@ -154,7 +154,7 @@
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
           const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
+          return entry ?? null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
       search
@@ -167,7 +167,7 @@
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
           const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
+          return entry ?? null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
       search
