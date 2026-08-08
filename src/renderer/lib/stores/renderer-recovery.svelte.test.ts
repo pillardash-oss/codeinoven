@@ -10,6 +10,7 @@ import {
   type ComposerDraftEntry,
   type RecoveryStorage
 } from './renderer-recovery'
+import { RendererRecoveryStore } from './renderer-recovery.svelte'
 
 class MemoryStorage implements RecoveryStorage {
   values = new Map<string, string>()
@@ -79,6 +80,16 @@ describe('RendererRecoveryStore', () => {
               description: 'Confirm production configuration.',
               status: 'blocked'
             }
+          ],
+          promptReferences: [
+            {
+              id: 'selection-1',
+              label: 'Selection 1',
+              text: 'Revert the auth change',
+              messageId: 'assistant-1',
+              startOffset: 12,
+              endOffset: 34
+            }
           ]
         }
       },
@@ -125,6 +136,16 @@ describe('RendererRecoveryStore', () => {
           description: 'Confirm production configuration.',
           status: 'blocked'
         }
+      ],
+      promptReferences: [
+        {
+          id: 'selection-1',
+          label: 'Selection 1',
+          text: 'Revert the auth change',
+          messageId: 'assistant-1',
+          startOffset: 12,
+          endOffset: 34
+        }
       ]
     })
     expect(storage.values.has(RENDERER_RECOVERY_STORAGE_KEY)).toBe(true)
@@ -154,7 +175,8 @@ describe('RendererRecoveryStore', () => {
       text: 'Legacy draft',
       attachments: [],
       projectReferences: [],
-      taskReferences: []
+      taskReferences: [],
+      promptReferences: []
     })
   })
 
@@ -186,9 +208,37 @@ describe('RendererRecoveryStore', () => {
         text: 'kept',
         attachments: [],
         projectReferences: [],
-        taskReferences: []
+        taskReferences: [],
+        promptReferences: []
       }
     })
+  })
+
+  it('persists response-selection annotations with the composer draft', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    const reference = {
+      id: 'selection-1',
+      label: 'Selection 1',
+      text: 'Revert the auth change',
+      messageId: 'assistant-1',
+      startOffset: 12,
+      endOffset: 34
+    }
+
+    store.setPromptReferences('project-1', 'thread-1', [reference])
+    expect(store.draftPromptReferences('project-1', 'thread-1')).toEqual([reference])
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+    // Survives a fresh store reading the same storage (app restart).
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toEqual([reference])
+
+    // Clearing annotations drops the whole draft entry when nothing else is present.
+    store.setPromptReferences('project-1', 'thread-1', [])
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+    const cleared = new RendererRecoveryStore(storage)
+    expect(cleared.draftPromptReferences('project-1', 'thread-1')).toEqual([])
   })
 
   it('continues operating when storage access fails', () => {

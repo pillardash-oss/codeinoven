@@ -37,6 +37,8 @@ export interface ComposerDraftEntry {
   attachments: PromptAttachment[]
   projectReferences: PromptProjectReference[]
   taskReferences: PromptAssignmentTaskReference[]
+  /** Response-selection annotations attached to the composer (agent-output excerpts + comments). */
+  promptReferences: QueuedResponseReference[]
 }
 
 /** A selected assistant-response excerpt anchored to a message range. */
@@ -315,7 +317,13 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
 
     // Backwards compatibility: old snapshots stored a plain string.
     if (typeof raw === 'string' && raw.length <= MAX_DRAFT_LENGTH) {
-      drafts[key] = { text: raw, attachments: [], projectReferences: [], taskReferences: [] }
+      drafts[key] = {
+        text: raw,
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: []
+      }
       count += 1
       continue
     }
@@ -333,7 +341,10 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const taskReferences = Array.isArray(raw.taskReferences)
       ? raw.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
       : []
-    drafts[key] = { text, attachments, projectReferences, taskReferences }
+    const promptReferences = Array.isArray(raw.promptReferences)
+      ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+      : []
+    drafts[key] = { text, attachments, projectReferences, taskReferences, promptReferences }
     count += 1
   }
   return drafts

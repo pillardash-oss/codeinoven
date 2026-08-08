@@ -35,6 +35,8 @@
     versions: AuditReport[]
     busy?: boolean
     error?: string
+    brainstormAvailable?: boolean
+    assignmentAvailable?: boolean
     agentMessagesOpen?: boolean
     actionsAvailable?: boolean
     onBack: () => void
@@ -60,6 +62,8 @@
     versions,
     busy = false,
     error,
+    brainstormAvailable = false,
+    assignmentAvailable = false,
     agentMessagesOpen = false,
     actionsAvailable = true,
     onBack,
@@ -588,6 +592,9 @@
       <div class="flex min-w-0 items-center gap-2">
         <StudioDocumentNavigation
           active="audit"
+          {brainstormAvailable}
+          {assignmentAvailable}
+          auditAvailable
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}

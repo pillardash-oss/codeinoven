@@ -1087,6 +1087,12 @@
     void responseReferences.length
     void visibleMessages.length
     void tick().then(() => {
+      // Highlights depend on the message DOM; re-create them whenever the
+      // conversation re-renders so annotations/comments come back after a
+      // thread switch (onMount runs before the async mirror finishes loading).
+      if (responseReferences.length > 0) {
+        restoreResponseHighlights(responseReferences)
+      }
       scheduleResponseBubbleUpdate()
     })
   })
@@ -1892,6 +1898,7 @@
       }
       seedContextUsageSnapshot(threadData?.contextUsage)
       restoreQueuedMessage()
+      restoreResponseReferences()
     } catch {
       // A single transient failure must not silently drop the settings, mirror,
       // and status restore — retry once, then degrade gracefully.
@@ -1980,6 +1987,8 @@
     const draft = rendererRecovery.draftFor(oldProjectId, oldThreadId)
     const attachments = rendererRecovery.attachmentsFor(oldProjectId, oldThreadId)
     const references = rendererRecovery.projectReferencesFor(oldProjectId, oldThreadId)
+    const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
+    const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
     rendererRecovery.clearDraft(oldProjectId, oldThreadId)
 
     const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
@@ -1994,8 +2003,22 @@
       scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
     })
       .then((newThread) => {
-        if (draft || attachments.length > 0 || references.length > 0) {
-          rendererRecovery.setDraft(targetProjectId, newThread.id, draft, attachments, references)
+        if (
+          draft ||
+          attachments.length > 0 ||
+          references.length > 0 ||
+          taskReferences.length > 0 ||
+          promptReferences.length > 0
+        ) {
+          rendererRecovery.setDraft(
+            targetProjectId,
+            newThread.id,
+            draft,
+            attachments,
+            references,
+            taskReferences,
+            promptReferences
+          )
         }
         workspaceState.requestMoveThread(oldThreadId, newThread)
         invoke('thread:delete', oldProjectId, oldThreadId).catch(() => {})
@@ -2407,6 +2430,18 @@
       responseReferencesState.setForThread(thread.projectId, thread.id, entry.promptReferences)
       scheduleResponseHighlightRestore(entry.promptReferences)
     }
+  }
+
+  /** Recover response-selection annotations persisted with the composer draft
+   *  (survives thread switches and app restarts) once the in-memory store has no
+   *  entry for this thread. */
+  function restoreResponseReferences(): void {
+    const existing = responseReferencesState.forThread(thread.projectId, thread.id)
+    if (existing.length > 0) return
+    const saved = rendererRecovery.draftPromptReferences(thread.projectId, thread.id)
+    if (saved.length === 0) return
+    responseReferencesState.setForThread(thread.projectId, thread.id, saved)
+    scheduleResponseHighlightRestore(saved)
   }
 
   // ─── Message queue & steer —───────────────────────────────────────────────
@@ -4977,6 +5012,9 @@
           busy={brainstormBusy || busy}
           error={brainstormError}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+          specAvailable={spec !== null}
+          assignmentAvailable={assignment !== null}
+          auditAvailable={auditReport !== null}
           onBack={closeSpecStudio}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
@@ -4998,6 +5036,8 @@
           versions={auditVersions}
           busy={auditBusy || busy}
           error={auditError}
+          assignmentAvailable={assignment !== null}
+          brainstormAvailable={brainstorm !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
@@ -5031,6 +5071,8 @@
             studioAssignment.version !== assignment.version}
           focusTaskId={assignmentFocusTaskId}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+          auditAvailable={auditReport !== null}
+          brainstormAvailable={brainstorm !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}
@@ -5067,6 +5109,8 @@
         agentMessagesOpen={workspaceState.specAgentSidebarOpen}
         assignmentAvailable={assignment !== null}
         assignmentMode={settings.assignmentMode === true}
+        auditAvailable={auditReport !== null}
+        brainstormAvailable={brainstorm !== null}
         onBack={closeSpecStudio}
         onOpenBrainstorm={openBrainstormStudio}
         onOpenInEditor={openSpecInEditor}
@@ -6009,7 +6053,9 @@
       <AssignmentCoordinatorPanel
         {assignment}
         auditThread={assignmentAuditThread}
+        auditState={assignmentAuditState}
         finalComplete={assignmentFinalComplete}
+        reportAvailable={auditReport !== null}
         threads={assignmentThreads}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
@@ -6028,6 +6074,7 @@
         specSummary={spec.content.resolutionSummary}
         auditThread={achievementAuditThread}
         {auditState}
+        reportAvailable={auditReport !== null}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
         auditorSettings={auditSettings}
