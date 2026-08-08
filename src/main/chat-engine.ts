@@ -1546,6 +1546,40 @@ export class ChatEngine {
     this.threadManager.reconcileAllHarnessUsage()
   }
 
+  /**
+   * Terminate every harness connection that is still active. Called when the
+   * user explicitly confirms a forced close (the working-threads confirmation
+   * modal), so a local project's SSE stream / harness process is SIGTERM'd
+   * immediately instead of lingering after the app exits. Best-effort and
+   * never throws; sessions already idle are left alone for the normal dispose
+   * path to tear down.
+   */
+  async terminateActiveConnections(): Promise<void> {
+    const active: Array<{ sessionId: string; info: SessionInfo }> = []
+    for (const [sessionId, status] of this.sessionStatuses) {
+      // "Working" is a streaming turn; "waiting" is a live connection paused on
+      // a permission/question reply. Both hold a harness process open.
+      if (status.state !== 'working' && status.state !== 'waiting') continue
+      const info = this.sessionRegistry.get(sessionId)
+      if (info) active.push({ sessionId, info })
+    }
+    await Promise.allSettled(
+      active.map(async ({ sessionId, info }) => {
+        const driver = this.drivers.get(info.driverId)
+        if (!driver) return
+        try {
+          if (driver.terminate) {
+            await driver.terminate(info.projectPath, sessionId)
+          } else {
+            await driver.abort(info.projectPath, sessionId)
+          }
+        } catch (error) {
+          Logger.dev('Forced-close termination of a harness session failed:', error)
+        }
+      })
+    )
+  }
+
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
     if (this.idleReaperTimer) {
