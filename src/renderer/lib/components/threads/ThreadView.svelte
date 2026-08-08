@@ -301,16 +301,6 @@
                 ? 'Antigravity'
                 : settings.harnessId
   )
-  /** Label of the thread's active text model, surfaced when a provider error occurs. */
-  const threadModelLabel = $derived.by(() => {
-    const provider = providers.find(
-      (candidate) =>
-        candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
-    )
-    const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
-    const providerName = provider?.name ?? settings.providerId
-    return model ? `${providerName} / ${model.name}` : `${providerName} / ${settings.modelId}`
-  })
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -3814,6 +3804,12 @@
     updateSettings({ ...settings, ...selected })
   }
 
+  /** Switch the thread's text model from the provider-error card's picker. */
+  function changeThreadModel(selected: ThreadSettings): void {
+    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    updateSettings({ ...settings, ...selected })
+  }
+
   async function completeAudit(): Promise<void> {
     auditBusy = true
     try {
@@ -5571,10 +5567,28 @@
           <AgentProviderStatusCard
             status={visibleProviderStatus}
             {providerName}
-            modelLabel={threadModelLabel}
+            settings={chatMode
+              ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+              : settings}
+            {providers}
+            projectId={thread.projectId}
+            favoriteModels={chatMode
+              ? rendererRecovery.chatFavoriteModels
+              : rendererRecovery.favoriteModels}
+            recentModels={chatMode
+              ? rendererRecovery.chatRecentModels
+              : rendererRecovery.recentModels}
+            onModelChange={changeThreadModel}
+            onToggleFavorite={(providerId, modelId) =>
+              chatMode
+                ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
+                : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              chatMode
+                ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             onStop={abortRun}
             onRetry={retryConnection}
-            onModelChange={() => composer?.openModelMenu()}
             onDismiss={() => {
               errorMessage = ''
               providerStatus = null

@@ -618,11 +618,6 @@
     })
   }
 
-  /** Open the model picker so the user can switch the thread's text model. */
-  export function openModelMenu(): void {
-    showModelMenu()
-  }
-
   function selectSlashAction(action: ActionDefinition, method: ActionSelection['method']): void {
     if (action.disabledReason) return
     const selectedQuery = slashQuery

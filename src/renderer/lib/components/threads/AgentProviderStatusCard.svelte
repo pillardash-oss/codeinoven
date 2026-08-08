@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { AlertTriangle, Clock3, Code2, Cpu, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock3, Code2, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentProviderIssueKind,
     AgentSessionStatus,
-    ProviderAccountLoginHandoff
+    ProviderAccountLoginHandoff,
+    ProviderCatalog,
+    ThreadSettings
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -12,17 +15,39 @@
   interface Props {
     status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
     providerName: string
-    /** Label of the model that failed, surfaced so the user can identify it. */
-    modelLabel?: string
+    /** Current thread settings; required to render the shared model picker. */
+    settings?: ThreadSettings
+    providers?: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
+    onModelChange?: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onStop?: () => void
     onRetry?: () => void
     onDismiss?: () => void
-    /** Opens the model picker to switch the failing model. */
-    onModelChange?: () => void
   }
 
-  let { status, providerName, modelLabel, onStop, onRetry, onDismiss, onModelChange }: Props =
-    $props()
+  let {
+    status,
+    providerName,
+    settings,
+    providers = [],
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
+    onModelChange,
+    onToggleFavorite,
+    onReorderFavorite,
+    onStop,
+    onRetry,
+    onDismiss
+  }: Props = $props()
   let now = $state(Date.now())
   let showRawError = $state(false)
   let loginOpen = $state(false)
@@ -103,6 +128,14 @@
     loginError = ''
   }
 
+  /** Commit a new thread model from the shared picker, mirroring the pattern used
+   *  by the Audit/Spec/Assignment cards. */
+  function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
+    if (!settings || !onModelChange) return
+    const harnessId = nextHarnessId ?? settings.harnessId
+    onModelChange({ ...settings, harnessId, providerId, modelId })
+  }
+
   function finishSignIn(exitCode: number): void {
     if (exitCode !== 0) {
       loginError = `Sign-in exited with code ${exitCode}.`
@@ -137,13 +170,6 @@
       </div>
 
       <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
-
-      {#if modelLabel && !waiting}
-        <p class="mt-1 text-[11px] font-medium text-dimmed">
-          <Cpu size={11} class="mr-1 inline -mt-0.5" />
-          {modelLabel}
-        </p>
-      {/if}
 
       {#if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
@@ -189,14 +215,22 @@
             Retry
           </button>
         {/if}
-        {#if !waiting && onModelChange}
-          <button
-            class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-            onclick={onModelChange}
-          >
-            <Cpu size={13} />
-            Change model
-          </button>
+        {#if !waiting && settings && providers.length > 0 && onModelChange}
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={settings.harnessId}
+            providerId={settings.providerId}
+            modelId={settings.modelId}
+            {favoriteModels}
+            {recentModels}
+            side="top"
+            label="Change"
+            variant="action"
+            onSelect={chooseModel}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
         {/if}
         {#if !waiting && rawError}
           <button
