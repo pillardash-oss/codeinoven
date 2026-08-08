@@ -3926,10 +3926,20 @@ export class ChatEngine {
         const message = error instanceof Error ? error.message : 'Image description failed'
         Logger.dev('Image description failed', {
           harnessId: selection.harnessId,
+          providerId: selection.providerId,
+          modelId: selection.modelId,
           error: message
         })
+        const attributedMessage = `The vision model (${this.visionModelLabel(
+          request.projectId,
+          selection
+        )}) failed: ${message}`
         if (attempt === 0) {
-          const decision = await this.requestImageDescriptorDecision(request, selection, message)
+          const decision = await this.requestImageDescriptorDecision(
+            request,
+            selection,
+            attributedMessage
+          )
           if (decision.action === 'retry') {
             if (decision.selection) {
               selection = decision.selection
@@ -3946,7 +3956,7 @@ export class ChatEngine {
             source: image.source,
             type: image.type,
             description: '',
-            error: `Image description failed and you chose to continue: ${message}. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
+            error: `${attributedMessage} You chose to continue. Work with the partial description above if it is usable; otherwise tell the user what is missing and suggest how to fix it.`
           }
         }
         return {
@@ -3954,7 +3964,7 @@ export class ChatEngine {
           source: image.source,
           type: image.type,
           description: '',
-          error: `Image description failed after retry: ${message}. Tell the user what is missing and suggest how to fix it.`
+          error: `${attributedMessage} The description still failed after retry. Tell the user what is missing and suggest how to fix it.`
         }
       }
     }
@@ -8414,6 +8424,21 @@ export class ChatEngine {
       if (model) return { harnessId: catalog.harnessId, providerId: catalog.id, modelId: model.id }
     }
     return undefined
+  }
+
+  /** Human-readable label for an image-descriptor vision model, falling back to
+   *  the raw ids when the catalog has not resolved the names yet. */
+  private visionModelLabel(projectId: string, selection: AgentModelSelection): string {
+    const catalogs =
+      this.providerCache.get(projectId) ?? this.sharedProviderCatalog?.catalogs ?? null
+    const provider =
+      catalogs?.find(
+        (candidate) =>
+          candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
+      ) ?? catalogs?.find((candidate) => candidate.id === selection.providerId)
+    const model = provider?.models.find((candidate) => candidate.id === selection.modelId)
+    if (!provider) return `${selection.harnessId} / ${selection.providerId} / ${selection.modelId}`
+    return `${provider.name ?? selection.providerId} / ${model?.name ?? selection.modelId}`
   }
 
   // ─── Event handling ───────────────────────────────────────────────────────

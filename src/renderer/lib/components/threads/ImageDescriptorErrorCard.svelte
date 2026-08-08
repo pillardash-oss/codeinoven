@@ -46,6 +46,12 @@
       modelId: request.selection.modelId
     }
   )
+  let changed = $derived(
+    override !== null &&
+      (override.providerId !== request.selection.providerId ||
+        override.modelId !== request.selection.modelId ||
+        override.harnessId !== request.selection.harnessId)
+  )
   let actionError = $state('')
 
   function retry(): void {
@@ -67,14 +73,14 @@
     <div class="flex min-w-0 items-center gap-2">
       <AlertTriangle size={15} class="shrink-0 text-danger" />
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        Image descriptor failed
+        Vision model failed
       </p>
     </div>
     <button
       class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-30"
       disabled={busy}
       onclick={ignore}
-      aria-label="Ignore the error and continue with whatever description was generated"
+      aria-label="Ignore the vision model error and continue with whatever description was generated"
       title="Ignore and continue"
     >
       <Check size={15} />
@@ -92,14 +98,15 @@
         {request.error}
       </p>
       <p class="mt-2 text-xs leading-relaxed text-muted">
-        Pick a different vision model and retry, or ignore and let the model work with whatever
-        description was generated.
+        {changed
+          ? 'Retry with the selected vision model, or ignore and let the model work with whatever description was generated.'
+          : 'Pick a different vision model and retry, or ignore and let the model work with whatever description was generated.'}
       </p>
     </div>
 
     <div>
       <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-dimmed">
-        Vision model
+        Change vision model
       </p>
       <ModelPicker
         {providers}
@@ -141,7 +148,7 @@
       onclick={retry}
     >
       <RotateCw size={13} />
-      Retry
+      {changed ? 'Retry with this model' : 'Retry'}
     </button>
   </div>
 </section>
