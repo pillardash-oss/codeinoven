@@ -2973,6 +2973,18 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
+    'deployment:overview',
+    async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
+      return provider.getDeploymentOverview({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+      })
+    }
+  )
+
+  ipcMain.handle(
     'pr:bundle',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)

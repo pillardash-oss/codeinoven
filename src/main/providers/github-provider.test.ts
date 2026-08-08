@@ -104,7 +104,7 @@ describe('GitHubProvider', () => {
     expect(retryHeaders['Authorization']).toBe('Bearer ghu_refreshed')
   })
 
-  it('lists pull requests and maps each to a reference', async () => {
+  it('maps pull requests, workflow runs, and deployments into provider models', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         { number: 3, title: 'First', html_url: 'https://github.com/acme/app/pull/3' },
@@ -120,6 +120,65 @@ describe('GitHubProvider', () => {
     })
     expect(references).toHaveLength(2)
     expect(references[0]?.number).toBe(3)
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        workflow_runs: [
+          {
+            id: 91,
+            name: 'Release',
+            display_title: 'Publish desktop build',
+            run_number: 14,
+            event: 'push',
+            status: 'completed',
+            conclusion: 'success',
+            head_branch: 'main',
+            head_sha: 'abcdef123456',
+            html_url: 'https://github.com/acme/app/actions/runs/91',
+            actor: { login: 'octocat' },
+            created_at: '2026-08-08T10:00:00Z',
+            updated_at: '2026-08-08T10:05:00Z'
+          }
+        ]
+      })
+    )
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          id: 42,
+          environment: 'production',
+          description: 'Desktop release',
+          ref: 'main',
+          sha: 'abcdef123456',
+          created_at: '2026-08-08T10:01:00Z',
+          updated_at: '2026-08-08T10:06:00Z'
+        }
+      ])
+    )
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([
+        {
+          state: 'success',
+          description: 'Deployment completed',
+          environment_url: 'https://app.example.com',
+          log_url: 'https://github.com/acme/app/actions/runs/91',
+          created_at: '2026-08-08T10:06:00Z'
+        }
+      ])
+    )
+
+    const overview = await provider.getDeploymentOverview({ owner: 'acme', repo: 'app' })
+
+    expect(overview.workflowRuns[0]).toMatchObject({
+      id: 91,
+      displayTitle: 'Publish desktop build',
+      conclusion: 'success'
+    })
+    expect(overview.deployments[0]).toMatchObject({
+      id: 42,
+      environment: 'production',
+      latestStatus: { state: 'success', environmentUrl: 'https://app.example.com' }
+    })
   })
 
   it('resolves repository identity from HTTPS, SSH, and scp-like remote URLs', () => {

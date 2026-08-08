@@ -1,4 +1,5 @@
 import type {
+  GitHubDeploymentOverview,
   GitRepositoryIdentity,
   PrDraft,
   PrMergeMethod,
@@ -77,6 +78,8 @@ export interface GitProvider {
   listPullRequestReviewComments(input: PullRequestTarget): Promise<PullRequestReviewComment[]>
   getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks>
   getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>
+  /** Recent workflow runs and deployments for read-only repository monitoring. */
+  getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
   /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.

@@ -174,6 +174,7 @@ const INVOKE_CHANNELS = [
   'pr:list',
   'pr:merge',
   'pr:page',
+  'deployment:overview',
   'pr:bundle',
   'pr:commitFiles',
   'pr:agentReport',
