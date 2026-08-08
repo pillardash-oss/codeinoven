@@ -1,7 +1,7 @@
 services:
   remote-control:
     build:
-      context: ../..
+      context: .
       dockerfile: services/remote-control/Dockerfile
     restart: unless-stopped
     environment:
@@ -29,7 +29,7 @@ services:
 
   mobile-pwa:
     build:
-      context: ../..
+      context: .
       dockerfile: services/remote-control/Dockerfile.pwa
     restart: unless-stopped
     depends_on:
