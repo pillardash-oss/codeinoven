@@ -91,6 +91,7 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     responseReferencesState,
@@ -1722,6 +1723,9 @@
   onMount(() => {
     workspaceState.jumpToMessage = jumpToMessage
     scheduleResponseHighlightRestore(responseReferences)
+    // This view owns dispatch of the thread's queued message while mounted;
+    // the background dispatcher must defer to it to avoid a double send.
+    queuedMessageDispatcher.markMounted(thread.projectId, thread.id)
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
@@ -1761,6 +1765,7 @@
 
     return () => {
       alive = false
+      queuedMessageDispatcher.markUnmounted(thread.projectId, thread.id)
       // Save scroll position so switching back snaps to the right place
       if (scrollEl) {
         threadScrollPositions.set(thread.id, {
