@@ -46,6 +46,7 @@ import {
 } from './utility-orchestration-service'
 import {
   IMAGE_DESCRIPTOR_PROMPT,
+  resolveSelfContainedAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
   type ResolvedImageEntry
@@ -4072,11 +4073,15 @@ export class ChatEngine {
     )
     try {
       const completion = this.waitForSessionCompletion(sessionId, 180_000, 'Image description')
+      // Inline local file sources as data URLs so the vision session never
+      // depends on the original path still existing (transient temp screenshots
+      // and pasted images can be deleted before the harness reads them).
+      const attachment = await resolveSelfContainedAttachment(image)
       const request: SendPromptOptions = {
         sessionId,
         settings,
         text: IMAGE_DESCRIPTOR_PROMPT,
-        attachments: [image.attachment],
+        attachments: [attachment],
         readOnly: true,
         allowedTools: [],
         userMessageId: createMessageId()
