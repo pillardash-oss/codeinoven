@@ -731,18 +731,27 @@
     void invoke('thread:setContextUsage', thread.projectId, thread.id, snapshot).catch(() => {})
   }
 
-  function revealContextUsage(): void {
-    if (contextUsage) commitContextUsage(contextUsage)
-    void refreshAccountUsageOnDemand()
-  }
-
   /** Live quota fetched from the harnesses; layered over message data so old
    *  threads (or threads whose turns predate quota capture) still show current
    *  rate-limit windows and credits in the battery popover. One entry per
    *  harness used on the thread. */
   let liveAccountUsage = $state<AgentAccountUsage[]>([])
   let refreshingAccountUsage = $state(false)
-  let accountUsageRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  /** Quota is fetched on battery hover and cached briefly so rapid re-hovers
+   *  don't hammer the harness CLIs. */
+  let accountUsageFetchedAt = 0
+  const ACCOUNT_USAGE_CACHE_MS = 5000
+
+  function revealContextUsage(): void {
+    if (contextUsage) commitContextUsage(contextUsage)
+    // Fetch live quota only when the battery is revealed (hover), and only if
+    // the cached copy is stale — never on thread open.
+    const stale =
+      liveAccountUsage.length === 0 ||
+      accountUsageFetchedAt === 0 ||
+      Date.now() - accountUsageFetchedAt > ACCOUNT_USAGE_CACHE_MS
+    if (stale) void refreshAccountUsageOnDemand()
+  }
 
   async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
     if (refreshingAccountUsage) return
@@ -757,6 +766,7 @@
       // from — an out-of-order resolve must not clobber the current selection.
       if (refreshKey && refreshKey !== `${settings.harnessId}:${settings.providerId}`) return
       liveAccountUsage = usageList
+      accountUsageFetchedAt = Date.now()
       const currentUsage = usageList.find(
         (usage) =>
           usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
@@ -795,28 +805,6 @@
       refreshingAccountUsage = false
     }
   }
-
-  $effect(() => {
-    // Refresh quota when the thread mounts AND whenever the user switches the
-    // selected harness/provider — so a fresh thread's battery shows the chosen
-    // harness's quota before any message is sent. The refresh key read here
-    // re-runs the effect when the selection changes. Debounce briefly to let the
-    // thread/messages settle first.
-    const refreshKey = `${settings.harnessId}:${settings.providerId}`
-    if (accountUsageRefreshTimer !== undefined) {
-      clearTimeout(accountUsageRefreshTimer)
-    }
-    accountUsageRefreshTimer = setTimeout(() => {
-      accountUsageRefreshTimer = undefined
-      void refreshAccountUsageOnDemand(refreshKey)
-    }, 400)
-    return () => {
-      if (accountUsageRefreshTimer !== undefined) {
-        clearTimeout(accountUsageRefreshTimer)
-        accountUsageRefreshTimer = undefined
-      }
-    }
-  })
 
   $effect(() => {
     const latest = contextUsage
