@@ -7,6 +7,7 @@ import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { ThreadManager } from './thread-manager'
 import { StorageEngine } from '../../main/storage-engine'
 import { AuditEngine } from './audit-engine'
+import type { AuditReport } from '../types'
 import type { Database } from '../../main/database/database'
 
 const CONTENT = {
@@ -113,5 +114,53 @@ describe('AuditEngine', () => {
     })
     expect(report.id).toBeTruthy()
     expect(engine.getActive('remote-1', threadId)?.content.conclusion).toBe('Complete.')
+  })
+
+  it('backfills markdown files for reports persisted only in the DB', async () => {
+    const engine = new AuditEngine(storage, db)
+    // Simulate a report created before the file-write path existed: insert the
+    // DB row directly so no markdown artifact is written.
+    const legacy: AuditReport = {
+      schemaVersion: 1,
+      id: 'legacy-audit',
+      projectId: 'project-1',
+      threadId,
+      specId: 'spec-1',
+      specVersion: 1,
+      version: 1,
+      content: CONTENT,
+      annotations: [],
+      provenance: { source: 'agent', actor: 'auditor', createdAt: 1 },
+      createdAt: 1,
+      updatedAt: 1
+    } as AuditReport
+    db.run(
+      `INSERT INTO audit_reports(
+        report_id, version, project_id, thread_id, spec_id, spec_version, data, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?)`,
+      legacy.id,
+      legacy.version,
+      legacy.projectId,
+      legacy.threadId,
+      legacy.specId,
+      legacy.specVersion,
+      JSON.stringify(legacy),
+      legacy.createdAt,
+      legacy.updatedAt
+    )
+    const auditPath = join(
+      projectPath,
+      '.cio/specs',
+      'audited-work',
+      'versions',
+      'legacy-audit-audit-v1.md'
+    )
+
+    await expect(readFile(auditPath, 'utf-8')).rejects.toThrow()
+
+    await engine.materializeAllReports()
+
+    const markdown = await readFile(auditPath, 'utf-8')
+    expect(markdown).toContain('The implementation passes.')
   })
 })
