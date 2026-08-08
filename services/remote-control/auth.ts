@@ -35,7 +35,7 @@ export const auth = betterAuth({
   emailAndPassword: { enabled: false },
   socialProviders: {
     github: {
-      clientId: environmentValue('GITHUB_OAUTH_CLIENT_ID', 'development-github-client-id'),
+      clientId: environmentValue('CODEINOVEN_GITHUB_CLIENT_ID', 'development-github-client-id'),
       clientSecret: environmentValue(
         'GITHUB_OAUTH_CLIENT_SECRET',
         'development-github-client-secret'

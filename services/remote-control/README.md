@@ -37,7 +37,7 @@ client ID; the client secret must remain in Coolify.
 - Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
   the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
   `/healthz` over the private Compose network. Coolify terminates public TLS.
-- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, and
+- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `CODEINOVEN_GITHUB_CLIENT_ID`, and
   `GITHUB_OAUTH_CLIENT_SECRET` in Coolify. Generate `BETTER_AUTH_SECRET` with
   `openssl rand -base64 32`.
 - Keep one replica of the SQLite service. The named `remote-data` volume persists the database;
@@ -54,11 +54,12 @@ and WebSocket proxying; it does not bind host ports 80/443.
 Create these GitHub Actions repository variables:
 
 - `REMOTE_API_ORIGIN=https://mobile.codeinoven.com`
-- `GITHUB_CLIENT_ID=<public GitHub App or OAuth App client ID>`
+- `CODEINOVEN_GITHUB_CLIENT_ID=<public GitHub App or OAuth App client ID>`
 
-The release and production-build workflows map them to `MAIN_VITE_REMOTE_API_ORIGIN` and
-`MAIN_VITE_GITHUB_CLIENT_ID`. The remote origin has a checked-in production default, while the
-desktop still accepts `REMOTE_API_ORIGIN` as a runtime override for development or self-hosting.
+The release and production-build workflows pass the GitHub client ID through unchanged and map the
+remote origin to `MAIN_VITE_REMOTE_API_ORIGIN`. The remote origin has a checked-in production
+default, while the desktop still accepts `REMOTE_API_ORIGIN` as a runtime override for development
+or self-hosting.
 
 ## Enrollment and relay protocol
 
