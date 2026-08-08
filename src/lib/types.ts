@@ -2463,6 +2463,10 @@ export interface AppConfig {
   /** When true, sending an image to a text-only model auto-uses the configured
    *  image descriptor model instead of showing the vision-model picker card. */
   imageDescriptorAskAgain: boolean
+  /** Automatically resume threads whose turn ended in a usage/rate-limit reset
+   *  once the reported reset time passes. Only applies to harnesses that do not
+   *  schedule their own provider retries (OpenCode manages its own). */
+  autoRetryAfterReset: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2489,6 +2493,7 @@ export type AppConfigPatch = Partial<
     | 'updateChannel'
     | 'keepAwakeWhileWorking'
     | 'imageDescriptorAskAgain'
+    | 'autoRetryAfterReset'
   >
 >
 

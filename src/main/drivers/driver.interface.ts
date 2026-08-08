@@ -39,6 +39,13 @@ export interface HarnessCapabilities {
   structuredOutput?: boolean
   /** Utility capabilities already supplied natively by this harness. */
   nativeUtilities?: UtilityKind[]
+  /**
+   * The harness schedules and performs its own provider retry after a reset
+   * (it emits a `waiting` session status with `retryAt` and resumes the turn
+   * itself). Harnesses without this need the app to auto-resume threads whose
+   * turn ended in a quota/rate-limit error with a reset time.
+   */
+  scheduledRetry?: boolean
 }
 
 /** Provider-neutral JSON-schema output request for deterministic agent results. */

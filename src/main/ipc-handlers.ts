@@ -25,6 +25,7 @@ import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
 import type { PowerWakeService } from './power-wake-service'
+import type { RetrySchedulerService } from './retry-scheduler-service'
 import { broadcastThreadUpdate, dismissThreadNotifications } from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
 import {
@@ -156,7 +157,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoInstallUpdates',
   'updateChannel',
   'keepAwakeWhileWorking',
-  'imageDescriptorAskAgain'
+  'imageDescriptorAskAgain',
+  'autoRetryAfterReset'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -891,6 +893,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.imageDescriptorAskAgain = value.imageDescriptorAskAgain
   }
 
+  if ('autoRetryAfterReset' in value) {
+    if (typeof value.autoRetryAfterReset !== 'boolean') {
+      throw new TypeError('autoRetryAfterReset must be a boolean')
+    }
+    patch.autoRetryAfterReset = value.autoRetryAfterReset
+  }
+
   return patch
 }
 
@@ -898,6 +907,8 @@ export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
   powerWakeService?: PowerWakeService
+  /** Auto-resume scheduler gated by the General settings toggle. */
+  retryScheduler?: RetrySchedulerService
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
 }
@@ -943,6 +954,7 @@ export function registerIpcHandlers(
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
+    options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
