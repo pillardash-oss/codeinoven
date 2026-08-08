@@ -95,7 +95,7 @@ async function receivedData(socket: FakeSocket, invoke: unknown): Promise<void> 
   socket.receive(JSON.stringify({ type: 'relay:data', payload }))
 }
 
-async function receivedDataWithId(socket: FakeSocket, id: number, invoke: unknown): Promise<void> {
+async function receivedDataWithId(socket: FakeSocket, id: string, invoke: unknown): Promise<void> {
   const payload = await encryptPayload(SECRET, JSON.stringify(invoke))
   socket.receive(JSON.stringify({ type: 'relay:data', id, payload }))
 }
@@ -124,10 +124,10 @@ function makeBodyReader(): (socket: FakeSocket) => Promise<Record<string, unknow
   }
 }
 
-function dataFrameIds(socket: FakeSocket): number[] {
+function dataFrameIds(socket: FakeSocket): string[] {
   return socket.sent
     .filter((frame) => frame.includes('relay:data'))
-    .map((frame) => (JSON.parse(frame) as { id: number }).id)
+    .map((frame) => (JSON.parse(frame) as { id: string }).id)
 }
 
 function openAuthenticated(harness: Harness, index = 0): FakeSocket {
@@ -221,9 +221,9 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
       ids = dataFrameIds(socket)
       expect(ids).toHaveLength(2)
     })
-    // Epoch-scoped ids: strictly increasing and unique across client restarts.
-    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 20)
-    expect(ids[1]).toBeGreaterThan(ids[0])
+    // Instance-scoped ids: full `<uuid>:<seq>` strings, strictly increasing.
+    expect(ids[0]).toMatch(/^[0-9a-f-]+:\d+$/)
+    expect(ids[1] > ids[0]).toBe(true)
     socket.receive(JSON.stringify({ type: 'relay:ack', id: ids[0] }))
     socket.fail()
     expect(socket.sent.filter((frame) => frame.includes('relay:data'))).toHaveLength(2)
@@ -354,15 +354,28 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     const harness = makeHarness()
     harness.client.connect()
     const socket = openAuthenticated(harness)
-    await receivedDataWithId(socket, 777, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
+    await receivedDataWithId(socket, '12345678-1234-1234-1234-123456789abc:1', {
+      rpc: 'invoke',
+      id: 1,
+      channel: 'chat',
+      args: []
+    })
     await vi.waitFor(() => {
       expect(harness.onRpc).toHaveBeenCalledTimes(1)
     })
     const acks = socket.sent.filter((frame) => frame.includes('relay:ack'))
     expect(acks).toHaveLength(1)
-    expect(JSON.parse(acks[0] ?? '{}')).toEqual({ type: 'relay:ack', id: 777 })
+    expect(JSON.parse(acks[0] ?? '{}')).toEqual({
+      type: 'relay:ack',
+      id: '12345678-1234-1234-1234-123456789abc:1'
+    })
     // A duplicate delivery is acknowledged again without re-processing.
-    await receivedDataWithId(socket, 777, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
+    await receivedDataWithId(socket, '12345678-1234-1234-1234-123456789abc:1', {
+      rpc: 'invoke',
+      id: 1,
+      channel: 'chat',
+      args: []
+    })
     await vi.waitFor(() => {
       const acksAfter = socket.sent.filter((frame) => frame.includes('relay:ack'))
       expect(acksAfter).toHaveLength(2)
@@ -396,12 +409,23 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     const first = openAuthenticated(harness)
     // A frame that fails to decrypt must NOT mark its id as seen, so the relay
     // can re-deliver the same id and it is processed instead of suppressed.
-    first.receive(JSON.stringify({ type: 'relay:data', id: 123, payload: 'not-encrypted' }))
+    first.receive(
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:1',
+        payload: 'not-encrypted'
+      })
+    )
     await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
     // Reconnect on the same client, then deliver a valid frame with the SAME id.
     await new Promise((resolve) => setTimeout(resolve, 12))
     const second = openAuthenticated(harness, 1)
-    await receivedDataWithId(second, 123, { rpc: 'invoke', id: 9, channel: 'chat', args: [] })
+    await receivedDataWithId(second, '12345678-1234-1234-1234-123456789abc:1', {
+      rpc: 'invoke',
+      id: 9,
+      channel: 'chat',
+      args: []
+    })
     await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
   })
 
@@ -419,12 +443,52 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     )
     // Deliver both frames back-to-back before the first decrypt resolves: the
     // bounded inbound-processing set suppresses the concurrent duplicate.
-    socket.receive(JSON.stringify({ type: 'relay:data', id: 777, payload: payload1 }))
-    socket.receive(JSON.stringify({ type: 'relay:data', id: 777, payload: payload2 }))
+    socket.receive(
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:1',
+        payload: payload1
+      })
+    )
+    socket.receive(
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:1',
+        payload: payload2
+      })
+    )
     await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
-    // Both deliveries are acknowledged as the receiver.
+    // The concurrent duplicate is coalesced: exactly ONE decrypt/dispatch/ACK.
     await vi.waitFor(() => {
-      expect(socket.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(2)
+      expect(socket.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(1)
+    })
+  })
+
+  it('emits no ACK when concurrent duplicates fail to decrypt, then replays successfully', async () => {
+    const harness = makeHarness({
+      reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
+    })
+    harness.client.connect()
+    const first = openAuthenticated(harness)
+    // Two concurrent frames with the same id both fail to decrypt: coalesced,
+    // zero ACKs, pending removed so a replay remains possible.
+    first.receive(JSON.stringify({ type: 'relay:data', id: 'abc-1', payload: 'bad-1' }))
+    first.receive(JSON.stringify({ type: 'relay:data', id: 'abc-1', payload: 'bad-2' }))
+    await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
+    expect(first.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(0)
+    // Reconnect and replay the same id with a VALID payload: one decrypt, one
+    // dispatch, one ACK.
+    await new Promise((resolve) => setTimeout(resolve, 12))
+    const second = openAuthenticated(harness, 1)
+    await receivedDataWithId(second, '12345678-1234-1234-1234-123456789abc:1', {
+      rpc: 'invoke',
+      id: 9,
+      channel: 'chat',
+      args: []
+    })
+    await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => {
+      expect(second.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(1)
     })
   })
 

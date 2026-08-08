@@ -13,91 +13,96 @@ export const RELAY_HELLO_VERSION = 1
 /** Outbound application frame routed by the relay to the peer. */
 export interface RelayDataFrame {
   type: 'relay:data'
-  /** Monotonic message id used for acknowledgement, dedup, and replay. */
-  id: number
+  /** Full wire id: `<uuid sender instance>:<bounded seq>`, unique across
+   *  client restarts. Used for acknowledgement, dedup, and replay. */
+  id: string
   payload: string
 }
 
 /** Delivery acknowledgement the relay sends back for a `relay:data` id. */
 export interface RelayAckFrame {
   type: 'relay:ack'
-  id: number
+  id: string
 }
 
 /** Retryable rejection the relay sends when an accepted frame could not be
- *  retained (overflow, expiry). The sender should re-queue and retry. */
+ *  retained (overflow, expiry, collision). The sender should re-queue/retry. */
 export interface RelayNackFrame {
   type: 'relay:nack'
-  id: number
+  id: string
   reason?: string
 }
 
 export type RelayEnvelopeFrame = RelayDataFrame | RelayAckFrame | RelayNackFrame
 
-/** Monotonic message-id allocator so ids are never reused across frames. */
-export function createMessageIdAllocator(initial = 1): () => number {
-  let next = initial
-  return () => {
-    const id = next
-    next += 1
-    return id
-  }
-}
-
-// Sender-instance ID (32 bits) + monotonic sequence (20 bits). The full id is
-// `instanceId * 2^20 + seq`; with a 32-bit random instance the space is
-// genuinely collision-resistant across clients while staying within JS safe
-// integers (max id ≈ 2^52).
-const INSTANCE_BITS = 32
 const SEQUENCE_BITS = 20
-const INSTANCE_MASK = 2 ** INSTANCE_BITS - 1
 const MAX_SEQUENCE = 2 ** SEQUENCE_BITS
 
-/** Unbiased crypto-random sender-instance ID in [0, 2^INSTANCE_BITS). */
-function randomInstanceId(): number {
-  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
-    // Uint32Array elements are unsigned, so the raw value is already in
-    // [0, 2^32); avoid bitwise AND which would sign-extend through Int32.
-    return crypto.getRandomValues(new Uint32Array(1))[0]
-  }
-  return Math.min(INSTANCE_MASK, Math.floor(Math.random() * (INSTANCE_MASK + 1)))
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const WIRE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[1-9]\d*$/i
+
+/** A random 128-bit sender-instance ID (UUIDv4). */
+export function randomInstanceId(): string {
+  const cryptoApi = globalThis.crypto as
+    { randomUUID?: () => string; getRandomValues?: (bytes: Uint8Array) => Uint8Array } | undefined
+  if (cryptoApi?.randomUUID) return cryptoApi.randomUUID()
+  const bytes = new Uint8Array(16)
+  cryptoApi?.getRandomValues?.(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/** Validate a sender-instance UUID string. */
+export function isValidSenderInstance(instanceId: string): boolean {
+  return UUID_PATTERN.test(instanceId)
+}
+
+/** Validate a full wire id (`uuid:seq`) used on data/ack/nack frames. */
+export function isValidWireId(id: string): boolean {
+  return WIRE_ID_PATTERN.test(id)
 }
 
 /**
- * Message-id allocator whose ids stay unique across client restarts: each id is
- * `senderInstanceId * 2^20 + seq`, with a fresh 32-bit crypto-random sender
- * instance ID per client instance plus a monotonic sequence. A peer that
- * reloads therefore never reuses wire ids the recipient has already seen, so
- * the recipient's duplicate-suppression set cannot drop a reloaded peer's fresh
- * frames. The instance ID must be a non-negative integer below 2^32; tests
- * inject fixed instance IDs for determinism.
+ * Message-id allocator whose ids are unique across client restarts: each id is
+ * `<uuid sender instance>:<seq>`, with a fresh 128-bit UUID per client instance
+ * plus a bounded monotonic sequence. A peer that reloads therefore never reuses
+ * wire ids the recipient has already seen, so the recipient's
+ * duplicate-suppression set cannot drop a reloaded peer's fresh frames. The
+ * sender instance must be a valid UUID; tests inject fixed instance UUIDs for
+ * determinism.
  */
-export function createEpochMessageIdAllocator(epoch: number = randomInstanceId()): () => number {
-  if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch > INSTANCE_MASK) {
-    throw new TypeError(`Relay message-id instance must be an integer in [0, ${INSTANCE_MASK}]`)
+export function createEpochMessageIdAllocator(
+  instanceId: string = randomInstanceId()
+): () => string {
+  if (!isValidSenderInstance(instanceId)) {
+    throw new TypeError('Relay message-id sender instance must be a UUID')
   }
-  const base = epoch * 2 ** SEQUENCE_BITS
   let seq = 0
   return () => {
     seq += 1
     if (seq >= MAX_SEQUENCE) {
       throw new Error('Relay message-id sequence space exhausted for this instance')
     }
-    return base + seq
+    return `${instanceId}:${seq}`
   }
 }
 
-/** Derive the sender instance ID from an instance-scoped wire id. */
-export function epochOfWireId(id: number): number {
-  return Math.floor(id / 2 ** SEQUENCE_BITS)
-}
-
-export function serializeRelayDataFrame(id: number, payload: string): string {
+export function serializeRelayDataFrame(id: string, payload: string): string {
   return JSON.stringify({ type: 'relay:data', id, payload } satisfies RelayDataFrame)
 }
 
-export function serializeRelayAckFrame(id: number): string {
+export function serializeRelayAckFrame(id: string): string {
   return JSON.stringify({ type: 'relay:ack', id } satisfies RelayAckFrame)
+}
+
+export function serializeRelayNackFrame(id: string, reason?: string): string {
+  return JSON.stringify({
+    type: 'relay:nack',
+    id,
+    ...(reason ? { reason } : {})
+  } satisfies RelayNackFrame)
 }
 
 export function parseRelayDataFrame(value: string): RelayDataFrame | null {
@@ -108,7 +113,7 @@ export function parseRelayDataFrame(value: string): RelayDataFrame | null {
     if (record.type !== 'relay:data' || typeof record.payload !== 'string') return null
     return {
       type: 'relay:data',
-      id: typeof record.id === 'number' ? record.id : NaN,
+      id: typeof record.id === 'string' ? record.id : '',
       payload: record.payload
     }
   } catch {
@@ -121,7 +126,7 @@ export function parseRelayAckFrame(value: string): RelayAckFrame | null {
     const parsed: unknown = JSON.parse(value)
     if (typeof parsed !== 'object' || parsed === null) return null
     const record = parsed as Record<string, unknown>
-    if (record.type !== 'relay:ack' || typeof record.id !== 'number') return null
+    if (record.type !== 'relay:ack' || typeof record.id !== 'string') return null
     return { type: 'relay:ack', id: record.id }
   } catch {
     return null
@@ -133,7 +138,7 @@ export function parseRelayNackFrame(value: string): RelayNackFrame | null {
     const parsed: unknown = JSON.parse(value)
     if (typeof parsed !== 'object' || parsed === null) return null
     const record = parsed as Record<string, unknown>
-    if (record.type !== 'relay:nack' || typeof record.id !== 'number') return null
+    if (record.type !== 'relay:nack' || typeof record.id !== 'string') return null
     return {
       type: 'relay:nack',
       id: record.id,
@@ -162,9 +167,9 @@ export function fullJitterDelay(
   return Math.floor(sample * cap)
 }
 
-/** A fixed-capacity FIFO map that evicts the oldest entry when full. */
+/** A fixed-capacity FIFO map (string-keyed) that evicts the oldest when full. */
 export class BoundedMap<V> {
-  private readonly entries = new Map<number, V>()
+  private readonly entries = new Map<string, V>()
 
   constructor(private readonly limit: number) {}
 
@@ -172,15 +177,15 @@ export class BoundedMap<V> {
     return this.entries.size
   }
 
-  has(key: number): boolean {
+  has(key: string): boolean {
     return this.entries.has(key)
   }
 
-  get(key: number): V | undefined {
+  get(key: string): V | undefined {
     return this.entries.get(key)
   }
 
-  set(key: number, value: V): void {
+  set(key: string, value: V): void {
     if (this.limit <= 0) return
     if (this.entries.has(key)) this.entries.delete(key)
     this.entries.set(key, value)
@@ -191,7 +196,7 @@ export class BoundedMap<V> {
     }
   }
 
-  delete(key: number): boolean {
+  delete(key: string): boolean {
     return this.entries.delete(key)
   }
 
@@ -204,9 +209,9 @@ export class BoundedMap<V> {
   }
 }
 
-/** A fixed-capacity set that evicts the oldest entry when full. */
+/** A fixed-capacity string set that evicts the oldest entry when full. */
 export class BoundedSet {
-  private readonly entries = new Set<number>()
+  private readonly entries = new Set<string>()
 
   constructor(private readonly limit: number) {}
 
@@ -214,11 +219,11 @@ export class BoundedSet {
     return this.entries.size
   }
 
-  has(key: number): boolean {
+  has(key: string): boolean {
     return this.entries.has(key)
   }
 
-  add(key: number): void {
+  add(key: string): void {
     if (this.limit <= 0) return
     if (this.entries.has(key)) return
     this.entries.add(key)
@@ -229,7 +234,7 @@ export class BoundedSet {
     }
   }
 
-  delete(key: number): boolean {
+  delete(key: string): boolean {
     return this.entries.delete(key)
   }
 
