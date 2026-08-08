@@ -137,9 +137,16 @@ function requestCloseConfirmation(): void {
   window.webContents.send('window:confirmClose', { projects: working })
 }
 
-ipcMain.handle('app:confirmClose', () => {
-  // The user approved the forced close while threads are working.
+ipcMain.handle('app:confirmClose', async () => {
+  // The user approved the forced close while threads are working. Terminate
+  // every still-streaming harness connection (SIGTERM to local harness
+  // processes) so no agent keeps working after the app exits, then proceed.
   quitConfirmed = true
+  try {
+    await chatEngine.terminateActiveConnections()
+  } catch (error) {
+    Logger.error('Could not terminate active harness connections on close', error)
+  }
   app.quit()
 })
 

@@ -1297,6 +1297,23 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /**
+   * Forcefully terminate the harness process backing a session (SIGTERM).
+   * Kills the per-session `opencode serve` process that streams the SSE turn so
+   * the connection is torn down immediately — used when the user confirms a
+   * forced close. Falls back to a graceful abort when no dedicated turn server
+   * exists for the session (the pooled server is left for the app to dispose).
+   */
+  terminate(projectPath: string, sessionId: string): Promise<void> {
+    const handle = this.turnServers.get(sessionId)
+    if (handle) {
+      handle.abortController.abort()
+      if (!handle.process.killed) handle.process.kill('SIGTERM')
+      return Promise.resolve()
+    }
+    return this.abort(projectPath, sessionId)
+  }
+
+  /**
    * Permanently remove a session from the pooled server, releasing the work it
    * owned (in-flight turns and any processes it spawned). No-op when the
    * project's server is not running, and an already-missing session counts as

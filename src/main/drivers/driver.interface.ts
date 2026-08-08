@@ -232,6 +232,16 @@ export interface HarnessDriver {
   /** Abort the running turn in a session. */
   abort(projectPath: string, sessionId: string): Promise<void>
 
+  /**
+   * Forcefully stop the harness process backing a session (SIGTERM). Called when
+   * the user explicitly confirms a forced close so a still-streaming local
+   * project stops immediately instead of lingering after the app exits. Drivers
+   * that own a per-session process (e.g. the OpenCode SSE server) implement
+   * this to kill the process outright; the default `abort` already sends
+   * SIGTERM for one-process-per-turn CLI drivers.
+   */
+  terminate?(projectPath: string, sessionId: string): Promise<void> | void
+
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
@@ -264,9 +274,7 @@ export interface HarnessDriver {
    * predate quota capture — can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
    */
-  readAccountUsage?(
-    projectPath: string
-  ): Promise<{
+  readAccountUsage?(projectPath: string): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     contextWindow?: number
