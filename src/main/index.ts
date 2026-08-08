@@ -44,6 +44,7 @@ import {
 import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
 import { PrivilegedIpcValidator, originOfUrl } from './ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
+import type { Thread } from '../lib/types'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -93,23 +94,34 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
   try {
     const threadRepo = new ThreadRepo(database)
     const projectRepo = new ProjectRepo(database)
-    const active = threadRepo
+    type ActiveThread = Thread & { status: 'planning' | 'executing' }
+    const active: ActiveThread[] = threadRepo
       .listAll()
-      .filter((t) => !t.archived && (t.status === 'planning' || t.status === 'executing'))
+      .filter(
+        (t): t is ActiveThread =>
+          !t.archived && (t.status === 'planning' || t.status === 'executing')
+      )
+      .sort((a, b) => b.lastActivity - a.lastActivity)
     if (active.length === 0) return []
     const byProject = new Map<string, CloseConfirmationProject>()
     for (const thread of active) {
-      const entry = byProject.get(thread.projectId)
-      if (entry) {
-        entry.threadCount++
-      } else {
+      let entry = byProject.get(thread.projectId)
+      if (!entry) {
         const project = projectRepo.get(thread.projectId)
-        byProject.set(thread.projectId, {
+        entry = {
           projectId: thread.projectId,
           projectName: project?.name ?? thread.projectId,
-          threadCount: 1
-        })
+          threadCount: 0,
+          threads: []
+        }
+        byProject.set(thread.projectId, entry)
       }
+      entry.threadCount++
+      entry.threads.push({
+        threadId: thread.id,
+        title: thread.title,
+        status: thread.status
+      })
     }
     return [...byProject.values()].sort((a, b) => b.threadCount - a.threadCount)
   } catch (error) {

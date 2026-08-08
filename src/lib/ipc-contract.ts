@@ -1209,11 +1209,20 @@ export interface ThreadClickedPayload {
   threadId: string
 }
 
+/** One thread still being worked on, blocking the close. */
+export interface CloseConfirmationThread {
+  threadId: string
+  title: string
+  status: 'planning' | 'executing'
+}
+
 /** A project with at least one thread still being worked on. */
 export interface CloseConfirmationProject {
   projectId: string
   projectName: string
   threadCount: number
+  /** The exact threads blocking the close, most active first. */
+  threads: CloseConfirmationThread[]
 }
 
 /** Sent when the user tries to close the app while threads are still working. */
