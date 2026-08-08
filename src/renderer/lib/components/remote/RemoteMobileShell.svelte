@@ -1082,7 +1082,7 @@
     }}
   >
     <Dialog.Portal>
-      <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+      <Dialog.Overlay class="fixed inset-0 z-50 cursor-pointer bg-overlay/70" />
       <Dialog.Content
         class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl outline-none"
       >
