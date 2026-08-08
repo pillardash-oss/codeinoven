@@ -6,8 +6,8 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import { APP_SLUG } from '$shared/brand'
 
 /**
- * Per-project provider catalog cache (stale-while-revalidate) with eager
- * start-up hydration.
+ * Per-project provider catalog cache (stale-while-revalidate) with optional
+ * start-up hydration controls.
  *
  * `agent:refreshProviderCatalog` pings every harness driver, which can take
  * seconds on a cold project and (for Cline) hits the network. At app start
@@ -77,7 +77,11 @@ class ProviderCatalogStore {
   /**
    * Seed every project's catalog from disk. Startup never contacts harnesses.
    */
-  async init(projectIds: string[]): Promise<void> {
+  async init(
+    projectIds: string[],
+    options: { refresh?: boolean } = {}
+  ): Promise<void> {
+    const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
     await Promise.all(
       targets.map(async (projectId) => {
@@ -98,11 +102,13 @@ class ProviderCatalogStore {
     )
     // Keep the local mirror current so the next launch renders instantly.
     this.persistMirror()
-    // Hydrate every project in the background so live harness data replaces
-    // the snapshot — and projects with no snapshot are populated — before the
-    // model picker is ever opened. Forced so a fresh snapshot is never trusted
-    // over a driver probe. Concurrent projects share one main-side discovery.
-    for (const projectId of targets) void this.refresh(projectId, true)
+    if (refresh) {
+      // Hydrate every project in the background so live harness data replaces
+      // the snapshot — and projects with no snapshot are populated — before the
+      // model picker is ever opened. Forced so a fresh snapshot is never trusted
+      // over a driver probe. Concurrent projects share one main-side discovery.
+      for (const projectId of targets) void this.refresh(projectId, true)
+    }
     // Re-arm the staleness sweep so caches never outlive their TTL silently.
     this.scheduleStalenessSweep()
   }

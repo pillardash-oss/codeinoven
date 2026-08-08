@@ -273,6 +273,69 @@ function closeSplash(): void {
 }
 
 /**
+ * Start non-critical startup work after the first paint so the splash can be
+ * replaced by the main shell immediately.
+ */
+function startBackgroundBoot(): void {
+  void (async () => {
+    try {
+      chatEngine.backfillHarnessUsage()
+    } catch (error) {
+      Logger.error('Harness usage backfill failed (non-fatal):', error)
+    }
+
+    try {
+      await powerWakeService.start()
+      setPowerWakeService(powerWakeService)
+    } catch (error) {
+      Logger.error('Power wake startup failed (non-fatal):', error)
+    }
+
+    try {
+      const recovery = await new RestartRecoveryService(database).recover()
+      if (recovery.recovered.length > 0) {
+        Logger.info('Recovered interrupted threads', {
+          inspected: recovery.inspected,
+          recovered: recovery.recovered.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+      }
+      if (recovery.failures.length > 0) {
+        Logger.error('Restart recovery completed with failures', recovery.failures)
+      }
+    } catch (error) {
+      Logger.error('Restart recovery failed (non-fatal):', error)
+    }
+
+    // Restore remote mode after paint so users can see app UI while the LAN
+    // stack spins up in the background.
+    void remoteMode
+      .restoreRemoteMode()
+      .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+
+    try {
+      ptyService.register()
+      providerConnection.register()
+      harnessUpdateService.register()
+      harnessInstallService.register()
+      providerConnection.warmUp()
+    } catch (error) {
+      Logger.error('Provider service startup failed (non-fatal):', error)
+    }
+
+    try {
+      notificationService.start()
+      setNotificationService(notificationService)
+      updaterService.start()
+    } catch (error) {
+      Logger.error('Update/notification startup failed (non-fatal):', error)
+    }
+  })()
+}
+
+/**
  * First-paint colour for the main window, matched to the renderer's resolved
  * theme (mirrors `--color-app` from app.css). Without it the window can flash
  * the default white body while the bundle boots on a slow machine.
@@ -313,7 +376,7 @@ function createWindow(): BrowserWindow {
     lockDownProductionWindow(window)
   }
 
-  window.on('ready-to-show', () => {
+  window.webContents.once('did-finish-load', () => {
     // Restore the maximized state before the first paint so the window never
     // flashes at its restored size while the splash is closing.
     if (windowStateService.shouldRestoreMaximized() && !window.isMaximized()) {
@@ -422,26 +485,7 @@ void app
     ])
     await windowStateService.load()
     Logger.info(`${APP_NAME} main process initialized`)
-    chatEngine.backfillHarnessUsage()
-    await powerWakeService.start()
-    setPowerWakeService(powerWakeService)
-    try {
-      const recovery = await new RestartRecoveryService(database).recover()
-      if (recovery.recovered.length > 0) {
-        Logger.info('Recovered interrupted threads', {
-          inspected: recovery.inspected,
-          recovered: recovery.recovered.map((thread) => ({
-            projectId: thread.projectId,
-            threadId: thread.id
-          }))
-        })
-      }
-      if (recovery.failures.length > 0) {
-        Logger.error('Restart recovery completed with failures', recovery.failures)
-      }
-    } catch (error) {
-      Logger.error('Restart recovery failed (non-fatal):', error)
-    }
+
     updaterService.setChatEngine(chatEngine)
     const projectManager = new ProjectManager(database)
     const projectFilesService = new ProjectFilesService(projectManager)
@@ -455,28 +499,18 @@ void app
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
     remoteMode.registerIpc()
-    // Restore remote mode from the previous session so the phone connection
-    // survives a desktop restart without the user re-enabling it by hand.
-    void remoteMode.restoreRemoteMode()
-    ptyService.register()
-    providerConnection.register()
-    harnessUpdateService.register()
-    harnessInstallService.register()
-    providerConnection.warmUp()
     chatEngine.register()
-    notificationService.start()
-    setNotificationService(notificationService)
-    updaterService.start()
 
     const window = createWindow()
+    startBackgroundBoot()
 
     // Failsafe: never let the splash outlive the app even if the renderer
-    // never paints (e.g. a script error) — dismiss it on ready or on close.
+    // never paints (e.g. a script error) — dismiss it on first load or close.
     // The budget is generous (60s) because on a low-end machine the renderer
     // legitimately takes a long time to boot; closing early would drop the
     // user onto a bare window while it still loads.
     const splashFailsafe = setTimeout(closeSplash, 60_000)
-    window.once('ready-to-show', () => {
+    window.webContents.once('did-finish-load', () => {
       clearTimeout(splashFailsafe)
       closeSplash()
     })

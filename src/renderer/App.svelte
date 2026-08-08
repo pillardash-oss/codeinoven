@@ -698,14 +698,26 @@
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
       scopeState.setThreads(threadList)
       notificationPanelState.hydrateFromThreads(threadList)
-      await scopeState.loadBoard()
-      // Seed model pickers from persisted snapshots. Harness discovery remains
-      // lazy and never starts project runtimes during application startup.
-      void providerCatalog.init([...projectList.map((project) => project.id), INBOX_PROJECT_ID])
-      // Canonical-ordered harness list (registry order) — the model picker's
-      // harness filter sorts against this so its chip order never depends on
-      // catalog insertion order.
-      void providerStore.init()
+      const projectIds = projectList.map((project) => project.id)
+      const hasScopeProject = scopeState.activeProjectId
+        ? [scopeState.activeProjectId]
+        : []
+      if (scopeState.activeProjectId) {
+        scopeState.ensureBoardLoaded(scopeState.activeProjectId)
+      }
+      window.requestAnimationFrame(() => {
+        // Seed model pickers from local snapshots without triggering harness probes.
+        // Live discovery is deferred until the model picker opens or the user
+        // explicitly refreshes, so startup can focus on first paint.
+        void providerCatalog.init([...projectIds, INBOX_PROJECT_ID], { refresh: false })
+        // Canonical-ordered harness list (registry order) — the model picker's
+        // harness filter sorts against this so its chip order never depends on
+        // catalog insertion order.
+        void providerStore.init()
+        if (hasScopeProject.length > 0) {
+          void providerCatalog.refresh(hasScopeProject[0], true)
+        }
+      })
     } catch {
       scopeState.setScopesFromProjects([], new Map())
       scopeState.setThreads([])
@@ -992,7 +1004,9 @@
   })
 
   void loadConfig()
-  void loadScopeData()
+  window.setTimeout(() => {
+    void loadScopeData()
+  }, 0)
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
