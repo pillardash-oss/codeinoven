@@ -2,26 +2,28 @@
  * Bundle-budget check for the production renderer build.
  *
  * Reads the built renderer output (default `out/renderer`) and enforces the
- * audit's remote PWA budgets:
+ * audit's remote PWA budgets over the **eagerly-loaded initial JS closure** —
+ * the entry plus every chunk it statically imports (and those chunks' static
+ * imports), which is exactly what a phone parses on first paint:
  *
- * - initial remote JavaScript (the disconnected shell's directly-referenced
- *   JS, measured gzip) ≤ 500 KB
+ * - initial remote JavaScript (gzip) ≤ 500 KB
  * - no single initial JS chunk (gzip) > 350 KB
  *
- * The initial closure is derived from the same production asset graph the LAN
- * gateway uses, so the check measures exactly what a phone loads on first
- * paint. Exits non-zero (deterministically) when a budget is exceeded.
+ * Truly lazy dynamic imports and their modulepreload dep arrays are excluded
+ * from the measurement. The closure is derived from the same production asset
+ * graph the LAN gateway uses, so the check measures exactly what a phone loads
+ * to show the first screen. Exits non-zero (deterministically) when a budget
+ * is exceeded.
  *
  * Usage: `bun run check:bundle [path/to/renderer-out]`
  */
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { computePwaAssetGraph } from '../src/main/remote/pwa-asset-graph'
-
-/** gzip bytes budget for the whole initial remote JS closure. */
-const INITIAL_JS_GZIP_BUDGET_BYTES = 500 * 1024
-/** gzip bytes budget for any single initial JS chunk. */
-const MAX_CHUNK_GZIP_BUDGET_BYTES = 350 * 1024
+import {
+  computePwaAssetGraph,
+  INITIAL_JS_GZIP_BUDGET_BYTES,
+  MAX_CHUNK_GZIP_BUDGET_BYTES
+} from '../src/main/remote/pwa-asset-graph'
 
 const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 

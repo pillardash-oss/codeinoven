@@ -21,52 +21,120 @@
  * - **Hashed `/assets/...` files** stay cache-first, which is safe precisely
  *   because the hash changes whenever the content does.
  *
- * Upgrades are safe because the precache version changes with the build: the
- * new shell is written to a fresh cache while `activate` retains **one bounded
- * previous-good shell** for fallback when the newest build is interrupted or
- * cannot be fetched. Only successful responses are cached — caching a 404 would
- * poison the cache and keep replaying that failure.
+ * Upgrades are safe. The new shell is precached **atomically**: any failed
+ * fetch rejects the install promise, so the browser keeps the previous-good
+ * service worker and its shell; `skipWaiting` runs only after every precache
+ * entry is present and verified. Each shell cache records an install-sequence
+ * metadata entry, so `activate` retains the current shell plus the **actual
+ * previous-good shell** (the most recently installed predecessor) and prunes
+ * everything older — no cache-name ordering assumptions. Only successful
+ * responses are cached — caching a 404 would poison the cache and keep
+ * replaying that failure.
  */
 const PRECACHE_MANIFEST = /*__PRECACHE_MANIFEST__*/[]
 const PRECACHE_VERSION = /*__PRECACHE_VERSION__*/"dev"
 const CACHE_PREFIX = 'codeinoven-remote-shell-'
 const CACHE_NAME = CACHE_PREFIX + PRECACHE_VERSION
+const SHELL_META_KEY = './__sw_shell_meta__'
 const CORE_ASSETS = ['./remote.html', './manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) =>
-        cache.addAll(PRECACHE_MANIFEST.length > 0 ? PRECACHE_MANIFEST : CORE_ASSETS)
-      )
-      .catch(() => undefined)
-  )
-  self.skipWaiting()
+  event.waitUntil(installShell().then(() => self.skipWaiting()))
 })
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => {
-        const shellKeys = keys
-          .filter((key) => key.startsWith(CACHE_PREFIX))
-          .sort()
-        // Retain the current shell plus exactly one bounded previous-good shell.
-        // Anything older than the immediate predecessor is removed so upgrades
-        // never accumulate unbounded caches while an interrupted update still
-        // has a working shell to fall back to.
-        const keep = new Set([CACHE_NAME])
-        const previous = shellKeys.filter((key) => key !== CACHE_NAME).pop()
-        if (previous) keep.add(previous)
-        return Promise.all(
-          keys.filter((key) => !keep.has(key)).map((key) => caches.delete(key))
-        )
-      })
-      .then(() => self.clients.claim())
+/**
+ * Precache the disconnected shell and mark the cache complete.
+ *
+ * The whole operation is atomic: `cache.addAll` rejects when any request fails
+ * or returns a non-OK status, and `verifyShell` re-checks every entry, so a
+ * partially written shell rejects the install promise before `skipWaiting` can
+ * run. The meta entry records an install sequence (max existing sequence + 1)
+ * that `activate` uses to keep the actual previous-good shell.
+ */
+async function installShell() {
+  const manifest = PRECACHE_MANIFEST.length > 0 ? PRECACHE_MANIFEST : CORE_ASSETS
+  const cache = await caches.open(CACHE_NAME)
+  await cache.addAll(manifest)
+  await verifyShell(cache, manifest)
+  const sequence = await nextInstallSequence()
+  await cache.put(
+    SHELL_META_KEY,
+    new Response(JSON.stringify({ sequence, version: PRECACHE_VERSION }), {
+      headers: { 'Content-Type': 'application/json' }
+    })
   )
+}
+
+/** Throw unless every precache URL is stored with an OK response. */
+async function verifyShell(cache, urls) {
+  const results = await Promise.all(
+    urls.map(async (url) => {
+      const response = await cache.match(url)
+      return Boolean(response && response.ok)
+    })
+  )
+  if (results.some((ok) => !ok)) throw new Error('precache incomplete')
+}
+
+/** Read the install-sequence meta from a shell cache, if present. */
+async function readShellMeta(cache) {
+  try {
+    const response = await cache.match(SHELL_META_KEY)
+    if (!response) return null
+    return await response.json()
+  } catch {
+    return null
+  }
+}
+
+/** Next monotonic install sequence across every existing shell cache. */
+async function nextInstallSequence() {
+  const keys = await caches.keys()
+  let max = 0
+  for (const key of keys) {
+    if (!key.startsWith(CACHE_PREFIX)) continue
+    const cache = await caches.open(key)
+    const meta = await readShellMeta(cache)
+    if (meta && typeof meta.sequence === 'number' && meta.sequence > max) {
+      max = meta.sequence
+    }
+  }
+  return max + 1
+}
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(activateShell())
 })
+
+/**
+ * Retain the current (verified-complete) shell plus the actual previous-good
+ * shell — the one with the highest install sequence among the other shell
+ * caches — and delete everything older. This keeps retention bounded to two
+ * caches and never relies on cache-name lexicographic order.
+ */
+async function activateShell() {
+  const keys = await caches.keys()
+  const shellKeys = keys.filter((key) => key.startsWith(CACHE_PREFIX))
+  const keep = new Set([CACHE_NAME])
+
+  let previousGood = null
+  let previousSequence = -1
+  for (const key of shellKeys) {
+    if (key === CACHE_NAME) continue
+    const cache = await caches.open(key)
+    const meta = await readShellMeta(cache)
+    if (meta && typeof meta.sequence === 'number' && meta.sequence > previousSequence) {
+      previousSequence = meta.sequence
+      previousGood = key
+    }
+  }
+  if (previousGood) keep.add(previousGood)
+
+  await Promise.all(
+    keys.filter((key) => !keep.has(key)).map((key) => caches.delete(key))
+  )
+  await self.clients.claim()
+}
 
 /**
  * A tapped phone notification focuses the client and asks it to open the

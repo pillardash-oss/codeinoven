@@ -43,6 +43,16 @@ import { gzipSync } from 'node:zlib'
 const ASSET_REFERENCE = /\.\/([A-Za-z0-9._-]+\.(?:js|mjs|css))/g
 
 /**
+ * Match only **static** import references inside a chunk — `from "./x.js"` and
+ * bare side-effect `import "./x.js"`. Dynamic `import("./x.js")` and the
+ * modulepreload dependency arrays Vite emits for lazy chunks (`["./x.js"]`) are
+ * deliberately excluded because they load on interaction, not on first paint.
+ * The `from`/`import` keyword disambiguates a real eager edge from incidental
+ * strings inside the dep-array or a dynamic import.
+ */
+const STATIC_IMPORT_REFERENCE = /(?:from|import)\s*["']\.\/([A-Za-z0-9._-]+\.(?:js|mjs))["']/g
+
+/**
  * Runtime-resolved public assets the shared renderer components fetch directly
  * (never via a static import), so they are invisible to the chunk-walk above.
  * The agent icon SVGs are loaded by `AgentIcon` from `publicAssetUrl`; the
@@ -187,12 +197,56 @@ const ROOT_SHELL_FILES = [
   '/favicon.ico'
 ]
 
+/** gzip budget for the whole eagerly-loaded initial remote JS closure. */
+export const INITIAL_JS_GZIP_BUDGET_BYTES = 500 * 1024
+/** gzip budget for any single eagerly-loaded initial JS chunk. */
+export const MAX_CHUNK_GZIP_BUDGET_BYTES = 350 * 1024
+
+/**
+ * Compute the eagerly-loaded initial JavaScript closure: the entry and
+ * modulepreload chunks referenced directly by `remote.html` plus every chunk
+ * they import **statically** (`from "./x.js"`). Lazy dynamic imports and their
+ * modulepreload dep arrays are excluded — they load on interaction, not first
+ * paint — so the closure is exactly what a phone parses to show the first
+ * screen. Returns a sorted, deduplicated list of `/assets/...` JS paths.
+ */
+async function collectEagerJsClosure(staticRoot: string, initialRefs: string[]): Promise<string[]> {
+  const assetsDir = join(staticRoot, 'assets')
+  const eager = new Set<string>()
+  const queue: string[] = []
+  for (const ref of initialRefs) {
+    if ((ref.endsWith('.js') || ref.endsWith('.mjs')) && !eager.has(ref)) {
+      eager.add(ref)
+      queue.push(ref)
+    }
+  }
+  while (queue.length > 0) {
+    const asset = queue.shift() as string
+    let content: string
+    try {
+      content = await readFile(join(staticRoot, asset.slice(1)), 'utf8')
+    } catch {
+      continue
+    }
+    for (const match of content.matchAll(STATIC_IMPORT_REFERENCE)) {
+      const name = match[1]
+      if (!name) continue
+      const path = `/assets/${name}`
+      if (!eager.has(path) && existsSync(join(assetsDir, name))) {
+        eager.add(path)
+        queue.push(path)
+      }
+    }
+  }
+  return [...eager].sort()
+}
+
 /**
  * Compute the full cache-classified asset graph, precache manifest, and bundle
- * budget. `precache` deliberately excludes the hashed connected-client closure:
- * only the disconnected shell (root files + initial `remote.html` references)
- * is precached, so first-install offline and interrupted-update scenarios keep a
- * usable pairing screen without pinning stale feature chunks.
+ * budget. `precache` covers the disconnected shell — root files plus every
+ * eagerly-loaded JS/CSS the initial paint needs — while lazy feature chunks
+ * (the connected client) are excluded so a rebuild never pins stale hashes.
+ * The bundle budget is measured over the same eager closure.
  */
 export async function computePwaAssetGraph(staticRoot: string): Promise<PwaAssetGraph> {
   const closure = await computePwaAssetClosure(staticRoot)
@@ -206,9 +260,11 @@ export async function computePwaAssetGraph(staticRoot: string): Promise<PwaAsset
   }
 
   const initial = await collectInitialAssetRefs(staticRoot)
-  const precache = [...ROOT_SHELL_FILES, ...initial]
+  const eagerJs = await collectEagerJsClosure(staticRoot, initial)
+  const precacheAssets = [...new Set([...initial, ...eagerJs])].sort()
+  const precache = [...ROOT_SHELL_FILES, ...precacheAssets]
 
-  const budget = computeInitialJsBudget(staticRoot, initial)
+  const budget = computeInitialJsBudget(staticRoot, eagerJs)
 
   return { closure, immutable, mutable, precache, budget }
 }
