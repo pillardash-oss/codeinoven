@@ -2,7 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { computePwaAssetClosure, computePwaAssetGraph } from './pwa-asset-graph'
+import { createHash } from 'node:crypto'
+import {
+  computePwaAssetClosure,
+  computePwaAssetGraph,
+  INITIAL_JS_GZIP_BUDGET_BYTES,
+  MAX_CHUNK_GZIP_BUDGET_BYTES
+} from './pwa-asset-graph'
+
+/** Deterministic high-entropy JS body that stays incompressible after gzip. */
+function bigIncompressibleJs(seed: string, minBytes: number): string {
+  let hash = seed
+  let body = ''
+  while (body.length < minBytes) {
+    hash = createHash('sha256').update(hash).digest('hex')
+    body += hash
+  }
+  return `export const payload = ${JSON.stringify(body)};`
+}
 
 async function makeRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'codeinoven-pwa-graph-'))
@@ -172,5 +189,104 @@ describe('computePwaAssetGraph', () => {
     expect(chunk?.gzipBytes).toBeGreaterThan(0)
     expect(graph.budget.initialJsGzipBytes).toBe(chunk?.gzipBytes)
     expect(graph.budget.maxInitialChunkGzipBytes).toBe(chunk?.gzipBytes)
+  })
+
+  it('includes transitive static imports in the budget but excludes lazy dynamic chunks', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    await writeFile(
+      join(root, 'assets', 'entry-abc.js'),
+      'import { a } from "./shared-abc.js";\nimport("./lazy-abc.js").then(a);',
+      'utf8'
+    )
+    await writeFile(
+      join(root, 'assets', 'shared-abc.js'),
+      'import { b } from "./nested-abc.js"; export const a = b;',
+      'utf8'
+    )
+    await writeFile(join(root, 'assets', 'nested-abc.js'), 'export const b = 1;', 'utf8')
+    await writeFile(join(root, 'assets', 'lazy-abc.js'), 'export default 2;', 'utf8')
+
+    const graph = await computePwaAssetGraph(root)
+    const urls = graph.budget.chunks.map((chunk) => chunk.url)
+    expect(urls).toContain('/assets/entry-abc.js')
+    expect(urls).toContain('/assets/shared-abc.js')
+    expect(urls).toContain('/assets/nested-abc.js')
+    expect(urls).not.toContain('/assets/lazy-abc.js')
+    // The lazy chunk is still served (part of the closure), just not budgeted.
+    expect(graph.closure.has('/assets/lazy-abc.js')).toBe(true)
+  })
+
+  it('includes transitive static chunks in the precache manifest', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    await writeFile(
+      join(root, 'assets', 'entry-abc.js'),
+      'import { a } from "./shared-abc.js"; void a;',
+      'utf8'
+    )
+    await writeFile(join(root, 'assets', 'shared-abc.js'), 'export const a = 1;', 'utf8')
+
+    const graph = await computePwaAssetGraph(root)
+    expect(graph.precache).toContain('/assets/entry-abc.js')
+    expect(graph.precache).toContain('/assets/shared-abc.js')
+  })
+
+  it('fails the total and max-chunk budgets for a large transitive static chunk', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    await writeFile(
+      join(root, 'assets', 'entry-abc.js'),
+      'import { a } from "./shared-abc.js"; void a;',
+      'utf8'
+    )
+    await writeFile(
+      join(root, 'assets', 'shared-abc.js'),
+      'import { big } from "./big-abc.js"; void big;',
+      'utf8'
+    )
+    // Deterministic large, poorly-compressible JS so gzip stays above budgets.
+    await writeFile(
+      join(root, 'assets', 'big-abc.js'),
+      bigIncompressibleJs('big-chunk', 1_200_000),
+      'utf8'
+    )
+
+    const graph = await computePwaAssetGraph(root)
+    expect(graph.budget.chunks.some((chunk) => chunk.url === '/assets/big-abc.js')).toBe(true)
+    expect(graph.budget.initialJsGzipBytes).toBeGreaterThan(INITIAL_JS_GZIP_BUDGET_BYTES)
+    expect(graph.budget.maxInitialChunkGzipBytes).toBeGreaterThan(MAX_CHUNK_GZIP_BUDGET_BYTES)
+  })
+
+  it('stays within budget when a large chunk is only lazily imported', async () => {
+    const root = await makeRoot()
+    await writeFile(
+      join(root, 'remote.html'),
+      '<script type="module" src="./assets/entry-abc.js"></script>',
+      'utf8'
+    )
+    await writeFile(join(root, 'assets', 'entry-abc.js'), 'import("./big-lazy-abc.js");', 'utf8')
+    await writeFile(
+      join(root, 'assets', 'big-lazy-abc.js'),
+      bigIncompressibleJs('lazy-chunk', 1_200_000),
+      'utf8'
+    )
+
+    const graph = await computePwaAssetGraph(root)
+    expect(graph.budget.chunks.some((chunk) => chunk.url === '/assets/big-lazy-abc.js')).toBe(false)
+    expect(graph.budget.initialJsGzipBytes).toBeLessThan(INITIAL_JS_GZIP_BUDGET_BYTES)
+    expect(graph.budget.maxInitialChunkGzipBytes).toBeLessThan(MAX_CHUNK_GZIP_BUDGET_BYTES)
   })
 })
