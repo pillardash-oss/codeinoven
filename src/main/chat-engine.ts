@@ -608,6 +608,63 @@ function formatOpenAnnotations(
     .join('\n')
 }
 
+/**
+ * Final composition of the per-turn system prompt for the implement/chat path.
+ * `behaviorPrompt` is the assembler-owned behavior layer and already carries the
+ * planning or implementation instruction exactly once; mermaid and question
+ * instructions are injected here only in `chat` mode, where no app layer exists.
+ */
+export function composeTurnSystemPrompt(input: {
+  chatPrompt: string
+  memoryInstruction: string
+  imageDescriptorNote: string
+  assignmentCoordinatorSystemPrompt: string
+  behaviorPrompt: string
+  utilityInstructions: string
+  behaviorMode: 'implement' | 'brainstorm' | 'chat'
+  historyRecap: string
+}): string {
+  return [
+    input.chatPrompt,
+    input.memoryInstruction,
+    input.imageDescriptorNote,
+    input.assignmentCoordinatorSystemPrompt,
+    input.behaviorPrompt,
+    input.utilityInstructions,
+    input.behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+    input.behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
+    input.historyRecap
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** Final composition of the planning/spec-generation turn system prompt. */
+export function composeBrainstormSystemPrompt(input: {
+  activeBrainstormTurn: boolean
+  assignmentMode: boolean
+  revisionPrompt: string
+  memoryInstruction: string
+  imageDescriptorNote: string
+  behaviorPrompt: string
+  utilityInstructions: string
+  historyRecap: string
+}): string {
+  return [
+    input.activeBrainstormTurn ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT : '',
+    input.activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
+    !input.activeBrainstormTurn && input.assignmentMode ? ASSIGNMENT_GENERATION_INSTRUCTION : '',
+    input.revisionPrompt,
+    input.memoryInstruction,
+    input.imageDescriptorNote,
+    input.behaviorPrompt,
+    input.utilityInstructions,
+    input.historyRecap
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 interface SessionInfo {
   projectId: string
   threadId: string
@@ -3493,21 +3550,16 @@ export class ChatEngine {
           },
           text: driverText,
           attachments,
-          systemPrompt: [
-            activeBrainstormTurn ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT : '',
-            activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
-            !activeBrainstormTurn && settings.assignmentMode === true
-              ? ASSIGNMENT_GENERATION_INSTRUCTION
-              : '',
+          systemPrompt: composeBrainstormSystemPrompt({
+            activeBrainstormTurn: Boolean(activeBrainstormTurn),
+            assignmentMode: settings.assignmentMode === true,
             revisionPrompt,
-            MEMORY_SYSTEM_INSTRUCTION,
+            memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
             historyRecap
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+          }),
           allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
           userMessageId: messageId
         }
@@ -3601,23 +3653,20 @@ export class ChatEngine {
         text: driverText,
         attachments,
         systemPrompt:
-          [
-            isChatThread
+          composeTurnSystemPrompt({
+            chatPrompt: isChatThread
               ? chatFileSystemEnabled
                 ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
                 : CHAT_SYSTEM_PROMPT
               : '',
-            MEMORY_SYSTEM_INSTRUCTION,
+            memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
             imageDescriptorNote,
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
-            behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
-            behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
+            behaviorMode,
             historyRecap
-          ]
-            .filter(Boolean)
-            .join('\n\n') || undefined,
+          }) || undefined,
         allowedTools:
           isChatThread && !chatFileSystemEnabled && settings.providerId && settings.modelId
             ? CHAT_WEB_ONLY_TOOLS

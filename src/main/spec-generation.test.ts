@@ -18,6 +18,8 @@ import {
   DEPLOYMENT_URL_SPEC_INSTRUCTION,
   SPEC_BRAINSTORM_SYSTEM_PROMPT,
   SPEC_IMPLEMENT_SYSTEM_PROMPT,
+  composeBrainstormSystemPrompt,
+  composeTurnSystemPrompt,
   parseGeneratedSpecContent,
   mergeProviderCatalogs,
   mergeAgentMessages,
@@ -341,5 +343,139 @@ describe('prompt assembly owns planning and implementation layers', () => {
     )
     const appLayer = layers.find((layer) => layer.title.startsWith('Application: CodeInOven'))
     expect(appLayer?.content).toBe('No application prompts configured.')
+  })
+
+  it('attaches normalized-hash and character/token accounting to every layer', async () => {
+    const layers = await assembler.getLayers(
+      'project',
+      'thread',
+      projectPath,
+      null,
+      constants,
+      'implement'
+    )
+    expect(layers.length).toBeGreaterThan(0)
+    for (const layer of layers) {
+      expect(layer.devHash).toBe(layerDevHash(layer.content))
+      expect(layer.characters).toBe(layer.content.length)
+      expect(layer.estimatedTokens).toBe(Math.ceil(layer.content.length / 4))
+    }
+  })
+})
+
+describe('ChatEngine final prompt composition', () => {
+  const constants = {
+    SPEC_BRAINSTORM_SYSTEM_PROMPT,
+    SPEC_IMPLEMENT_SYSTEM_PROMPT
+  }
+  const assembler = new PromptAssembler(new MemoryService())
+  const projectPath = '/nonexistent-prompt-assembler-test-project'
+
+  function normalizedOccurrences(haystack: string, needle: string): number {
+    const text = normalizeLayerContent(haystack)
+    const target = normalizeLayerContent(needle)
+    let count = 0
+    let index = 0
+    while ((index = text.indexOf(target, index)) !== -1) {
+      count += 1
+      index += target.length
+    }
+    return count
+  }
+
+  async function behaviorFor(mode: 'brainstorm' | 'implement' | 'chat'): Promise<string> {
+    return assembler.getAssembledPrompt('project', 'thread', projectPath, null, '', constants, mode)
+  }
+
+  it('composes the implementation turn with the implementation prompt exactly once', async () => {
+    const behaviorPrompt = await behaviorFor('implement')
+    const composed = composeTurnSystemPrompt({
+      chatPrompt: '',
+      memoryInstruction: 'Memory instruction.',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt,
+      utilityInstructions: '',
+      behaviorMode: 'implement',
+      historyRecap: ''
+    })
+    expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(1)
+    expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(0)
+    // Mermaid and question instructions are embedded once inside the
+    // implementation prompt and must not be injected again by the composer.
+    expect(normalizedOccurrences(composed, 'mermaid')).toBe(1)
+    expect(normalizedOccurrences(composed, '`question` tool')).toBe(1)
+  })
+
+  it('composes the planning turn without re-inserting the brainstorming prompt', async () => {
+    const behaviorPrompt = await behaviorFor('brainstorm')
+    const composed = composeTurnSystemPrompt({
+      chatPrompt: '',
+      memoryInstruction: 'Memory instruction.',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt,
+      utilityInstructions: '',
+      behaviorMode: 'brainstorm',
+      historyRecap: ''
+    })
+    expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
+    expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
+  })
+
+  it('injects mermaid and question instructions exactly once for chat turns', async () => {
+    const behaviorPrompt = await behaviorFor('chat')
+    const composed = composeTurnSystemPrompt({
+      chatPrompt: 'You are a general-purpose chat assistant.',
+      memoryInstruction: 'Memory instruction.',
+      imageDescriptorNote: '',
+      assignmentCoordinatorSystemPrompt: '',
+      behaviorPrompt,
+      utilityInstructions: '',
+      behaviorMode: 'chat',
+      historyRecap: ''
+    })
+    expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(0)
+    expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
+    expect(normalizedOccurrences(composed, 'mermaid')).toBe(1)
+    expect(normalizedOccurrences(composed, '`question` tool')).toBe(1)
+  })
+
+  it('composes the spec-generation turn with the planning prompt exactly once', async () => {
+    const behaviorPrompt = await behaviorFor('brainstorm')
+    const composed = composeBrainstormSystemPrompt({
+      activeBrainstormTurn: false,
+      assignmentMode: false,
+      revisionPrompt: '',
+      memoryInstruction: 'Memory instruction.',
+      imageDescriptorNote: '',
+      behaviorPrompt,
+      utilityInstructions: '',
+      historyRecap: ''
+    })
+    expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
+    expect(normalizedOccurrences(composed, SPEC_IMPLEMENT_SYSTEM_PROMPT)).toBe(0)
+    expect(normalizedOccurrences(composed, 'implementation-ready engineering specifications')).toBe(
+      1
+    )
+  })
+
+  it('keeps a brainstorm discussion turn free of the spec-generation contract', async () => {
+    const behaviorPrompt = await behaviorFor('brainstorm')
+    const composed = composeBrainstormSystemPrompt({
+      activeBrainstormTurn: true,
+      assignmentMode: false,
+      revisionPrompt: '',
+      memoryInstruction: 'Memory instruction.',
+      imageDescriptorNote: '',
+      behaviorPrompt,
+      utilityInstructions: '',
+      historyRecap: ''
+    })
+    expect(normalizedOccurrences(composed, SPEC_BRAINSTORM_SYSTEM_PROMPT)).toBe(1)
+    expect(normalizedOccurrences(composed, 'Brainstorm session before specification')).toBe(1)
+    expect(normalizedOccurrences(composed, 'implementation-ready engineering specifications')).toBe(
+      0
+    )
   })
 })

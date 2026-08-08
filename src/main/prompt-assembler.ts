@@ -17,6 +17,24 @@ export interface BehaviorLayer {
    * AGENTS.md placeholder when the harness already loads it natively).
    */
   skipInPrompt?: boolean
+  /** Normalized development hash of the layer content. */
+  devHash?: string
+  /** Raw character count of the layer content. */
+  characters?: number
+  /** Heuristic token estimate (~4 characters per token). */
+  estimatedTokens?: number
+}
+
+/** Attach normalized-hash and character/token accounting to a behavior layer
+ *  without exposing or logging the layer content. */
+function withLayerAccounting(layer: BehaviorLayer): BehaviorLayer {
+  const report = layerSize(layer.content)
+  return {
+    ...layer,
+    devHash: layerDevHash(layer.content),
+    characters: report.characters,
+    estimatedTokens: report.estimatedTokens
+  }
 }
 
 /** Minimal driver info needed for the behavior layer display. */
@@ -91,58 +109,70 @@ export class PromptAssembler {
     const layers: BehaviorLayer[] = []
 
     const harnessContent = buildWorkspaceContext(driver, projectPath)
-    layers.push({
-      title: `Harness: ${driver?.name ?? 'Agent Harness'}`,
-      content: harnessContent,
-      editable: false,
-      defaultOpen: false
-    })
+    layers.push(
+      withLayerAccounting({
+        title: `Harness: ${driver?.name ?? 'Agent Harness'}`,
+        content: harnessContent,
+        editable: false,
+        defaultOpen: false
+      })
+    )
 
     const appContent = this.buildAppLayerContent(mode, systemPromptConstants)
-    layers.push({
-      title: `Application: CodeInOven (${modeLabel(mode)} mode)`,
-      content: appContent,
-      editable: false,
-      defaultOpen: false
-    })
+    layers.push(
+      withLayerAccounting({
+        title: `Application: CodeInOven (${modeLabel(mode)} mode)`,
+        content: appContent,
+        editable: false,
+        defaultOpen: false
+      })
+    )
 
     const memory = await this.memoryService.formatCurrent(projectId, threadId)
-    layers.push({
-      title: 'Memory',
-      content: memory || 'No memory entries configured.',
-      editable: false,
-      defaultOpen: false
-    })
+    layers.push(
+      withLayerAccounting({
+        title: 'Memory',
+        content: memory || 'No memory entries configured.',
+        editable: false,
+        defaultOpen: false
+      })
+    )
 
     const projectBehavior = await readAgentsMd(projectPath)
     const skipAgentsMd = driver?.loadsAgentsMd === true
     if (skipAgentsMd) {
-      layers.push({
-        title: 'AGENTS.md (Project)',
-        content: `Loaded natively by ${driver.name}; not re-sent to avoid duplicate tokens.`,
-        editable: false,
-        defaultOpen: false,
-        skipInPrompt: true
-      })
+      layers.push(
+        withLayerAccounting({
+          title: 'AGENTS.md (Project)',
+          content: `Loaded natively by ${driver.name}; not re-sent to avoid duplicate tokens.`,
+          editable: false,
+          defaultOpen: false,
+          skipInPrompt: true
+        })
+      )
     } else {
-      layers.push({
-        title: 'AGENTS.md (Project)',
-        content: projectBehavior || 'No project AGENTS.md found.',
-        editable: true,
-        defaultOpen: true
-      })
+      layers.push(
+        withLayerAccounting({
+          title: 'AGENTS.md (Project)',
+          content: projectBehavior || 'No project AGENTS.md found.',
+          editable: true,
+          defaultOpen: true
+        })
+      )
     }
 
     const nestedAgents = await scanNestedAgentsMd(projectPath)
     for (const nested of nestedAgents) {
       const dirName = nested.path.split('/').pop() ?? nested.path
-      layers.push({
-        title: `AGENTS.md (${dirName})`,
-        content: nested.content,
-        editable: !skipAgentsMd,
-        defaultOpen: !skipAgentsMd,
-        ...(skipAgentsMd ? { skipInPrompt: true } : {})
-      })
+      layers.push(
+        withLayerAccounting({
+          title: `AGENTS.md (${dirName})`,
+          content: nested.content,
+          editable: !skipAgentsMd,
+          defaultOpen: !skipAgentsMd,
+          ...(skipAgentsMd ? { skipInPrompt: true } : {})
+        })
+      )
     }
 
     return layers
