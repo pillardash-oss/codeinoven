@@ -1,3 +1,6 @@
+import { fileURLToPath } from 'url'
+import { realpath } from 'fs/promises'
+import { isAbsolute, relative, resolve, sep } from 'path'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -741,4 +744,210 @@ export function validateFaviconHostnames(value: unknown): string[] {
     if (!hostnames.includes(normalized)) hostnames.push(normalized)
   }
   return hostnames
+}
+
+// ─── Privileged-IPC validation wrapper ──────────────────────────────────────
+
+const WEB_PROTOCOLS = new Set(['https:', 'http:'])
+/** Development-only origins that may be opened over plain http:. */
+const DEV_HTTP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
+const MAX_EXTERNAL_URL_LENGTH = 8192
+const MAX_SCOPED_PATH_LENGTH = 16_384
+
+/** True when the string contains a control character (C0, DEL). */
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/** Resolve the origin of a URL, or null when it cannot be parsed. */
+export function originOfUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    // The URL spec serializes `file:` origins as the literal string "null";
+    // normalize them to the scheme so trusted-file origins can be matched.
+    return parsed.protocol === 'file:' ? 'file://' : parsed.origin
+  } catch {
+    return null
+  }
+}
+
+/** Whether a URL's origin is contained in the trusted set. */
+export function isTrustedOrigin(url: string, trustedOrigins: ReadonlySet<string>): boolean {
+  const origin = originOfUrl(url)
+  return origin !== null && trustedOrigins.has(origin)
+}
+
+/** Resolvers for the local-file scopes that reveal/preview operations may target. */
+export interface PrivilegedScopeResolvers {
+  /** Registered local project root directories, resolved lazily. */
+  projectRoots: () => Promise<readonly string[]> | readonly string[]
+  /** CodeInOven's own config directory. */
+  configRoot: () => string
+}
+
+export interface PrivilegedIpcValidatorOptions {
+  /** Origins the renderer may invoke privileged IPC from. */
+  trustedOrigins: Iterable<string>
+  /** Resolvers for the file scopes reveal/preview operations may target. */
+  scopes?: PrivilegedScopeResolvers
+}
+
+/**
+ * Shared privileged-IPC validation wrapper. Every renderer-exposed operation
+ * that can open the system browser, reveal files, or read local files goes
+ * through this single boundary so sender frames, external URLs, and local
+ * paths are validated consistently across the main process.
+ */
+export class PrivilegedIpcValidator {
+  readonly trustedOrigins: ReadonlySet<string>
+  readonly #scopes: PrivilegedScopeResolvers | undefined
+  readonly #userSelectedFiles = new Set<string>()
+  readonly #userSelectedRoots = new Set<string>()
+
+  constructor(options: PrivilegedIpcValidatorOptions) {
+    this.trustedOrigins = new Set(options.trustedOrigins)
+    this.#scopes = options.scopes
+  }
+
+  /** Whether the IPC sender frame originates from a trusted renderer origin. */
+  isTrustedSenderFrame(frame: { url: string } | null | undefined): boolean {
+    if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
+    return isTrustedOrigin(frame.url, this.trustedOrigins)
+  }
+
+  /** Reject a privileged IPC call whose sender frame is not trusted. */
+  assertTrustedSender(event: { senderFrame?: { url: string } | null } | null | undefined): void {
+    if (!this.isTrustedSenderFrame(event?.senderFrame)) {
+      throw new Error('Privileged IPC rejected: sender frame is not trusted')
+    }
+  }
+
+  /**
+   * Validate a URL for `shell.openExternal` / window-open. Only parsed `https:`
+   * URLs and intentionally supported development `http:` URLs are permitted;
+   * credentials, control characters, malformed input, and non-web schemes are
+   * rejected. Returns the normalized URL.
+   */
+  validateExternalUrl(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) {
+      throw new TypeError('External URL must be a string of at most 8192 characters')
+    }
+    if (containsControlCharacter(value)) {
+      throw new TypeError('External URL must not contain control characters')
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(value)
+    } catch {
+      throw new TypeError('External URL is malformed')
+    }
+    if (!WEB_PROTOCOLS.has(parsed.protocol)) {
+      throw new TypeError(`External URL scheme "${parsed.protocol}" is not supported`)
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new TypeError('External URL must not contain credentials')
+    }
+    if (parsed.protocol === 'http:') {
+      const hostname = parsed.hostname.replace(/^\[|\]$/gu, '')
+      if (!DEV_HTTP_HOSTNAMES.has(hostname)) {
+        throw new TypeError('External http: URLs are only supported for localhost development origins')
+      }
+    }
+    return parsed.toString()
+  }
+
+  /** Record a file the user explicitly selected through an OS dialog. */
+  registerUserSelectedFile(path: string): void {
+    if (typeof path === 'string' && path.length > 0) this.#userSelectedFiles.add(path)
+  }
+
+  /** Record a directory the user explicitly selected through an OS dialog. */
+  registerUserSelectedRoot(path: string): void {
+    if (typeof path === 'string' && path.length > 0) this.#userSelectedRoots.add(path)
+  }
+
+  /**
+   * Validate a local path for file preview/reveal. The candidate must be a
+   * bounded absolute path (or `file://` URL) free of control characters that,
+   * after symlink resolution, lives inside a registered project root, the
+   * config root, or a user-selected directory, or exactly matches a
+   * user-selected file. Returns the canonical resolved path.
+   */
+  async resolveScopedPath(value: unknown): Promise<string> {
+    const candidate = this.#decodeCandidatePath(value)
+    const canonical = await this.#canonicalize(candidate)
+    if (this.#userSelectedFiles.has(candidate) || this.#userSelectedFiles.has(canonical)) {
+      return canonical
+    }
+    const scopes = await this.#resolveScopes()
+    for (const scope of scopes) {
+      if (isWithinRoot(scope, canonical)) return canonical
+    }
+    throw new TypeError('Path is outside the approved project or user-selected scopes')
+  }
+
+  #decodeCandidatePath(value: unknown): string {
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      value.length > MAX_SCOPED_PATH_LENGTH
+    ) {
+      throw new TypeError('Path must be a string of at most 16384 characters')
+    }
+    if (containsControlCharacter(value)) {
+      throw new TypeError('Path must not contain control characters')
+    }
+    const decoded = value.startsWith('file://') ? this.#fileUrlToPath(value) : value
+    if (!isAbsolute(decoded)) {
+      throw new TypeError('Path must be absolute')
+    }
+    return resolve(decoded)
+  }
+
+  #fileUrlToPath(value: string): string {
+    try {
+      return fileURLToPath(value)
+    } catch {
+      throw new TypeError('Path is not a valid file URL')
+    }
+  }
+
+  async #canonicalize(path: string): Promise<string> {
+    try {
+      return await realpath(path)
+    } catch {
+      throw new TypeError('Path does not resolve to an existing file or directory')
+    }
+  }
+
+  async #resolveScopes(): Promise<string[]> {
+    if (!this.#scopes) return []
+    const projectRoots = await this.#scopes.projectRoots()
+    const candidates = [
+      ...projectRoots,
+      this.#scopes.configRoot(),
+      ...this.#userSelectedRoots
+    ].filter((root) => typeof root === 'string' && root.length > 0)
+    const resolved: string[] = []
+    for (const root of candidates) {
+      try {
+        resolved.push(await realpath(root))
+      } catch {
+        // A root that no longer exists can grant no scope.
+      }
+    }
+    return resolved
+  }
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const pathFromRoot = relative(root, target)
+  return (
+    pathFromRoot === '' ||
+    (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
+  )
 }

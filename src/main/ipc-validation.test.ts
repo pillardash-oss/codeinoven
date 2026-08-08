@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
 import {
+  isTrustedOrigin,
+  originOfUrl,
+  PrivilegedIpcValidator,
   validateBoolean,
   validateBoundedInteger,
   validateBoundedString,
@@ -277,5 +283,197 @@ describe('IPC git validation', () => {
     expect(validatePushOptions({ setUpstream: false })).toEqual({ setUpstream: false })
     expect(() => validatePushOptions({ setUpstream: 'yes' })).toThrow(TypeError)
     expect(() => validatePushOptions({ setUpstream: true, force: true })).toThrow(TypeError)
+  })
+})
+
+const TRUSTED_ORIGINS = new Set(['http://localhost:5173', 'file://'])
+
+function createValidator(scopes?: {
+  projectRoots?: string[]
+  configRoot?: string
+}): PrivilegedIpcValidator {
+  const configRoot = scopes?.configRoot ?? ''
+  return new PrivilegedIpcValidator({
+    trustedOrigins: TRUSTED_ORIGINS,
+    scopes:
+      scopes && (scopes.projectRoots?.length || scopes.configRoot)
+        ? {
+            projectRoots: () => scopes.projectRoots ?? [],
+            configRoot: () => configRoot
+          }
+        : undefined
+  })
+}
+
+describe('privileged-IPC sender validation', () => {
+  it('resolves trusted origins from URLs', () => {
+    expect(originOfUrl('http://localhost:5173/index.html')).toBe('http://localhost:5173')
+    expect(originOfUrl('file:///out/renderer/index.html')).toBe('file://')
+    expect(originOfUrl('not a url')).toBeNull()
+  })
+
+  it('accepts trusted dev-server and file renderer frames', () => {
+    const validator = createValidator()
+    expect(validator.isTrustedSenderFrame({ url: 'http://localhost:5173/index.html' })).toBe(true)
+    expect(validator.isTrustedSenderFrame({ url: 'file:///out/renderer/index.html' })).toBe(true)
+  })
+
+  it('rejects foreign frames, subframe schemes, and missing frames', () => {
+    const validator = createValidator()
+    for (const url of [
+      'https://evil.example/phish',
+      'http://localhost:9999/index.html',
+      'appfile://project/project-1/README.md'
+    ]) {
+      expect(validator.isTrustedSenderFrame({ url })).toBe(false)
+    }
+    expect(validator.isTrustedSenderFrame(null)).toBe(false)
+    expect(validator.isTrustedSenderFrame(undefined)).toBe(false)
+    expect(() => validator.assertTrustedSender({ senderFrame: { url: 'https://evil.example' } })).toThrow(
+      /sender frame is not trusted/u
+    )
+  })
+
+  it('isTrustedOrigin respects the explicit trusted set', () => {
+    expect(isTrustedOrigin('http://localhost:5173/app', TRUSTED_ORIGINS)).toBe(true)
+    expect(isTrustedOrigin('http://localhost:5174/app', TRUSTED_ORIGINS)).toBe(false)
+  })
+})
+
+describe('privileged-IPC external URL validation', () => {
+  it('permits parsed https: URLs', () => {
+    const validator = createValidator()
+    expect(validator.validateExternalUrl('https://example.com/path?q=1#frag')).toBe(
+      'https://example.com/path?q=1#frag'
+    )
+    expect(validator.validateExternalUrl('https://github.com/acme/app')).toBe(
+      'https://github.com/acme/app'
+    )
+  })
+
+  it('permits intentionally supported development http: origins', () => {
+    const validator = createValidator()
+    expect(validator.validateExternalUrl('http://localhost:5173')).toBe('http://localhost:5173/')
+    expect(validator.validateExternalUrl('http://127.0.0.1:8877/api')).toBe('http://127.0.0.1:8877/api')
+    expect(validator.validateExternalUrl('http://[::1]:5173/')).toBe('http://[::1]:5173/')
+  })
+
+  it('rejects non-localhost http: URLs', () => {
+    const validator = createValidator()
+    expect(() => validator.validateExternalUrl('http://example.com')).toThrow(/localhost development/iu)
+    expect(() => validator.validateExternalUrl('http://192.168.1.10')).toThrow(TypeError)
+  })
+
+  it('rejects non-web schemes, credentials, control characters, and malformed input', () => {
+    const validator = createValidator()
+    for (const url of [
+      'javascript:alert(1)',
+      'file:///etc/passwd',
+      'data:text/html,<script>',
+      'ftp://example.com/file',
+      'appfile://project/project-1/README.md',
+      'https://user:pass@example.com',
+      'https://user@example.com',
+      'https://example.com\npayload',
+      'https://example.com\u0000payload',
+      '',
+      '   ',
+      'not a url'
+    ]) {
+      expect(() => validator.validateExternalUrl(url)).toThrow(TypeError)
+    }
+    expect(() => validator.validateExternalUrl(42)).toThrow(TypeError)
+  })
+})
+
+describe('privileged-IPC scoped path validation', () => {
+  let roots: string[] = []
+  let configRoot = ''
+  let createdRoot = ''
+
+  async function setup(): Promise<PrivilegedIpcValidator> {
+    const root = await mkdtemp(join(tmpdir(), 'cio-scope-'))
+    createdRoot = root
+    const project = join(root, 'project')
+    const outside = join(root, 'outside')
+    configRoot = join(root, 'config')
+    await mkdir(project, { recursive: true })
+    await mkdir(outside, { recursive: true })
+    await mkdir(configRoot, { recursive: true })
+    await writeFile(join(project, 'readme.md'), 'hello')
+    await writeFile(join(outside, 'secret.txt'), 'secret')
+    roots = [project]
+    return new PrivilegedIpcValidator({
+      trustedOrigins: TRUSTED_ORIGINS,
+      scopes: { projectRoots: () => roots, configRoot: () => configRoot }
+    })
+  }
+
+  afterEach(async () => {
+    roots = []
+    configRoot = ''
+    if (createdRoot) {
+      await rm(createdRoot, { recursive: true, force: true })
+      createdRoot = ''
+    }
+  })
+
+  it('accepts paths inside registered project roots', async () => {
+    const validator = await setup()
+    const target = join(roots[0]!, 'readme.md')
+    await expect(validator.resolveScopedPath(target)).resolves.toBe(await realpath(target))
+  })
+
+  it('accepts paths inside the config root and file:// URL inputs', async () => {
+    const validator = await setup()
+    const target = join(configRoot, 'app.json')
+    await writeFile(target, '{}')
+    await expect(validator.resolveScopedPath(target)).resolves.toBe(await realpath(target))
+    const asUrl = `file://${join(roots[0]!, 'readme.md')}`
+    await expect(validator.resolveScopedPath(asUrl)).resolves.toBe(await realpath(join(roots[0]!, 'readme.md')))
+  })
+
+  it('accepts user-selected files and directories', async () => {
+    const validator = await setup()
+    const picked = await mkdtemp(join(tmpdir(), 'cio-picked-'))
+    const file = join(picked, 'file.txt')
+    const dir = join(picked, 'dir')
+    await writeFile(file, 'x')
+    await mkdir(dir)
+    validator.registerUserSelectedFile(file)
+    await expect(validator.resolveScopedPath(file)).resolves.toBe(await realpath(file))
+    validator.registerUserSelectedRoot(dir)
+    const inside = join(dir, 'nested.txt')
+    await writeFile(inside, 'x')
+    await expect(validator.resolveScopedPath(inside)).resolves.toBe(await realpath(inside))
+    await rm(picked, { recursive: true, force: true })
+  })
+
+  it('rejects paths outside the approved scopes', async () => {
+    const validator = await setup()
+    const outside = join(createdRoot, 'outside', 'secret.txt')
+    await expect(validator.resolveScopedPath(outside)).rejects.toThrow(
+      /approved project or user-selected scopes/iu
+    )
+  })
+
+  it('rejects arbitrary relative paths, control characters, and symlink escapes', async () => {
+    const validator = await setup()
+    await expect(validator.resolveScopedPath('../etc/passwd')).rejects.toThrow(TypeError)
+    await expect(validator.resolveScopedPath('/tmp/evil\u0000payload')).rejects.toThrow(TypeError)
+    await expect(validator.resolveScopedPath(42)).rejects.toThrow(TypeError)
+
+    const escape = join(tmpdir(), 'cio-scope-escape-link')
+    const secret = join(tmpdir(), 'cio-scope-secret.txt')
+    await writeFile(secret, 'secret')
+    await symlink(secret, escape).catch(() => undefined)
+    await expect(validator.resolveScopedPath(escape)).rejects.toThrow(TypeError)
+  })
+
+  it('rejects paths that do not resolve to an existing entry', async () => {
+    const validator = await setup()
+    await expect(validator.resolveScopedPath(join(roots[0]!, 'missing.md'))).rejects.toThrow(
+      /does not resolve/iu
+    )
   })
 })

@@ -1,8 +1,8 @@
 import { app, ipcMain, dialog, shell, clipboard, BrowserWindow } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
 import { readFile, writeFile, mkdtemp, mkdir, stat } from 'fs/promises'
 import { tmpdir, release } from 'os'
 import { basename, dirname, extname, join } from 'path'
-import { fileURLToPath } from 'url'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import type { Database } from './database/database'
 import { StorageEngine } from './storage-engine'
@@ -61,7 +61,9 @@ import {
   validateStashId,
   validateThreadSettings,
   validateThreadStatus,
-  validateThreadUpdateInput
+  validateThreadUpdateInput,
+  PrivilegedIpcValidator,
+  originOfUrl
 } from './ipc-validation'
 import { ProjectManager } from '../lib/engines/project-manager'
 import { ThreadManager } from '../lib/engines/thread-manager'
@@ -94,7 +96,7 @@ import {
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../lib/brainstorm/brainstorm-validation'
 import { exportBrainstormMarkdown } from '../lib/brainstorm/brainstorm-markdown'
-import { atomicWrite } from '../lib/utils'
+import { atomicWrite, getConfigRoot } from '../lib/utils'
 import { normalizeWorkerNames } from '../lib/assignment/worker-names'
 import type {
   AppConfig,
@@ -204,6 +206,20 @@ const AGENT_DEFAULT_FIELDS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Origins the renderer may invoke privileged IPC from: the development server
+ * origin while running unpackaged against `ELECTRON_RENDERER_URL`, otherwise
+ * the packaged `file://` renderer origin.
+ */
+function computeTrustedRendererOrigins(): string[] {
+  const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
+    const origin = originOfUrl(process.env['ELECTRON_RENDERER_URL'])
+    if (origin) return [origin]
+  }
+  return ['file://']
 }
 
 function requireString(value: unknown, label: string, allowEmpty = false): string {
@@ -947,6 +963,30 @@ export function registerIpcHandlers(
   const diagnosticsService = new DiagnosticsService(database)
   const memoryService = new MemoryService(storage)
 
+  // Shared privileged-IPC boundary: every renderer call that can open the
+  // system browser, reveal files, or read local files is validated here.
+  const privilegedIpc = new PrivilegedIpcValidator({
+    trustedOrigins: computeTrustedRendererOrigins(),
+    scopes: {
+      projectRoots: async () =>
+        (await projectManager.listProjects())
+          .map((project) => project.path)
+          .filter((path): path is string => typeof path === 'string' && path.length > 0),
+      configRoot: () => getConfigRoot()
+    }
+  })
+
+  /** Register a privileged channel whose sender frame must be trusted. */
+  function privileged<TArgs extends unknown[]>(
+    channel: string,
+    handler: (event: IpcMainInvokeEvent, ...args: TArgs) => unknown
+  ): void {
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+      privilegedIpc.assertTrustedSender(event)
+      return handler(event, ...(args as TArgs))
+    })
+  }
+
   // ─── Application config ────────────────────────────────────────────────
   ipcMain.handle('config:get', () => storage.getConfig())
   ipcMain.handle('config:update', async (_, input: unknown) => {
@@ -1264,9 +1304,9 @@ export function registerIpcHandlers(
   ipcMain.handle('assignment:validate', (_, content: unknown) =>
     validateAssignment(validateAssignmentContent(content))
   )
-  ipcMain.handle(
+  privileged(
     'assignment:openInEditor',
-    async (_, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
+    async (_event, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
       const active = assignmentEngine.getActive(safeProjectId, safeThreadId)
@@ -1279,9 +1319,9 @@ export function registerIpcHandlers(
       return targetPath
     }
   )
-  ipcMain.handle(
+  privileged(
     'assignment:revealInFiles',
-    async (_, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
+    async (_event, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
       const active = assignmentEngine.getActive(safeProjectId, safeThreadId)
@@ -1482,9 +1522,9 @@ export function registerIpcHandlers(
         note === undefined ? '' : requireString(note, 'Brainstorm finalization note', true)
       )
   )
-  ipcMain.handle(
+  privileged(
     'brainstorm:openInEditor',
-    async (_, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+    async (_event, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
@@ -1508,9 +1548,9 @@ export function registerIpcHandlers(
       return targetPath
     }
   )
-  ipcMain.handle(
+  privileged(
     'brainstorm:revealInFiles',
-    async (_, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+    async (_event, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
@@ -1766,9 +1806,9 @@ export function registerIpcHandlers(
     await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
     return assignment
   })
-  ipcMain.handle(
+  privileged(
     'audit:openInEditor',
-    async (_, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+    async (_event, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validReportId = validateEntityId(reportId, 'Audit report ID')
@@ -1792,9 +1832,9 @@ export function registerIpcHandlers(
       return targetPath
     }
   )
-  ipcMain.handle(
+  privileged(
     'audit:revealInFiles',
-    async (_, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+    async (_event, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validReportId = validateEntityId(reportId, 'Audit report ID')
@@ -2050,7 +2090,7 @@ export function registerIpcHandlers(
     await atomicWrite(result.filePath, exportEngineeringSpecMarkdown(spec))
     return result.filePath
   })
-  ipcMain.handle('spec:openInEditor', async (_, rawSpec: unknown) => {
+  privileged('spec:openInEditor', async (_event, rawSpec: unknown) => {
     const spec = validateEngineeringSpecInput(rawSpec)
     const persisted = await specEngine.getVersion(
       spec.projectId,
@@ -2070,7 +2110,7 @@ export function registerIpcHandlers(
     await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
     return targetPath
   })
-  ipcMain.handle('spec:revealInFiles', async (_, rawSpec: unknown) => {
+  privileged('spec:revealInFiles', async (_event, rawSpec: unknown) => {
     const spec = validateEngineeringSpecInput(rawSpec)
     const persisted = await specEngine.getVersion(
       spec.projectId,
@@ -2108,8 +2148,10 @@ export function registerIpcHandlers(
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
 
-      // Remember the chosen folder for next time.
+      // Remember the chosen folder for next time and record it as a
+      // user-approved scope for reveal/preview operations.
       config.lastFolderDialogPath = result.filePaths[0]
+      privilegedIpc.registerUserSelectedRoot(result.filePaths[0])
       await storage.saveConfig(config)
 
       return result.filePaths[0]
@@ -2133,6 +2175,7 @@ export function registerIpcHandlers(
       const tempDir = await mkdtemp(join(tmpdir(), 'cio-clipboard-'))
       const tempPath = join(tempDir, 'pasted-image.png')
       await writeFile(tempPath, image.toPNG())
+      privilegedIpc.registerUserSelectedFile(tempPath)
       return tempPath
     } catch (error) {
       Logger.error('clipboard:saveImage failed:', error)
@@ -2185,6 +2228,7 @@ export function registerIpcHandlers(
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
       config.lastAttachmentDialogPath = dirname(result.filePaths[0])
+      privilegedIpc.registerUserSelectedFile(result.filePaths[0])
       await storage.saveConfig(config)
       return result.filePaths[0]
     } catch (error) {
@@ -2212,6 +2256,7 @@ export function registerIpcHandlers(
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
+      privilegedIpc.registerUserSelectedFile(result.filePaths[0])
       return result.filePaths[0]
     } catch (error) {
       Logger.error('dialog:pickImage failed:', error)
@@ -2219,8 +2264,13 @@ export function registerIpcHandlers(
     }
   })
 
-  ipcMain.handle('shell:openExternal', (_event, url: string) => {
-    shell.openExternal(url)
+  privileged('shell:openExternal', (_event, url: unknown) => {
+    try {
+      const safeUrl = privilegedIpc.validateExternalUrl(url)
+      void shell.openExternal(safeUrl)
+    } catch (error) {
+      Logger.error('shell:openExternal rejected unsafe URL:', error)
+    }
   })
 
   // Resolve website favicons for external links. Hostnames are validated at the
@@ -2230,20 +2280,22 @@ export function registerIpcHandlers(
     return resolveFavicons(hostnames)
   })
 
-  // Reveal a chat artifact (uploaded or agent-created file) in the system file manager.
-  ipcMain.handle('shell:revealPath', (_event, path: string) => {
+  // Reveal a chat artifact (uploaded or agent-created file) in the system file
+  // manager. The path must resolve inside a registered project, the config root,
+  // or a user-selected scope.
+  privileged('shell:revealPath', async (_event, path: unknown) => {
     try {
-      const target = path.startsWith('file://') ? fileURLToPath(path) : path
-      shell.showItemInFolder(target)
+      const safePath = await privilegedIpc.resolveScopedPath(path)
+      shell.showItemInFolder(safePath)
       return true
     } catch (error) {
-      Logger.error('shell:revealPath failed:', error)
+      Logger.error('shell:revealPath rejected out-of-scope path:', error)
       return false
     }
   })
 
   // Read a file from disk and return it as a data URL — used for local previews
-  // without persisting anything to project storage.
+  // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -2255,15 +2307,31 @@ export function registerIpcHandlers(
     '.pdf': 'application/pdf'
   }
 
-  ipcMain.handle('file:readAsDataUrl', async (_event, filePath: unknown) => {
+  // Read a local file into bytes for renderer-side media previews. The preload
+  // no longer reads files directly; it delegates here so the path can be
+  // constrained to registered project, config-root, or user-selected scopes.
+  privileged('file:read', async (_event, filePath: unknown) => {
     try {
-      const safePath = requireString(filePath, 'File path')
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      const buffer = await readFile(safePath)
+      return new Uint8Array(
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+      )
+    } catch (error) {
+      Logger.error('file:read rejected out-of-scope path:', error)
+      return null
+    }
+  })
+
+  privileged('file:readAsDataUrl', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
       const ext = extname(safePath).toLowerCase()
       const mime = MIME_MAP[ext] ?? 'application/octet-stream'
       const buffer = await readFile(safePath)
       return `data:${mime};base64,${buffer.toString('base64')}`
     } catch (error) {
-      Logger.error('file:readAsDataUrl failed:', error)
+      Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
       return null
     }
   })
@@ -2391,9 +2459,9 @@ export function registerIpcHandlers(
       requireString(relativePath, 'Project file path')
     )
   )
-  ipcMain.handle(
+  privileged(
     'projectFiles:openInEditor',
-    async (_, projectId: unknown, relativePath: unknown) => {
+    async (_event, projectId: unknown, relativePath: unknown) => {
       const config = await storage.getConfig()
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
@@ -3029,7 +3097,7 @@ export function registerIpcHandlers(
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )
-  ipcMain.handle('project:openInEditor', async (_, projectId: string) => {
+  privileged('project:openInEditor', async (_event, projectId: string) => {
     const project = await projectManager.getProject(projectId)
     if (!project?.path) return
 

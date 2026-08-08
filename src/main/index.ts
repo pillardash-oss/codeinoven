@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -42,6 +42,7 @@ import {
   lockDownProductionWindow
 } from './production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
+import { PrivilegedIpcValidator, originOfUrl } from './ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
@@ -175,6 +176,21 @@ function isCloseShortcut(input: Electron.Input): boolean {
   )
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+
+/**
+ * Window/session boundary validator. It guards external window creation,
+ * navigation, permission requests, and downloads against unsafe schemes and
+ * foreign origins; file-path scoping lives in `ipc-handlers.ts`.
+ */
+function appTrustedOrigins(): string[] {
+  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
+    const origin = originOfUrl(process.env['ELECTRON_RENDERER_URL'])
+    if (origin) return [origin]
+  }
+  return ['file://']
+}
+const windowBoundaryValidator = new PrivilegedIpcValidator({ trustedOrigins: appTrustedOrigins() })
+
 const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
 const database = new Database()
@@ -431,9 +447,25 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // External links leave the app through the default browser only when they
+  // are safe web URLs. Every popup is denied regardless — the renderer never
+  // spawns a second window.
   window.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    try {
+      const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
+      void shell.openExternal(safeUrl)
+    } catch (error) {
+      Logger.error('Window open rejected unsafe URL:', error)
+    }
     return { action: 'deny' }
+  })
+
+  // The renderer is a single-page application: never let the main frame
+  // navigate away from the app's own origin (dev server or packaged file).
+  window.webContents.on('will-navigate', (event, url) => {
+    if (!windowBoundaryValidator.isTrustedSenderFrame({ url })) {
+      event.preventDefault()
+    }
   })
 
   if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -521,6 +553,19 @@ void app
     remoteMode.registerIpc()
     chatEngine.register()
     chatEngine.attachRetryScheduler(retryScheduler)
+
+    // Deny every permission request from the renderer (camera, microphone,
+    // notifications, geolocation, fullscreen, etc.). No desktop feature relies
+    // on web permission grants.
+    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+      callback(false)
+    })
+
+    // Deny all downloads initiated from the renderer; exports always use the
+    // native save dialog in the main process.
+    session.defaultSession.on('will-download', (event) => {
+      event.preventDefault()
+    })
 
     const window = createWindow()
     startBackgroundBoot()
