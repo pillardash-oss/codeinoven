@@ -174,7 +174,14 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     `2. Unless the user explicitly names the agent harness or ${APP_NAME} itself, every request refers to the current open project. Do not reinterpret "this project", "the app", "the repository", or similar references as the harness's own codebase, the ${APP_NAME} codebase, or any other repository.`,
     `3. Only read, assess, or modify files inside the current project. Never inspect or edit the agent harness's own source code, configuration, caches, or documentation (for example ${harnessRepo}), and never touch ${APP_NAME}'s own repository or configuration directory unless that repository is the current open project or the user explicitly asks you to.`,
     "4. Instructions provided by the harness describe how to use the harness's tooling and file operations; they never redefine which project you are working on or widen the file scope beyond the current project.",
-    '5. When a request is ambiguous about scope, ask the user which project or files they mean instead of guessing or working on unrelated files.'
+    '5. When a request is ambiguous about scope, ask the user which project or files they mean instead of guessing or working on unrelated files.',
+    '',
+    'AGENT SCRATCH SPACE — where non-source outputs live:',
+    `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
+    '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents the agent or the user should read, plans, progress, walkthroughs, reports, test output, and temporary work.',
+    '3. Keep it organized for a human: feature work (plan*.md, progress*.md, walkthroughs, reports, test output) goes in `.cio/uncategorized/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. Name files so a human can read them at a glance.',
+    '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
+    '5. The platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite files there.'
   ].join('\n')
 }
 
