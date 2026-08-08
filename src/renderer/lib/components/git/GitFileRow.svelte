@@ -12,10 +12,15 @@
     loadingDiff: boolean
     error: string | null
     expanded: boolean
+    selected?: boolean
+    selectable?: boolean
     onToggleDiff: () => void
     onToggleStage: () => void
+    onToggleSelect?: (change: GitFileChange, additive: boolean) => void
     onStash?: (path: string) => void
     onOpenInEditor?: (path: string) => void
+    onIgnore?: (path: string) => void
+    onDiscard?: (path: string) => void
     readonly?: boolean
   }
 
@@ -25,14 +30,25 @@
     loadingDiff,
     error,
     expanded,
+    selected = false,
+    selectable = false,
     onToggleDiff,
     onToggleStage,
+    onToggleSelect,
     onStash,
     onOpenInEditor,
+    onIgnore,
+    onDiscard,
     readonly = false
   }: Props = $props()
 
-  const hasActions = $derived(!readonly && (onStash !== undefined || onOpenInEditor !== undefined))
+  const hasActions = $derived(
+    !readonly &&
+      (onStash !== undefined ||
+        onOpenInEditor !== undefined ||
+        onIgnore !== undefined ||
+        onDiscard !== undefined)
+  )
 
   const letter = $derived(
     change.status === 'added'
@@ -86,11 +102,34 @@
       <div class="group flex min-h-9 items-center pr-1.5">
         <button
           type="button"
-          class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated/50"
+          class={[
+            'flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors',
+            selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
+          ]}
           title={expanded ? `Collapse diff for ${change.path}` : `Show diff for ${change.path}`}
           aria-expanded={expanded}
-          onclick={onToggleDiff}
+          aria-pressed={selectable ? selected : undefined}
+          onclick={(event: MouseEvent) => {
+            if (selectable && onToggleSelect && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              onToggleSelect(change, true)
+              return
+            }
+            onToggleDiff()
+          }}
         >
+          {#if selectable}
+            <span
+              class={[
+                'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors',
+                selected ? 'border-primary bg-primary' : 'border-border bg-elevated'
+              ]}
+            >
+              {#if selected}
+                <Check size={9} class="text-on-primary" />
+              {/if}
+            </span>
+          {/if}
           <span class={['w-4 shrink-0 text-center font-mono text-[10px] font-semibold', color]}>
             {letter}
           </span>
@@ -177,6 +216,27 @@
               <span class="inline-block w-3 text-center text-[10px]">✎</span>
               Open
             </ContextMenu.Item>
+          {/if}
+          {#if onIgnore || onDiscard}
+            <ContextMenu.Separator class="my-1 h-px bg-border" />
+            {#if onIgnore}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onIgnore?.(change.path)}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+                Ignore
+              </ContextMenu.Item>
+            {/if}
+            {#if onDiscard}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+                onSelect={() => onDiscard?.(change.path)}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+                Discard changes
+              </ContextMenu.Item>
+            {/if}
           {/if}
         </ContextMenu.Content>
       </ContextMenu.Portal>

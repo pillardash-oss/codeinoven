@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { simpleGit } from 'simple-git'
@@ -265,6 +265,67 @@ describe('GitService', () => {
 
     const status = await service.getStatus(directory)
     expect(status.clean).toBe(true)
+  })
+
+  it('adds ignored paths to .gitignore and drops them from status', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'keep.txt'), 'keep\n', 'utf-8')
+    await service.stage(directory, ['keep.txt'])
+    await service.commit(directory, 'keep')
+
+    await writeFile(join(directory, 'secret.tmp'), 'noise\n', 'utf-8')
+    await mkdir(join(directory, 'build'), { recursive: true })
+    await writeFile(join(directory, 'build/out.js'), 'noise\n', 'utf-8')
+
+    const afterIgnore = await service.ignore(directory, ['secret.tmp', 'build'])
+    // Only the new .gitignore itself remains untracked — the ignored paths drop out.
+    expect(afterIgnore.untrackedChanges).toBe(1)
+    const remaining = afterIgnore.changes.map((change) => change.path)
+    expect(remaining).toEqual(['.gitignore'])
+
+    const gitignore = await readFile(join(directory, '.gitignore'), 'utf-8')
+    expect(gitignore).toContain('secret.tmp')
+    expect(gitignore).toContain('build/')
+  })
+
+  it('discards working-tree changes and deletes untracked files', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'tracked.txt'), 'original\n', 'utf-8')
+    await service.stage(directory, ['tracked.txt'])
+    await service.commit(directory, 'initial')
+
+    await writeFile(join(directory, 'tracked.txt'), 'modified\n', 'utf-8')
+    await writeFile(join(directory, 'fresh.txt'), 'new\n', 'utf-8')
+
+    const afterDiscard = await service.discard(directory, ['tracked.txt', 'fresh.txt'])
+    expect(afterDiscard.clean).toBe(true)
+
+    const trackedContent = await readFile(join(directory, 'tracked.txt'), 'utf-8')
+    expect(trackedContent).toBe('original\n')
+  })
+
+  it('stashes only the paths given when a subset is requested', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'a.txt'), 'a\n', 'utf-8')
+    await writeFile(join(directory, 'b.txt'), 'b\n', 'utf-8')
+    await service.stage(directory, ['a.txt', 'b.txt'])
+    await service.commit(directory, 'base')
+
+    await writeFile(join(directory, 'a.txt'), 'a2\n', 'utf-8')
+    await writeFile(join(directory, 'b.txt'), 'b2\n', 'utf-8')
+
+    await service.stash(directory, 'partial', ['a.txt'])
+
+    const status = await service.getStatus(directory)
+    const changed = status.changes.map((change) => change.path)
+    expect(changed).toContain('b.txt')
+    expect(changed).not.toContain('a.txt')
   })
 
   it('pushes with a transient auth token without persisting it', async () => {

@@ -10,11 +10,15 @@
     expanded: Record<string, boolean>
     loadingDiff: Record<string, boolean>
     diffErrors: Record<string, string | null>
+    selectedPaths: Record<string, boolean>
     onToggleDiff: (change: GitFileChange) => void
     onToggleStage: (change: GitFileChange) => void
+    onToggleSelect: (change: GitFileChange, additive: boolean) => void
     onStagePaths: (paths: string[], staged: boolean) => void
     onStashPaths: (paths: string[]) => void
     onOpenInEditor: (path: string) => void
+    onIgnorePaths: (paths: string[]) => void
+    onDiscardPaths: (paths: string[]) => void
   }
 
   let {
@@ -23,11 +27,15 @@
     expanded,
     loadingDiff,
     diffErrors,
+    selectedPaths = $bindable({} as Record<string, boolean>),
     onToggleDiff,
     onToggleStage,
+    onToggleSelect,
     onStagePaths,
     onStashPaths,
-    onOpenInEditor
+    onOpenInEditor,
+    onIgnorePaths,
+    onDiscardPaths
   }: Props = $props()
 
   interface TreeNode {
@@ -81,6 +89,21 @@
     expandedDirs = { ...expandedDirs, [path]: !(expandedDirs[path] ?? false) }
   }
 
+  function onToggleSelectDir(node: TreeNode, additive: boolean): void {
+    const paths = allPathsFor(node)
+    const allSelected = paths.length > 0 && paths.every((path) => selectedPaths[path])
+    const remove = additive && allSelected
+    const next = { ...selectedPaths }
+    for (const path of paths) {
+      if (remove) {
+        delete next[path]
+      } else {
+        next[path] = true
+      }
+    }
+    selectedPaths = next
+  }
+
   const statusLetter = (change: GitFileChange): string =>
     change.status === 'added'
       ? 'A'
@@ -129,6 +152,20 @@
     <span class="inline-block w-3 text-center text-[10px]">↓</span>
     Stash directory…
   </ContextMenu.Item>
+  <ContextMenu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    onSelect={() => onIgnorePaths(allPathsFor(node))}
+  >
+    <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+    Ignore directory
+  </ContextMenu.Item>
+  <ContextMenu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+    onSelect={() => onDiscardPaths(allPathsFor(node))}
+  >
+    <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+    Discard changes
+  </ContextMenu.Item>
 {/snippet}
 
 {#snippet fileActions(change: GitFileChange)}
@@ -159,6 +196,21 @@
     <span class="inline-block w-3 text-center text-[10px]">✎</span>
     Open
   </ContextMenu.Item>
+  <ContextMenu.Separator class="my-1 h-px bg-border" />
+  <ContextMenu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+    onSelect={() => onIgnorePaths([change.path])}
+  >
+    <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+    Ignore
+  </ContextMenu.Item>
+  <ContextMenu.Item
+    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+    onSelect={() => onDiscardPaths([change.path])}
+  >
+    <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+    Discard changes
+  </ContextMenu.Item>
 {/snippet}
 
 {#snippet fileRow(change: GitFileChange)}
@@ -170,12 +222,32 @@
       title={`Actions for ${change.path}`}
     >
       <div
-        class="group flex h-8 w-full cursor-pointer items-center gap-2 pr-2 text-left transition-colors hover:bg-elevated/50"
+        class={[
+          'group flex h-8 w-full cursor-pointer items-center gap-2 pr-2 text-left transition-colors',
+          selectedPaths[change.path] ? 'bg-primary/10' : 'hover:bg-elevated/50'
+        ]}
         role="button"
         tabindex="0"
-        onclick={() => onToggleDiff(change)}
+        onclick={(event: MouseEvent) => {
+          if (event.metaKey || event.ctrlKey) {
+            event.preventDefault()
+            onToggleSelect(change, true)
+            return
+          }
+          onToggleDiff(change)
+        }}
         onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && onToggleDiff(change)}
       >
+        <span
+          class={[
+            'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors',
+            selectedPaths[change.path] ? 'border-primary bg-primary' : 'border-border bg-elevated'
+          ]}
+        >
+          {#if selectedPaths[change.path]}
+            <Check size={9} class="text-on-primary" />
+          {/if}
+        </span>
         <span
           class={[
             'w-4 shrink-0 text-center font-mono text-[10px] font-semibold',
@@ -236,6 +308,9 @@
 {#snippet dirRow(node: TreeNode, depth: number)}
   {@const isOpen = expandedDirs[node.path] ?? false}
   {@const indent = 3 + depth * 2}
+  {@const dirFiles = filesFor(node)}
+  {@const dirSelected =
+    dirFiles.every((change) => selectedPaths[change.path]) && dirFiles.length > 0}
   <ContextMenu.Root>
     <ContextMenu.Trigger
       class="block w-full"
@@ -244,11 +319,31 @@
     >
       <button
         type="button"
-        class="flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left transition-colors hover:bg-elevated/50"
+        class={[
+          'flex h-8 w-full cursor-pointer items-center gap-2 px-3 text-left transition-colors',
+          dirSelected ? 'bg-primary/10' : 'hover:bg-elevated/50'
+        ]}
         style="padding-left: {indent}px"
         aria-expanded={isOpen}
-        onclick={() => toggleDir(node.path)}
+        onclick={(event: MouseEvent) => {
+          if (event.metaKey || event.ctrlKey) {
+            event.preventDefault()
+            onToggleSelectDir(node, true)
+            return
+          }
+          toggleDir(node.path)
+        }}
       >
+        <span
+          class={[
+            'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border transition-colors',
+            dirSelected ? 'border-primary bg-primary' : 'border-border bg-elevated'
+          ]}
+        >
+          {#if dirSelected}
+            <Check size={9} class="text-on-primary" />
+          {/if}
+        </span>
         {#if isOpen}
           <ChevronDown size={12} class="shrink-0 text-dimmed" />
           <FolderOpen size={13} class="shrink-0 text-warning" />

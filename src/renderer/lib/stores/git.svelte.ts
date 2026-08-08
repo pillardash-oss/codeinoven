@@ -42,6 +42,8 @@ export type GitOperation =
   | 'merge'
   | 'rebase'
   | 'stash'
+  | 'ignore'
+  | 'discard'
   | 'stash-pop'
   | 'stash-drop'
   | 'abortMerge'
@@ -402,6 +404,30 @@ export class GitState {
       this.error = errorMessage(reason, 'Stash failed')
     } finally {
       this.markBusy('stash', false)
+    }
+  }
+
+  async ignore(projectId: string, paths: string[]): Promise<void> {
+    this.markBusy('ignore', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:ignore', projectId, paths)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Files could not be ignored')
+    } finally {
+      this.markBusy('ignore', false)
+    }
+  }
+
+  async discard(projectId: string, paths: string[]): Promise<void> {
+    this.markBusy('discard', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:discard', projectId, paths)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Changes could not be discarded')
+    } finally {
+      this.markBusy('discard', false)
     }
   }
 
