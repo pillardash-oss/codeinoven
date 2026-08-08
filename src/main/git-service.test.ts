@@ -150,7 +150,7 @@ describe('GitService', () => {
     await simpleGit().clone(bare, clone)
     const cloneService = new GitService()
     const cloneStatus = await cloneService.getStatus(clone)
-    expect(cloneStatus.filesChanged ?? cloneStatus.changes).toHaveLength(0)
+    expect(cloneStatus.changes).toHaveLength(0)
   })
 
   it('computes ahead/behind after a divergent push', async () => {

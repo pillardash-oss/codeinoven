@@ -61,7 +61,7 @@ const defaultConfig: AppConfig = {
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
-  memory: { enabled: true, entries: [] },
+  memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   autoDownloadUpdates: true,
   autoInstallUpdates: true,

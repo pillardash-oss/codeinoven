@@ -25,6 +25,14 @@ import { homedir } from 'node:os'
 const ORG_SLUG = 'pillardash'
 const APP_SLUG = 'codeinoven'
 
+function log(...parts) {
+  process.stdout.write(`${parts.join(' ')}\n`)
+}
+
+function logError(...parts) {
+  process.stderr.write(`${parts.join(' ')}\n`)
+}
+
 function configRoot() {
   return join(homedir(), '.config', ORG_SLUG, APP_SLUG)
 }
@@ -46,7 +54,7 @@ function parseArgs(argv) {
 
 const opts = parseArgs(process.argv.slice(2))
 if (opts.help) {
-  console.log(
+  log(
     [
       'Usage: node scripts/migrate-harness-usage.mjs [options]',
       '',
@@ -64,8 +72,8 @@ if (opts.help) {
 
 const dbPath = opts.db ?? join(configRoot(), 'codeinoven.db')
 if (!existsSync(dbPath)) {
-  console.error(`Database not found: ${dbPath}`)
-  console.error('Pass the path with --db <path>.')
+  logError(`Database not found: ${dbPath}`)
+  logError('Pass the path with --db <path>.')
   process.exit(1)
 }
 
@@ -93,11 +101,8 @@ function parseTokens(raw) {
 
 function tableExists(name) {
   return (
-    db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?"
-      )
-      .get(name) !== undefined
+    db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(name) !==
+    undefined
   )
 }
 
@@ -201,9 +206,10 @@ function rebuildThread(projectId, threadId) {
 
 function writeThread(projectId, threadId, entries, countedIds) {
   db.transaction(() => {
-    db.prepare(
-      'DELETE FROM harness_usage WHERE project_id = ? AND thread_id = ?'
-    ).run(projectId, threadId)
+    db.prepare('DELETE FROM harness_usage WHERE project_id = ? AND thread_id = ?').run(
+      projectId,
+      threadId
+    )
     db.prepare('DELETE FROM harness_usage_messages WHERE thread_id = ?').run(threadId)
 
     const insertUsage = db.prepare(
@@ -258,8 +264,8 @@ function main() {
   const before = db.prepare('SELECT COUNT(*) c FROM harness_usage').get().c
   const beforeLedger = db.prepare('SELECT COUNT(*) c FROM harness_usage_messages').get().c
 
-  console.log(`Backfilling ${threads.length} threads...`)
-  console.log(`Before: ${before} harness_usage rows, ${beforeLedger} ledger rows.`)
+  log(`Backfilling ${threads.length} threads...`)
+  log(`Before: ${before} harness_usage rows, ${beforeLedger} ledger rows.`)
 
   let usageRows = 0
   let counted = 0
@@ -279,28 +285,28 @@ function main() {
     }
   }
 
-  const after = opts.dryRun
-    ? null
-    : db.prepare('SELECT COUNT(*) c FROM harness_usage').get().c
+  const after = opts.dryRun ? null : db.prepare('SELECT COUNT(*) c FROM harness_usage').get().c
   const afterLedger = opts.dryRun
     ? null
     : db.prepare('SELECT COUNT(*) c FROM harness_usage_messages').get().c
 
-  console.log(
+  log(
     `\nWould write ${usageRows} harness_usage rows across ${threads.length} threads, ` +
       `marking ${counted} messages in the ledger.`
   )
-  console.log('Per-harness thread counts:')
+  log('Per-harness thread counts:')
   for (const [harnessId, count] of [...harnessCounts.entries()].sort((a, b) => b[1] - a[1])) {
-    console.log(`  ${harnessId}: ${count}`)
+    log(`  ${harnessId}: ${count}`)
   }
 
   if (!opts.dryRun) {
-    console.log(`\nAfter: ${after} harness_usage rows (was ${before}), ` +
-      `${afterLedger} ledger rows (was ${beforeLedger}).`)
-    console.log('Migration complete.')
+    log(
+      `\nAfter: ${after} harness_usage rows (was ${before}), ` +
+        `${afterLedger} ledger rows (was ${beforeLedger}).`
+    )
+    log('Migration complete.')
   } else {
-    console.log('\nDry run — no changes written. Re-run without --dry-run to apply.')
+    log('\nDry run — no changes written. Re-run without --dry-run to apply.')
   }
 
   db.close()
