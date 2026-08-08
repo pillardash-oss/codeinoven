@@ -672,6 +672,19 @@
     selectedPaths = next
   }
 
+  function toggleSectionSelection(sectionFiles: GitFileChange[]): void {
+    const allSelected = sectionFiles.length > 0 && sectionFiles.every((f) => selectedPaths[f.path])
+    const next = { ...selectedPaths }
+    for (const file of sectionFiles) {
+      if (allSelected) {
+        delete next[file.path]
+      } else {
+        next[file.path] = true
+      }
+    }
+    selectedPaths = next
+  }
+
   function clearSelection(): void {
     selectedPaths = {}
   }
@@ -1387,7 +1400,49 @@
                   <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
                     {#each fileSections as section, si (section.title)}
                       {#if si > 0}<div class="border-t border-border"></div>{/if}
+                      {@const sectionAllSelected =
+                        section.files.length > 0 &&
+                        section.files.every((f) => selectedPaths[f.path])}
+                      {@const sectionSomeSelected = section.files.some(
+                        (f) => selectedPaths[f.path]
+                      )}
                       <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                        <span
+                          role="checkbox"
+                          tabindex="0"
+                          aria-checked={sectionAllSelected
+                            ? 'true'
+                            : sectionSomeSelected
+                              ? 'mixed'
+                              : 'false'}
+                          aria-label={sectionAllSelected
+                            ? `Deselect all ${section.files.length} files in ${section.title}`
+                            : `Select all ${section.files.length} files in ${section.title}`}
+                          class={[
+                            'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
+                            sectionAllSelected
+                              ? 'border-primary bg-primary'
+                              : 'border-border bg-elevated'
+                          ]}
+                          onclick={(event: MouseEvent) => {
+                            event.stopPropagation()
+                            event.preventDefault()
+                            toggleSectionSelection(section.files)
+                          }}
+                          onkeydown={(event: KeyboardEvent) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.stopPropagation()
+                              event.preventDefault()
+                              toggleSectionSelection(section.files)
+                            }
+                          }}
+                        >
+                          {#if sectionAllSelected}
+                            <Check size={9} class="text-on-primary" />
+                          {:else if sectionSomeSelected}
+                            <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
+                          {/if}
+                        </span>
                         <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
                           {section.title}
                         </span>
