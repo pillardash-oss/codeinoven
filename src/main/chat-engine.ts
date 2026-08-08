@@ -4927,6 +4927,7 @@ export class ChatEngine {
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks.',
+      'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. Re-dispatch it by calling assign-task again: the API returns a fresh worker thread for the retry. Do not wait for an audit-feedback state to recover a failed task; assign-task is the recovery path.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
           role: 'coordinator',
@@ -5525,7 +5526,7 @@ export class ChatEngine {
       [
         `Worker ${task?.workerName ?? task?.threadId ?? taskId} reported task “${task?.title ?? taskId}”.`,
         'Inspect the worker thread, project changes, audit-checklist.md, baseline.txt, and check.txt. Correctly audit every checklist item.',
-        'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API.',
+        'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it — a failed task is not terminal.',
         this.assignmentApiInstructions(
           this.assignmentApiCapability({
             role: 'coordinator',
