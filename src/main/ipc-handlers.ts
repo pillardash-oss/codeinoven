@@ -959,7 +959,9 @@ export function registerIpcHandlers(
   const vault = new SecretVault(storage)
   const githubAuthService = new GitHubAuthService(vault)
   const checkpointManager = new CheckpointManager(database)
-  const diagnosticsService = new DiagnosticsService(database)
+  const diagnosticsService = new DiagnosticsService(database, () =>
+    memoryService.auxiliaryUsageByFeature()
+  )
   const memoryService = new MemoryService(storage)
 
   // Shared privileged-IPC boundary: every renderer call that can open the

@@ -1,5 +1,16 @@
 import { Logger } from '../logger'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
+import {
+  BoundedMap,
+  BoundedSet,
+  createMessageIdAllocator,
+  fullJitterDelay,
+  parseRelayAckFrame,
+  parseRelayDataFrame,
+  serializeRelayDataFrame
+} from '../../renderer/lib/remote/relay-protocol'
+
+export { fullJitterDelay } from '../../renderer/lib/remote/relay-protocol'
 
 export interface CloudRelayClientOptions {
   apiOrigin: string
@@ -21,6 +32,13 @@ export interface CloudRelayClientOptions {
   queueLimit?: number
   /** Bounded idempotent-result replay cache for RPC invokes. */
   replayLimit?: number
+  /** Opt-in self-reconnect with full-jitter backoff preserving the queue. */
+  reconnect?: {
+    maxAttempts?: number
+    initialDelayMs?: number
+    maxDelayMs?: number
+    random?: () => number
+  }
   /** Injectable WebSocket factory so connect/auth deadlines are unit-testable. */
   socketFactory?: (url: string) => WebSocket
 }
@@ -41,24 +59,8 @@ const DEFAULT_AUTH_TIMEOUT_MS = 10_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 const DEFAULT_QUEUE_LIMIT = 1_000
 const DEFAULT_REPLAY_LIMIT = 4_096
-
-/**
- * Full-jitter backoff delay for the given reconnect attempt. Returns a value
- * in `[0, min(maxMs, baseMs * 2^attempt))` using the injected random source so
- * tests can drive it deterministically.
- */
-export function fullJitterDelay(
-  attempt: number,
-  baseMs: number,
-  maxMs: number,
-  random: () => number = Math.random
-): number {
-  const safeAttempt = Math.max(0, Math.floor(attempt))
-  const cap = Math.min(maxMs, baseMs * 2 ** safeAttempt)
-  if (cap <= 0) return 0
-  const sample = Math.min(1, Math.max(0, random()))
-  return Math.floor(sample * cap)
-}
+const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
+const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
 
 /** Resolve `promise` with `fallback` when it does not settle within `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -75,64 +77,29 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   })
 }
 
-/** A fixed-capacity FIFO map that evicts the oldest entry when full. */
-class BoundedMap<V> {
-  private readonly entries = new Map<number, V>()
-
-  constructor(private readonly limit: number) {}
-
-  get size(): number {
-    return this.entries.size
-  }
-
-  has(key: number): boolean {
-    return this.entries.has(key)
-  }
-
-  get(key: number): V | undefined {
-    return this.entries.get(key)
-  }
-
-  set(key: number, value: V): void {
-    if (this.limit <= 0) return
-    if (this.entries.has(key)) this.entries.delete(key)
-    this.entries.set(key, value)
-    while (this.entries.size > this.limit) {
-      const oldest = this.entries.keys().next().value
-      if (oldest === undefined) break
-      this.entries.delete(oldest)
-    }
-  }
-
-  delete(key: number): boolean {
-    return this.entries.delete(key)
-  }
-
-  clear(): void {
-    this.entries.clear()
-  }
-
-  values(): V[] {
-    return [...this.entries.values()]
-  }
-}
-
 export class CloudRelayClient {
   private socket: WebSocket | null = null
   private authenticated = false
   private closed = false
-  private nextMessageId = 1
+  private closing = false
+  private reconnecting = false
   private connectTimer: ReturnType<typeof setTimeout> | null = null
   private authTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private reconnectAttempt = 0
+  private readonly nextMessageId: () => number
   private readonly queue: OutboundRecord[] = []
-  private readonly inFlight = new BoundedMap<OutboundRecord>(DEFAULT_QUEUE_LIMIT)
-  private readonly replay = new BoundedMap<RpcOutcome>(DEFAULT_REPLAY_LIMIT)
+  private readonly inFlight: BoundedMap<OutboundRecord>
+  private readonly replay: BoundedMap<RpcOutcome>
   private readonly processing = new Set<number>()
+  private readonly seenInboundIds: BoundedSet
   private readonly onAbort: () => void
   private readonly connectTimeoutMs: number
   private readonly authTimeoutMs: number
   private readonly requestTimeoutMs: number
   private readonly queueLimit: number
+  private readonly replayLimit: number
+  private readonly reconnect: CloudRelayClientOptions['reconnect']
   private readonly socketFactory: (url: string) => WebSocket
 
   constructor(private readonly options: CloudRelayClientOptions) {
@@ -140,6 +107,12 @@ export class CloudRelayClient {
     this.authTimeoutMs = options.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.queueLimit = options.queueLimit ?? DEFAULT_QUEUE_LIMIT
+    this.replayLimit = options.replayLimit ?? DEFAULT_REPLAY_LIMIT
+    this.reconnect = options.reconnect
+    this.inFlight = new BoundedMap<OutboundRecord>(this.queueLimit)
+    this.replay = new BoundedMap<RpcOutcome>(this.replayLimit)
+    this.seenInboundIds = new BoundedSet(this.replayLimit)
+    this.nextMessageId = createMessageIdAllocator(1)
     this.socketFactory =
       options.socketFactory ?? ((target: string): WebSocket => new WebSocket(target))
     this.onAbort = () => this.cancelConnection('cancelled')
@@ -147,6 +120,35 @@ export class CloudRelayClient {
   }
 
   connect(): void {
+    this.closing = false
+    this.openSocket()
+  }
+
+  close(): void {
+    this.closing = true
+    this.closed = true
+    this.authenticated = false
+    this.clearTimers()
+    this.options.signal?.removeEventListener('abort', this.onAbort)
+    this.queue.length = 0
+    this.inFlight.clear()
+    this.socket?.close()
+    this.socket = null
+  }
+
+  /** Handle an externally fired abort signal without discarding the queue. */
+  private cancelConnection(reason: string): void {
+    if (this.closing || this.closed) return
+    this.closed = true
+    this.authenticated = false
+    this.clearTimers()
+    this.options.signal?.removeEventListener('abort', this.onAbort)
+    this.socket?.close()
+    this.socket = null
+    this.options.onDisconnected(reason)
+  }
+
+  private openSocket(): void {
     this.closed = false
     this.authenticated = false
     const target = new URL('/v1/relay', this.options.apiOrigin)
@@ -158,7 +160,7 @@ export class CloudRelayClient {
     this.connectTimer = setTimeout(() => {
       if (!this.closed && (!socket || socket.readyState !== WebSocket.OPEN)) {
         Logger.error('Remote cloud relay connect deadline exceeded')
-        this.dropConnection('connect-timeout')
+        this.dropAndRetry('connect-timeout')
       }
     }, this.connectTimeoutMs)
 
@@ -171,7 +173,7 @@ export class CloudRelayClient {
       this.authTimer = setTimeout(() => {
         if (!this.closed && !this.authenticated) {
           Logger.error('Remote cloud relay authentication deadline exceeded')
-          this.dropConnection('auth-timeout')
+          this.dropAndRetry('auth-timeout')
         }
       }, this.authTimeoutMs)
     }
@@ -187,47 +189,46 @@ export class CloudRelayClient {
         clearTimeout(this.authTimer)
         this.authTimer = null
       }
-      if (!this.closed) {
-        this.requeueInFlight()
-        this.authenticated = false
-        this.options.onDisconnected(event.reason || `relay-closed-${event.code}`)
-      }
+      if (this.closing || this.closed) return
+      this.authenticated = false
+      this.dropAndRetry(event.reason || `relay-closed-${event.code}`)
     }
   }
 
-  close(): void {
+  /** Terminal socket loss: requeue unacked work and schedule a reconnect. */
+  private dropAndRetry(reason: string): void {
+    if (this.closing || this.closed) return
     this.closed = true
-    this.authenticated = false
     this.clearTimers()
-    this.options.signal?.removeEventListener('abort', this.onAbort)
-    this.queue.length = 0
-    this.inFlight.clear()
-    this.socket?.close()
-    this.socket = null
-  }
-
-  /** Handle an externally fired abort signal without discarding the queue. */
-  private cancelConnection(reason: string): void {
-    if (this.closed) return
-    this.closed = true
     this.authenticated = false
-    this.clearTimers()
-    this.options.signal?.removeEventListener('abort', this.onAbort)
-    this.socket?.close()
-    this.socket = null
-    this.options.onDisconnected(reason)
-  }
-
-  /** Unexpected socket loss: clear deadlines and keep queued work retryable. */
-  private dropConnection(reason: string): void {
-    if (this.closed) return
-    this.closed = true
-    this.authenticated = false
-    this.clearTimers()
     this.requeueInFlight()
     this.socket?.close()
     this.socket = null
     this.options.onDisconnected(reason)
+    this.scheduleReconnect(reason)
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (this.closing || this.reconnectTimer !== null) return
+    if (!this.reconnect) return
+    const maxAttempts = this.reconnect.maxAttempts
+    if (maxAttempts !== undefined && this.reconnectAttempt >= maxAttempts) {
+      this.reconnectAttempt = 0
+      this.options.onDisconnected(`${reason} (reconnect exhausted)`)
+      return
+    }
+    const delay = fullJitterDelay(
+      this.reconnectAttempt,
+      this.reconnect.initialDelayMs ?? DEFAULT_RECONNECT_INITIAL_DELAY_MS,
+      this.reconnect.maxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS,
+      this.reconnect.random
+    )
+    this.reconnectAttempt += 1
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null
+      this.reconnecting = true
+      this.openSocket()
+    }, delay)
   }
 
   private clearTimers(): void {
@@ -256,9 +257,8 @@ export class CloudRelayClient {
   }
 
   async send(payload: unknown): Promise<void> {
-    if (this.closed) return
-    const record: OutboundRecord = { id: this.nextMessageId, payload }
-    this.nextMessageId += 1
+    if (this.closed || this.closing) return
+    const record: OutboundRecord = { id: this.nextMessageId(), payload }
     if (this.authenticated && this.socket && this.socket.readyState === WebSocket.OPEN) {
       await this.transmit(record)
       return
@@ -274,11 +274,16 @@ export class CloudRelayClient {
     )
     if (this.socket.readyState === WebSocket.OPEN) {
       this.inFlight.set(record.id, record)
-      this.socket.send(JSON.stringify({ type: 'relay:data', id: record.id, payload: encrypted }))
+      this.socket.send(serializeRelayDataFrame(record.id, encrypted))
     }
   }
 
   private handleMessage(text: string): void {
+    const ack = parseRelayAckFrame(text)
+    if (ack) {
+      this.inFlight.delete(ack.id)
+      return
+    }
     let record: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(text)
@@ -293,20 +298,24 @@ export class CloudRelayClient {
         this.authTimer = null
       }
       this.authenticated = true
+      this.reconnecting = false
+      this.reconnectAttempt = 0
       this.options.onAuthenticated()
       void this.flushQueue()
       return
     }
-    if (record['type'] === 'relay:ack' && typeof record['id'] === 'number') {
-      this.inFlight.delete(record['id'])
-      return
-    }
     if (record['type'] === 'relay:data' && typeof record['payload'] === 'string') {
+      const frame = parseRelayDataFrame(text)
+      // Duplicate suppression: an already delivered inbound frame id is ignored.
+      if (frame && !Number.isNaN(frame.id)) {
+        if (this.seenInboundIds.has(frame.id)) return
+        this.seenInboundIds.add(frame.id)
+      }
       void decryptPayload(this.options.controlSecret, record['payload'])
         .then((plaintext) => this.handleEncryptedMessage(plaintext))
         .catch(() => {
           Logger.error('Remote cloud relay payload authentication failed')
-          this.dropConnection('decrypt-failed')
+          this.dropAndRetry('decrypt-failed')
         })
     }
   }

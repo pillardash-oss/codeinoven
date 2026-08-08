@@ -113,6 +113,7 @@ import type {
 } from '../lib/types'
 import { INBOX_PROJECT_ID } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
+import { computePromptBudget, truncateToTokenBudget } from '../lib/prompt-budget'
 import {
   AUDIT_REPORT_SCHEMA,
   ASSIGNMENT_PLAN_SCHEMA,
@@ -944,6 +945,12 @@ export class ChatEngine {
   /** Model titles use a disposable harness session, but wait for the main turn
    * to become idle so concurrent Claude processes cannot race OAuth refresh. */
   private pendingAutoTitles = new Map<string, PendingAutoTitle>()
+  /**
+   * Whether `ensureSession` confirmed the harness session natively holds the
+   * conversation (non-empty provider history). `buildHistoryRecap` uses this to
+   * avoid loading provider history a second time (A-13).
+   */
+  private readonly sessionNativeHistory = new Map<string, boolean>()
   /** Latest provider lifecycle state, retained across renderer remounts. */
   private sessionStatuses = new Map<string, AgentSessionStatus>()
   /** Auto-resume scheduler for harnesses that do not manage their own retries. */
@@ -2419,6 +2426,9 @@ export class ChatEngine {
         })
       }
     }
+    // Record whether the harness natively holds the conversation so the recap
+    // path can skip a second provider history load.
+    this.sessionNativeHistory.set(sessionId, storedSessionMessages.length > 0)
 
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
@@ -2505,6 +2515,7 @@ export class ChatEngine {
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
     this.pendingAutoTitles.delete(sessionId)
+    this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
@@ -3169,7 +3180,9 @@ export class ChatEngine {
     const hiddenContext = [hiddenPromptContext, projectReferenceContext]
       .filter(Boolean)
       .join('\n\n')
-    const driverText = hiddenContext ? `${hiddenContext}\n\nUser message:\n${text}` : text
+    const driverText = hiddenContext
+      ? `${this.budgetHiddenContext(hiddenContext, projectId, thread.settings)}\n\nUser message:\n${text}`
+      : text
     const userMessage = await this.persistOutboundMessage(
       projectId,
       threadId,
@@ -3250,7 +3263,9 @@ export class ChatEngine {
     const hiddenContext = [hiddenPromptContext, projectReferenceContext]
       .filter(Boolean)
       .join('\n\n')
-    const driverText = hiddenContext ? `${hiddenContext}\n\nUser message:\n${text}` : text
+    const driverText = hiddenContext
+      ? `${this.budgetHiddenContext(hiddenContext, projectId, settings)}\n\nUser message:\n${text}`
+      : text
     if (
       specAction !== undefined &&
       specAction !== 'request' &&
@@ -4652,13 +4667,20 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
     if (thread?.sessionId && sameHarness) {
-      // The session may be brand new (fork or edit truncation) — skip the
-      // recap only when the harness actually holds the conversation.
+      // `ensureSession` already confirmed the harness holds the conversation —
+      // skip the redundant provider history load entirely (A-13).
+      if (this.sessionNativeHistory.get(thread.sessionId) === true) return ''
       try {
         const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
           const priorMessages = mirror.at(-1)?.role === 'user' ? mirror.slice(0, -1) : mirror
-          return formatHistoryRecap(priorMessages)
+          return formatHistoryRecap(priorMessages, {
+            maxInputTokens: this.selectedModelInputBudget(
+              thread.settings?.providerId,
+              thread.settings?.modelId,
+              projectId
+            )
+          })
         }
         const held = await driver.loadMessages(projectPath, thread.sessionId)
         if (held.length > 0) return ''
@@ -4666,7 +4688,56 @@ export class ChatEngine {
         // Session unreachable — treat it as fresh and replay the mirror.
       }
     }
-    return formatHistoryRecap(mirror)
+    return formatHistoryRecap(mirror, {
+      maxInputTokens: this.selectedModelInputBudget(
+        thread?.settings?.providerId,
+        thread?.settings?.modelId,
+        projectId
+      )
+    })
+  }
+
+  /**
+   * Input budget for the history recap derived from the selected model's
+   * context window with reserved output and tool headroom. Falls back to the
+   * default window when the model is unknown or the catalog is unavailable.
+   */
+  private selectedModelInputBudget(
+    providerId: string | undefined,
+    modelId: string | undefined,
+    projectId: string
+  ): number {
+    let contextWindow: number | undefined
+    if (providerId && modelId) {
+      try {
+        const cached = this.providerCache.get(projectId)
+        const model = cached
+          ?.flatMap((catalog) => catalog.models)
+          .find((model) => model.providerId === providerId && model.id === modelId)
+        contextWindow = model?.contextWindow
+      } catch {
+        // Catalog unavailable — fall back to the default window.
+      }
+    }
+    return computePromptBudget({ contextWindow }).availableInputTokens
+  }
+
+  /**
+   * Cap the hidden orchestration context by the selected model's available
+   * input budget (reserved output/tool headroom already subtracted) so the
+   * prompt never crowds the model window with injected context (A-13).
+   */
+  private budgetHiddenContext(
+    context: string,
+    projectId: string,
+    settings: Pick<ThreadSettings, 'providerId' | 'modelId'> | undefined
+  ): string {
+    const available = this.selectedModelInputBudget(
+      settings?.providerId,
+      settings?.modelId,
+      projectId
+    )
+    return truncateToTokenBudget(context, available)
   }
 
   /** Abort the thread's running session. */
@@ -11198,8 +11269,13 @@ export function textForMessage(message: AgentMessage): string {
  * Format a mirrored transcript as a system-prompt recap. Used when a prompt
  * has to start a fresh harness session over an existing conversation
  * (forked threads, lost sessions) so the agent keeps the prior context.
+ * `maxInputTokens` caps the recap by the selected model's available input
+ * budget (reserved output/tool headroom already subtracted).
  */
-export function formatHistoryRecap(messages: AgentMessage[]): string {
+export function formatHistoryRecap(
+  messages: AgentMessage[],
+  options: { maxInputTokens?: number } = {}
+): string {
   const latestCompactionIndex = messages.findLastIndex((message) =>
     message.parts.some(
       (part) =>
@@ -11241,9 +11317,13 @@ export function formatHistoryRecap(messages: AgentMessage[]): string {
     .filter(Boolean)
     .join('\n\n')
   if (!transcript) return ''
+  const budgetedTranscript =
+    options.maxInputTokens === undefined
+      ? transcript.slice(-24_000)
+      : truncateToTokenBudget(transcript, options.maxInputTokens)
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
-    transcript.slice(-24_000),
+    budgetedTranscript,
     'Continue seamlessly from that context.'
   ].join('\n\n')
 }

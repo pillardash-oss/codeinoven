@@ -272,6 +272,68 @@ describe('CloudRelayClient cancellation', () => {
   })
 })
 
+describe('CloudRelayClient self-reconnect preserving the queue', () => {
+  it('reconnects on the same client and retransmits unacknowledged work', async () => {
+    const harness = makeHarness({
+      reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
+    })
+    harness.client.connect()
+    const first = openAuthenticated(harness)
+    await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
+    await vi.waitFor(() => {
+      expect(dataFrameIds(first)).toEqual([1])
+    })
+
+    first.fail()
+    expect(harness.disconnected).toEqual(['network'])
+    // Reconnect fires after the full-jitter delay (~2ms).
+    await new Promise((resolve) => setTimeout(resolve, 12))
+    const second = openAuthenticated(harness, 1)
+    // The unacknowledged frame is retransmitted on the same client with its id.
+    await vi.waitFor(() => {
+      expect(dataFrameIds(second)).toEqual([1])
+    })
+  })
+
+  it('never reconnects after a deliberate close', async () => {
+    const harness = makeHarness({
+      reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
+    })
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    harness.client.close()
+    socket.fail()
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(harness.disconnected).toEqual([])
+    expect(harness.sockets).toHaveLength(1)
+  })
+})
+
+describe('CloudRelayClient configured replay limit', () => {
+  it('evicts the oldest answered invoke from the bounded replay cache', async () => {
+    const harness = makeHarness({ replayLimit: 2 })
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    for (const id of [1, 2, 3]) {
+      await receivedData(socket, { rpc: 'invoke', id, channel: 'chat', args: [] })
+      await vi.waitFor(async () => {
+        const bodies = await readBodies(socket)
+        expect(bodies.some((body) => body['id'] === id && body['rpc'] === 'result')).toBe(true)
+      })
+    }
+    expect(harness.onRpc).toHaveBeenCalledTimes(3)
+    // Id 1 was evicted (limit 2) so a repeat re-runs onRpc; id 3 replays.
+    await receivedData(socket, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
+    await vi.waitFor(() => {
+      expect(harness.onRpc).toHaveBeenCalledTimes(4)
+    })
+    await receivedData(socket, { rpc: 'invoke', id: 3, channel: 'chat', args: [] })
+    await vi.waitFor(async () => {
+      expect(harness.onRpc).toHaveBeenCalledTimes(4)
+    })
+  })
+})
+
 describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
   it('suppresses a duplicate invoke while the first is still processing', async () => {
     let resolveRpc: ((value: { ok: boolean; result?: unknown }) => void) | null = null
