@@ -20,7 +20,8 @@ import {
   type AgentMessage,
   type AgentPart,
   type ThreadMessageCursor,
-  type ThreadMessagePage
+  type ThreadMessagePage,
+  type UserMessageSummary
 } from '../types'
 
 /**
@@ -547,6 +548,25 @@ export class ThreadManager {
   ): Promise<ThreadMessagePage> {
     if (!this.getOwnedThread(projectId, threadId)) return { messages: [], hasOlder: false }
     return this.agentMessageRepo.loadPageByThread(threadId, before, limit)
+  }
+
+  /** Load a contiguous mirrored window centered on an arbitrary message id. */
+  async loadMessagePageAround(
+    projectId: string,
+    threadId: string,
+    anchorId: string,
+    limit: number
+  ): Promise<ThreadMessagePage> {
+    if (!this.getOwnedThread(projectId, threadId)) {
+      return { messages: [], hasOlder: false, hasNewer: false }
+    }
+    return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+  }
+
+  /** Load every mirrored user-authored conversation message, oldest to newest. */
+  async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
+    if (!this.getOwnedThread(projectId, threadId)) return []
+    return this.agentMessageRepo.loadUserMessagesByThread(threadId)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */

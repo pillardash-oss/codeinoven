@@ -310,6 +310,8 @@ const INVOKE_CHANNELS = [
   'thread:listAll',
   'threads:search',
   'thread:loadMessages',
+  'thread:loadMessagesAround',
+  'thread:loadUserMessages',
   'thread:reorder',
   'thread:reorderScope',
   'thread:markRead',

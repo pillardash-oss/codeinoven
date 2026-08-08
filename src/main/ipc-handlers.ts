@@ -3102,6 +3102,25 @@ export function registerIpcHandlers(
       )
     }
   )
+  // Mirror-only centered transcript read for quick jumps to arbitrary messages.
+  ipcMain.handle(
+    'thread:loadMessagesAround',
+    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) => {
+      return threadManager.loadMessagePageAround(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateBoundedString(anchorId, 'Message ID', 1, 512),
+        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+      )
+    }
+  )
+  // Lightweight full user-message history for the header quick-jump list.
+  ipcMain.handle('thread:loadUserMessages', (_, projectId: unknown, threadId: unknown) =>
+    threadManager.loadUserMessages(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
   ipcMain.handle('thread:update', (_, projectId: string, threadId: string, input) =>
     threadManager.updateThread(
       validateEntityId(projectId, 'Project ID'),

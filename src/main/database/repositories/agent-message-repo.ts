@@ -5,8 +5,18 @@ import type {
   AgentMessageVisibility,
   AgentPart,
   ThreadMessageCursor,
-  ThreadMessagePage
+  ThreadMessagePage,
+  UserMessageSummary
 } from '../../../lib/types'
+
+/** Plain-text content of a user-authored agent message (mirrors the renderer). */
+function userMessageText(partsJson: string): string {
+  const parts = JSON.parse(partsJson) as AgentPart[]
+  return parts
+    .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
+    .map((p) => p.text)
+    .join('\n')
+}
 
 /** Plain-text content of an agent message used for full-text search indexing. */
 export function partsToSearchText(parts: AgentPart[]): string {
@@ -277,6 +287,81 @@ export class AgentMessageRepo {
       messages: pageRows.reverse().map((row) => rowToMessage(row)),
       hasOlder
     }
+  }
+
+  /**
+   * Load a contiguous window of conversation history centered on an arbitrary
+   * message id — half older and half newer around the anchor. Used to jump to a
+   * message far outside the currently loaded window.
+   */
+  loadPageAroundByThread(threadId: string, anchorId: string, limit: number): ThreadMessagePage {
+    const anchor = this.db.get<{ created_at: number }>(
+      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      threadId,
+      anchorId
+    )
+    if (!anchor) return { messages: [], hasOlder: false, hasNewer: false }
+
+    const half = Math.max(1, Math.floor(limit / 2))
+    const olderRows = this.db.all<AgentMessageRow>(
+      `SELECT * FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL
+         AND visibility IN ('conversation', 'working_trace')
+         AND (created_at < ? OR (created_at = ? AND id < ?))
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
+      threadId,
+      anchor.created_at,
+      anchor.created_at,
+      anchorId,
+      half + 1
+    )
+    const newerRows = this.db.all<AgentMessageRow>(
+      `SELECT * FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL
+         AND visibility IN ('conversation', 'working_trace')
+         AND (created_at > ? OR (created_at = ? AND id > ?))
+       ORDER BY created_at ASC, id ASC
+       LIMIT ?`,
+      threadId,
+      anchor.created_at,
+      anchor.created_at,
+      anchorId,
+      half + 1
+    )
+    const hasOlder = olderRows.length > half
+    const hasNewer = newerRows.length > half
+    const anchorRow = this.db.get<AgentMessageRow>(
+      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
+      threadId,
+      anchorId
+    )
+    const rows = [
+      ...olderRows.slice(0, half).reverse(),
+      ...(anchorRow ? [anchorRow] : []),
+      ...newerRows.slice(0, half)
+    ]
+    return {
+      messages: rows.map((row) => rowToMessage(row)),
+      hasOlder,
+      hasNewer
+    }
+  }
+
+  /** Every user-authored conversation message, oldest to newest. */
+  loadUserMessagesByThread(threadId: string): UserMessageSummary[] {
+    const rows = this.db.all<{ id: string; parts: string; created_at: number }>(
+      `SELECT id, parts, created_at FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL AND role = 'user'
+         AND visibility IN ('conversation', 'working_trace')
+       ORDER BY created_at ASC, id ASC`,
+      threadId
+    )
+    return rows.map((row) => ({
+      id: row.id,
+      content: userMessageText(row.parts),
+      createdAt: row.created_at
+    }))
   }
 
   loadAllByThread(threadId: string): AgentMessage[] {
