@@ -4,12 +4,16 @@
  *
  * Reusable overlay components (`Modal`, `DockableModal`) register their close
  * behavior on a LIFO stack while open, so the shortcut closes exactly the
- * topmost registered overlay. Everything else that blocks the UI — bits-ui
- * Dialog/AlertDialog (which listen for Escape on `document`) and overlays with
- * an element-level Escape handler — is closed through a non-bubbling synthetic
- * Escape on `document` and on the topmost visible `[role="dialog"]` element.
- * Non-bubbling events keep window-level listeners (e.g. the chat composer's
- * double-Escape stop) inert, so the shortcut can never abort a running turn.
+ * topmost registered overlay. Genuine modal dialogs — bits-ui Dialog/AlertDialog,
+ * which listen for Escape on `document` — are closed through a non-bubbling
+ * synthetic Escape on `document`. Non-bubbling events keep window-level
+ * listeners (e.g. the chat composer's double-Escape stop) inert, so the
+ * shortcut can never abort a running turn.
+ *
+ * Only `aria-modal="true"` dialogs are considered: hover-only popovers and
+ * pickers that merely carry `role="dialog"` (e.g. the context-usage popover)
+ * are permanently in the DOM and must never be mistaken for an open modal, or
+ * the shortcut would be swallowed and never close the active thread.
  */
 
 type CloseHandler = () => void
@@ -36,9 +40,15 @@ export function requestCloseTopOverlay(): boolean {
   return true
 }
 
-const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
+const DIALOG_SELECTOR = '[aria-modal="true"], [role="alertdialog"]'
 
 function isVisible(element: Element): boolean {
+  if (element instanceof HTMLElement) {
+    const style = window.getComputedStyle(element)
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+      return false
+    }
+  }
   const rect = element.getBoundingClientRect()
   return rect.width > 0 && rect.height > 0
 }
