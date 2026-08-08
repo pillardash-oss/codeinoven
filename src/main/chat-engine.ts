@@ -2886,7 +2886,25 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return null
-    return this.sessionStatuses.get(thread.sessionId) ?? null
+    const live = this.sessionStatuses.get(thread.sessionId)
+    if (live) return live
+    // After an app restart the in-memory status is gone, but a persisted
+    // auto-resume record is authoritative: reconstruct the warning card so the
+    // thread still shows its reset countdown and proves it will auto-run.
+    const pending = this.retryScheduler?.getPendingRetry(thread.sessionId)
+    if (!pending) return null
+    return {
+      state: 'error',
+      issue: {
+        kind: pending.issueKind,
+        message: pending.issueMessage,
+        harnessId: pending.harnessId,
+        retryable: true,
+        retryAt: pending.retryAt,
+        ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
+        ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
+      }
+    }
   }
 
   /**
@@ -9680,6 +9698,9 @@ export class ChatEngine {
       threadId: info.threadId,
       harnessId: issue.harnessId ?? info.driverId,
       retryAt,
+      issueKind: issue.kind,
+      issueMessage: issue.message,
+      ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
   }
