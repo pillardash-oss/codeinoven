@@ -28,7 +28,7 @@ Always read the APP-BIBLE.md file if it exists. It will guide you on the princip
 
 ### 1. work-ethic
 
-When you want to start a task, first create your plan, and put it in a plan.md file under `.cio/uncategorized/<feature>/` (see Strict Rules for the output layout) then, ensure you define the phase you are currently working on at the top of the plan.md file, then when you finish a task, update your progress in a progress.md file, stating what you've done successfully, and what you plan on doing next, then mark the task in the plan.md file as in-progress or completed. Do not stop till you have exhaustively completed the phases you are working on. Always commit contextually when you finish a plan, so we can rollback if needs be.
+When you want to start a task, first create your plan, and put it in a plan.md file then, ensure you define the phase you are currently working on at the top of the plan.md file, then when you finish a task, update your progress in a progress.md file, stating what you've done successfully, and what you plan on doing next, then mark the task in the plan.md file as in-progress or completed. Do not stop till you have exhaustively completed the phases you are working on. Always commit contextually when you finish a plan, so we can rollback if needs be.
 
 Here is an example of how a plan.md file should look like:
 
@@ -46,9 +46,6 @@ However, if you have a way to name files like I just described above, maybe in y
 
 ### 2. Strict Rules
 
-- Unless the user explicitly says otherwise, ALL agent outputs (reports, plans, progress, walkthroughs, test output, temp work, cloned repos, python `.venv`s, etc) belong under the project's `.cio/` folder — never the repo root and never the user's working tree. The platform already owns `.cio/specs/<feature>/spec.md` and `.cio/git/pr/<n>/`; do not touch those.
-- Feature work (plan*.md, progress*.md, walkthroughs, reports, test-result) goes in `.cio/uncategorized/<feature>/`, named so a human can read it at a glance.
-- Disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`.
 - Always use `bun`.
 - Never run `bun run dev` rather use `bun run check [FILES]` to get check the project. Only check the files that concerns you, never check the whole project unless explicitly asked to.
 - Use `bun run lint [FILES]` to lint files. Lint only files you worked on, never lint the whole repo except explicitly asked to!
@@ -56,7 +53,7 @@ However, if you have a way to name files like I just described above, maybe in y
 - Use `bun run test [FILES]` to use the defined test script. Test only files you worked on and the files that concerns them. Where they were imported to! Never run test for the whole app except explicitly asked to.
 - When formatting and linting, always do so for the files you worked on. And when testing, always test on the files and any additional files that concerns the ones you worked on. Never perform a full repo test/lint/format.
 - Always run tests if any before you start fixing, then after to know if you introduced any regression. This should be done after you have determined or estimated the files/areas you would work on.
-- Output the result of your test run to the `.cio/uncategorized/<feature>/test-result` directory, calling it (feature)-baseline.txt or (feature)-(1,2,...n).txt or (feature)-final.txt then grep only what you need from the result after the test is done running, something like grep failed or warning, then find the relevant line number in the files so you don't pollute the context with the whole test result (relevant and irrelevant).
+- Output the result of your test run to the agent-out/test-result directory, calling it (feature)-baseline.txt or (feature)-(1,2,...n).txt or (feature)-final.txt then grep only what you need from the result after the test is done running, something like grep failed or warning, then find the relevant line number in the files so you don't pollute the context with the whole test result (relevant and irrelevant).
 - Always commit your work contextually when you're done.
 - Do not use type `any` anywhere in this codebase!
 - In svelte when you add an attribute to an element, just like html, the default value is true, so writing something like `<Button active={true}>Sample</Button>` makes no sense, it should simply be `<Button active>Sample</Button>`
@@ -76,7 +73,7 @@ However, if you have a way to name files like I just described above, maybe in y
 - Always commit your work (the files you worked on regardless of any untracked changes or other git conflicts), so that I can easily audit your work.
 - Always give me a rundown of all you did; what went wrong (if applicable) and how you fixed or approached it and enough info for me to understand your work.
 - If you ever have a conflict where the plan.md file or the progress.md file has been overwritten since your last edit, then create a new plan-[feature].md or progress-[feature].md file and continue with that.
-- All files for documentation (plan*.md, progress*.md, test-output, walkthroughs, etc) should be placed in the `.cio/uncategorized/<feature>/` directory. If it doesn't exist, create it, so that the root of the folder is not polluted and remains work only files.
+- All files for documentation (plan*.md, progress*.md, test-output, walkthroughs, etc) should be placed in the agent-out/ directory. If it doesn't exist, create it, so that the root of the folder is not polluted and remains work only files.
 - Never commit an ignored file!
 - DO NOT USE untrack in this project for svelte!!! If you are using untrack then you are writing your code wrongly!!
 - Do not overuse $effect! Always read the svelte documentation to understand how state works and refrain from overusing $effect or $derived or using $derived as a readonly thing!
