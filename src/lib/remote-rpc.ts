@@ -186,7 +186,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'git:commitDiff',
   'git:commitFileDiff',
   'git:reset',
-  'git:revert',
+  'git:deleteCommit',
   'git:getIdentity',
   'git:setIdentity',
   'git:remotes',

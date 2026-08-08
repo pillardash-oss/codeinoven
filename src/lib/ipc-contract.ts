@@ -695,8 +695,9 @@ export interface IpcInvokeContract {
     [projectId: string, mode: import('./types').GitResetMode, target?: string],
     GitStatus
   >
-  'git:revert': Contract<[projectId: string, target: string], GitStatus>
+  'git:deleteCommit': Contract<[projectId: string, target: string], GitStatus>
   'git:getIdentity': Contract<[projectId: string], GitIdentity>
+
   'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
   'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>
   'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>

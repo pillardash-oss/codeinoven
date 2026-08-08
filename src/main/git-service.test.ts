@@ -308,28 +308,29 @@ describe('GitService', () => {
     expect(trackedContent).toBe('original\n')
   })
 
-  it('reverts a commit by creating an inverse commit', async () => {
+  it('deletes a commit by dropping it from history and replaying later commits', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
     await service.initialize(directory)
-    await writeFile(join(directory, 'a.txt'), 'original\n', 'utf-8')
-    await service.stage(directory, ['a.txt'])
-    await service.commit(directory, 'initial')
+    for (const [name, content] of [
+      ['a', 'one\n'],
+      ['b', 'two\n'],
+      ['c', 'three\n']
+    ] as const) {
+      await writeFile(join(directory, `${name}.txt`), content, 'utf-8')
+      await service.stage(directory, [`${name}.txt`])
+      await service.commit(directory, name)
+    }
 
-    await writeFile(join(directory, 'a.txt'), 'changed\n', 'utf-8')
-    await service.stage(directory, ['a.txt'])
-    await service.commit(directory, 'feature change')
+    const before = await service.log(directory)
+    expect(before.map((commit) => commit.message.split('\n')[0])).toEqual(['c', 'b', 'a'])
+    const middle = before[1]
+    expect(middle?.message).toContain('b')
 
-    const log = await service.log(directory)
-    const featureCommit = log[0]
-    expect(featureCommit?.message).toContain('feature change')
-
-    await service.revert(directory, featureCommit?.hash ?? '')
+    await service.deleteCommit(directory, middle?.hash ?? '')
 
     const after = await service.log(directory)
-    expect(after[0]?.message).toContain('Revert')
-    const content = await readFile(join(directory, 'a.txt'), 'utf-8')
-    expect(content).toBe('original\n')
+    expect(after.map((commit) => commit.message.split('\n')[0])).toEqual(['c', 'a'])
   })
 
   it('stashes only the paths given when a subset is requested', async () => {

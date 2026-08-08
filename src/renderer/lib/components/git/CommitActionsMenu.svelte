@@ -6,9 +6,9 @@
   interface Props {
     isHead: boolean
     resetBusy?: boolean
-    revertBusy?: boolean
+    deleteBusy?: boolean
     onReset: (mode: GitResetMode) => void
-    onRevert: () => void
+    onDelete: () => void
     onAmend?: () => void
     onCopyHash: () => void
     onCopyMessage: () => void
@@ -17,9 +17,9 @@
   let {
     isHead,
     resetBusy = false,
-    revertBusy = false,
+    deleteBusy = false,
     onReset,
-    onRevert,
+    onDelete,
     onAmend,
     onCopyHash,
     onCopyMessage
@@ -29,11 +29,11 @@
     'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
 </script>
 
-<DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || revertBusy}>
+<DropdownMenu.Item class={itemClass} onSelect={onCopyHash} disabled={resetBusy || deleteBusy}>
   <Copy size={12} class="shrink-0 text-dimmed" />
   Copy commit hash
 </DropdownMenu.Item>
-<DropdownMenu.Item class={itemClass} onSelect={onCopyMessage} disabled={resetBusy || revertBusy}>
+<DropdownMenu.Item class={itemClass} onSelect={onCopyMessage} disabled={resetBusy || deleteBusy}>
   <MessageSquareText size={12} class="shrink-0 text-dimmed" />
   Copy commit message
 </DropdownMenu.Item>
@@ -41,7 +41,7 @@
 <DropdownMenu.Separator class="my-1 h-px bg-border" />
 
 <DropdownMenu.Sub>
-  <DropdownMenu.SubTrigger class={itemClass} disabled={resetBusy || revertBusy}>
+  <DropdownMenu.SubTrigger class={itemClass} disabled={resetBusy || deleteBusy}>
     <RotateCcw size={12} class="shrink-0 text-dimmed" />
     Reset to here…
   </DropdownMenu.SubTrigger>
@@ -68,7 +68,7 @@
 </DropdownMenu.Sub>
 
 {#if isHead && onAmend}
-  <DropdownMenu.Item class={itemClass} onSelect={onAmend} disabled={resetBusy || revertBusy}>
+  <DropdownMenu.Item class={itemClass} onSelect={onAmend} disabled={resetBusy || deleteBusy}>
     <GitCommit size={12} class="shrink-0 text-dimmed" />
     Amend commit message
   </DropdownMenu.Item>
@@ -78,9 +78,9 @@
 
 <DropdownMenu.Item
   class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
-  onSelect={onRevert}
-  disabled={revertBusy || resetBusy}
+  onSelect={onDelete}
+  disabled={deleteBusy || resetBusy}
 >
   <Trash2 size={12} class="shrink-0" />
-  Revert commit
+  Delete commit
 </DropdownMenu.Item>

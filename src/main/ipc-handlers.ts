@@ -2587,11 +2587,11 @@ export function registerIpcHandlers(
     }
     return status
   })
-  ipcMain.handle('git:revert', async (_, projectId: unknown, target: unknown) => {
+  ipcMain.handle('git:deleteCommit', async (_, projectId: unknown, target: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const status = await gitService.revert(
+    const status = await gitService.deleteCommit(
       await resolveProjectPath(safeProjectId),
-      validateEntityId(target, 'Revert target')
+      validateEntityId(target, 'Delete commit target')
     )
     const threads = await threadManager.listThreads(safeProjectId)
     for (const thread of threads) {

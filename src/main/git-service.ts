@@ -377,12 +377,17 @@ export class GitService {
     })
   }
 
-  /** Revert a commit by creating a new commit that undoes it. */
-  async revert(projectPath: string, target: string): Promise<GitStatus> {
+  /**
+   * Delete a commit by dropping it from history (interactive-rebase semantics).
+   * `git rebase --onto <target>^ <target>` replays every commit after `target`
+   * onto its parent, skipping `target` itself. Only safe for unpushed commits;
+   * pushed commits need a force-push afterwards.
+   */
+  async deleteCommit(projectPath: string, target: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).raw(['revert', '--no-edit', target])
+        await this.client(directory).raw(['rebase', '--onto', `${target}^`, target])
       })
       return this.readStatus(directory)
     })

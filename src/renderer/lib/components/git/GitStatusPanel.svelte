@@ -94,7 +94,7 @@
   let commitMessage = $state('')
   let selectedCommit = $state<GitCommitInfo | null>(null)
   let commitDiffChanges = $state<GitFileChange[]>([])
-  let revertTarget = $state<GitCommitInfo | null>(null)
+  let deleteCommitTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(null)
   let githubConnected = $state(false)
@@ -439,15 +439,15 @@
     acknowledgeActiveTurn = false
   }
 
-  function requestRevert(commit: GitCommitInfo): void {
-    revertTarget = commit
+  function requestDeleteCommit(commit: GitCommitInfo): void {
+    deleteCommitTarget = commit
   }
 
-  async function confirmRevert(): Promise<void> {
-    const target = revertTarget
+  async function confirmDeleteCommit(): Promise<void> {
+    const target = deleteCommitTarget
     if (!target) return
-    revertTarget = null
-    await gitState.revert(projectId, target.hash)
+    deleteCommitTarget = null
+    await gitState.deleteCommit(projectId, target.hash)
     if (!gitState.error) {
       clearSelectedCommit()
       commitHistory = []
@@ -1156,9 +1156,9 @@
                     <CommitActionsMenu
                       isHead={isHeadCommit}
                       resetBusy={gitState.isBusy('reset')}
-                      revertBusy={gitState.isBusy('revert')}
+                      deleteBusy={gitState.isBusy('delete-commit')}
                       onReset={(mode) => requestReset(mode, commit.hash)}
-                      onRevert={() => requestRevert(commit)}
+                      onDelete={() => requestDeleteCommit(commit)}
                       onAmend={startAmend}
                       onCopyHash={() => void copyCommitHash(commit)}
                       onCopyMessage={() => void copyCommitMessage(commit)}
@@ -1535,9 +1535,9 @@
                       <CommitActionsMenu
                         isHead={isCurrentHead}
                         resetBusy={gitState.isBusy('reset')}
-                        revertBusy={gitState.isBusy('revert')}
+                        deleteBusy={gitState.isBusy('delete-commit')}
                         onReset={(mode) => requestReset(mode, commit.hash)}
-                        onRevert={() => requestRevert(commit)}
+                        onDelete={() => requestDeleteCommit(commit)}
                         onAmend={isCurrentHead ? startAmend : undefined}
                         onCopyHash={() => void copyCommitHash(commit)}
                         onCopyMessage={() => void copyCommitMessage(commit)}
@@ -2196,22 +2196,24 @@
     </Modal>
   {/if}
 
-  {#if revertTarget}
-    {@const revertCommit = revertTarget}
-    <AlertDialog.Root open onOpenChange={() => (revertTarget = null)}>
+  {#if deleteCommitTarget}
+    {@const deleteCommit = deleteCommitTarget}
+    <AlertDialog.Root open onOpenChange={() => (deleteCommitTarget = null)}>
       <AlertDialog.Portal>
         <AlertDialog.Content
           class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
         >
           <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Revert commit?
+            Delete commit?
           </AlertDialog.Title>
           <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            Create a new commit that undoes
+            Drop
             <strong class="font-medium text-foreground">
-              “{revertCommit.message.split('\n')[0]}”
+              “{deleteCommit.message.split('\n')[0]}”
             </strong>
-            ({revertCommit.shortHash}). The original commit stays in history.
+            ({deleteCommit.shortHash}) from history. Commits after it are replayed and get new
+            hashes, so this is safest for commits that have not been pushed yet. This cannot be
+            undone.
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -2220,14 +2222,14 @@
               Cancel
             </AlertDialog.Cancel>
             <AlertDialog.Action
-              class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-              disabled={gitState.isBusy('revert')}
-              onclick={() => void confirmRevert()}
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('delete-commit')}
+              onclick={() => void confirmDeleteCommit()}
             >
-              {#if gitState.isBusy('revert')}
+              {#if gitState.isBusy('delete-commit')}
                 <Loader2 size={12} class="animate-spin" />
               {/if}
-              Revert commit
+              Delete commit
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>
