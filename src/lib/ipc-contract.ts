@@ -1151,6 +1151,11 @@ export interface IpcInvokeContract {
   'remote:disconnectDevice': Contract<[deviceId: string], void>
   'remote:renameDevice': Contract<[deviceId: string, name: string], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
+  /**
+   * Asks the main process to close the main window — the same path as the
+   * traffic-light close button, so the working-threads confirmation gate applies.
+   */
+  'app:requestClose': Contract<[], void>
 }
 
 export interface ThreadClickedPayload {
@@ -1236,6 +1241,13 @@ export interface IpcEventContract {
   'window:beforeQuit': []
   /** Emitted when the app is asked to close while threads are still working. */
   'window:confirmClose': [payload: CloseConfirmationPayload]
+  /**
+   * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
+   * key (so the macOS "Close Window" menu accelerator never fires) and asks the
+   * renderer to close the active surface — modal, settings page, or thread —
+   * and only fall back to closing the window when nothing is active.
+   */
+  'window:closeShortcut': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

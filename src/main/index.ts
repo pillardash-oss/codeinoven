@@ -142,6 +142,29 @@ ipcMain.handle('app:confirmClose', () => {
   quitConfirmed = true
   app.quit()
 })
+
+/**
+ * Close the main window on the renderer's request (Cmd/Ctrl+W with nothing
+ * active). Goes through the same `close` gate as the traffic-light button, so
+ * working threads still get the close-confirmation prompt.
+ */
+ipcMain.handle('app:requestClose', () => {
+  const window = mainWindow
+  if (window && !window.isDestroyed()) {
+    window.close()
+  }
+})
+
+/** Cmd/Ctrl+W is "close the active surface" — the renderer decides what that is. */
+function isCloseShortcut(input: Electron.Input): boolean {
+  return (
+    input.type === 'keyDown' &&
+    !input.isAutoRepeat &&
+    (input.meta || input.control) &&
+    !input.alt &&
+    input.key.toLowerCase() === 'w'
+  )
+}
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
 const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
@@ -315,6 +338,17 @@ function createWindow(): BrowserWindow {
 
   ptyService.attach(window.webContents)
   windowStateService.attach(window)
+
+  window.webContents.on('before-input-event', (event, input) => {
+    // Cmd/Ctrl+W is handled by the renderer ("close the active surface": modal,
+    // settings page, or thread). Prevent the default here so the macOS
+    // application menu's "Close Window" accelerator never closes the window
+    // before the renderer can decide what should actually close.
+    if (isCloseShortcut(input)) {
+      event.preventDefault()
+      window.webContents.send('window:closeShortcut')
+    }
+  })
 
   window.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
