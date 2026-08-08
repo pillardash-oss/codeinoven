@@ -544,4 +544,180 @@ describe('AssignmentEngine', () => {
     expect(reworking.status).toBe('approved')
     expect(reworking.auditCycle?.status).toBe('reworking')
   })
+
+  it('re-dispatches a failed worker task to a fresh worker thread', async () => {
+    const engine = new AssignmentEngine(
+      storage,
+      db,
+      () => 100,
+      () => 'assignment-1'
+    )
+    await engine.createDraft({
+      projectId: 'project-1',
+      coordinatorThreadId: coordinatorId,
+      specId: 'spec-1',
+      specVersion: 1,
+      content: {
+        ...content(),
+        tasks: content().tasks.map((task) =>
+          task.id === 'design' ? { ...task, dependsOn: [] } : task
+        )
+      },
+      provenance: { source: 'agent', actor: 'Sr. Engineer' }
+    })
+    await engine.activate('project-1', coordinatorId)
+
+    const first = await engine.assignTask('assignment-1', 'design', 'assign-design')
+    const firstThreadId = first.thread?.id ?? ''
+
+    await engine.reportTask(
+      'assignment-1',
+      'design',
+      firstThreadId,
+      { status: 'failed', summary: 'crashed', evidence: [], reportedAt: 100 },
+      'report-fail'
+    )
+    const failed = await engine.reviewTask(
+      'assignment-1',
+      'design',
+      coordinatorId,
+      {
+        decision: 'fail',
+        checklistResults: [
+          { item: 'Shared colors are defined', passed: false, evidence: 'missing' }
+        ],
+        notes: 'Worker crashed; re-dispatch.',
+        reviewedAt: 100
+      },
+      'review-fail'
+    )
+    expect(failed.task?.status).toBe('failed')
+
+    const redispatch = await engine.assignTask('assignment-1', 'design', 'redispatch')
+    expect(redispatch.task?.status).toBe('running')
+    expect(redispatch.task?.report).toBeUndefined()
+    expect(redispatch.task?.review).toBeUndefined()
+    expect(redispatch.thread?.id).not.toBe(firstThreadId)
+    expect(redispatch.thread?.assignmentTaskId).toBe('design')
+
+    const abandoned = await new ThreadManager(db).getThread('project-1', firstThreadId)
+    expect(abandoned?.assignmentId).toBeUndefined()
+    expect(abandoned?.assignmentRole).toBeUndefined()
+    expect(abandoned?.assignmentTaskId).toBeUndefined()
+    expect(abandoned?.coordinatorThreadId).toBeUndefined()
+  })
+
+  it('lets the coordinator re-review a failed task as rework', async () => {
+    const engine = new AssignmentEngine(
+      storage,
+      db,
+      () => 100,
+      () => 'assignment-1'
+    )
+    await engine.createDraft({
+      projectId: 'project-1',
+      coordinatorThreadId: coordinatorId,
+      specId: 'spec-1',
+      specVersion: 1,
+      content: {
+        ...content(),
+        tasks: content().tasks.map((task) =>
+          task.id === 'design' ? { ...task, dependsOn: [] } : task
+        )
+      },
+      provenance: { source: 'agent', actor: 'Sr. Engineer' }
+    })
+    await engine.activate('project-1', coordinatorId)
+    const assigned = await engine.assignTask('assignment-1', 'design', 'assign-design')
+    await engine.reportTask(
+      'assignment-1',
+      'design',
+      assigned.thread?.id ?? '',
+      { status: 'failed', summary: 'crashed', evidence: [], reportedAt: 100 },
+      'report-fail'
+    )
+    await engine.reviewTask(
+      'assignment-1',
+      'design',
+      coordinatorId,
+      {
+        decision: 'fail',
+        checklistResults: [],
+        notes: 'crash',
+        reviewedAt: 100
+      },
+      'review-fail'
+    )
+    const rework = await engine.reviewTask(
+      'assignment-1',
+      'design',
+      coordinatorId,
+      {
+        decision: 'rework',
+        checklistResults: [
+          { item: 'Shared colors are defined', passed: false, evidence: 'missing' }
+        ],
+        notes: 'Re-dispatch after crash.',
+        reviewedAt: 101
+      },
+      'review-rework'
+    )
+    expect(rework.task?.status).toBe('rework')
+    const reassigned = await engine.assignTask('assignment-1', 'design', 'reassign')
+    expect(reassigned.task?.status).toBe('running')
+  })
+
+  it('persists and restores Assignment API capability tokens across engine instances', async () => {
+    const engine = new AssignmentEngine(
+      storage,
+      db,
+      () => 100,
+      () => 'assignment-1'
+    )
+    await engine.createDraft({
+      projectId: 'project-1',
+      coordinatorThreadId: coordinatorId,
+      specId: 'spec-1',
+      specVersion: 1,
+      content: content(),
+      provenance: { source: 'agent', actor: 'Sr. Engineer' }
+    })
+    await engine.activate('project-1', coordinatorId)
+
+    engine.saveApiPort(54916)
+    expect(engine.loadApiPort()).toBe(54916)
+    engine.saveApiCapability('token-a', {
+      role: 'worker',
+      assignmentId: 'assignment-1',
+      threadId: 'thread-1',
+      taskId: 'design'
+    })
+    engine.saveApiCapability('token-b', {
+      role: 'coordinator',
+      assignmentId: 'assignment-1',
+      threadId: coordinatorId
+    })
+
+    const restarted = new AssignmentEngine(
+      storage,
+      db,
+      () => 100,
+      () => 'unused'
+    )
+    expect(restarted.loadApiPort()).toBe(54916)
+    const restored = restarted.loadApiCapabilities()
+    expect(restored.get('token-a')).toEqual({
+      role: 'worker',
+      assignmentId: 'assignment-1',
+      threadId: 'thread-1',
+      taskId: 'design'
+    })
+    expect(restored.get('token-b')).toEqual({
+      role: 'coordinator',
+      assignmentId: 'assignment-1',
+      threadId: coordinatorId
+    })
+    restarted.removeApiCapabilitiesForAssignment('assignment-1')
+    expect(restarted.loadApiCapabilities().size).toBe(0)
+  })
 })

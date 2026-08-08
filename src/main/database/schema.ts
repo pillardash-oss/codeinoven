@@ -366,6 +366,19 @@ CREATE TABLE IF NOT EXISTS assignment_coordinator_snapshots (
   snapshot_json TEXT NOT NULL,
   claimed_at    INTEGER NOT NULL,
   PRIMARY KEY (assignment_id, snapshot_hash)
+);
+
+-- Durable capability tokens for the in-process Assignment API. Tokens and the
+-- bound port survive app restarts so in-flight worker/coordinator harness
+-- sessions that rehydrate keep a valid base URL + bearer token instead of being
+-- orphaned the moment the main process restarts.
+CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
+  token         TEXT PRIMARY KEY NOT NULL,
+  role          TEXT NOT NULL,
+  assignment_id TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  task_id       TEXT,
+  created_at    INTEGER NOT NULL
 );`
 
 export const HARNESS_USAGE_SQL = `

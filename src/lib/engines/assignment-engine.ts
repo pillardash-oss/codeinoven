@@ -3,6 +3,7 @@ import { stat } from 'fs/promises'
 import { createHash, randomInt } from 'crypto'
 import type { Database } from '../../main/database/database'
 import { AssignmentRepo } from '../../main/database/repositories/assignment-repo'
+import type { AssignmentApiCapabilityRow } from '../../main/database/repositories/assignment-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import type { StorageEngine } from '../../main/storage-engine'
 import type {
@@ -236,6 +237,30 @@ export class AssignmentEngine {
   /** Mark the state reached by a completed coordinator turn as already observed. */
   async rememberCoordinatorSnapshot(assignmentId: string): Promise<void> {
     await this.claimCoordinatorSnapshot(assignmentId)
+  }
+
+  /** Durable loopback port for the Assignment API (survives app restarts). */
+  saveApiPort(port: number): void {
+    this.repo.saveApiPort(port)
+  }
+
+  loadApiPort(): number | null {
+    return this.repo.loadApiPort()
+  }
+
+  /** Persist a capability token so in-flight harness sessions survive restarts. */
+  saveApiCapability(token: string, capability: AssignmentApiCapabilityRow): void {
+    this.repo.saveApiCapability(token, capability)
+  }
+
+  /** Restore every persisted capability token after a restart. */
+  loadApiCapabilities(): Map<string, AssignmentApiCapabilityRow> {
+    return this.repo.loadApiCapabilities()
+  }
+
+  /** Drop capability tokens once an Assignment reaches a terminal state. */
+  removeApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.repo.removeApiCapabilitiesForAssignment(assignmentId)
   }
 
   async markdownPath(projectId: string, coordinatorThreadId: string): Promise<string> {
@@ -745,7 +770,7 @@ export class AssignmentEngine {
 
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
-    if (!['ready', 'rework'].includes(task.status)) {
+    if (!['ready', 'rework', 'failed'].includes(task.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         `Task ${taskId} is ${task.status}, not ready for assignment`
@@ -760,18 +785,38 @@ export class AssignmentEngine {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
 
+    // A failed task (worker crash / rejected deliverable) is re-dispatchable:
+    // clear its stale report, review, worker name, and thread so a fresh worker
+    // thread is created for the retry — never reuse the crashed worker's thread.
+    // The abandoned thread is unlinked from the Assignment so a late harness
+    // session error on it cannot report as this task's current worker.
+    const staleThreadId = task.status === 'failed' ? task.threadId : undefined
+    const dispatchBase =
+      task.status === 'failed'
+        ? {
+            ...task,
+            report: undefined,
+            review: undefined,
+            workerName: undefined,
+            threadId: undefined
+          }
+        : task
+    if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
+      await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
+    }
+
     let assignedTask: AssignmentTask
     let thread: Thread | null = coordinator
-    if (task.owner === 'senior') {
+    if (dispatchBase.owner === 'senior') {
       assignedTask = {
-        ...task,
+        ...dispatchBase,
         threadId: active.coordinatorThreadId,
         status: 'running',
         startedAt: this.now()
       }
-    } else if (task.threadId) {
-      assignedTask = { ...task, status: 'running', startedAt: this.now() }
-      thread = await this.threads.getThread(active.projectId, task.threadId)
+    } else if (dispatchBase.threadId) {
+      assignedTask = { ...dispatchBase, status: 'running', startedAt: this.now() }
+      thread = await this.threads.getThread(active.projectId, dispatchBase.threadId)
     } else {
       const workerName = await this.workerName(active)
       const settings = await this.workerSettings(active, task, coordinator.settings)
@@ -790,7 +835,7 @@ export class AssignmentEngine {
         coordinatorThreadId: active.coordinatorThreadId
       })
       assignedTask = {
-        ...task,
+        ...dispatchBase,
         workerName,
         threadId: thread.id,
         status: 'running',
@@ -946,7 +991,7 @@ export class AssignmentEngine {
       throw new AssignmentEngineError('unauthorized', 'Only the Sr. Engineer can review tasks')
     }
     const task = this.requireTask(active, taskId)
-    if (!['reported', 'attention'].includes(task.status)) {
+    if (!['reported', 'attention', 'failed'].includes(task.status)) {
       throw new AssignmentEngineError('invalid_transition', `Task ${taskId} has not reported`)
     }
     if (!this.repo.claimOperation(operationId, assignmentId, 'review_task')) {
@@ -999,6 +1044,9 @@ export class AssignmentEngine {
     }
     this.repo.save(updated, active.version)
     await this.writeMarkdown(updated)
+    if (allComplete) {
+      this.removeApiCapabilitiesForAssignment(active.id)
+    }
     const result: AssignmentToolResult = {
       assignment: updated,
       task: reviewedTask,

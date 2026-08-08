@@ -371,6 +371,22 @@ export class ThreadManager {
     return updated
   }
 
+  /**
+   * Detach a worker thread from its Assignment after its task is re-dispatched
+   * to a fresh worker. The abandoned thread must no longer be treated as an
+   * Assignment worker so a late harness session error on it cannot report as
+   * the task's current worker.
+   */
+  async unlinkAssignmentThread(projectId: string, threadId: string): Promise<void> {
+    this.requireOwnedThread(projectId, threadId)
+    this.threadRepo.updateField(threadId, 'assignment_id', null)
+    this.threadRepo.updateField(threadId, 'assignment_role', null)
+    this.threadRepo.updateField(threadId, 'assignment_task_id', null)
+    this.threadRepo.updateField(threadId, 'coordinator_thread_id', null)
+    const updated = this.threadRepo.get(threadId)
+    if (updated) this.onChange?.(updated)
+  }
+
   async setAuditState(
     projectId: string,
     threadId: string,
