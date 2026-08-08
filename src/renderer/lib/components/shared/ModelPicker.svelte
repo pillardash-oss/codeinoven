@@ -360,6 +360,7 @@
     harnessFilterOpen = false
     selectedHarnesses.clear()
     showAllHarnesses = false
+    pickerListScrollTop = 0
   }
 
   function handleOpenChange(nextOpen: boolean): void {
@@ -370,14 +371,223 @@
     resetPicker()
     void tick().then(() => {
       searchInput?.focus()
-      modelList
-        ?.querySelector(`[data-model-id="${CSS.escape(modelId)}"]`)
-        ?.scrollIntoView({ block: 'nearest' })
+      const selectedOffset = pickerOffsetForSelectedModel()
+      if (selectedOffset !== undefined) {
+        scrollPickerListTo(selectedOffset - 60)
+      }
     })
     // Revalidate exactly once per open. Keeping this outside a reactive effect
     // prevents catalog updates from snapping the user's scroll position back
     // to the selected model.
     if (projectId) void providerCatalog.refresh(projectId)
+  }
+
+  // ---- Virtualized model list ----------------------------------------------
+  // The list can render 500+ model rows on every open; mounting them all
+  // synchronously costs ~120ms and delays the picker's first paint. Only the
+  // rows intersecting the scroll viewport (plus an overscan) are mounted,
+  // positioned by exact per-kind heights so scroll offsets stay accurate.
+  const PICKER_OVERSCAN = 8
+  const PICKER_ROW_HEIGHT = {
+    divider: 9,
+    header: 28,
+    'provider-header': 28,
+    'provider-message': 32,
+    'unavailable-model': 40,
+    model: 44
+  } as const
+
+  type PickerListItem =
+    | { kind: 'divider'; key: string }
+    | {
+        kind: 'header'
+        key: string
+        id: string
+        text: string
+        icon: typeof Star
+        iconClass: string
+        count: number
+      }
+    | { kind: 'provider-header'; key: string; provider: ProviderCatalog }
+    | { kind: 'provider-message'; key: string; provider: ProviderCatalog }
+    | {
+        kind: 'unavailable-model'
+        key: string
+        favorite: { modelKey: string; providerId: string; modelId: string }
+      }
+    | {
+        kind: 'model'
+        key: string
+        entry: ModelEntry
+        favoriteKey?: string
+        draggable: boolean
+      }
+
+  let pickerListScrollTop = $state(0)
+  let pickerViewport = $state(240)
+
+  /** Flatten every visible list section into positioned rows. */
+  let pickerLayout = $derived.by(() => {
+    const items: PickerListItem[] = []
+
+    if (favoriteModelsList.length > 0) {
+      items.push({
+        kind: 'header',
+        key: 'header-favorites',
+        id: 'favorites',
+        text: 'Favorites',
+        icon: Star,
+        iconClass: 'text-amber-400',
+        count: favoriteModelsList.length
+      })
+      if (!collapsedGroups.has('favorites')) {
+        for (const entry of favoriteModelsList) {
+          items.push({
+            kind: 'model',
+            key: `fav-${modelEntryKey(entry)}`,
+            entry,
+            favoriteKey: modelKey(entry.provider.id, entry.model.id),
+            draggable: Boolean(onReorderFavorite)
+          })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-favorites' })
+    }
+
+    if (recentModelsList.length > 0) {
+      items.push({
+        kind: 'header',
+        key: 'header-recent',
+        id: 'recent',
+        text: 'Recently used',
+        icon: Clock,
+        iconClass: 'text-muted',
+        count: recentModelsList.length
+      })
+      if (!collapsedGroups.has('recent')) {
+        for (const entry of recentModelsList) {
+          items.push({ kind: 'model', key: `rec-${modelEntryKey(entry)}`, entry, draggable: false })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-recent' })
+    }
+
+    if (unavailableFavoriteModels.length > 0 && !search) {
+      items.push({
+        kind: 'header',
+        key: 'header-unavailable',
+        id: 'unavailable-favorites',
+        text: 'Unavailable favorites',
+        icon: Star,
+        iconClass: 'text-dimmed',
+        count: unavailableFavoriteModels.length
+      })
+      if (!collapsedGroups.has('unavailable-favorites')) {
+        for (const favorite of unavailableFavoriteModels) {
+          items.push({ kind: 'unavailable-model', key: `unav-${favorite.modelKey}`, favorite })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-unavailable' })
+    }
+
+    for (const provider of filteredProviders) {
+      const providerKey = provider.harnessId + ':' + provider.id
+      items.push({ kind: 'provider-header', key: `ph-${providerKey}`, provider })
+      if (!collapsedGroups.has(providerKey)) {
+        if (provider.catalogStatus === 'unavailable') {
+          items.push({ kind: 'provider-message', key: `pm-${providerKey}`, provider })
+        } else {
+          for (const model of provider.models) {
+            items.push({
+              kind: 'model',
+              key: `m-${modelEntryKey({ provider, model })}`,
+              entry: { provider, model },
+              draggable: false
+            })
+          }
+        }
+      }
+    }
+
+    let total = 0
+    const offsets: number[] = []
+    for (const item of items) {
+      offsets.push(total)
+      total += PICKER_ROW_HEIGHT[item.kind]
+    }
+    offsets.push(total)
+    return { items, offsets, total }
+  })
+
+  /** Flat, ordered keys of every model row, for keyboard navigation. */
+  let pickerModelKeys = $derived(
+    pickerLayout.items.filter((item) => item.kind === 'model').map((item) => item.key)
+  )
+
+  let pickerVisibleItems = $derived.by(() => {
+    const { items, offsets, total } = pickerLayout
+    if (items.length === 0) return { items: [], total }
+    const start = Math.max(0, pickerItemIndexAt(offsets, pickerListScrollTop) - PICKER_OVERSCAN)
+    const end = Math.min(
+      items.length,
+      pickerItemIndexAt(offsets, pickerListScrollTop + pickerViewport) + PICKER_OVERSCAN + 1
+    )
+    const visible: (PickerListItem & { offset: number })[] = []
+    for (let index = start; index < end; index++) {
+      visible.push({ ...items[index], offset: offsets[index] })
+    }
+    return { items: visible, total }
+  })
+
+  /** Index of the item whose [offset, offset+height) range contains `target`. */
+  function pickerItemIndexAt(offsets: number[], target: number): number {
+    let low = 0
+    let high = offsets.length - 2
+    if (target <= offsets[low]) return low
+    if (target >= offsets[high + 1]) return high
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (offsets[mid + 1] <= target) low = mid + 1
+      else high = mid
+    }
+    return low
+  }
+
+  /** Pixel offset of the currently selected model row, if it is listed. */
+  function pickerOffsetForSelectedModel(): number | undefined {
+    const index = pickerLayout.items.findIndex(
+      (item) =>
+        item.kind === 'model' &&
+        item.entry.model.id === modelId &&
+        item.entry.provider.id === providerId &&
+        item.entry.provider.harnessId === harnessId
+    )
+    return index === -1 ? undefined : pickerLayout.offsets[index]
+  }
+
+  /** Scroll the virtual list to a pixel offset (state + DOM stay in sync). */
+  function scrollPickerListTo(top: number): void {
+    pickerListScrollTop = Math.max(0, top)
+    if (modelList) modelList.scrollTop = pickerListScrollTop
+  }
+
+  /** Keep the viewport height and scroll position in sync for the virtual list. */
+  function measurePickerList(node: HTMLDivElement): { destroy(): void } {
+    pickerViewport = node.clientHeight
+    const resizeObserver = new ResizeObserver(() => {
+      pickerViewport = node.clientHeight
+    })
+    resizeObserver.observe(node)
+    const onScroll = (): void => {
+      pickerListScrollTop = node.scrollTop
+    }
+    node.addEventListener('scroll', onScroll, { passive: true })
+    return {
+      destroy() {
+        resizeObserver.disconnect()
+        node.removeEventListener('scroll', onScroll)
+      }
+    }
   }
 
   /** True while the current project's catalog is being re-probed by the store. */
@@ -497,6 +707,7 @@
             id={searchId}
             bind:this={searchInput}
             bind:value={search}
+            oninput={() => scrollPickerListTo(0)}
             type="text"
             class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
             placeholder="Search models..."
@@ -504,6 +715,7 @@
             onkeydown={(event: KeyboardEvent) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
+                scrollPickerListTo(0)
                 const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
                 if (firstBtn instanceof HTMLElement) firstBtn.focus()
                 return
@@ -607,7 +819,12 @@
           </div>
         {/if}
 
-        <div id={listId} bind:this={modelList} class="max-h-60 overflow-y-auto p-1">
+        <div
+          id={listId}
+          bind:this={modelList}
+          use:measurePickerList
+          class="max-h-60 overflow-y-auto p-1"
+        >
           {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
             <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
           {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
@@ -619,143 +836,20 @@
                   : 'No models in the selected harnesses'}
             </p>
           {:else}
-            {#if favoriteModelsList.length > 0}
-              {@render groupHeader(
-                Star,
-                'favorites',
-                'Favorites',
-                'text-amber-400',
-                favoriteModelsList.length
-              )}
-              {#if !collapsedGroups.has('favorites')}
-                {#each favoriteModelsList as entry (modelEntryKey(entry))}
-                  {@const key = modelKey(entry.provider.id, entry.model.id)}
-                  <div
-                    class="relative"
-                    role="listitem"
-                    class:opacity-50={draggingFavoriteKey === key}
-                    draggable={Boolean(onReorderFavorite)}
-                    ondragstart={(event: DragEvent) =>
-                      startFavoriteDrag(event, key, entry.model.name)}
-                    ondragover={(event: DragEvent) => favoriteDragOver(event, key)}
-                    ondrop={(event: DragEvent) => favoriteDrop(event, key)}
-                    ondragleave={clearFavoriteDrag}
-                    ondragend={clearFavoriteDrag}
-                  >
-                    {#if onReorderFavorite}
-                      <span
-                        class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
-                        aria-hidden="true"
-                      >
-                        <GripVertical size={11} />
-                      </span>
-                    {/if}
-                    <div class={onReorderFavorite ? 'pl-4' : ''}>
-                      {@render modelRow(entry)}
-                    </div>
-                    <div
-                      class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
-                        key && favoriteDropTarget.position === 'before'
-                        ? 'bg-primary'
-                        : 'bg-transparent'}"
-                    ></div>
-                    <div
-                      class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
-                        key && favoriteDropTarget.position === 'after'
-                        ? 'bg-primary'
-                        : 'bg-transparent'}"
-                    ></div>
-                  </div>
-                {/each}
-              {/if}
-              {@render divider()}
-            {/if}
-
-            {#if recentModelsList.length > 0}
-              {@render groupHeader(
-                Clock,
-                'recent',
-                'Recently used',
-                'text-muted',
-                recentModelsList.length
-              )}
-              {#if !collapsedGroups.has('recent')}
-                {#each recentModelsList as entry (modelEntryKey(entry))}
-                  {@render modelRow(entry)}
-                {/each}
-              {/if}
-              {@render divider()}
-            {/if}
-
-            {#if unavailableFavoriteModels.length > 0 && !search}
-              {@render groupHeader(
-                Star,
-                'unavailable-favorites',
-                'Unavailable favorites',
-                'text-dimmed',
-                unavailableFavoriteModels.length
-              )}
-              {#if !collapsedGroups.has('unavailable-favorites')}
-                {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
-                  <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
-                    <span class="min-w-0 flex-1">
-                      <span class="block truncate text-xs">{favorite.modelId}</span>
-                      {#if favorite.providerId}
-                        <span class="block truncate text-[10px]">{favorite.providerId}</span>
-                      {/if}
-                    </span>
-                    {#if onToggleFavorite}
-                      <button
-                        type="button"
-                        class="shrink-0 transition-colors hover:text-foreground"
-                        title="Remove unavailable favorite"
-                        aria-label={`Remove ${favorite.modelId} from favorites`}
-                        onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
-                      >
-                        <X size={11} />
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              {/if}
-              {@render divider()}
-            {/if}
-
-            {#each filteredProviders as provider (provider.harnessId + ':' + provider.id)}
-              {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
-              <button
-                type="button"
-                class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-                aria-expanded={!collapsed}
-                title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
-                onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
-              >
-                <ChevronRight
-                  size={11}
-                  class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
-                />
-                <VendorIcon name={provider.name} size={14} />
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                  {provider.name}
-                </span>
-                {#if provider.catalogStatus === 'unavailable'}
-                  <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
-                {:else}
-                  <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
-                {/if}
-              </button>
-              {#if !collapsed}
-                {#if provider.catalogStatus === 'unavailable'}
-                  <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
-                    {provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
-                  </p>
-                {:else}
-                  {#each provider.models as model (model.id)}
-                    {@render modelRow({ provider, model })}
-                  {/each}
-                {/if}
-              {/if}
-            {/each}
+            <div style:height={`${pickerLayout.total}px`} style:position="relative">
+              {#each pickerVisibleItems.items as item (item.key)}
+                <div
+                  style:position="absolute"
+                  style:left="0"
+                  style:right="0"
+                  style:top={`${item.offset}px`}
+                  style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
+                  class="overflow-hidden"
+                >
+                  {@render renderPickerItem(item)}
+                </div>
+              {/each}
+            </div>
           {/if}
         </div>
       </Popover.Content>
@@ -807,24 +901,134 @@
   <div class="mx-2 my-1 border-t border-border"></div>
 {/snippet}
 
-{#snippet modelRow(entry: ModelEntry)}
+{#snippet providerHeader(provider: ProviderCatalog)}
+  {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
+  <button
+    type="button"
+    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    aria-expanded={!collapsed}
+    title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
+    onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
+  >
+    <ChevronRight
+      size={11}
+      class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+    />
+    <VendorIcon name={provider.name} size={14} />
+    <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+      {provider.name}
+    </span>
+    {#if provider.catalogStatus === 'unavailable'}
+      <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
+    {:else}
+      <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
+    {/if}
+  </button>
+{/snippet}
+
+{#snippet renderPickerItem(item: PickerListItem & { offset: number })}
+  {#if item.kind === 'divider'}
+    {@render divider()}
+  {:else if item.kind === 'header'}
+    {@render groupHeader(item.icon, item.id, item.text, item.iconClass, item.count)}
+  {:else if item.kind === 'provider-header'}
+    {@render providerHeader(item.provider)}
+  {:else if item.kind === 'provider-message'}
+    <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
+      {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
+    </p>
+  {:else if item.kind === 'unavailable-model'}
+    <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+      <span class="min-w-0 flex-1">
+        <span class="block truncate text-xs">{item.favorite.modelId}</span>
+        {#if item.favorite.providerId}
+          <span class="block truncate text-[10px]">{item.favorite.providerId}</span>
+        {/if}
+      </span>
+      {#if onToggleFavorite}
+        <button
+          type="button"
+          class="shrink-0 transition-colors hover:text-foreground"
+          title="Remove unavailable favorite"
+          aria-label={`Remove ${item.favorite.modelId} from favorites`}
+          onclick={() => onToggleFavorite(item.favorite.providerId, item.favorite.modelId)}
+        >
+          <X size={11} />
+        </button>
+      {/if}
+    </div>
+  {:else}
+    {#if item.favoriteKey !== undefined}
+      {@const key = item.favoriteKey}
+      <div
+        class="relative"
+        role="listitem"
+        class:opacity-50={draggingFavoriteKey === key}
+        draggable={item.draggable}
+        ondragstart={(event: DragEvent) => startFavoriteDrag(event, key, item.entry.model.name)}
+        ondragover={(event: DragEvent) => favoriteDragOver(event, key)}
+        ondrop={(event: DragEvent) => favoriteDrop(event, key)}
+        ondragleave={clearFavoriteDrag}
+        ondragend={clearFavoriteDrag}
+      >
+        {#if item.draggable}
+          <span
+            class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
+            aria-hidden="true"
+          >
+            <GripVertical size={11} />
+          </span>
+        {/if}
+        <div class={item.draggable ? 'pl-4' : ''}>
+          {@render modelRow(item.entry, item.key)}
+        </div>
+        <div
+          class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+            key && favoriteDropTarget.position === 'before'
+            ? 'bg-primary'
+            : 'bg-transparent'}"
+        ></div>
+        <div
+          class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+            key && favoriteDropTarget.position === 'after'
+            ? 'bg-primary'
+            : 'bg-transparent'}"
+        ></div>
+      </div>
+    {:else}
+      {@render modelRow(item.entry, item.key)}
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet modelRow(entry: ModelEntry, rowKey: string)}
   {@const key = modelKey(entry.provider.id, entry.model.id)}
   <button
     class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
+    data-model-key={rowKey}
     onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
-        const buttons = document.querySelectorAll(`#${CSS.escape(listId)} .model-row-btn`)
-        const currentIndex = Array.from(buttons).indexOf(event.currentTarget as HTMLElement)
-        const nextIndex =
+        const currentIndex = pickerModelKeys.indexOf(rowKey)
+        if (currentIndex === -1) return
+        const targetIndex =
           event.key === 'ArrowDown'
-            ? Math.min(currentIndex + 1, buttons.length - 1)
+            ? Math.min(currentIndex + 1, pickerModelKeys.length - 1)
             : Math.max(currentIndex - 1, 0)
-        const next = buttons[nextIndex] as HTMLElement
-        if (next) next.focus()
+        if (targetIndex === currentIndex) return
+        const targetKey = pickerModelKeys[targetIndex]
+        const targetItemIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+        if (targetItemIndex !== -1) {
+          scrollPickerListTo(pickerLayout.offsets[targetItemIndex] - 60)
+        }
+        void tick().then(() => {
+          modelList
+            ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+            ?.focus()
+        })
         return
       }
       if (event.key === 'Escape') {
