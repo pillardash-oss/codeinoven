@@ -226,19 +226,20 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       if (frame.type === 'relay:data' && frame.payload) {
         const dataFrame = parseRelayDataFrame(event.data)
         const wireId = dataFrame && !Number.isNaN(dataFrame.id) ? dataFrame.id : undefined
-        if (wireId !== undefined) {
-          if (seenInboundIds.has(wireId)) {
-            // Duplicate delivery: the receiver already accepted this frame, so
-            // acknowledge without re-decrypting (replay-protected) or re-emitting.
-            sendAck(wireId)
-            return
-          }
-          seenInboundIds.add(wireId)
+        if (wireId !== undefined && seenInboundIds.has(wireId)) {
+          // Duplicate delivery of a successfully-decrypted frame: the receiver
+          // already accepted it, so acknowledge without re-decrypting.
+          sendAck(wireId)
+          return
         }
         void decryptPayload(options.controlSecret, frame.payload)
           .then((data) => {
-            // Receiver-confirmed delivery: ack every accepted frame end to end.
-            if (wireId !== undefined) sendAck(wireId)
+            // Mark seen and acknowledge only after decryption succeeds, so a
+            // failed-decrypt frame is never suppressed and can be replayed.
+            if (wireId !== undefined) {
+              seenInboundIds.add(wireId)
+              sendAck(wireId)
+            }
             options.onEvent({ kind: 'message', data })
           })
           .catch(() => {

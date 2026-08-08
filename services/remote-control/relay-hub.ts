@@ -93,7 +93,7 @@ export class RelayHub {
     return this.mobileSockets.get(desktopId)
   }
 
-  /** Register a live desktop socket and return buffered frames to replay. */
+  /** Register a live desktop socket and deliver any buffered frames to it. */
   connectDesktop(desktopId: string, socket: RelaySocket): string[] {
     const previous = this.desktopSockets.get(desktopId)
     if (previous && previous !== socket) previous.close(4000, 'replaced')
@@ -101,7 +101,7 @@ export class RelayHub {
     return this.replay(desktopId, 'desktop')
   }
 
-  /** Register a live mobile socket and return buffered frames to replay. */
+  /** Register a live mobile socket and deliver any buffered frames to it. */
   connectMobile(desktopId: string, socket: RelaySocket): string[] {
     const previous = this.mobileSockets.get(desktopId)
     if (previous && previous !== socket) previous.close(4000, 'replaced')
@@ -136,10 +136,15 @@ export class RelayHub {
       to === 'desktop' ? this.desktopSockets.get(desktopId) : this.mobileSockets.get(desktopId)
     const frames = this.outstanding.get(desktopId)
     if (frames?.has(id)) {
-      // A retransmission of an already-accepted frame: re-deliver it live and
-      // extend retention so a lost receiver ACK can still resolve it.
       const existing = frames.get(id)
       if (existing) {
+        // A wire id collision from the OPPOSITE direction is a protocol
+        // violation: a different sender must never alias another's outstanding
+        // frame. Same-direction retransmission re-delivers and extends
+        // retention so a lost receiver ACK can still resolve it.
+        if (existing.from !== from) {
+          return { accepted: false, delivered: false, reason: 'cross-direction-collision' }
+        }
         if (target) target.send(frame)
         existing.delivered = Boolean(target)
         existing.expiresAt = this.now() + this.bufferTtlMs
@@ -169,12 +174,18 @@ export class RelayHub {
 
   /**
    * The receiver confirmed delivery of `id`: forward the receiver-generated
-   * `relay:ack` to the original sender and release the retained frame.
+   * `relay:ack` to the original sender and release the retained frame. The ACK
+   * is authenticated against the retained intended receiver role and that
+   * role's CURRENT live socket, so a sender can never self-ACK its own frame.
    */
-  acknowledge(desktopId: string, id: number): boolean {
+  acknowledge(desktopId: string, id: number, ackRole: RelayRole, ackSocket: RelaySocket): boolean {
     const frames = this.outstanding.get(desktopId)
     const entry = frames?.get(id)
     if (!entry) return false
+    if (entry.to !== ackRole) return false
+    const live =
+      ackRole === 'desktop' ? this.desktopSockets.get(desktopId) : this.mobileSockets.get(desktopId)
+    if (live !== ackSocket) return false
     frames?.delete(id)
     if (frames?.size === 0) this.outstanding.delete(desktopId)
     entry.sender.send(JSON.stringify({ type: 'relay:ack', id }))

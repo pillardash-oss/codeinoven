@@ -504,25 +504,29 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
       socket.close(4001, 'authentication-failed')
       return
     }
-    const replayed = relayHub.connectDesktop(desktop.id, socket)
+    // The hub delivers any replayed buffered frames to the new socket itself;
+    // the server must not re-send them (single delivery path).
+    relayHub.connectDesktop(desktop.id, socket)
     socket.data.authenticated = true
     socket.data.desktopId = desktop.id
     socket.data.userId = desktop.user_id
     database.touchDesktop(desktop.id)
     database.audit('relay.desktop-connected', desktop.user_id, desktop.id)
     socket.send(JSON.stringify({ type: 'relay:authenticated', desktopId: desktop.id }))
-    for (const frame of replayed) socket.send(frame)
     relayHub
       .mobileSocket(desktop.id)
       ?.send(JSON.stringify({ type: 'relay:presence', online: true }))
     return
   }
 
-  // Receiver-generated end-to-end confirmation: forward the ACK to the sender
-  // and release the retained frame in the hub.
+  // Receiver-generated end-to-end confirmation: authenticate the ACK against
+  // the retained intended receiver role + current socket, forward it to the
+  // sender, and release the retained frame in the hub.
   if (record['type'] === 'relay:ack' && typeof record['id'] === 'number') {
     const ackDesktopId = socket.data.desktopId
-    if (ackDesktopId) relayHub.acknowledge(ackDesktopId, record['id'])
+    if (ackDesktopId && socket.data.role) {
+      relayHub.acknowledge(ackDesktopId, record['id'], socket.data.role, socket)
+    }
     return
   }
 
@@ -567,7 +571,8 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
     maxPayloadLength: MAX_RELAY_BYTES,
     open(socket) {
       if (socket.data.role === 'mobile' && socket.data.desktopId && socket.data.sessionId) {
-        const replayed = relayHub.connectMobile(socket.data.desktopId, socket)
+        // The hub delivers any replayed buffered frames itself (single path).
+        relayHub.connectMobile(socket.data.desktopId, socket)
         const sockets = sessionSockets.get(socket.data.sessionId) ?? new Set()
         sockets.add(socket)
         sessionSockets.set(socket.data.sessionId, sockets)
@@ -578,7 +583,6 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
             online: relayHub.desktopOnline(socket.data.desktopId)
           })
         )
-        for (const frame of replayed) socket.send(frame)
       } else {
         socket.send(JSON.stringify({ type: 'relay:authentication-required' }))
       }

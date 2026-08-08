@@ -388,6 +388,23 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     })
   })
 
+  it('does not mark an inbound id seen until decryption succeeds (failed-decrypt replay)', async () => {
+    const harness = makeHarness({
+      reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
+    })
+    harness.client.connect()
+    const first = openAuthenticated(harness)
+    // A frame that fails to decrypt must NOT mark its id as seen, so the relay
+    // can re-deliver the same id and it is processed instead of suppressed.
+    first.receive(JSON.stringify({ type: 'relay:data', id: 123, payload: 'not-encrypted' }))
+    await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
+    // Reconnect on the same client, then deliver a valid frame with the SAME id.
+    await new Promise((resolve) => setTimeout(resolve, 12))
+    const second = openAuthenticated(harness, 1)
+    await receivedDataWithId(second, 123, { rpc: 'invoke', id: 9, channel: 'chat', args: [] })
+    await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
+  })
+
   it('suppresses a duplicate invoke while the first is still processing', async () => {
     let resolveRpc: ((value: { ok: boolean; result?: unknown }) => void) | null = null
     const onRpc = vi.fn(

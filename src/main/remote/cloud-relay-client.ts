@@ -319,19 +319,20 @@ export class CloudRelayClient {
     if (record['type'] === 'relay:data' && typeof record['payload'] === 'string') {
       const frame = parseRelayDataFrame(text)
       const wireId = frame && !Number.isNaN(frame.id) ? frame.id : undefined
-      if (wireId !== undefined) {
-        if (this.seenInboundIds.has(wireId)) {
-          // Duplicate delivery: the receiver already accepted this frame, so
-          // acknowledge without re-decrypting (replay-protected) or re-emitting.
-          this.sendAck(wireId)
-          return
-        }
-        this.seenInboundIds.add(wireId)
+      if (wireId !== undefined && this.seenInboundIds.has(wireId)) {
+        // Duplicate delivery of a successfully-decrypted frame: the receiver
+        // already accepted it, so acknowledge without re-decrypting.
+        this.sendAck(wireId)
+        return
       }
       void decryptPayload(this.options.controlSecret, record['payload'])
         .then((plaintext) => {
-          // Receiver-confirmed delivery: ack every accepted frame end to end.
-          if (wireId !== undefined) this.sendAck(wireId)
+          // Mark seen and acknowledge only after decryption succeeds, so a
+          // failed-decrypt frame is never suppressed and can be replayed.
+          if (wireId !== undefined) {
+            this.seenInboundIds.add(wireId)
+            this.sendAck(wireId)
+          }
           this.handleEncryptedMessage(plaintext, wireId)
         })
         .catch(() => {
