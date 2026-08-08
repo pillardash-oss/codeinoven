@@ -301,6 +301,16 @@
                 ? 'Antigravity'
                 : settings.harnessId
   )
+  /** Label of the thread's active text model, surfaced when a provider error occurs. */
+  const threadModelLabel = $derived.by(() => {
+    const provider = providers.find(
+      (candidate) =>
+        candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
+    const providerName = provider?.name ?? settings.providerId
+    return model ? `${providerName} / ${model.name}` : `${providerName} / ${settings.modelId}`
+  })
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -5561,8 +5571,10 @@
           <AgentProviderStatusCard
             status={visibleProviderStatus}
             {providerName}
+            modelLabel={threadModelLabel}
             onStop={abortRun}
             onRetry={retryConnection}
+            onModelChange={() => composer?.openModelMenu()}
             onDismiss={() => {
               errorMessage = ''
               providerStatus = null

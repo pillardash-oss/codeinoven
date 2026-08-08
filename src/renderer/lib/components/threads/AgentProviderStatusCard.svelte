@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Clock3, Code2, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
+  import { AlertTriangle, Clock3, Code2, Cpu, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
   import type {
     AgentProviderIssueKind,
     AgentSessionStatus,
@@ -12,12 +12,17 @@
   interface Props {
     status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
     providerName: string
+    /** Label of the model that failed, surfaced so the user can identify it. */
+    modelLabel?: string
     onStop?: () => void
     onRetry?: () => void
     onDismiss?: () => void
+    /** Opens the model picker to switch the failing model. */
+    onModelChange?: () => void
   }
 
-  let { status, providerName, onStop, onRetry, onDismiss }: Props = $props()
+  let { status, providerName, modelLabel, onStop, onRetry, onDismiss, onModelChange }: Props =
+    $props()
   let now = $state(Date.now())
   let showRawError = $state(false)
   let loginOpen = $state(false)
@@ -133,6 +138,13 @@
 
       <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
 
+      {#if modelLabel && !waiting}
+        <p class="mt-1 text-[11px] font-medium text-dimmed">
+          <Cpu size={11} class="mr-1 inline -mt-0.5" />
+          {modelLabel}
+        </p>
+      {/if}
+
       {#if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           Retrying {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
@@ -175,6 +187,15 @@
           >
             <RotateCcw size={13} />
             Retry
+          </button>
+        {/if}
+        {#if !waiting && onModelChange}
+          <button
+            class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            onclick={onModelChange}
+          >
+            <Cpu size={13} />
+            Change model
           </button>
         {/if}
         {#if !waiting && rawError}
