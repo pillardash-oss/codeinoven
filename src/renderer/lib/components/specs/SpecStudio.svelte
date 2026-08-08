@@ -70,8 +70,10 @@
     busy?: boolean
     error?: string
     agentMessagesOpen?: boolean
+    brainstormAvailable?: boolean
     assignmentAvailable?: boolean
     assignmentMode?: boolean
+    auditAvailable?: boolean
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
     onRevealInAppFile: (spec: EngineeringSpec) => CallbackResult
@@ -157,8 +159,10 @@
     busy = false,
     error,
     agentMessagesOpen = false,
+    brainstormAvailable = false,
     assignmentAvailable = false,
     assignmentMode = false,
+    auditAvailable = false,
     onBack,
     onOpenInEditor,
     onRevealInAppFile,
@@ -884,6 +888,9 @@
       <div class="flex min-w-0 items-center gap-2">
         <StudioDocumentNavigation
           active="spec"
+          {brainstormAvailable}
+          {assignmentAvailable}
+          {auditAvailable}
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}

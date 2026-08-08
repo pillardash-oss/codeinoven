@@ -17,6 +17,7 @@ import {
   type ComposerDraftEntry,
   type MainView,
   type QueuedMessageEntry,
+  type QueuedResponseReference,
   type RecoveryStorage,
   type RendererRecoverySnapshot,
   type SelectedThreadReference
@@ -78,13 +79,20 @@ export class RendererRecoveryStore {
 
   private entryFor(projectId: string, threadId: string): ComposerDraftEntry {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId))
-      return { text: '', attachments: [], projectReferences: [], taskReferences: [] }
+      return {
+        text: '',
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: []
+      }
     return (
       this.composerDrafts[recoveryDraftKey(projectId, threadId)] ?? {
         text: '',
         attachments: [],
         projectReferences: [],
-        taskReferences: []
+        taskReferences: [],
+        promptReferences: []
       }
     )
   }
@@ -167,6 +175,7 @@ export class RendererRecoveryStore {
       entry.attachments.length > 0 ||
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
+      entry.promptReferences.length > 0 ||
       this.queuedMessageFor(projectId, threadId) !== null
     )
   }
@@ -189,7 +198,8 @@ export class RendererRecoveryStore {
     draft: string,
     attachments?: PromptAttachment[],
     projectReferences?: PromptProjectReference[],
-    taskReferences?: PromptAssignmentTaskReference[]
+    taskReferences?: PromptAssignmentTaskReference[],
+    promptReferences?: QueuedResponseReference[]
   ): void {
     if (
       !isRecoveryIdentifier(projectId) ||
@@ -205,17 +215,20 @@ export class RendererRecoveryStore {
       text: '',
       attachments: [],
       projectReferences: [],
-      taskReferences: []
+      taskReferences: [],
+      promptReferences: []
     }
     const nextAttachments = attachments ?? current.attachments
     const nextProjectReferences = projectReferences ?? current.projectReferences
     const nextTaskReferences = taskReferences ?? current.taskReferences
+    const nextPromptReferences = promptReferences ?? current.promptReferences
     // No-op writes must not reassign state — callers may run inside effects.
     if (
       current.text === draft &&
       current.attachments === nextAttachments &&
       current.projectReferences === nextProjectReferences &&
-      current.taskReferences === nextTaskReferences
+      current.taskReferences === nextTaskReferences &&
+      current.promptReferences === nextPromptReferences
     )
       return
 
@@ -224,7 +237,8 @@ export class RendererRecoveryStore {
       draft.length === 0 &&
       nextAttachments.length === 0 &&
       nextProjectReferences.length === 0 &&
-      nextTaskReferences.length === 0
+      nextTaskReferences.length === 0 &&
+      nextPromptReferences.length === 0
     ) {
       delete next[key]
     } else {
@@ -236,7 +250,8 @@ export class RendererRecoveryStore {
         text: draft,
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,
-        taskReferences: nextTaskReferences
+        taskReferences: nextTaskReferences,
+        promptReferences: nextPromptReferences
       }
     }
     this.composerDrafts = next
@@ -244,7 +259,31 @@ export class RendererRecoveryStore {
   }
 
   clearDraft(projectId: string, threadId: string): void {
-    this.setDraft(projectId, threadId, '', [], [], [])
+    this.setDraft(projectId, threadId, '', [], [], [], [])
+  }
+
+  /** The persisted response-selection annotations attached to a thread's composer draft. */
+  draftPromptReferences(projectId: string, threadId: string): QueuedResponseReference[] {
+    return this.entryFor(projectId, threadId).promptReferences
+  }
+
+  /** Persist a thread's response-selection annotations, preserving any existing
+   *  composer text/attachments so annotations never clobber the draft. */
+  setPromptReferences(
+    projectId: string,
+    threadId: string,
+    references: QueuedResponseReference[]
+  ): void {
+    const entry = this.entryFor(projectId, threadId)
+    this.setDraft(
+      projectId,
+      threadId,
+      entry.text,
+      entry.attachments,
+      entry.projectReferences,
+      entry.taskReferences,
+      references
+    )
   }
 
   /** The persisted queued message for a thread, if any. */

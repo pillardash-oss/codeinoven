@@ -105,7 +105,8 @@ class QueuedMessageDispatcher {
             dispatched.text,
             dispatched.attachments,
             dispatched.projectReferences,
-            dispatched.taskReferences
+            dispatched.taskReferences,
+            dispatched.promptReferences
           )
         }
       }

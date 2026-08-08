@@ -5,6 +5,10 @@
 
   interface Props {
     active: StudioDocument
+    brainstormAvailable?: boolean
+    specAvailable?: boolean
+    assignmentAvailable?: boolean
+    auditAvailable?: boolean
     agentMessagesOpen?: boolean
     /** Whether the studio's section rail is currently showing. */
     sectionsOpen?: boolean
@@ -21,6 +25,10 @@
 
   let {
     active,
+    brainstormAvailable = false,
+    specAvailable = true,
+    assignmentAvailable = false,
+    auditAvailable = false,
     agentMessagesOpen = false,
     sectionsOpen = false,
     sectionsLabel = 'sections',
@@ -72,14 +80,13 @@
     <MessageSquareText size={13} />
   </button>
   <div class="flex min-w-0 overflow-x-auto rounded-lg bg-raised p-0.5" aria-label="Studio document">
-    {#if onOpenBrainstorm}
+    {#if brainstormAvailable && onOpenBrainstorm}
       <button
         class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
         'brainstorm'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'brainstorm'}
-        title="Open the Brainstorm"
         onclick={onOpenBrainstorm}
       >
         Brainstorm
@@ -88,33 +95,37 @@
     <button
       class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'spec'
         ? 'bg-surface font-semibold text-foreground shadow-sm'
-        : 'text-muted hover:bg-overlay hover:text-foreground'}"
+        : specAvailable
+          ? 'text-muted hover:bg-overlay hover:text-foreground'
+          : 'cursor-not-allowed text-dimmed opacity-50'}"
       aria-pressed={active === 'spec'}
-      title="Open the specification"
+      aria-disabled={!specAvailable}
+      disabled={!specAvailable}
+      title={specAvailable
+        ? 'Open specification'
+        : 'Finalize the brainstorm to create a specification'}
       onclick={onOpenSpec}
     >
       Spec
     </button>
-    {#if onOpenAssignment}
+    {#if assignmentAvailable && onOpenAssignment}
       <button
         class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active ===
         'assignment'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'assignment'}
-        title="Open the Assignment"
         onclick={onOpenAssignment}
       >
         Assignment
       </button>
     {/if}
-    {#if onOpenAudit}
+    {#if auditAvailable && onOpenAudit}
       <button
         class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'audit'
           ? 'bg-surface font-semibold text-foreground shadow-sm'
           : 'text-muted hover:bg-overlay hover:text-foreground'}"
         aria-pressed={active === 'audit'}
-        title="Open the audit report"
         onclick={onOpenAudit}
       >
         Audit

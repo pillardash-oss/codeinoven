@@ -9,6 +9,7 @@
     specSummary: string
     auditThread?: Thread
     auditState?: Thread['auditState']
+    reportAvailable?: boolean
     selectedThreadId: string
     width: number
     auditorSettings: ThreadSettings
@@ -36,6 +37,7 @@
     specSummary,
     auditThread,
     auditState,
+    reportAvailable = false,
     selectedThreadId,
     width,
     auditorSettings,
@@ -194,7 +196,7 @@
     <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
     <p class="mt-1 line-clamp-4 text-xs leading-relaxed text-muted">{specSummary}</p>
     <div class="mt-3 flex gap-2">
-      {#if onOpenAudit}
+      {#if auditState === 'offered' && onOpenAudit}
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
@@ -205,7 +207,7 @@
           <ShieldCheck size={13} />
         </button>
       {/if}
-      {#if onViewReport}
+      {#if reportAvailable && onViewReport}
         <button
           type="button"
           class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
