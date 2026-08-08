@@ -20,6 +20,7 @@ import { DiagnosticsService } from './diagnostics-service'
 import { resolveFavicons } from './favicon-service'
 import { MemoryService, validateMemoryConfig } from './memory-service'
 import { harnessLoadsAgentsMd } from './harness-registry'
+import type { HarnessManifestService } from './harness-manifest-service'
 import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
@@ -895,6 +896,8 @@ export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
   powerWakeService?: PowerWakeService
+  /** Confirmed-override layer on the declarative harness behavior manifests. */
+  harnessManifestService?: HarnessManifestService
 }
 
 export function registerIpcHandlers(
@@ -998,10 +1001,14 @@ export function registerIpcHandlers(
                 ? 'Antigravity'
                 : 'OpenCode'
     const harnessId = thread?.settings?.harnessId ?? 'opencode'
+    const loadsAgentsMd =
+      options.harnessManifestService === undefined
+        ? harnessLoadsAgentsMd(harnessId)
+        : await options.harnessManifestService.resolveLoadsAgentsMd(harnessId)
     const driverInfo = {
       id: harnessId,
       name: driverName,
-      loadsAgentsMd: harnessLoadsAgentsMd(harnessId)
+      loadsAgentsMd
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
@@ -2559,6 +2566,18 @@ export function registerIpcHandlers(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
       validateStashMessage(message),
       paths === undefined ? undefined : validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:ignore', async (_, projectId: unknown, paths: unknown) =>
+    gitService.ignore(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:discard', async (_, projectId: unknown, paths: unknown) =>
+    gitService.discard(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
     )
   )
   ipcMain.handle('git:stashList', async (_, projectId: unknown) =>

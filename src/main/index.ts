@@ -18,6 +18,7 @@ import { PtyService } from './pty-service'
 import { ProviderConnectionService } from './provider-connection'
 import { HarnessUpdateService } from './harness-update-service'
 import { HarnessInstallService } from './harness-install-service'
+import { HarnessManifestService } from './harness-manifest-service'
 import { ChatEngine } from './chat-engine'
 import { ComputerUsePipService } from './computer-use-pip-service'
 import { ProjectManager } from '../lib/engines/project-manager'
@@ -180,8 +181,9 @@ const ptyService = new PtyService(storage, database)
 const providerConnection = new ProviderConnectionService()
 const harnessUpdateService = new HarnessUpdateService(providerConnection)
 const harnessInstallService = new HarnessInstallService(providerConnection)
+const harnessManifestService = new HarnessManifestService(storage)
 const computerUsePipService = new ComputerUsePipService(storage)
-const chatEngine = new ChatEngine(storage, database, computerUsePipService)
+const chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
 const notificationService = new NotificationService(storage, database, openThreadFromNotification)
 const updaterService = new UpdaterService(storage)
 const powerWakeService = new PowerWakeService(storage, database)
@@ -250,7 +252,7 @@ function createSplashWindow(): BrowserWindow {
     fullscreenable: false,
     skipTaskbar: true,
     show: true,
-    backgroundColor: '#081825',
+    backgroundColor: '#000000',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -327,6 +329,7 @@ function startBackgroundBoot(): void {
       providerConnection.register()
       harnessUpdateService.register()
       harnessInstallService.register()
+      harnessManifestService.register()
       providerConnection.warmUp()
     } catch (error) {
       Logger.error('Provider service startup failed (non-fatal):', error)
@@ -500,7 +503,8 @@ void app
     registerIpcHandlers(storage, database, updaterService, chatEngine, {
       projectManager,
       projectFilesService,
-      powerWakeService
+      powerWakeService,
+      harnessManifestService
     })
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)

@@ -965,7 +965,8 @@ export class ChatEngine {
   constructor(
     private storage: StorageEngine,
     private database: Database,
-    private computerUsePip?: import('./computer-use-pip-service').ComputerUsePipService
+    private computerUsePip?: import('./computer-use-pip-service').ComputerUsePipService,
+    private harnessManifest?: import('./harness-manifest-service').HarnessManifestService
   ) {
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
@@ -2720,13 +2721,15 @@ export class ChatEngine {
       const harnessId =
         (await this.threadManager.getThread(projectId, threadId))?.settings?.harnessId ?? 'opencode'
       const driver = this.drivers.get(harnessId)
+      const loadsAgentsMd =
+        this.harnessManifest === undefined
+          ? harnessLoadsAgentsMd(harnessId)
+          : await this.harnessManifest.resolveLoadsAgentsMd(harnessId)
       return await this.promptAssembler.getAssembledPrompt(
         projectId,
         threadId,
         projectPath,
-        driver
-          ? { id: driver.id, name: driver.name, loadsAgentsMd: harnessLoadsAgentsMd(harnessId) }
-          : null,
+        driver ? { id: driver.id, name: driver.name, loadsAgentsMd } : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT,
@@ -9598,6 +9601,15 @@ export class ChatEngine {
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
       this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
+      // The harness demonstrably ran — confirm its behavior manifest in use so
+      // the reliable declared baseline becomes a validated runtime confirmation
+      // (unless the user explicitly overrode it). Fire-and-forget: never let
+      // manifest bookkeeping block turn finalization.
+      if (this.harnessManifest) {
+        void this.harnessManifest
+          .recordInUse(info.driverId)
+          .catch((error) => Logger.dev('Harness manifest in-use confirmation failed:', error))
+      }
 
       const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
