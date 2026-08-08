@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   visibility      TEXT NOT NULL DEFAULT 'conversation' CHECK(visibility IN ('conversation','working_trace','subagent_trace','hidden')),
   parts           TEXT NOT NULL DEFAULT '[]',
   search_text     TEXT NOT NULL DEFAULT '',
+  content_hash    TEXT,
   transport_parts TEXT,
   transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
   model_id        TEXT,
@@ -214,7 +215,89 @@ CREATE TRIGGER IF NOT EXISTS agent_messages_fts_update AFTER UPDATE ON agent_mes
   INSERT INTO agent_messages_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
 END;`
 
-export const MISC_TABLES_SQL = `
+/**
+ * Remote device identity tables (A-04), applied idempotently alongside the
+ * misc tables by `Database.init()` via `MISC_TABLES_SQL`. Kept as a named
+ * export so the focused tests can create them without importing the full
+ * database module.
+ */
+export const REMOTE_DEVICE_SQL = `
+-- ─── Remote device identity (A-04) ──────────────────────────────────────
+-- Per-enrolled-device scoped credentials. Only public keys and fingerprints
+-- are stored — never a device private key, a bearer secret, or the raw
+-- shared pairing value. Revocation writes a tombstone so a copied offline
+-- credential can never reconnect.
+CREATE TABLE IF NOT EXISTS remote_devices (
+  device_id                TEXT PRIMARY KEY NOT NULL,
+  name                     TEXT NOT NULL DEFAULT 'Phone',
+  signing_public_jwk       TEXT NOT NULL,
+  agreement_public_jwk     TEXT NOT NULL,
+  public_key_fingerprint   TEXT NOT NULL,
+  scopes                   TEXT NOT NULL,
+  all_projects             INTEGER NOT NULL DEFAULT 1,
+  project_ids              TEXT NOT NULL DEFAULT '[]',
+  auth_version             INTEGER NOT NULL DEFAULT 1,
+  credential_issued_at     INTEGER NOT NULL,
+  credential_expires_at    INTEGER NOT NULL,
+  created_at               INTEGER NOT NULL,
+  last_used_at             INTEGER,
+  expires_at               INTEGER NOT NULL,
+  rotated_at               INTEGER,
+  revoked_at               INTEGER,
+  revoked_reason           TEXT,
+  last_transport           TEXT NOT NULL DEFAULT 'lan'
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_devices_revoked ON remote_devices(revoked_at);
+
+-- Immutable revocation tombstones retained for at least the longer of one year
+-- or the revoked credential's original expiry plus seven days.
+CREATE TABLE IF NOT EXISTS remote_device_tombstones (
+  device_id                TEXT PRIMARY KEY NOT NULL,
+  public_key_fingerprint   TEXT NOT NULL,
+  last_auth_version        INTEGER NOT NULL,
+  revoked_at               INTEGER NOT NULL
+);
+
+-- Bounded, append-only security audit log. Never contains secrets, raw
+-- request arguments, prompt/file contents, or key material.
+CREATE TABLE IF NOT EXISTS remote_audit_events (
+  id                       TEXT PRIMARY KEY NOT NULL,
+  timestamp                INTEGER NOT NULL,
+  device_id                TEXT,
+  device_name              TEXT,
+  fingerprint_prefix       TEXT,
+  transport                TEXT,
+  session_id               TEXT,
+  request_id               TEXT,
+  channel                  TEXT,
+  project_id               TEXT,
+  resource_id              TEXT,
+  required_scope           TEXT,
+  decision                 TEXT NOT NULL,
+  reason_code              TEXT,
+  step_up_approval_id      TEXT,
+  auth_version             INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_audit_timestamp ON remote_audit_events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_remote_audit_device ON remote_audit_events(device_id);
+
+-- Short-lived single-use pairing bootstraps. Only a SHA-256 hash of the raw
+-- value is stored; the raw value lives in the QR URL fragment and is erased
+-- on consume/rotation.
+CREATE TABLE IF NOT EXISTS remote_pairing_bootstraps (
+  bootstrap_id             TEXT PRIMARY KEY NOT NULL,
+  hash                     TEXT NOT NULL,
+  issued_at                INTEGER NOT NULL,
+  expires_at               INTEGER NOT NULL,
+  state                    TEXT NOT NULL DEFAULT 'pending'
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_bootstraps_state ON remote_pairing_bootstraps(state);`
+
+export const MISC_TABLES_SQL =
+  `
 -- ─── Brainstorm Workflow ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS brainstorm_workflow (
   project_id                   TEXT NOT NULL,
@@ -379,7 +462,43 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
   thread_id     TEXT NOT NULL,
   task_id       TEXT,
   created_at    INTEGER NOT NULL
-);`
+);` + REMOTE_DEVICE_SQL
+
+export const PERSISTENCE_SQL = `
+-- ─── Provider sync cursors ────────────────────────────────────────────────
+-- Per (thread, harness session) transcript watermark so provider transcript
+-- synchronization appends only new deltas instead of rewriting the full
+-- mirrored history on every idle sync. Keyed on the thread's current harness
+-- session; changing sessions starts a fresh cursor.
+CREATE TABLE IF NOT EXISTS provider_sync_cursors (
+  thread_id       TEXT NOT NULL,
+  session_id      TEXT NOT NULL,
+  message_count   INTEGER NOT NULL DEFAULT 0,
+  last_message_id TEXT NOT NULL DEFAULT '',
+  synced_at       INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, session_id)
+);
+
+-- ─── Maintenance bookkeeping ───────────────────────────────────────────────
+-- Last-run timestamps and health probes written by the maintenance worker.
+CREATE TABLE IF NOT EXISTS maintenance_meta (
+  key   TEXT PRIMARY KEY NOT NULL,
+  value TEXT NOT NULL
+);
+
+-- ─── Retention archive ────────────────────────────────────────────────────
+-- Bounded, recoverable retention: high-volume log rows are moved here before
+-- they are pruned, and the archive itself is capped so disk use stays bounded.
+CREATE TABLE IF NOT EXISTS retention_archive (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  source     TEXT NOT NULL,
+  source_id  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  payload    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_retention_archive_source_time
+  ON retention_archive(source, created_at);`
 
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────

@@ -45,6 +45,7 @@ import {
   decryptPayload,
   encryptPayload
 } from '../../renderer/lib/remote/session-security'
+import type { RemoteRpcDeviceContext, RemoteScope } from '../../lib/remote-rpc'
 import { loadOrCreateSelfSignedCertificate } from './self-signed-cert'
 import { computePwaAssetGraph } from './pwa-asset-graph'
 import type { RemoteDeviceInfo } from './remote-types'
@@ -57,8 +58,21 @@ export interface GatewayHandlers {
   /** Called with a decrypted remote RPC invoke; returns the result to reply. */
   onRpc?: (
     channel: string,
-    args: unknown[]
+    args: unknown[],
+    device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
+  /**
+   * Authenticates a device handshake against the device credential service.
+   * When absent the gateway falls back to the shared-secret handshake so the
+   * desktop renderer and legacy clients keep working.
+   */
+  authenticateDevice?: (input: {
+    nonce: string
+    token: string
+    deviceId: string
+    deviceName: string
+    transport: 'lan' | 'relay'
+  }) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
 }
 
 export interface RemoteGatewayOptions {
@@ -87,6 +101,9 @@ interface PeerConnection {
   deviceName: string
   connectedAt: number
   authChallenge: string
+  /** Enrolled-device record resolved by the `authenticateDevice` handler. */
+  device?: RemoteDeviceInfo
+  sessionId: string
 }
 
 /** An on-disk file with its raw bytes, ETag, and lazily-compressed variants. */
@@ -621,7 +638,8 @@ export class RemoteGateway {
       deviceId: '',
       deviceName: '',
       connectedAt: 0,
-      authChallenge: randomBytes(32).toString('base64url')
+      authChallenge: randomBytes(32).toString('base64url'),
+      sessionId: randomBytes(16).toString('base64url')
     }
     this.peers.add(peer)
     socketSend(peer, { type: 'remote:challenge', nonce: peer.authChallenge })
@@ -748,8 +766,20 @@ export class RemoteGateway {
       const deviceName = typeof record.deviceName === 'string' ? record.deviceName.trim() : ''
       const challengeAccepted = nonce === peer.authChallenge && peer.authChallenge.length > 0
       peer.authChallenge = ''
-      void authenticateHandshake(this.options.peerSecret, nonce, token).then((verified) => {
-        const accepted = challengeAccepted && verified
+      const verify = this.options.handlers.authenticateDevice
+        ? this.options.handlers.authenticateDevice({
+            nonce,
+            token,
+            deviceId,
+            deviceName,
+            transport: 'lan'
+          })
+        : authenticateHandshake(this.options.peerSecret, nonce, token).then((verified) => ({
+            accepted: challengeAccepted && verified,
+            device: undefined
+          }))
+      void verify.then((result) => {
+        const accepted = challengeAccepted && result.accepted
         if (this.stopped || !this.peers.has(peer)) return
         if (!accepted) {
           socketSend(peer, { type: 'remote:error', reason: 'auth-failed' })
@@ -776,9 +806,13 @@ export class RemoteGateway {
         peer.deviceId = identity
         peer.deviceName = deviceName.length > 0 ? deviceName : 'Phone'
         peer.connectedAt = Date.now()
+        peer.device = result.device
         peer.authenticated = true
         this.livePeers.set(identity, peer)
-        socketSend(peer, { type: 'remote:hello:ok' })
+        socketSend(peer, {
+          type: 'remote:hello:ok',
+          ...(result.device ? { device: result.device } : {})
+        })
         this.notifyDevicesChange()
       })
       return
@@ -815,7 +849,15 @@ export class RemoteGateway {
         id: peer.deviceId,
         name: peer.deviceName,
         connectedAt: peer.connectedAt,
-        transport: 'lan' as const
+        transport: 'lan' as const,
+        connected: true,
+        scopes: peer.device?.scopes ?? [],
+        fingerprint: peer.device?.fingerprint ?? null,
+        lastUsedAt: peer.device?.lastUsedAt ?? null,
+        expiresAt: peer.device?.expiresAt ?? null,
+        credentialExpiresAt: peer.device?.credentialExpiresAt ?? null,
+        revokedAt: peer.device?.revokedAt ?? null,
+        authVersion: peer.device?.authVersion ?? 0
       }))
   }
 
@@ -876,7 +918,18 @@ export class RemoteGateway {
     const id = typeof record.id === 'number' ? record.id : -1
     const channel = typeof record.channel === 'string' ? record.channel : ''
     const args = Array.isArray(record.args) ? record.args : []
-    const outcome = await this.options.handlers.onRpc(channel, args)
+    const device: RemoteRpcDeviceContext | undefined = peer.device
+      ? {
+          deviceId: peer.device.id,
+          name: peer.device.name,
+          fingerprint: peer.device.fingerprint ?? '',
+          authVersion: peer.device.authVersion,
+          sessionId: peer.sessionId,
+          requestId: String(id),
+          scopes: peer.device.scopes as RemoteScope[]
+        }
+      : undefined
+    const outcome = await this.options.handlers.onRpc(channel, args, device)
     if (this.stopped || !this.peers.has(peer)) return
     this.sendToPeerOnly(
       peer,

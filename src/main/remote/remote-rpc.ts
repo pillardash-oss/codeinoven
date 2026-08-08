@@ -19,6 +19,13 @@ import { ProjectFilesService } from '../project-files-service'
 import type { ChatEngine } from '../chat-engine'
 import { broadcastThreadUpdate } from '../thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
+import {
+  authorizationForChannel,
+  type RemoteRpcDenied,
+  type RemoteRpcDeviceContext,
+  type RemoteRpcStepUpRequired
+} from '../../lib/remote-rpc'
+import { DeviceCredentialService, sha256Hex } from './device-credential-service'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import {
   SpecEngine,
@@ -118,6 +125,12 @@ export interface RemoteRpcServices {
   /** Storage engine — needed for config and the memory/spec/assignment engines. */
   storage?: StorageEngine
   projectManager?: ProjectManager
+  /**
+   * Device credential service used to enforce per-device scopes and local
+   * step-up approval for remote invocations. Optional so the desktop-reuse
+   * dispatcher and legacy tests can construct it without device state.
+   */
+  credentials?: DeviceCredentialService
 }
 
 /** A remote RPC invoke request that reached the main process. */
@@ -125,6 +138,8 @@ export interface RemoteInvoke {
   id: number
   channel: string
   args: unknown[]
+  /** The authenticated device this invocation belongs to, when known. */
+  device?: RemoteRpcDeviceContext
 }
 
 export type RemoteRpcResult = { ok: true; result: unknown } | { ok: false; message: string }
@@ -146,9 +161,11 @@ export class RemoteRpcDispatcher {
   private readonly vault: SecretVault
   private readonly githubAuthService: GitHubAuthService
   private readonly storage: StorageEngine
+  private readonly credentials: DeviceCredentialService | null
 
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
+    this.credentials = services.credentials ?? null
     this.threadManager = new ThreadManager(services.database, broadcastThreadUpdate, (thread) => {
       void services.chatEngine.deleteThreadSession(thread.projectId, thread.id)
     })
@@ -180,6 +197,18 @@ export class RemoteRpcDispatcher {
     if (!this.isAllowed(invoke.channel)) {
       return { ok: false, message: `Channel not allowed over the remote bridge: ${invoke.channel}` }
     }
+    if (invoke.device) {
+      const authorized = await this.authorizeDevice(invoke)
+      if (!authorized.allowed) {
+        if (authorized.denied.code === 'step_up_required') {
+          return {
+            ok: false,
+            message: JSON.stringify(authorized.denied)
+          }
+        }
+        return { ok: false, message: `Access denied: ${authorized.denied.reason}` }
+      }
+    }
     try {
       // The remote bridge transports args as JSON, which cannot represent
       // `undefined` — an omitted optional argument (e.g. `presentation`,
@@ -187,12 +216,171 @@ export class RemoteRpcDispatcher {
       // behave exactly as they do on the desktop IPC path.
       const args = invoke.args.map((arg) => (arg === null ? undefined : arg))
       const result = await this.call(invoke.channel, args)
+      this.credentials?.audit({
+        decision: 'rpc_allowed',
+        deviceId: invoke.device?.deviceId ?? null,
+        deviceName: invoke.device?.name ?? null,
+        fingerprintPrefix: invoke.device?.fingerprint.slice(0, 8) ?? null,
+        transport: 'lan',
+        sessionId: invoke.device?.sessionId ?? null,
+        requestId: invoke.device?.requestId ?? null,
+        channel: invoke.channel,
+        authVersion: invoke.device?.authVersion ?? null
+      })
       return { ok: true, result }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       Logger.error(`Remote RPC ${invoke.channel} failed:`, error)
       return { ok: false, message }
     }
+  }
+
+  /**
+   * Enforce the device-scope + step-up contract for a remote invocation.
+   * Deny-by-default: the channel must have a registry entry, the device must
+   * hold the required scope, and high-risk channels require a single-use local
+   * approval bound to this exact request.
+   */
+  private async authorizeDevice(
+    invoke: RemoteInvoke
+  ): Promise<
+    { allowed: true } | { allowed: false; denied: RemoteRpcDenied | RemoteRpcStepUpRequired }
+  > {
+    const device = invoke.device as RemoteRpcDeviceContext
+    const auth = authorizationForChannel(invoke.channel)
+    if (!auth) {
+      return {
+        allowed: false,
+        denied: { code: 'authorization_denied', scope: null, reason: 'channel not authorized' }
+      }
+    }
+    if (!device.scopes.includes(auth.scope)) {
+      this.credentials?.audit({
+        decision: 'rpc_denied',
+        reasonCode: 'no_scope',
+        deviceId: device.deviceId,
+        deviceName: device.name,
+        fingerprintPrefix: device.fingerprint.slice(0, 8),
+        transport: 'lan',
+        sessionId: device.sessionId,
+        requestId: device.requestId,
+        channel: invoke.channel,
+        requiredScope: auth.scope,
+        authVersion: device.authVersion
+      })
+      return {
+        allowed: false,
+        denied: {
+          code: 'authorization_denied',
+          scope: auth.scope,
+          reason: `device lacks scope ${auth.scope}`
+        }
+      }
+    }
+
+    const needsStepUp =
+      auth.stepUp === 'always' || (auth.stepUp === 'conditional' && auth.requiresStepUp === true)
+    if (!needsStepUp || !this.credentials) {
+      return { allowed: true }
+    }
+
+    const resource = this.resourceForChannel(invoke.channel, invoke.args)
+    const argsDigest = await sha256Hex(JSON.stringify(invoke.args))
+    if (
+      this.credentials.hasApprovalFor({
+        deviceId: device.deviceId,
+        authVersion: device.authVersion,
+        sessionId: device.sessionId,
+        requestId: device.requestId,
+        channel: invoke.channel,
+        resource,
+        argsDigest
+      })
+    ) {
+      return { allowed: true }
+    }
+
+    const created = this.credentials.createStepUpApproval({
+      deviceId: device.deviceId,
+      authVersion: device.authVersion,
+      sessionId: device.sessionId,
+      requestId: device.requestId,
+      channel: invoke.channel,
+      action: invoke.channel,
+      resource,
+      argsDigest
+    })
+    if (created.ok && created.approval) {
+      return {
+        allowed: false,
+        denied: {
+          code: 'step_up_required',
+          approvalId: created.approval.approvalId,
+          expiresAt: created.approval.expiresAt,
+          action: created.approval.action,
+          resource: created.approval.resource
+        }
+      }
+    }
+    this.credentials.audit({
+      decision: 'rpc_denied',
+      reasonCode: 'denied_by_default',
+      deviceId: device.deviceId,
+      deviceName: device.name,
+      sessionId: device.sessionId,
+      requestId: device.requestId,
+      channel: invoke.channel,
+      requiredScope: auth.scope,
+      authVersion: device.authVersion
+    })
+    return {
+      allowed: false,
+      denied: {
+        code: 'authorization_denied',
+        scope: auth.scope,
+        reason: 'step-up capacity exceeded'
+      }
+    }
+  }
+
+  /** Coarse affected-resource label for step-up binding and audit records. */
+  private resourceForChannel(channel: string, args: unknown[]): string | null {
+    const projectId = typeof args[0] === 'string' ? args[0] : null
+    const threadId = typeof args[1] === 'string' ? args[1] : null
+    if (channel.startsWith('project') || channel === 'git:init') {
+      return projectId
+    }
+    if (projectId && threadId) return `${projectId}/${threadId}`
+    if (projectId) return projectId
+    return null
+  }
+
+  /** Local desktop approval for a pending step-up request (trusted IPC only). */
+  approveStepUp(approvalId: string, decision: 'approved' | 'rejected'): boolean {
+    if (!this.credentials) return false
+    const pending = this.credentials
+      .listPendingApprovals()
+      .find((approval) => approval.approvalId === approvalId)
+    if (!pending) return false
+    return this.credentials.resolveStepUpApproval({
+      approvalId,
+      deviceId: pending.deviceId,
+      authVersion: pending.authVersion,
+      sessionId: pending.sessionId,
+      requestId: pending.requestId,
+      channel: pending.channel,
+      resource: pending.resource,
+      argsDigest: pending.argsDigest,
+      decision
+    })
+  }
+
+  listPendingApprovals(): ReturnType<DeviceCredentialService['listPendingApprovals']> {
+    return this.credentials?.listPendingApprovals() ?? []
+  }
+
+  listAuditEvents(limit = 100): ReturnType<DeviceCredentialService['listAudit']> {
+    return this.credentials?.listAudit(limit) ?? []
   }
 
   private async call(channel: string, args: unknown[]): Promise<unknown> {

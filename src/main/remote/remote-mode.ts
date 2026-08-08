@@ -19,8 +19,19 @@ import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
-import { loadOrCreatePeerSecret } from './peer-secret'
+import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
+import {
+  isPairingExpired,
+  loadOrCreatePeerSecret,
+  readPairingExpiry,
+  rotatePeerSecret
+} from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
+import {
+  DeviceCredentialService,
+  generateSigningKeyPair,
+  type EnrolledDevice
+} from './device-credential-service'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
 import {
   readRemoteDeviceNames,
@@ -34,6 +45,15 @@ declare global {
   const __CODEINOVEN_REMOTE_API_ORIGIN__: string | undefined
 }
 
+/** Gateway device-authentication callback shape (see RemoteGateway options). */
+type GatewayAuthHandler = (input: {
+  nonce: string
+  token: string
+  deviceId: string
+  deviceName: string
+  transport: 'lan' | 'relay'
+}) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
+
 export interface RemoteModeOptions {
   lanPort: number
   localPort: number
@@ -44,6 +64,8 @@ export interface RemoteModeOptions {
   rpc?: RemoteRpcDispatcher | null
   /** Optional storage used to persist the remote-mode flag across restarts. */
   storage?: import('../storage-engine').StorageEngine | null
+  /** Device credential service backing per-device identity and revocation. */
+  credentials?: DeviceCredentialService | null
   /**
    * Called whenever the live remote-session state changes (a phone connects or
    * disconnects). Lets the host keep the device awake while a session is live.
@@ -162,6 +184,7 @@ export class RemoteModeController {
   private readonly iconPath: string
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage-engine').StorageEngine | null
+  private readonly credentials: DeviceCredentialService | null
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
   private readonly vault: SecretVault | null
@@ -174,6 +197,8 @@ export class RemoteModeController {
   private devices: RemoteDeviceInfo[] = []
   /** Persisted device-name overrides, keyed by device id. */
   private deviceNames: Record<string, string> = {}
+  /** Expiry of the current pairing QR value (epoch ms), or null. */
+  private pairingExpiresAt: number | null = null
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -183,6 +208,7 @@ export class RemoteModeController {
     this.iconPath = options.iconPath
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
+    this.credentials = options.credentials ?? null
     this.vault = this.storage ? new SecretVault(this.storage) : null
     this.onSessionActiveChange = options.onSessionActiveChange
     this.cloudStatus = {
@@ -264,17 +290,41 @@ export class RemoteModeController {
     }
   }
 
+  /**
+   * Enforce the pairing-bootstrap ceremony: rotate the secret when it has
+   * expired and register the current value with the credential service so a
+   * single-use enrollment can consume it. A stale QR never grants a session.
+   */
+  private async syncPairingState(): Promise<void> {
+    const directory = join(app.getPath('userData'), 'remote-gateway')
+    if (this.credentials && !this.peerSecret && (await isPairingExpired(directory))) {
+      this.resolvedPeerSecret = await rotatePeerSecret(directory)
+      Logger.info('Remote pairing bootstrap rotated: previous QR value expired')
+    }
+    const secret = this.resolvedPeerSecret
+    if (!secret) return
+    const expiresAt = await readPairingExpiry(directory)
+    this.pairingExpiresAt = expiresAt
+    if (this.credentials) {
+      await this.credentials.registerPairingValue(secret, {
+        expiresAt: expiresAt ?? Date.now() + 5 * 60 * 1_000
+      })
+    }
+  }
+
   get status(): RemoteModeStatus {
+    const gateway = this.gateway?.info() ?? {
+      listening: false,
+      port: this.lanPort,
+      url: null,
+      pairingUrl: null,
+      pairingExpiresAt: null
+    }
     return {
       remoteMode: this.keepAlive.phase !== 'IDLE',
       phase: this.keepAlive.phase,
       blockedQuit: this.keepAlive.blockedQuit,
-      gateway: this.gateway?.info() ?? {
-        listening: false,
-        port: this.lanPort,
-        url: null,
-        pairingUrl: null
-      },
+      gateway: { ...gateway, pairingExpiresAt: this.pairingExpiresAt },
       cloud: { ...this.cloudStatus },
       devices: this.devices
     }
@@ -324,12 +374,10 @@ export class RemoteModeController {
 
   /** Called by the gateway whenever the connected device set changes. */
   onDevicesChange(devices: RemoteDeviceInfo[]): void {
-    const wasLive = this.devices.length > 0
-    this.devices = devices.map((device) => ({
-      ...device,
-      name: this.deviceNames[device.id] ?? device.name
-    }))
-    const isLive = this.devices.length > 0
+    const wasLive = this.devices.some((device) => device.connected)
+    const connectedIds = new Set(devices.map((device) => device.id))
+    this.refreshDevices(connectedIds)
+    const isLive = this.devices.some((device) => device.connected)
     if (isLive && !wasLive) {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
@@ -345,10 +393,59 @@ export class RemoteModeController {
     this.broadcast()
   }
 
-  /** Rename a connected device; the override is persisted for reconnects. */
+  /**
+   * Rebuild the device list from the enrolled device records, marking which
+   * hold a live session. Falls back to the gateway's connected set when no
+   * credential service is wired (legacy path).
+   */
+  private refreshDevices(connectedIds: Set<string>): void {
+    if (!this.credentials) {
+      const live = this.gateway?.listDevices() ?? []
+      this.devices = live.map((device) => ({
+        ...device,
+        name: this.deviceNames[device.id] ?? device.name,
+        connected: true,
+        scopes: [],
+        fingerprint: null,
+        lastUsedAt: null,
+        expiresAt: null,
+        credentialExpiresAt: null,
+        revokedAt: null,
+        authVersion: 0
+      }))
+      return
+    }
+    this.devices = this.credentials.listDevices().map((device) => ({
+      ...this.toDeviceInfo(device, connectedIds.has(device.deviceId)),
+      name: this.deviceNames[device.deviceId] ?? device.name
+    }))
+  }
+
+  /** Enrolled-device record → display-facing `RemoteDeviceInfo`. */
+  private toDeviceInfo(device: EnrolledDevice, connected: boolean): RemoteDeviceInfo {
+    return {
+      id: device.deviceId,
+      name: device.name,
+      connectedAt: device.lastUsedAt ?? device.createdAt,
+      transport: device.lastTransport,
+      connected,
+      scopes: device.scopes,
+      fingerprint: device.publicKeyFingerprint,
+      lastUsedAt: device.lastUsedAt,
+      expiresAt: device.expiresAt,
+      credentialExpiresAt: device.credentialExpiresAt,
+      revokedAt: device.revokedAt,
+      authVersion: device.authVersion
+    }
+  }
+
+  /** Rename an enrolled device; the record and legacy override are updated. */
   async renameDevice(deviceId: string, name: string): Promise<RemoteModeStatus> {
     const trimmed = name.trim().slice(0, 100)
     if (trimmed.length === 0) throw new TypeError('Device name cannot be empty')
+    if (this.credentials) {
+      this.credentials.renameDevice(deviceId, trimmed)
+    }
     this.deviceNames = { ...this.deviceNames, [deviceId]: trimmed }
     if (this.storage) {
       await writeRemoteDeviceName(this.storage, deviceId, trimmed)
@@ -364,6 +461,81 @@ export class RemoteModeController {
   /** Disconnect a connected device by id. */
   disconnectDevice(deviceId: string): void {
     this.gateway?.disconnectDevice(deviceId)
+  }
+
+  /**
+   * Human revocation: durably marks the device revoked (tombstone + authVersion
+   * bump), closes every live socket, and only then broadcasts the new list.
+   */
+  async revokeDevice(deviceId: string, reason: string): Promise<RemoteModeStatus> {
+    if (!this.credentials) throw new Error('Device credential service is unavailable')
+    const revoked = this.credentials.revokeDevice(deviceId, reason || 'operator')
+    if (!revoked) throw new Error('Device not found')
+    this.gateway?.disconnectDevice(deviceId)
+    this.refreshDevices(new Set(this.gateway?.listDevices().map((d) => d.id) ?? []))
+    this.syncTray()
+    this.broadcast()
+    return this.status
+  }
+
+  /** Enrolled device records (including revoked), enriched with connection state. */
+  listEnrolledDevices(): RemoteDeviceInfo[] {
+    if (!this.credentials) return []
+    const connectedIds = new Set(this.gateway?.listDevices().map((d) => d.id) ?? [])
+    return this.credentials.listDevices().map((device) => ({
+      ...this.toDeviceInfo(device, connectedIds.has(device.deviceId)),
+      name: this.deviceNames[device.deviceId] ?? device.name
+    }))
+  }
+
+  /** Trusted desktop step-up disposition for a pending high-risk request. */
+  approveStepUp(approvalId: string, decision: 'approved' | 'rejected'): boolean {
+    return this.rpc?.approveStepUp(approvalId, decision) ?? false
+  }
+
+  listPendingApprovals(): ReturnType<RemoteRpcDispatcher['listPendingApprovals']> {
+    return this.rpc?.listPendingApprovals() ?? []
+  }
+
+  listAuditEvents(limit = 100): ReturnType<RemoteRpcDispatcher['listAuditEvents']> {
+    return this.rpc?.listAuditEvents(limit) ?? []
+  }
+
+  /**
+   * Gateway device-authentication handler. During the migration window the
+   * shared secret only grants a pairing; every session is bound to an enrolled
+   * device record, so revoking a device closes its sessions and rejects its
+   * reconnects even when an offline copy of the old credential is presented.
+   */
+  private makeAuthenticateDevice(): GatewayAuthHandler {
+    return async ({ nonce, token, deviceId, deviceName }) => {
+      const secret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
+      if (!secret) return { accepted: false }
+      const verified = await verifyHandshakeToken(secret, nonce, token)
+      if (!verified) return { accepted: false }
+      const existing = this.credentials?.getDevice(deviceId) ?? null
+      if (existing) {
+        if (existing.revokedAt !== null) return { accepted: false }
+        if (existing.expiresAt < Date.now()) return { accepted: false }
+        return { accepted: true, device: this.toDeviceInfo(existing, true) }
+      }
+      if (!this.credentials) return { accepted: true }
+      // New device: enroll with a desktop-generated key pair so the one-scan
+      // setup stays zero-configuration while the identity service records the
+      // device, its scopes, and its credential lifetime.
+      const signing = await generateSigningKeyPair()
+      const agreement = await generateSigningKeyPair()
+      const outcome = await this.credentials.enrollDevice({
+        bootstrapValue: secret,
+        name: deviceName,
+        signingPublicJwk: signing.publicJwk,
+        agreementPublicJwk: agreement.publicJwk,
+        signingProof: '__desktop_generated__',
+        transport: 'lan'
+      })
+      if (!outcome.ok || !outcome.device) return { accepted: false }
+      return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
+    }
   }
 
   /** Forward live desktop events to every connected phone peer. */
@@ -412,10 +584,7 @@ export class RemoteModeController {
         return this.toggleRemoteMode(Boolean(enabled))
       }
     )
-    ipcMain.handle(
-      'remote:listDevices',
-      (): RemoteDeviceInfo[] => this.gateway?.listDevices() ?? []
-    )
+    ipcMain.handle('remote:listDevices', (): RemoteDeviceInfo[] => this.listEnrolledDevices())
     ipcMain.handle(
       'remote:disconnectDevice',
       (_event: IpcMainInvokeEvent, deviceId: string): void => {
@@ -427,6 +596,36 @@ export class RemoteModeController {
       (_event: IpcMainInvokeEvent, deviceId: string, name: string): Promise<RemoteModeStatus> => {
         return this.renameDevice(typeof deviceId === 'string' ? deviceId : '', String(name))
       }
+    )
+    ipcMain.handle(
+      'remote:revokeDevice',
+      (_event: IpcMainInvokeEvent, deviceId: string, reason: string): Promise<RemoteModeStatus> => {
+        return this.revokeDevice(typeof deviceId === 'string' ? deviceId : '', String(reason))
+      }
+    )
+    ipcMain.handle(
+      'remote:approveStepUp',
+      (_event: IpcMainInvokeEvent, approvalId: string): boolean => {
+        return this.approveStepUp(typeof approvalId === 'string' ? approvalId : '', 'approved')
+      }
+    )
+    ipcMain.handle(
+      'remote:rejectStepUp',
+      (_event: IpcMainInvokeEvent, approvalId: string): boolean => {
+        return this.approveStepUp(typeof approvalId === 'string' ? approvalId : '', 'rejected')
+      }
+    )
+    ipcMain.handle(
+      'remote:listPendingApprovals',
+      (): ReturnType<RemoteRpcDispatcher['listPendingApprovals']> => this.listPendingApprovals()
+    )
+    ipcMain.handle(
+      'remote:listAuditEvents',
+      (
+        _event: IpcMainInvokeEvent,
+        limit: number
+      ): ReturnType<RemoteRpcDispatcher['listAuditEvents']> =>
+        this.listAuditEvents(typeof limit === 'number' ? limit : 100)
     )
     ipcMain.handle('remote:beginCloudEnrollment', (): Promise<RemoteModeStatus> => {
       return this.beginCloudEnrollment()
@@ -714,6 +913,7 @@ export class RemoteModeController {
     }
     await this.loadDeviceNames()
     const peerSecret = await this.resolvePeerSecret()
+    await this.syncPairingState()
     const gateway = new RemoteGateway({
       port: this.lanPort,
       localPort: this.localPort,
@@ -723,9 +923,10 @@ export class RemoteModeController {
       allowedOrigins: this.cloudApiOrigin ? [new URL(this.cloudApiOrigin).origin] : [],
       handlers: {
         onDevicesChange: (devices) => this.onDevicesChange(devices),
+        authenticateDevice: this.makeAuthenticateDevice(),
         onRpc: this.rpc
-          ? async (channel, args) =>
-              this.rpc?.dispatch({ id: 0, channel, args }) ?? {
+          ? async (channel, args, device) =>
+              this.rpc?.dispatch({ id: 0, channel, args, device }) ?? {
                 ok: false,
                 message: 'RPC unavailable'
               }

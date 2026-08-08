@@ -37,6 +37,7 @@ import {
   remotePeerSecret
 } from './remote/remote-mode'
 import { RemoteRpcDispatcher } from './remote/remote-rpc'
+import { DeviceCredentialService } from './remote/device-credential-service'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -45,6 +46,8 @@ import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
 import { PrivilegedIpcValidator } from './ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 import type { Thread } from '../lib/types'
+import { startupTelemetry } from './startup-telemetry'
+import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './lifecycle-diagnostics'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -74,6 +77,15 @@ function registerSignalHandlers(): void {
   }
 }
 registerSignalHandlers()
+
+// Start event-loop delay tracking as early as the process allows so the
+// telemetry histogram captures the whole boot window, including module
+// evaluation and Electron's ready handshake.
+startupTelemetry.startEventLoopMonitor()
+// Privacy-preserving process-wide crash policy: uncaught exceptions and
+// unhandled rejections are logged and exit nonzero instead of leaving a
+// headless or silently-hung process.
+installProcessCrashDiagnostics()
 
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
@@ -191,6 +203,19 @@ ipcMain.handle('app:requestClose', () => {
   }
 })
 
+/**
+ * The renderer reports when its initial hydration is done (visible projects,
+ * selected project, recent active threads). Timestamps the final startup
+ * phases so the boot telemetry spans the whole chain from process entry to an
+ * interactive workspace.
+ */
+ipcMain.handle('app:rendererReady', () => {
+  startupTelemetry.mark('renderer:hydrated')
+  startupTelemetry.mark('workspace:ready')
+  startupTelemetry.stopEventLoopMonitor()
+  startupTelemetry.report()
+})
+
 /** Cmd/Ctrl+W is "close the active surface" — the renderer decides what that is. */
 function isCloseShortcut(input: Electron.Input): boolean {
   return (
@@ -238,6 +263,7 @@ const powerWakeService = new PowerWakeService(storage, database)
 const retryScheduler = new RetrySchedulerService(storage)
 
 /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
+const remoteCredentials = new DeviceCredentialService(database)
 const remoteMode = new RemoteModeController({
   lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
   localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
@@ -247,9 +273,11 @@ const remoteMode = new RemoteModeController({
   rpc: new RemoteRpcDispatcher({
     database,
     chatEngine,
-    storage
+    storage,
+    credentials: remoteCredentials
   }),
   storage,
+  credentials: remoteCredentials,
   onSessionActiveChange: (active) => powerWakeService.setRemoteSessionActive(active)
 })
 
@@ -528,8 +556,10 @@ void app
   .whenReady()
   .then(async () => {
     if (!hasSingleInstanceLock) return
+    startupTelemetry.mark('electron:ready')
     // Show the splash before any awaited work so the app feels instant.
     createSplashWindow()
+    startupTelemetry.mark('splash:created')
 
     // Wire the durable log sink before any fallible startup work. The error
     // dialog tells the user to "export diagnostics after the app opens", which
@@ -561,6 +591,8 @@ void app
       // serializing behind the heavier startup work.
       warmTrafficLightDetection()
     ])
+    startupTelemetry.mark('storage:ready')
+    startupTelemetry.mark('database:ready')
     await windowStateService.load()
     Logger.info(`${APP_NAME} main process initialized`)
 
@@ -607,7 +639,7 @@ void app
     })
 
     const window = createWindow()
-    startBackgroundBoot()
+    startupTelemetry.mark('window:created')
 
     // Failsafe: never let the splash outlive the app even if the renderer
     // never paints (e.g. a script error) — dismiss it on first load or close.
@@ -616,8 +648,14 @@ void app
     // user onto a bare window while it still loads.
     const splashFailsafe = setTimeout(closeSplash, 60_000)
     window.webContents.once('did-finish-load', () => {
+      startupTelemetry.mark('window:firstPaint')
       clearTimeout(splashFailsafe)
       closeSplash()
+      // Optional services (provider warming, updater, notifications, power
+      // wake, retry scheduler, remote mode) start only after the primary
+      // window path so first paint is never blocked by their construction or
+      // disk/network work.
+      startBackgroundBoot()
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)
@@ -635,15 +673,17 @@ void app
   })
   .catch(async (error: unknown) => {
     closeSplash()
-    const message = error instanceof Error ? error.message : String(error)
-    Logger.error(`${APP_NAME} startup failed`, error)
-    // Flush so the failure is persisted before the app exits — the user is
-    // told to export diagnostics, which reads this exact file.
-    await Logger.flush().catch(() => undefined)
-    dialog.showErrorBox(
-      `${APP_NAME} could not start`,
-      `${message}\n\nRestart ${APP_NAME}. If the problem continues, export diagnostics after the app opens.`
-    )
+    // Deterministically close resources and quit with a nonzero diagnostic
+    // code so a failed boot never leaves a headless process. Logs, flushes the
+    // durable log, closes the database, shows the error box, then exits(1).
+    await handleFatalStartupFailure({
+      error,
+      appName: APP_NAME,
+      closeDatabase: () => database.close(),
+      showErrorBox: (title, message) => dialog.showErrorBox(title, message),
+      quit: (code) => app.exit(code),
+      telemetry: startupTelemetry
+    })
   })
 
 app.on('window-all-closed', () => {
