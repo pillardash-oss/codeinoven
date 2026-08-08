@@ -1199,6 +1199,11 @@ export interface IpcInvokeContract {
   'remote:listDevices': Contract<[], RemoteDeviceInfo[]>
   'remote:disconnectDevice': Contract<[deviceId: string], void>
   'remote:renameDevice': Contract<[deviceId: string, name: string], RemoteModeStatus>
+  'remote:revokeDevice': Contract<[deviceId: string, reason: string], RemoteModeStatus>
+  'remote:approveStepUp': Contract<[approvalId: string], boolean>
+  'remote:rejectStepUp': Contract<[approvalId: string], boolean>
+  'remote:listPendingApprovals': Contract<[], RemotePendingStepUpApproval[]>
+  'remote:listAuditEvents': Contract<[limit: number], RemoteAuditEventInfo[]>
   'remote:beginCloudEnrollment': Contract<[], RemoteModeStatus>
   'remote:resetCloudEnrollment': Contract<[], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
@@ -1207,6 +1212,12 @@ export interface IpcInvokeContract {
    * traffic-light close button, so the working-threads confirmation gate applies.
    */
   'app:requestClose': Contract<[], void>
+  /**
+   * Signalled by the renderer after its initial hydration completes so the main
+   * process can timestamp the `renderer:hydrated` / `workspace:ready` startup
+   * phases. Carries no payload.
+   */
+  'app:rendererReady': Contract<[], void>
 }
 
 export interface ThreadClickedPayload {
@@ -1271,6 +1282,11 @@ export interface RemoteGatewayInfo {
    * automatically — no typing, no account.
    */
   pairingUrl: string | null
+  /**
+   * When the pairing value in `pairingUrl` expires (epoch ms). The bootstrap
+   * is only valid for five minutes and rotates after enrollment.
+   */
+  pairingExpiresAt: number | null
 }
 
 export interface RemoteCloudStatus {
@@ -1283,13 +1299,26 @@ export interface RemoteCloudStatus {
   lastError: string | null
 }
 
-/** A phone device currently connected to the desktop gateway. */
+/** A phone device known to the desktop (enrolled, connected, or revoked). */
 export interface RemoteDeviceInfo {
   id: string
   /** Human-readable device name (reported by the phone or renamed on desktop). */
   name: string
   connectedAt: number
   transport: 'lan' | 'relay'
+  /** Whether the device currently holds a live session. */
+  connected: boolean
+  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  scopes: string[]
+  /** SHA-256 fingerprint prefix of the device signing key. */
+  fingerprint: string | null
+  lastUsedAt: number | null
+  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  expiresAt: number | null
+  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  credentialExpiresAt: number | null
+  revokedAt: number | null
+  authVersion: number
 }
 
 export interface RemoteModeStatus {
@@ -1300,6 +1329,32 @@ export interface RemoteModeStatus {
   cloud: RemoteCloudStatus
   /** Connected phone devices, newest first. */
   devices: RemoteDeviceInfo[]
+}
+
+/** A pending single-use local step-up approval awaiting desktop disposition. */
+export interface RemotePendingStepUpApproval {
+  approvalId: string
+  deviceId: string
+  channel: string
+  action: string
+  resource: string | null
+  expiresAt: number
+}
+
+/** A redacted security audit record — never contains secrets or content. */
+export interface RemoteAuditEventInfo {
+  id: string
+  timestamp: number
+  deviceId: string | null
+  deviceName: string | null
+  fingerprintPrefix: string | null
+  channel: string | null
+  projectId: string | null
+  requiredScope: string | null
+  decision: string
+  reasonCode: string | null
+  stepUpApprovalId: string | null
+  authVersion: number | null
 }
 
 export interface IpcEventContract {

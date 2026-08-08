@@ -338,10 +338,16 @@ const INVOKE_CHANNELS = [
   'remote:listDevices',
   'remote:disconnectDevice',
   'remote:renameDevice',
+  'remote:revokeDevice',
+  'remote:approveStepUp',
+  'remote:rejectStepUp',
+  'remote:listPendingApprovals',
+  'remote:listAuditEvents',
   'remote:beginCloudEnrollment',
   'remote:resetCloudEnrollment',
   'app:confirmClose',
-  'app:requestClose'
+  'app:requestClose',
+  'app:rendererReady'
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>

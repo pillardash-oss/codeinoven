@@ -109,6 +109,25 @@
     await invoke('remote:disconnectDevice', deviceId)
   }
 
+  async function handleRevokeDevice(deviceId: string): Promise<void> {
+    if (!desktop) return
+    try {
+      remoteStatus = await invoke('remote:revokeDevice', deviceId, 'operator')
+    } catch {
+      // The status event will resync the list if the revocation failed.
+    }
+  }
+
+  function gatewayHost(): string | null {
+    const url = remoteStatus?.gateway?.url
+    if (!url) return null
+    try {
+      return new URL(url).host
+    } catch {
+      return null
+    }
+  }
+
   async function beginCloudEnrollment(): Promise<void> {
     if (!desktop || busy) return
     busy = true
@@ -224,7 +243,12 @@
     {/if}
 
     {#if !pwa && remoteStatus?.gateway?.pairingUrl}
-      <PairingQr pairingUrl={remoteStatus.gateway.pairingUrl} phoneUrl={remoteStatus.gateway.url} />
+      <PairingQr
+        pairingUrl={remoteStatus.gateway.pairingUrl}
+        phoneUrl={remoteStatus.gateway.url}
+        pairingExpiresAt={remoteStatus.gateway.pairingExpiresAt}
+        networkInterface={gatewayHost()}
+      />
     {/if}
 
     <RemoteStatus
@@ -239,6 +263,7 @@
         {busy}
         onRename={(deviceId, name) => void handleRenameDevice(deviceId, name)}
         onDisconnect={(deviceId) => void handleDisconnectDevice(deviceId)}
+        onRevoke={(deviceId) => void handleRevokeDevice(deviceId)}
       />
     {/if}
 

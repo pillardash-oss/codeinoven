@@ -18,6 +18,11 @@ export interface RemoteGatewayInfo {
    * automatically — no typing, no account.
    */
   pairingUrl: string | null
+  /**
+   * When the pairing value in `pairingUrl` expires (epoch ms). The bootstrap
+   * is only valid for five minutes and rotates after enrollment.
+   */
+  pairingExpiresAt: number | null
 }
 
 export interface RemoteCloudStatus {
@@ -30,13 +35,26 @@ export interface RemoteCloudStatus {
   lastError: string | null
 }
 
-/** A phone device currently connected to the desktop gateway. */
+/** A phone device known to the desktop (enrolled, connected, or revoked). */
 export interface RemoteDeviceInfo {
   id: string
   /** Human-readable device name (reported by the phone or renamed on desktop). */
   name: string
   connectedAt: number
   transport: 'lan' | 'relay'
+  /** Whether the device currently holds a live session. */
+  connected: boolean
+  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  scopes: string[]
+  /** SHA-256 fingerprint prefix of the device signing key. */
+  fingerprint: string | null
+  lastUsedAt: number | null
+  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  expiresAt: number | null
+  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  credentialExpiresAt: number | null
+  revokedAt: number | null
+  authVersion: number
 }
 
 export interface RemoteModeStatus {
