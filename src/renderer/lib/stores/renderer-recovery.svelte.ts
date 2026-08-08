@@ -292,6 +292,28 @@ export class RendererRecoveryStore {
     return this.queuedMessages[recoveryDraftKey(projectId, threadId)] ?? null
   }
 
+  /** Enumerate every thread that currently has a persisted queued message. */
+  queuedMessageThreads(): Array<{ projectId: string; threadId: string }> {
+    const threads: Array<{ projectId: string; threadId: string }> = []
+    for (const key of Object.keys(this.queuedMessages)) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(key)
+      } catch {
+        continue
+      }
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        isRecoveryIdentifier(parsed[0]) &&
+        isRecoveryIdentifier(parsed[1])
+      ) {
+        threads.push({ projectId: parsed[0], threadId: parsed[1] })
+      }
+    }
+    return threads
+  }
+
   /** Persist a message queued while the agent was busy. */
   setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
     if (
