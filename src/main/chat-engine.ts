@@ -5198,8 +5198,23 @@ export class ChatEngine {
       if (path === '/v1/assignments/get') {
         const assignmentId = this.apiString(body.assignmentId, 'assignmentId')
         const assignment = this.assignmentEngine.listVersions(assignmentId).at(-1)
+        let auditReport: AuditReport | null = null
+        if (assignment?.auditCycle?.reportId && assignment.auditCycle.reportVersion !== undefined) {
+          try {
+            auditReport =
+              this.auditEngine.getVersion(
+                assignment.projectId,
+                assignment.coordinatorThreadId,
+                assignment.auditCycle.reportId,
+                assignment.auditCycle.reportVersion
+              ) ?? null
+          } catch {
+            auditReport = null
+          }
+        }
         this.writeAssignmentApiResponse(response, assignment ? 200 : 404, {
-          assignment: assignment ?? null
+          assignment: assignment ?? null,
+          auditReport
         })
         return
       }

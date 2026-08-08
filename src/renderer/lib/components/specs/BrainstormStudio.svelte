@@ -54,9 +54,6 @@
     busy?: boolean
     error?: string
     agentMessagesOpen?: boolean
-    specAvailable?: boolean
-    assignmentAvailable?: boolean
-    auditAvailable?: boolean
     onBack: () => void
     onToggleAgentMessages: () => void
     onOpenSpec?: () => void
@@ -84,9 +81,6 @@
     busy = false,
     error,
     agentMessagesOpen = false,
-    specAvailable = false,
-    assignmentAvailable = false,
-    auditAvailable = false,
     onBack,
     onToggleAgentMessages,
     onOpenSpec,
@@ -517,10 +511,6 @@
       <div class="flex min-w-0 items-center gap-2">
         <StudioDocumentNavigation
           active="brainstorm"
-          brainstormAvailable
-          {specAvailable}
-          {assignmentAvailable}
-          {auditAvailable}
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}
@@ -528,7 +518,7 @@
           sectionsLabel="brainstorm sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           onOpenBrainstorm={() => undefined}
-          onOpenSpec={specAvailable ? onOpenSpec : undefined}
+          {onOpenSpec}
           {onOpenAssignment}
           {onOpenAudit}
         />

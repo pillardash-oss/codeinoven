@@ -48,8 +48,6 @@
     readOnly?: boolean
     focusTaskId?: string
     agentMessagesOpen?: boolean
-    brainstormAvailable?: boolean
-    auditAvailable?: boolean
     auditActive?: boolean
     finalComplete?: boolean
     onBack: () => void
@@ -100,8 +98,6 @@
     readOnly = false,
     focusTaskId,
     agentMessagesOpen = false,
-    brainstormAvailable = false,
-    auditAvailable = false,
     auditActive = false,
     finalComplete = false,
     onBack,
@@ -472,9 +468,6 @@
       <div class="flex min-w-0 items-center gap-2">
         <StudioDocumentNavigation
           active="assignment"
-          {brainstormAvailable}
-          assignmentAvailable
-          {auditAvailable}
           {agentMessagesOpen}
           {onBack}
           {onToggleAgentMessages}

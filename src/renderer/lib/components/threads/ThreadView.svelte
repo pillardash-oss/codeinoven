@@ -4977,9 +4977,6 @@
           busy={brainstormBusy || busy}
           error={brainstormError}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          specAvailable={spec !== null}
-          assignmentAvailable={assignment !== null}
-          auditAvailable={auditReport !== null}
           onBack={closeSpecStudio}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
@@ -5001,8 +4998,6 @@
           versions={auditVersions}
           busy={auditBusy || busy}
           error={auditError}
-          assignmentAvailable={assignment !== null}
-          brainstormAvailable={brainstorm !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
@@ -5036,8 +5031,6 @@
             studioAssignment.version !== assignment.version}
           focusTaskId={assignmentFocusTaskId}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-          auditAvailable={auditReport !== null}
-          brainstormAvailable={brainstorm !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}
@@ -5074,8 +5067,6 @@
         agentMessagesOpen={workspaceState.specAgentSidebarOpen}
         assignmentAvailable={assignment !== null}
         assignmentMode={settings.assignmentMode === true}
-        auditAvailable={auditReport !== null}
-        brainstormAvailable={brainstorm !== null}
         onBack={closeSpecStudio}
         onOpenBrainstorm={openBrainstormStudio}
         onOpenInEditor={openSpecInEditor}
@@ -6018,9 +6009,7 @@
       <AssignmentCoordinatorPanel
         {assignment}
         auditThread={assignmentAuditThread}
-        auditState={assignmentAuditState}
         finalComplete={assignmentFinalComplete}
-        reportAvailable={auditReport !== null}
         threads={assignmentThreads}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
@@ -6039,7 +6028,6 @@
         specSummary={spec.content.resolutionSummary}
         auditThread={achievementAuditThread}
         {auditState}
-        reportAvailable={auditReport !== null}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
         auditorSettings={auditSettings}
