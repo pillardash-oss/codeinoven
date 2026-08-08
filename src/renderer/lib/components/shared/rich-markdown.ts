@@ -148,9 +148,9 @@ export function renderRichMarkdown(
       const candidate = lines[index] ?? ''
       if (
         /^```(\S*)/.test(candidate) ||
-        /^(#{1,6})\s+/.test(candidate) ||
-        /^\s*[-+*]\s+/.test(candidate) ||
-        /^\s*\d+[.)]\s+/.test(candidate)
+        /^(#{1,6})\s+(.+)$/.test(candidate) ||
+        /^\s*[-+*]\s+(.+)$/.test(candidate) ||
+        /^\s*\d+[.)]\s+(.+)$/.test(candidate)
       ) {
         break
       }
@@ -324,6 +324,70 @@ export function placeCaretInside(element: HTMLElement): void {
   range.collapse(false)
   selection.removeAllRanges()
   selection.addRange(range)
+}
+
+function placeCaretAtStart(element: HTMLElement): void {
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+/** Lifts nested lists out of a list item so the item can be re-shaped as a block
+ *  (paragraph or a sibling item) without dragging its sub-lists along. */
+function liftNestedLists(item: HTMLElement): HTMLElement[] {
+  const lists = Array.from(item.children).filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && (child.tagName === 'UL' || child.tagName === 'OL')
+  )
+  for (const list of lists) {
+    list.remove()
+  }
+  return lists
+}
+
+/** Reverts a list item that the caret sits at the very start of: an item nested
+ *  inside another item is lifted up a level, and the first item of a top-level
+ *  list becomes a plain paragraph in front of the list. Mid-list items fall back
+ *  to the browser's native merge and return false. */
+export function unlistListItem(root: HTMLElement, listItem: HTMLElement): boolean {
+  const list = listItem.parentElement
+  if (!list || (list.tagName !== 'UL' && list.tagName !== 'OL')) return false
+  if (!root.contains(listItem) || listItem.previousElementSibling !== null) return false
+
+  const parentListItem = list.parentElement?.closest('li')
+  if (parentListItem) {
+    const parentList = parentListItem.parentElement
+    if (!parentList) return false
+    listItem.remove()
+    parentList.insertBefore(listItem, parentListItem.nextSibling)
+    if (!list.firstElementChild) list.remove()
+    placeCaretAtStart(listItem)
+    return true
+  }
+
+  const nestedLists = liftNestedLists(listItem)
+  const paragraph = document.createElement('p')
+  paragraph.append(...Array.from(listItem.childNodes))
+  if (paragraph.childNodes.length === 0) paragraph.append(document.createElement('br'))
+  listItem.remove()
+  list.before(paragraph)
+  let cursor: ChildNode = paragraph
+  for (const nested of nestedLists) {
+    cursor.after(nested)
+    cursor = nested
+  }
+  if (!list.firstElementChild) {
+    list.remove()
+    if (!root.firstElementChild) {
+      root.innerHTML = renderRichMarkdown('')
+    }
+  }
+  placeCaretAtStart(paragraph)
+  return true
 }
 
 function currentBlock(root: HTMLElement, node: Node): HTMLElement | null {
