@@ -1,8 +1,10 @@
 <script lang="ts">
   import {
+    AppWindow,
     ArrowRight,
     Check,
     ChevronDown,
+    FileText,
     History,
     MessageSquare,
     MessageSquarePlus,
@@ -13,6 +15,7 @@
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, onMount, tick } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
@@ -76,6 +79,8 @@
       brainstorm: BrainstormDocument,
       additionalNotes: string
     ) => CallbackResult
+    onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
+    onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
   }
 
   let {
@@ -97,7 +102,9 @@
     onAddAnnotation,
     onUpdateAnnotation,
     onResolveAnnotation,
-    onSubmit
+    onSubmit,
+    onOpenInEditor,
+    onRevealInAppFile
   }: Props = $props()
 
   const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
@@ -114,6 +121,8 @@
   // a newly selected or persisted version while retaining intentional local edit buffers.
   // svelte-ignore state_referenced_locally
   let draft = $state<BrainstormDocument>($state.snapshot(brainstorm))
+  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
+  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
   let loadedKey = $state(`${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`)
   let selectedSection = $state<BrainstormSectionId>('context')
@@ -730,6 +739,37 @@
             {/each}
           </div>
         </div>
+
+        {#if onRevealInAppFile || onOpenInEditor}
+          <div class="flex shrink-0 items-center gap-1 border-t p-2">
+            {#if onRevealInAppFile}
+              <button
+                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                disabled={busy}
+                title="Reveal this brainstorm as Markdown in the file tree"
+                onclick={() => void onRevealInAppFile?.(draft)}
+              >
+                <FileText size={13} />
+                View
+              </button>
+            {/if}
+            {#if onOpenInEditor}
+              <button
+                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                disabled={busy}
+                title={`Open this brainstorm as Markdown in ${preferredName}`}
+                onclick={() => void onOpenInEditor?.(draft)}
+              >
+                {#if preferredIcon}
+                  <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
+                {:else}
+                  <AppWindow size={14} class="shrink-0" />
+                {/if}
+                Open
+              </button>
+            {/if}
+          </div>
+        {/if}
       </div>
     </aside>
 

@@ -92,6 +92,22 @@ export class AuditEngine {
     return row ? (JSON.parse(row.data) as AuditReport) : null
   }
 
+  /** Resolve the materialized markdown artifact for an audit report version. */
+  async markdownPath(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number
+  ): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.db, projectId, threadId)
+    return this.storage.resolveProjectSpecArtifact(
+      projectId,
+      featureSlug,
+      join('versions', `${reportId}-audit-v${version}.md`),
+      requireLocalProject(this.db, projectId)
+    )
+  }
+
   listVersions(projectId: string, threadId: string, reportId: string): AuditReport[] {
     const rows = this.db.all<{ data: string }>(
       'SELECT data FROM audit_reports WHERE report_id=? ORDER BY version',

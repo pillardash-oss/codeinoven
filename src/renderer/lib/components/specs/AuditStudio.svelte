@@ -1,6 +1,17 @@
 <script lang="ts">
-  import { Check, MessageSquare, MessageSquarePlus, Pencil, Plus, Save, X } from '@lucide/svelte'
+  import {
+    AppWindow,
+    Check,
+    FileText,
+    MessageSquare,
+    MessageSquarePlus,
+    Pencil,
+    Plus,
+    Save,
+    X
+  } from '@lucide/svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     AuditAnnotation,
     AuditFindingSeverity,
@@ -55,6 +66,8 @@
     onResolveAnnotation: (annotationId: string) => Promise<AuditReport | null>
     onReview: (report: AuditReport, notes: string) => Promise<boolean>
     onComplete: () => CallbackResult
+    onOpenInEditor?: (report: AuditReport) => CallbackResult
+    onRevealInAppFile?: (report: AuditReport) => CallbackResult
   }
 
   let {
@@ -77,7 +90,9 @@
     onUpdateAnnotation,
     onResolveAnnotation,
     onReview,
-    onComplete
+    onComplete,
+    onOpenInEditor,
+    onRevealInAppFile
   }: Props = $props()
   // svelte-ignore state_referenced_locally
   let draft = $state<AuditReport>($state.snapshot(report))
@@ -85,6 +100,8 @@
   let reviewOpen = $state(false)
   let reviewNotes = $state('')
   let reviewSubmitting = $state(false)
+  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
+  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let annotationBody = $state('')
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<AuditAnnotation | null>(null)
@@ -799,6 +816,37 @@
           </div>
         </div>
       </div>
+
+      {#if onRevealInAppFile || onOpenInEditor}
+        <div class="flex shrink-0 items-center gap-1 border-t p-2">
+          {#if onRevealInAppFile}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title="Reveal this audit report as Markdown in the file tree"
+              onclick={() => void onRevealInAppFile?.(draft)}
+            >
+              <FileText size={13} />
+              View
+            </button>
+          {/if}
+          {#if onOpenInEditor}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title={`Open this audit report as Markdown in ${preferredName}`}
+              onclick={() => void onOpenInEditor?.(draft)}
+            >
+              {#if preferredIcon}
+                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
+              {:else}
+                <AppWindow size={14} class="shrink-0" />
+              {/if}
+              Open
+            </button>
+          {/if}
+        </div>
+      {/if}
     </aside>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <main
