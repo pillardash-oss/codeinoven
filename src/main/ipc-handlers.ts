@@ -19,6 +19,7 @@ import { CheckpointManager } from './checkpoint-manager'
 import { DiagnosticsService } from './diagnostics-service'
 import { resolveFavicons } from './favicon-service'
 import { MemoryService, validateMemoryConfig } from './memory-service'
+import { harnessLoadsAgentsMd } from './harness-registry'
 import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
@@ -996,9 +997,11 @@ export function registerIpcHandlers(
               : thread?.settings?.harnessId === 'antigravity'
                 ? 'Antigravity'
                 : 'OpenCode'
+    const harnessId = thread?.settings?.harnessId ?? 'opencode'
     const driverInfo = {
-      id: thread?.settings?.harnessId ?? 'opencode',
-      name: driverName
+      id: harnessId,
+      name: driverName,
+      loadsAgentsMd: harnessLoadsAgentsMd(harnessId)
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
