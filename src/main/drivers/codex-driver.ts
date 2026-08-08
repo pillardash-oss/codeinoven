@@ -1482,6 +1482,9 @@ function codexSandboxPolicy(
 }
 
 function codexEffort(value: ThreadSettings['thinkingLevel']): string {
+  // Codex calls its lowest supported reasoning effort `low`; `minimal` is the
+  // cross-harness alias used by the app and by lightweight internal turns.
+  if (value === 'minimal') return 'low'
   return value
 }
 

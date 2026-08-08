@@ -1881,8 +1881,8 @@
       initializeHistoryWindow(page.messages.length)
       if (threadData?.settings) {
         settings = chatMode
-          ? normalizeChatSettings({ ...chatEffectiveSettings(), ...threadData.settings })
-          : { ...threadSettings.lastUsed, ...threadData.settings }
+          ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
+          : threadSettings.initialFor(threadData)
       }
       agentDefaults = config.agentDefaults
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
