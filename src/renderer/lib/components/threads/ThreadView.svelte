@@ -1516,8 +1516,11 @@
 
   // Keep the thread-messages store aware of the active session so streaming
   // events are routed to the right cache even when this component remounts.
+  // Never clear the mapping with an empty id on mount: a thread remounted while
+  // its turn is still in flight must keep routing its session events, otherwise
+  // a message queued on this thread can't be dispatched once the agent idles.
   $effect(() => {
-    threadMessages.setSessionId(thread.projectId, thread.id, sessionId || undefined)
+    if (sessionId) threadMessages.setSessionId(thread.projectId, thread.id, sessionId)
   })
 
   // Convert file:// image URLs to blob: Object URLs for reliable display in
@@ -1975,6 +1978,12 @@
       // Merge the newest mirror page with optimistic messages and any older
       // pages already loaded for this thread.
       threadMessages.mergePage(projectId, id, page.messages)
+      // Re-bind the thread's persisted session so its live events keep routing
+      // to this cache (and the background queue dispatcher) even when the
+      // renderer never sent a message on this mount.
+      if (threadData?.sessionId) {
+        threadMessages.setSessionId(projectId, id, threadData.sessionId)
+      }
       syncOpenSubagentTabs()
       // The live session status (connectSession) is authoritative; only fall
       // back to the persisted thread status when no live status was seen.
