@@ -518,13 +518,27 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     return
   }
 
+  // Receiver-generated end-to-end confirmation: forward the ACK to the sender
+  // and release the retained frame in the hub.
+  if (record['type'] === 'relay:ack' && typeof record['id'] === 'number') {
+    const ackDesktopId = socket.data.desktopId
+    if (ackDesktopId) relayHub.acknowledge(ackDesktopId, record['id'])
+    return
+  }
+
   if (record['type'] !== 'relay:data' || typeof record['payload'] !== 'string') return
   const desktopId = socket.data.desktopId
   if (!desktopId) return
   if (socket.data.role === 'desktop') {
-    const outcome = relayHub.forward(desktopId, 'desktop', text)
-    if (outcome.accepted && typeof record['id'] === 'number') {
-      socket.send(JSON.stringify({ type: 'relay:ack', id: record['id'] }))
+    const outcome = relayHub.forward(desktopId, 'desktop', socket, text)
+    if (!outcome.accepted && typeof record['id'] === 'number') {
+      socket.send(
+        JSON.stringify({
+          type: 'relay:nack',
+          id: record['id'],
+          reason: outcome.reason ?? 'rejected'
+        })
+      )
     }
     return
   }
@@ -532,9 +546,15 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     socket.close(4003, 'session-ended')
     return
   }
-  const outcome = relayHub.forward(desktopId, 'mobile', text)
-  if (outcome.accepted && typeof record['id'] === 'number') {
-    socket.send(JSON.stringify({ type: 'relay:ack', id: record['id'] }))
+  const outcome = relayHub.forward(desktopId, 'mobile', socket, text)
+  if (!outcome.accepted && typeof record['id'] === 'number') {
+    socket.send(
+      JSON.stringify({
+        type: 'relay:nack',
+        id: record['id'],
+        reason: outcome.reason ?? 'rejected'
+      })
+    )
   }
 }
 

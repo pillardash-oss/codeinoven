@@ -19,6 +19,8 @@ import {
   fullJitterDelay,
   parseRelayAckFrame,
   parseRelayDataFrame,
+  parseRelayNackFrame,
+  serializeRelayAckFrame,
   serializeRelayDataFrame
 } from './relay-protocol'
 
@@ -152,6 +154,12 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
     }
   }
 
+  /** Send a receiver-generated `relay:ack` control frame on the open socket. */
+  function sendAck(id: number): void {
+    if (!socket || !open || socket.readyState !== WebSocket.OPEN) return
+    socket.send(serializeRelayAckFrame(id))
+  }
+
   function scheduleReconnect(): void {
     if (closing || reconnectTimer !== null) return
     if (!reconnect) return
@@ -187,6 +195,16 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
         inFlight.delete(ack.id)
         return
       }
+      const nack = parseRelayNackFrame(event.data)
+      if (nack) {
+        // Explicit retryable rejection: requeue the frame for retransmission.
+        const record = inFlight.get(nack.id)
+        if (record) {
+          inFlight.delete(nack.id)
+          enqueue(record)
+        }
+        return
+      }
       const frame = parseFrame(event.data)
       if (!frame) return
       if (frame.type === 'relay:authenticated') {
@@ -207,13 +225,22 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       }
       if (frame.type === 'relay:data' && frame.payload) {
         const dataFrame = parseRelayDataFrame(event.data)
-        // Duplicate suppression: an already delivered inbound frame id is ignored.
-        if (dataFrame && !Number.isNaN(dataFrame.id)) {
-          if (seenInboundIds.has(dataFrame.id)) return
-          seenInboundIds.add(dataFrame.id)
+        const wireId = dataFrame && !Number.isNaN(dataFrame.id) ? dataFrame.id : undefined
+        if (wireId !== undefined) {
+          if (seenInboundIds.has(wireId)) {
+            // Duplicate delivery: the receiver already accepted this frame, so
+            // acknowledge without re-decrypting (replay-protected) or re-emitting.
+            sendAck(wireId)
+            return
+          }
+          seenInboundIds.add(wireId)
         }
         void decryptPayload(options.controlSecret, frame.payload)
-          .then((data) => options.onEvent({ kind: 'message', data }))
+          .then((data) => {
+            // Receiver-confirmed delivery: ack every accepted frame end to end.
+            if (wireId !== undefined) sendAck(wireId)
+            options.onEvent({ kind: 'message', data })
+          })
           .catch(() => {
             remoteLog.error('Cloud relay payload authentication failed')
             socket?.close()

@@ -14,10 +14,11 @@ import {
  * End-to-end protocol coverage that exercises the REAL production relay hub
  * (`services/remote-control/relay-hub.ts` — the routing logic the remote-control
  * server's `relayMessage` handler delegates to) between a real desktop
- * (CloudRelayClient) and a real mobile (account-relay client). This verifies
- * the wire protocol, ACK-on-accept delivery semantics, offline buffering,
- * reconnect replay, TTL expiry, deterministic overflow, and epoch-scoped ids
- * against the shared server logic rather than a synthetic harness.
+ * (CloudRelayClient) and a real mobile (account-relay client). Delivery is
+ * confirmed END TO END: the hub retains each frame until the RECEIVER
+ * acknowledges it, then forwards that receiver-generated ACK to the sender.
+ * This covers offline/reconnect, disconnect-after-send, overflow, expiry, and
+ * receiver-ACK clearing against the shared server logic.
  */
 
 const SECRET = 'control-secret'
@@ -69,7 +70,8 @@ class DuplexSocket {
 /**
  * Bridges one client socket to the real RelayHub exactly as the server's
  * `relayMessage` handler does: register the peer, route `relay:data` through
- * `hub.forward`, and acknowledge only frames the hub accepted for delivery.
+ * `hub.forward`, forward receiver-generated `relay:ack` through
+ * `hub.acknowledge`, and surface retryable `relay:nack` on rejection.
  */
 class HubBridge {
   readonly client: DuplexSocket
@@ -99,10 +101,20 @@ class HubBridge {
       } catch {
         return
       }
+      if (frame.type === 'relay:ack' && typeof frame.id === 'number') {
+        this.hub.acknowledge(this.desktopId, frame.id)
+        return
+      }
       if (frame.type === 'relay:data' && typeof frame.id === 'number') {
-        const outcome = hub.forward(desktopId, role, data)
-        if (outcome.accepted) {
-          client.deliver(JSON.stringify({ type: 'relay:ack', id: frame.id }))
+        const outcome = this.hub.forward(this.desktopId, this.role, this.peerSocket, data)
+        if (!outcome.accepted) {
+          client.deliver(
+            JSON.stringify({
+              type: 'relay:nack',
+              id: frame.id,
+              reason: outcome.reason ?? 'rejected'
+            })
+          )
         }
       }
     }
@@ -118,6 +130,11 @@ class HubBridge {
   /** Remove this peer from the hub (simulates the socket closing server-side). */
   disconnect(): void {
     this.hub.disconnect(this.desktopId, this.role, this.peerSocket)
+  }
+
+  /** The peer socket identity registered with the hub. */
+  socket(): RelaySocket {
+    return this.peerSocket
   }
 }
 
@@ -135,7 +152,7 @@ function wireDesktop(hub: RelayHub): {
 function wireMobile(
   hub: RelayHub,
   onMessage: (data: string) => void
-): { client: DuplexSocket; mobile: AccountRelayClient } {
+): { client: DuplexSocket; mobile: AccountRelayClient; bridge: HubBridge } {
   const client = new DuplexSocket()
   const mobile = createAccountRelayClient({
     desktopId: DESKTOP_ID,
@@ -148,8 +165,8 @@ function wireMobile(
   })
   // Mobile is authenticated by the server without a client handshake frame.
   void mobile.connect()
-  new HubBridge(hub, DESKTOP_ID, 'mobile', client)
-  return { client, mobile }
+  const bridge = new HubBridge(hub, DESKTOP_ID, 'mobile', client)
+  return { client, mobile, bridge }
 }
 
 /** Server accepts the mobile: mark the channel open and deliver authenticated. */
@@ -192,30 +209,26 @@ afterAll(() => {
 })
 
 describe('account relay end-to-end protocol (real RelayHub)', () => {
-  it('routes frames through the hub with ACK-on-accepted-delivery', async () => {
+  it('confirms delivery only after the receiver acknowledges end to end', async () => {
     const hub = new RelayHub()
-    const desktopMessages: string[] = []
     const mobileMessages: string[] = []
-
-    // Desktop connects + authenticates.
-    const desktopBridge = wireDesktop(hub)
-    const desktop = createDesktopClient(hub, desktopBridge, desktopBridge.onRpc)
+    const desktopWire = wireDesktop(hub)
+    const desktop = createDesktopClient(hub, desktopWire.bridge, desktopWire.onRpc)
     desktop.connect()
-    desktopBridge.client.open()
-    await vi.waitFor(() => expect(desktopBridge.client.sent.length).toBe(1))
-    desktopBridge.client.deliver(
+    desktopWire.client.open()
+    await vi.waitFor(() => expect(desktopWire.client.sent.length).toBe(1))
+    desktopWire.client.deliver(
       JSON.stringify({ type: 'relay:authenticated', desktopId: DESKTOP_ID })
     )
 
-    // Mobile connects + authenticates.
     const mobileWire = wireMobile(hub, (data) => mobileMessages.push(data))
     authenticateMobile(mobileWire.client)
 
-    // Mobile invokes an RPC -> hub routes to desktop -> desktop answers -> hub
-    // routes the result back to the mobile.
+    // Mobile invokes an RPC; the desktop (receiver) processes it and the hub
+    // routes the result back. No ACK is issued by the hub on acceptance.
     await sendMobileData(mobileWire.mobile, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
     await vi.waitFor(() => {
-      expect(desktopBridge.onRpc).toHaveBeenCalledWith('chat', [])
+      expect(desktopWire.onRpc).toHaveBeenCalledWith('chat', [])
     })
     await vi.waitFor(() => {
       expect(mobileMessages).toHaveLength(1)
@@ -223,24 +236,26 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
       expect(body.rpc).toBe('result')
       expect(body.id).toBe(1)
     })
-
-    // Every accepted relay:data frame is acknowledged to its sender.
-    const desktopAcks = desktopBridge.client.received.filter((frame) => frame.includes('relay:ack'))
-    expect(desktopAcks.length).toBeGreaterThan(0)
+    // Both directions resolve once the receivers confirm: retained work clears.
+    await vi.waitFor(() => {
+      expect(hub.outstandingCount()).toBe(0)
+    })
+    // The mobile received receiver-generated end-to-end ACKs for its frames.
     const mobileAcks = mobileWire.client.received.filter((frame) => frame.includes('relay:ack'))
     expect(mobileAcks.length).toBeGreaterThan(0)
-    expect(desktopMessages).toEqual([])
+    const desktopAcks = desktopWire.client.received.filter((frame) => frame.includes('relay:ack'))
+    expect(desktopAcks.length).toBeGreaterThan(0)
 
     desktop.close()
     mobileWire.mobile.close()
   })
 
-  it('buffers for an offline peer and replays on reconnect', async () => {
+  it('buffers for an offline peer, no premature ACK, and replays on reconnect', async () => {
     const hub = new RelayHub()
 
     // Desktop connects + authenticates, then goes offline (hub-visible).
     const desktopBridge = wireDesktop(hub)
-    const desktop = createDesktopClient(hub, desktopBridge, desktopBridge.onRpc)
+    const desktop = createDesktopClient(hub, desktopBridge.bridge, desktopBridge.onRpc)
     desktop.connect()
     desktopBridge.client.open()
     await vi.waitFor(() => expect(desktopBridge.client.sent.length).toBe(1))
@@ -255,11 +270,13 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     authenticateMobile(mobileWire.client)
     await sendMobileData(mobileWire.mobile, { rpc: 'invoke', id: 5, channel: 'chat', args: [] })
     await vi.waitFor(() => {
-      expect(hub.bufferedCount()).toBe(1)
+      expect(hub.outstandingCount()).toBe(1)
     })
-    // The offline frame is still accepted (buffered) and acknowledged.
-    const mobileAck = mobileWire.client.received.find((frame) => frame.includes('relay:ack'))
-    expect(mobileAck).toBeDefined()
+    // No receiver confirmation yet: the sender must NOT be acked prematurely.
+    const mobileAckBefore = mobileWire.client.received.filter((frame) =>
+      frame.includes('relay:ack')
+    )
+    expect(mobileAckBefore).toHaveLength(0)
 
     // Desktop reconnects (new socket) and the hub replays the buffered frame.
     const reconnected = wireDesktop(hub)
@@ -270,16 +287,21 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
       JSON.stringify({ type: 'relay:authenticated', desktopId: DESKTOP_ID })
     )
     reconnected.bridge.deliverReplay()
-    await vi.waitFor(async () => {
+    await vi.waitFor(() => {
       expect(reconnected.onRpc).toHaveBeenCalled()
     })
-    expect(hub.bufferedCount()).toBe(0)
+    // The desktop (receiver) confirmed the replayed frame -> sender acked + cleared.
+    await vi.waitFor(() => {
+      expect(hub.outstandingCount()).toBe(0)
+    })
+    const mobileAckAfter = mobileWire.client.received.filter((frame) => frame.includes('relay:ack'))
+    expect(mobileAckAfter.length).toBeGreaterThan(0)
 
     desktop2.close()
     mobileWire.mobile.close()
   })
 
-  it('drops the oldest buffered frame deterministically at the buffer limit', async () => {
+  it('rejects on overflow with a retryable NACK instead of silently dropping', async () => {
     const hub = new RelayHub({ bufferLimit: 2 })
     const mobileWire = wireMobile(hub, () => undefined)
     authenticateMobile(mobileWire.client)
@@ -287,9 +309,15 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
       await sendMobileData(mobileWire.mobile, { rpc: 'event', channel: 'a', payload: id })
     }
     await vi.waitFor(() => {
-      expect(hub.bufferedCount()).toBe(2)
+      expect(hub.outstandingCount()).toBe(2)
     })
-    // Reconnect the desktop and inspect which frames survived the overflow.
+    // The overflowing frame was rejected with an explicit retryable NACK.
+    const nacks = mobileWire.client.received.filter((frame) => frame.includes('relay:nack'))
+    expect(nacks).toHaveLength(1)
+    const nack = JSON.parse(nacks[0] ?? '{}') as { id: number; reason?: string }
+    expect(nack.reason).toBe('overflow')
+
+    // The two accepted frames survive and are replayed on reconnect.
     const desktopBridge = wireDesktop(hub)
     const replayed = desktopBridge.bridge.deliverReplay()
     const { decryptPayload } = await import('../../renderer/lib/remote/session-security')
@@ -299,23 +327,73 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
         return JSON.parse(await decryptPayload(SECRET, parsed.payload)) as Record<string, unknown>
       })
     )
-    expect(bodies.map((body) => body['payload'])).toEqual([2, 3])
+    expect(bodies.map((body) => body['payload'])).toEqual([1, 2])
     mobileWire.mobile.close()
   })
 
-  it('expires buffered frames after the TTL', async () => {
+  it('expires accepted frames after the TTL and NACKs the sender', async () => {
     const now = 1_000
     const hub = new RelayHub({ bufferTtlMs: 5_000, now: () => now })
     const mobileWire = wireMobile(hub, () => undefined)
     authenticateMobile(mobileWire.client)
     await sendMobileData(mobileWire.mobile, { rpc: 'event', channel: 'a', payload: 1 })
     await vi.waitFor(() => {
-      expect(hub.bufferedCount()).toBe(1)
+      expect(hub.outstandingCount()).toBe(1)
     })
     ;(hub as unknown as { now: () => number }).now = () => now + 6_000
     expect(hub.sweep()).toBe(1)
-    expect(hub.bufferedCount()).toBe(0)
+    expect(hub.outstandingCount()).toBe(0)
+    const nacks = mobileWire.client.received.filter((frame) => frame.includes('relay:nack'))
+    expect(nacks).toHaveLength(1)
+    const nack = JSON.parse(nacks[0] ?? '{}') as { id: number; reason?: string }
+    expect(nack.reason).toBe('expired')
     mobileWire.mobile.close()
+  })
+
+  it('survives a sender disconnect-after-send: retained work still resolves end to end', async () => {
+    const hub = new RelayHub()
+
+    // Receiver (desktop) offline from the start.
+    // Sender (mobile) sends while the receiver is offline -> retained, no ack.
+    const mobileWire = wireMobile(hub, () => undefined)
+    authenticateMobile(mobileWire.client)
+    await sendMobileData(mobileWire.mobile, { rpc: 'invoke', id: 7, channel: 'chat', args: [] })
+    await vi.waitFor(() => {
+      expect(hub.outstandingCount()).toBe(1)
+    })
+    expect(mobileWire.client.received.filter((frame) => frame.includes('relay:ack'))).toHaveLength(
+      0
+    )
+
+    // The sender disconnects before the receiver can confirm.
+    mobileWire.bridge.disconnect()
+    mobileWire.client.drop('offline')
+
+    // The receiver reconnects, gets the replayed frame, and confirms it. The
+    // hub forwards the ACK to the (now stale) sender socket harmlessly and
+    // releases the retained work.
+    const desktopWire = wireDesktop(hub)
+    const desktop = createDesktopClient(hub, desktopWire.bridge, desktopWire.onRpc)
+    desktop.connect()
+    desktopWire.client.open()
+    await vi.waitFor(() => expect(desktopWire.client.sent.length).toBe(1))
+    desktopWire.client.deliver(
+      JSON.stringify({ type: 'relay:authenticated', desktopId: DESKTOP_ID })
+    )
+    desktopWire.bridge.deliverReplay()
+    await vi.waitFor(() => {
+      expect(desktopWire.onRpc).toHaveBeenCalledTimes(1)
+    })
+    // The replayed frame was confirmed end to end: the sender (now stale)
+    // received the receiver-generated ACK and the retained entry is released.
+    const mobileAck = mobileWire.client.received.find((frame) => frame.includes('relay:ack'))
+    expect(mobileAck).toBeDefined()
+    // Only the desktop's result (buffered for the offline mobile) remains.
+    await vi.waitFor(() => {
+      expect(hub.outstandingCount()).toBe(1)
+    })
+
+    desktop.close()
   })
 
   it('uses epoch-scoped wire ids so a reloaded peer is not deduplicated away', async () => {
@@ -341,5 +419,158 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
 
     firstMobile.mobile.close()
     secondMobile.mobile.close()
+  })
+})
+
+describe('RelayHub loss-safety unit semantics', () => {
+  function recordingSocket(): { socket: RelaySocket; sent: string[] } {
+    const sent: string[] = []
+    return {
+      sent,
+      socket: {
+        send: (data) => sent.push(data),
+        close: () => undefined
+      }
+    }
+  }
+
+  it('does not ack on server acceptance — only on receiver confirmation', () => {
+    const hub = new RelayHub()
+    const sender = recordingSocket()
+    const receiver = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.connectDesktop(DESKTOP_ID, receiver.socket)
+
+    const outcome = hub.forward(
+      DESKTOP_ID,
+      'mobile',
+      sender.socket,
+      JSON.stringify({ type: 'relay:data', id: 42, payload: 'x' })
+    )
+    expect(outcome).toEqual({ accepted: true, delivered: true })
+    // No premature ACK from the hub.
+    expect(sender.sent).toEqual([])
+    expect(hub.outstandingCount()).toBe(1)
+
+    // The receiver confirms -> the receiver-generated ACK is forwarded to the
+    // sender and the retained frame is released.
+    expect(hub.acknowledge(DESKTOP_ID, 42)).toBe(true)
+    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:ack', id: 42 })])
+    expect(hub.outstandingCount()).toBe(0)
+    expect(hub.acknowledge(DESKTOP_ID, 42)).toBe(false)
+  })
+
+  it('rejects a malformed or non-positive wire id without accepting it', () => {
+    const hub = new RelayHub()
+    const sender = recordingSocket()
+    const receiver = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.connectDesktop(DESKTOP_ID, receiver.socket)
+
+    expect(
+      hub.forward(
+        DESKTOP_ID,
+        'mobile',
+        sender.socket,
+        JSON.stringify({ type: 'relay:data', payload: 'x' })
+      )
+    ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
+    expect(
+      hub.forward(
+        DESKTOP_ID,
+        'mobile',
+        sender.socket,
+        JSON.stringify({ type: 'relay:data', id: -1, payload: 'x' })
+      )
+    ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
+    expect(
+      hub.forward(
+        DESKTOP_ID,
+        'mobile',
+        sender.socket,
+        JSON.stringify({ type: 'relay:data', id: 1.5, payload: 'x' })
+      )
+    ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
+    expect(hub.outstandingCount()).toBe(0)
+    expect(receiver.sent).toEqual([])
+  })
+
+  it('rejects on overflow (NACK) instead of dropping already-accepted work', () => {
+    const hub = new RelayHub({ bufferLimit: 2 })
+    const sender = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    // Receiver offline: frames are retained, then the third overflows.
+    for (const id of [1, 2]) {
+      const outcome = hub.forward(
+        DESKTOP_ID,
+        'mobile',
+        sender.socket,
+        JSON.stringify({ type: 'relay:data', id, payload: String(id) })
+      )
+      expect(outcome.accepted).toBe(true)
+    }
+    const overflow = hub.forward(
+      DESKTOP_ID,
+      'mobile',
+      sender.socket,
+      JSON.stringify({ type: 'relay:data', id: 3, payload: '3' })
+    )
+    expect(overflow).toEqual({ accepted: false, delivered: false, reason: 'overflow' })
+    expect(hub.outstandingCount()).toBe(2)
+  })
+
+  it('expires retained frames with a retryable NACK, never silently', () => {
+    const now = 1_000
+    const hub = new RelayHub({ bufferTtlMs: 5_000, now: () => now })
+    const sender = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.forward(
+      DESKTOP_ID,
+      'mobile',
+      sender.socket,
+      JSON.stringify({ type: 'relay:data', id: 9, payload: 'x' })
+    )
+    ;(hub as unknown as { now: () => number }).now = () => now + 6_000
+    expect(hub.sweep()).toBe(1)
+    expect(hub.outstandingCount()).toBe(0)
+    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:nack', id: 9, reason: 'expired' })])
+  })
+
+  it('forwards a late receiver ACK to a stale (disconnected) sender harmlessly', () => {
+    const hub = new RelayHub()
+    const sender = recordingSocket()
+    const receiver = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.connectDesktop(DESKTOP_ID, receiver.socket)
+    hub.forward(
+      DESKTOP_ID,
+      'mobile',
+      sender.socket,
+      JSON.stringify({ type: 'relay:data', id: 11, payload: 'x' })
+    )
+    // The sender disconnects after sending; its socket is no longer live.
+    hub.disconnect(DESKTOP_ID, 'mobile', sender.socket)
+    // The receiver confirms; the ACK is forwarded to the stale socket (send is
+    // a harmless no-op in production) and the retained frame is released.
+    expect(hub.acknowledge(DESKTOP_ID, 11)).toBe(true)
+    expect(hub.outstandingCount()).toBe(0)
+  })
+
+  it('re-delivers a retransmission of an accepted frame and re-acks on confirm', () => {
+    const hub = new RelayHub()
+    const sender = recordingSocket()
+    const receiver = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.connectDesktop(DESKTOP_ID, receiver.socket)
+    const frame = JSON.stringify({ type: 'relay:data', id: 5, payload: 'x' })
+    hub.forward(DESKTOP_ID, 'mobile', sender.socket, frame)
+    // Retransmission (same id) is accepted and delivered again.
+    const retry = hub.forward(DESKTOP_ID, 'mobile', sender.socket, frame)
+    expect(retry).toEqual({ accepted: true, delivered: true })
+    expect(receiver.sent.filter((f) => f.includes('relay:data'))).toHaveLength(2)
+    expect(hub.outstandingCount()).toBe(1)
+    // One receiver confirmation resolves the single retained entry.
+    expect(hub.acknowledge(DESKTOP_ID, 5)).toBe(true)
+    expect(hub.outstandingCount()).toBe(0)
   })
 })
