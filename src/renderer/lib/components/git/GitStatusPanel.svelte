@@ -133,6 +133,11 @@
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
 
   const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
+  const commitBusy = $derived(gitState.isBusy(['commit', 'amend']))
+  const batchBusy = $derived(
+    gitState.isBusy(['stage', 'unstage', 'commit', 'stash', 'ignore', 'discard'])
+  )
+  const stashOpBusy = $derived(gitState.isBusy(['stash-pop', 'stash-drop']))
 
   async function refreshStatus(): Promise<void> {
     gitState.ensureProjectEvents(projectId)
@@ -1195,14 +1200,7 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={() => void stageSelectedAction(false)}
                     title="Stage the selected files"
                   >
@@ -1211,14 +1209,7 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={() => void stageSelectedAction(true)}
                     title="Unstage the selected files"
                   >
@@ -1227,14 +1218,7 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={requestCommitSelected}
                     title="Stage the selected files and write a commit"
                   >
@@ -1243,14 +1227,7 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={() => requestStashFor(selectedPathList)}
                     title="Stash the selected files"
                   >
@@ -1259,30 +1236,16 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={() => void ignoreSelectedAction()}
                     title="Add the selected files to .gitignore"
                   >
-                    Ignore
+                    Add to gitignore
                   </button>
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                    disabled={gitState.isBusy([
-                      'stage',
-                      'unstage',
-                      'commit',
-                      'stash',
-                      'ignore',
-                      'discard'
-                    ])}
+                    disabled={batchBusy}
                     onclick={() => requestDiscard(selectedPathList)}
                     title="Discard changes to the selected files"
                   >
@@ -1550,7 +1513,7 @@
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                    disabled={stashOpBusy}
                     title="Restore stash {stash.id} into the working tree"
                     onclick={() => void popStash(stash.id)}
                   >
@@ -1559,7 +1522,7 @@
                   <button
                     type="button"
                     class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                    disabled={gitState.isBusy(['stash-pop', 'stash-drop'])}
+                    disabled={stashOpBusy}
                     title="Discard stash {stash.id}"
                     aria-label="Discard stash {stash.id}"
                     onclick={() => requestStashDrop(stash)}
@@ -1628,12 +1591,10 @@
         <button
           type="button"
           class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary shadow-sm transition-colors hover:bg-primary-hover disabled:opacity-40"
-          disabled={!commitMessage.trim() ||
-            gitState.isBusy(['commit', 'amend']) ||
-            (!amendMode && staged.length === 0)}
+          disabled={!commitMessage.trim() || commitBusy || (!amendMode && staged.length === 0)}
           onclick={() => void commitInline()}
         >
-          {#if gitState.isBusy(['commit', 'amend'])}
+          {#if commitBusy}
             <Loader2 size={11} class="animate-spin" />
           {:else}
             <GitCommit size={11} />

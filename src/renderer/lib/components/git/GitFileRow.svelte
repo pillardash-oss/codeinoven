@@ -225,7 +225,7 @@
                 onSelect={() => onIgnore?.(change.path)}
               >
                 <span class="inline-block w-3 text-center text-[10px]">⊘</span>
-                Ignore
+                Add to gitignore
               </ContextMenu.Item>
             {/if}
             {#if onDiscard}
