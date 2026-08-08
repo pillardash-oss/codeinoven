@@ -1544,6 +1544,15 @@ export interface ThreadMessageCursor {
 export interface ThreadMessagePage {
   messages: AgentMessage[]
   hasOlder: boolean
+  /** True when newer messages exist beyond this page (set by centered loads). */
+  hasNewer?: boolean
+}
+
+/** Lightweight user-authored message summary for the header history jump list. */
+export interface UserMessageSummary {
+  id: string
+  content: string
+  createdAt: number
 }
 
 // ─── Agent streaming events (forwarded main → renderer) ────────────────────

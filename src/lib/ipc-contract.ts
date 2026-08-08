@@ -110,6 +110,7 @@ import type {
   AgentAccountUsage,
   ThreadMessageCursor,
   ThreadMessagePage,
+  UserMessageSummary,
   ThreadSettings,
   ThreadStatus,
   TurnCheckpointFileDiff,
@@ -1135,6 +1136,11 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, before?: ThreadMessageCursor, limit?: number],
     ThreadMessagePage
   >
+  'thread:loadMessagesAround': Contract<
+    [projectId: string, threadId: string, anchorId: string, limit: number],
+    ThreadMessagePage
+  >
+  'thread:loadUserMessages': Contract<[projectId: string, threadId: string], UserMessageSummary[]>
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
   'thread:setArchived': Contract<[projectId: string, threadId: string, archived: boolean], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>

@@ -154,7 +154,8 @@
     PendingAgentQuestionRequest,
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
-    UserMessagePresentation
+    UserMessagePresentation,
+    UserMessageSummary
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
 
@@ -203,6 +204,10 @@
   let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
   let visibleMessages = $derived(messages.slice(visibleStartIndex))
   let olderMessagesAvailable = $state(false)
+  let loadingNewerMessages = $state(false)
+  let jumpLoading = $state(false)
+  /** Full persisted user-message history for the header's quick-jump list. */
+  let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let hasOlderMessages = $derived(visibleStartIndex > 0 || olderMessagesAvailable)
   let userMessageTexts = $derived(
     messages
@@ -1431,14 +1436,82 @@
     })
   )
 
-  /** Jump target for the header's history dropdown. */
+  /** Jump target for the header's history dropdown — loads a window around the
+   *  target when it lies outside the currently loaded cache, then scrolls to it. */
   async function jumpToMessage(id: string): Promise<void> {
-    const targetIndex = messages.findIndex((message) => message.id === id)
-    if (targetIndex >= 0 && targetIndex < visibleStartIndex) {
-      renderedStartIndex = targetIndex
-      await tick()
+    const { projectId, id: threadId } = thread
+    if (jumpLoading) return
+    const cachedIndex = messages.findIndex((message) => message.id === id)
+    if (cachedIndex >= 0) {
+      if (cachedIndex < visibleStartIndex) {
+        renderedStartIndex = cachedIndex
+        await tick()
+      }
+      document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
     }
-    document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    jumpLoading = true
+    try {
+      const page = await invoke(
+        'thread:loadMessagesAround',
+        projectId,
+        threadId,
+        id,
+        HISTORY_WINDOW_SIZE
+      )
+      if (!alive) return
+      threadMessages.mergePage(projectId, threadId, page.messages)
+      const targetIndex = messages.findIndex((message) => message.id === id)
+      if (targetIndex >= 0) {
+        renderedStartIndex = Math.max(0, targetIndex - Math.floor(HISTORY_WINDOW_SIZE / 4))
+        olderMessagesAvailable = page.hasOlder
+        await tick()
+        document
+          .getElementById(`msg-${id}`)
+          ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      // Page forward in the background so the transcript stays contiguous down
+      // to the already-loaded thread tail after a far-back jump.
+      if (page.hasNewer) {
+        const newest = page.messages[page.messages.length - 1]
+        if (newest) void fillForwardFrom(projectId, threadId, newest.id)
+      }
+    } catch {
+      // The target could not be located in the mirror — nothing else to do.
+    } finally {
+      jumpLoading = false
+    }
+  }
+
+  /** Page forward from a far-back jump anchor until the cache reaches the tail. */
+  async function fillForwardFrom(
+    projectId: string,
+    threadId: string,
+    anchorId: string
+  ): Promise<void> {
+    if (loadingNewerMessages) return
+    loadingNewerMessages = true
+    try {
+      let cursorId = anchorId
+      for (let pageCount = 0; pageCount < 25; pageCount++) {
+        const page = await invoke(
+          'thread:loadMessagesAround',
+          projectId,
+          threadId,
+          cursorId,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        if (page.messages.length === 0) return
+        threadMessages.mergePage(projectId, threadId, page.messages)
+        if (!page.hasNewer) return
+        cursorId = page.messages[page.messages.length - 1].id
+      }
+    } catch {
+      // Non-fatal — a residual gap can still be filled by scrolling.
+    } finally {
+      loadingNewerMessages = false
+    }
   }
 
   // Keep the thread-messages store aware of the active session so streaming
@@ -1464,11 +1537,23 @@
     workspaceState.sources = sources
   })
 
-  // Feed the header's history dropdown with only user-authored messages.
+  // Feed the header's history dropdown with every user-authored message: the
+  // full persisted history plus any live/optimistic cache messages still pending
+  // in the mirror, deduped and kept in chronological order.
   $effect(() => {
-    const userMessages = messages
-      .filter((message) => message.role === 'user')
-      .map((message) => ({ id: message.id, content: messageText(message) }))
+    const byId: Record<string, UserMessageSummary> = {}
+    for (const entry of fullUserMessageHistory) byId[entry.id] = entry
+    for (const message of messages) {
+      if (message.role !== 'user') continue
+      byId[message.id] = {
+        id: message.id,
+        content: messageText(message),
+        createdAt: message.createdAt
+      }
+    }
+    const userMessages = Object.values(byId)
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+      .map(({ id, content }) => ({ id, content }))
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
   })
@@ -1926,6 +2011,7 @@
     // Independent extras — each lands as it resolves, none block the paint.
     void refreshCheckpoints()
     void loadProjectContext()
+    void refreshUserMessageHistory()
 
     if (!chatMode) {
       try {
@@ -1977,6 +2063,18 @@
       }
     } catch {
       project = null
+    }
+  }
+
+  /** Load the thread's full persisted user-message history for the header jump list. */
+  async function refreshUserMessageHistory(): Promise<void> {
+    const { projectId, id } = thread
+    try {
+      const history = await invoke('thread:loadUserMessages', projectId, id)
+      if (!alive) return
+      fullUserMessageHistory = history
+    } catch {
+      // Non-fatal — the dropdown falls back to the loaded message window.
     }
   }
 
