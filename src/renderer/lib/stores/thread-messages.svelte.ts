@@ -8,6 +8,7 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
 import { messageId as createMessageId } from '$shared/id'
 import { SvelteMap } from 'svelte/reactivity'
 import type {
@@ -615,11 +616,15 @@ class ThreadMessagesStore {
           )
         } else if (event.status.state === 'idle') {
           agentRuns.setIdle(projectId, threadId)
+          queuedMessageDispatcher.onThreadIdle(projectId, threadId)
         }
         break
       case 'session.idle':
       case 'session.error':
         agentRuns.setIdle(projectId, threadId)
+        if (event.type === 'session.idle') {
+          queuedMessageDispatcher.onThreadIdle(projectId, threadId)
+        }
         break
     }
   }
