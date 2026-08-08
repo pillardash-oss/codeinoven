@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Loader2, Search, X } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
-  import type { Thread, ThreadSearchResult } from '$shared/types'
+  import { isOrchestrationChildThread, type Thread, type ThreadSearchResult } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
 
   export type ThreadSearchResolver = (query: string, threads: Thread[]) => Thread[]
@@ -42,7 +42,12 @@
     const normalized = query.trim().toLowerCase()
     if (!normalized) return []
     return threads
-      .filter((thread) => !thread.archived && thread.title.toLowerCase().includes(normalized))
+      .filter(
+        (thread) =>
+          !thread.archived &&
+          !isOrchestrationChildThread(thread) &&
+          thread.title.toLowerCase().includes(normalized)
+      )
       .sort((left, right) => {
         const stageDifference = threadSortKey(left) - threadSortKey(right)
         if (stageDifference !== 0) return stageDifference
@@ -90,7 +95,9 @@
       })
         .then((results) => {
           if (requestId !== searchRequestId) return
-          ftsResults = scope.filter ? results.filter((r) => scope.filter?.(r.thread)) : results
+          ftsResults = (
+            scope.filter ? results.filter((r) => scope.filter?.(r.thread)) : results
+          ).filter((r) => !isOrchestrationChildThread(r.thread))
           searching = false
         })
         .catch(() => {
@@ -146,7 +153,8 @@
         <input
           bind:this={searchInput}
           bind:value={query}
-          oninput={(e: Event & { currentTarget: HTMLInputElement }) => runFtsSearch(e.currentTarget.value)}
+          oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+            runFtsSearch(e.currentTarget.value)}
           type="search"
           class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
           placeholder="Search {contextLabel}..."

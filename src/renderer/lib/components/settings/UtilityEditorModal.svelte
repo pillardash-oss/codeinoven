@@ -38,6 +38,7 @@
     UtilityScope,
     WebToolProviderId
   } from '$shared/types'
+  import { isOrchestrationChildThread } from '$shared/types'
 
   type ScopeLevel = UtilityScope['level']
   type BindingStrategy = HarnessUtilityBinding['strategy']
@@ -239,7 +240,12 @@ Write the skill…`
       .map((provider) => ({ id: provider.id, name: provider.name }))
   )
   let scopedThreads = $derived(
-    threads.filter((thread) => thread.projectId === draft.projectId && !thread.archived)
+    threads.filter(
+      (thread) =>
+        thread.projectId === draft.projectId &&
+        !thread.archived &&
+        !isOrchestrationChildThread(thread)
+    )
   )
   let projectOptions = $derived.by((): ScopeProject[] => {
     const options = projects.map((project) => ({

@@ -196,6 +196,26 @@ export interface Thread {
   workingDirectory: string
 }
 
+/**
+ * A worker or auditor thread owned by an Achievement/Assignment coordinator
+ * (the Sr. Engineer). These threads are orchestration internals: they never
+ * notify on their own, are hidden from the regular projects/threads surfaces,
+ * and surface only inside their scoped container (scope board) and the
+ * coordinator panels. The coordinator thread itself is always a normal,
+ * user-facing thread and never matches this predicate.
+ */
+export function isOrchestrationChildThread(thread: Thread): boolean {
+  if (thread.achievementRole === 'coordinator' || thread.assignmentRole === 'coordinator') {
+    return false
+  }
+  return (
+    thread.achievementRole === 'auditor' ||
+    thread.assignmentRole === 'worker' ||
+    thread.assignmentId !== undefined ||
+    thread.coordinatorThreadId !== undefined
+  )
+}
+
 export interface CreateThreadInput {
   projectId: string
   providerId: string

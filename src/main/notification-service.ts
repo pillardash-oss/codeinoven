@@ -7,7 +7,7 @@ import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { AssignmentRepo } from './database/repositories/assignment-repo'
-import type { Thread, ThreadStatus } from '../lib/types'
+import { isOrchestrationChildThread, type Thread, type ThreadStatus } from '../lib/types'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
@@ -126,26 +126,12 @@ export class NotificationService {
   }
 
   /**
-   * Any thread that participates in Achievement or Assignment orchestration:
-   * coordinator, durable workers, and auditors all carry at least one of
-   * achievementRole, assignmentRole, assignmentId, or coordinatorThreadId.
-   */
-  private isOrchestrationThread(thread: Thread): boolean {
-    return (
-      thread.achievementRole !== undefined ||
-      thread.assignmentRole !== undefined ||
-      thread.assignmentId !== undefined ||
-      thread.coordinatorThreadId !== undefined
-    )
-  }
-
-  /**
    * Worker and auditor threads are orchestration internals: their progress and
    * outcomes are surfaced through the coordinator instead, so they never
    * notify on their own.
    */
   private isSuppressedOrchestration(thread: Thread): boolean {
-    return this.isOrchestrationThread(thread) && !this.isCoordinatorThread(thread)
+    return isOrchestrationChildThread(thread)
   }
 
   /**

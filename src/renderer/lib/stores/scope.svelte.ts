@@ -4,6 +4,7 @@ import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  isOrchestrationChildThread,
   type Project,
   type ScopeBoard,
   type ScopeBucket,
@@ -140,7 +141,9 @@ export function clearScopeSnapshot(): void {
 export function threadStage(thread: Thread, draftThreadId?: string | null): ThreadStage {
   if (draftThreadId && thread.id === draftThreadId) return 'todo'
   if (thread.pinned) return 'pinned'
-  if (thread.status === 'completed' && !thread.read) return 'unread'
+  if (thread.status === 'completed' && !thread.read && !isOrchestrationChildThread(thread)) {
+    return 'unread'
+  }
   return scopeSliceForStatus(thread.status)
 }
 
@@ -202,11 +205,12 @@ class ScopeState {
       const projectThreads = this.allScopeThreads.filter(
         (t) => t.projectId === project.id && !t.archived
       )
+      const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
       badges.set(project.id, {
         hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
-        hasUnread: projectThreads.some((t) => t.status === 'completed' && !t.read),
-        hasAttention: projectThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
-        hasError: projectThreads.some((t) => t.status === 'failed')
+        hasUnread: userThreads.some((t) => t.status === 'completed' && !t.read),
+        hasAttention: userThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
+        hasError: userThreads.some((t) => t.status === 'failed')
       })
     }
     return badges
