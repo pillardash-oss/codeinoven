@@ -102,7 +102,7 @@ class HubBridge {
         return
       }
       if (frame.type === 'relay:ack' && typeof frame.id === 'number') {
-        this.hub.acknowledge(this.desktopId, frame.id)
+        this.hub.acknowledge(this.desktopId, frame.id, this.role, this.peerSocket)
         return
       }
       if (frame.type === 'relay:data' && typeof frame.id === 'number') {
@@ -454,10 +454,10 @@ describe('RelayHub loss-safety unit semantics', () => {
 
     // The receiver confirms -> the receiver-generated ACK is forwarded to the
     // sender and the retained frame is released.
-    expect(hub.acknowledge(DESKTOP_ID, 42)).toBe(true)
+    expect(hub.acknowledge(DESKTOP_ID, 42, 'desktop', receiver.socket)).toBe(true)
     expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:ack', id: 42 })])
     expect(hub.outstandingCount()).toBe(0)
-    expect(hub.acknowledge(DESKTOP_ID, 42)).toBe(false)
+    expect(hub.acknowledge(DESKTOP_ID, 42, 'desktop', receiver.socket)).toBe(false)
   })
 
   it('rejects a malformed or non-positive wire id without accepting it', () => {
@@ -493,6 +493,52 @@ describe('RelayHub loss-safety unit semantics', () => {
     ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
     expect(hub.outstandingCount()).toBe(0)
     expect(receiver.sent).toEqual([])
+  })
+
+  it('never lets a sender self-ACK — the ACK must come from the intended receiver', () => {
+    const hub = new RelayHub()
+    const sender = recordingSocket()
+    const receiver = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, sender.socket)
+    hub.connectDesktop(DESKTOP_ID, receiver.socket)
+    const outcome = hub.forward(
+      DESKTOP_ID,
+      'mobile',
+      sender.socket,
+      JSON.stringify({ type: 'relay:data', id: 77, payload: 'x' })
+    )
+    expect(outcome.accepted).toBe(true)
+    // The sender (mobile) tries to ack its own frame -> rejected, no ACK.
+    expect(hub.acknowledge(DESKTOP_ID, 77, 'mobile', sender.socket)).toBe(false)
+    expect(hub.outstandingCount()).toBe(1)
+    expect(sender.sent).toEqual([])
+    // The intended receiver (desktop) acking with a non-live socket is also
+    // rejected; the current live receiver socket succeeds.
+    expect(hub.acknowledge(DESKTOP_ID, 77, 'desktop', sender.socket)).toBe(false)
+    expect(hub.acknowledge(DESKTOP_ID, 77, 'desktop', receiver.socket)).toBe(true)
+    expect(hub.outstandingCount()).toBe(0)
+    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:ack', id: 77 })])
+  })
+
+  it('rejects a cross-direction wire-id collision instead of aliasing it', () => {
+    const hub = new RelayHub()
+    const mobile = recordingSocket()
+    const desktop = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, mobile.socket)
+    hub.connectDesktop(DESKTOP_ID, desktop.socket)
+    // Mobile sends id 500; retained awaiting receiver confirmation.
+    const mobileFrame = JSON.stringify({ type: 'relay:data', id: 500, payload: 'mobile' })
+    expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, mobileFrame).accepted).toBe(true)
+    // Desktop tries the same wire id in the opposite direction -> rejected.
+    const desktopFrame = JSON.stringify({ type: 'relay:data', id: 500, payload: 'desktop' })
+    expect(hub.forward(DESKTOP_ID, 'desktop', desktop.socket, desktopFrame)).toEqual({
+      accepted: false,
+      delivered: false,
+      reason: 'cross-direction-collision'
+    })
+    // A same-direction retransmission is accepted and re-delivered.
+    expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, mobileFrame).accepted).toBe(true)
+    expect(hub.outstandingCount()).toBe(1)
   })
 
   it('rejects on overflow (NACK) instead of dropping already-accepted work', () => {
@@ -550,9 +596,10 @@ describe('RelayHub loss-safety unit semantics', () => {
     )
     // The sender disconnects after sending; its socket is no longer live.
     hub.disconnect(DESKTOP_ID, 'mobile', sender.socket)
-    // The receiver confirms; the ACK is forwarded to the stale socket (send is
-    // a harmless no-op in production) and the retained frame is released.
-    expect(hub.acknowledge(DESKTOP_ID, 11)).toBe(true)
+    // The receiver confirms; the ACK is authenticated (receiver role + its
+    // current socket), forwarded to the stale sender socket (harmless), and the
+    // retained frame is released.
+    expect(hub.acknowledge(DESKTOP_ID, 11, 'desktop', receiver.socket)).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
   })
 
@@ -570,7 +617,7 @@ describe('RelayHub loss-safety unit semantics', () => {
     expect(receiver.sent.filter((f) => f.includes('relay:data'))).toHaveLength(2)
     expect(hub.outstandingCount()).toBe(1)
     // One receiver confirmation resolves the single retained entry.
-    expect(hub.acknowledge(DESKTOP_ID, 5)).toBe(true)
+    expect(hub.acknowledge(DESKTOP_ID, 5, 'desktop', receiver.socket)).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
   })
 })

@@ -3278,15 +3278,30 @@ export class ChatEngine {
     const hiddenContext = [hiddenPromptContext, projectReferenceContext]
       .filter(Boolean)
       .join('\n\n')
-    // One aggregate selected-model input budget for the turn: the hidden
-    // orchestration context is capped against it first and the history recap
-    // later consumes only the remaining headroom (A-13).
+    // One aggregate selected-model input budget for the turn (A-13). The
+    // session-dependent system/behavior/tool layers are not assembled yet, so
+    // driverText's hidden orchestration context is capped against an early
+    // aggregate budget that reserves the final system layer; the precise recap
+    // budget is re-derived later from the actual composed system base. When the
+    // fixed user/system layers already exceed the model input budget, the
+    // dynamic (hidden + recap) layers are capped to zero and the user text is
+    // sent as-is — the harness enforces its own truncation, and no dynamic
+    // layer is ever allocated past the remaining headroom.
     const inputBudget = this.selectedModelInputBudget(
       settings.providerId,
       settings.modelId,
       projectId
     )
-    const budgetedHidden = this.budgetHiddenContext(hiddenContext, inputBudget)
+    const earlyLayers = budgetTurnLayers(
+      {
+        userTokens: estimateTextTokens(text),
+        systemTokens: SYSTEM_LAYER_RESERVE_TOKENS,
+        hiddenTokens: estimateTextTokens(hiddenContext),
+        recapTokens: MAX_RECAP_TOKENS
+      },
+      inputBudget
+    )
+    const budgetedHidden = truncateToTokenBudget(hiddenContext, earlyLayers.hiddenTokens)
     const hiddenConsumedTokens = estimateTextTokens(budgetedHidden)
     const driverText = budgetedHidden ? `${budgetedHidden}\n\nUser message:\n${text}` : text
     if (

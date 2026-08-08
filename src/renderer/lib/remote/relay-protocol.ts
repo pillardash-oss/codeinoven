@@ -49,12 +49,14 @@ const SEQUENCE_BITS = 32
 const EPOCH_MASK = 2 ** EPOCH_BITS - 1
 const MAX_SEQUENCE = 2 ** SEQUENCE_BITS
 
+/** Unbiased crypto-random epoch in [0, 2^EPOCH_BITS) — genuinely random so
+ *  two independent clients collide with negligible probability. */
 function randomEpoch(): number {
   if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
     const value = crypto.getRandomValues(new Uint32Array(1))[0]
-    return value % EPOCH_MASK
+    return value & EPOCH_MASK
   }
-  return Math.floor(Math.random() * EPOCH_MASK)
+  return Math.floor(Math.random() * (EPOCH_MASK + 1))
 }
 
 /**
