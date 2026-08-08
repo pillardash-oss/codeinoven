@@ -148,32 +148,32 @@ export async function encryptPayload(secret: string, plaintext: string): Promise
 
 /** Decrypt a payload produced by `encryptPayload`. */
 export async function decryptPayload(secret: string, payload: string): Promise<string> {
+  const parts = payload.split(':')
+  const versioned = parts[0] === PAYLOAD_VERSION
+  if ((!versioned && parts.length !== 2) || (versioned && parts.length !== 4)) {
+    throw new Error('malformed-encrypted-payload')
+  }
+  const timestamp = versioned ? parts[1] : null
+  if (timestamp) {
+    const sentAt = Number.parseInt(timestamp, 36)
+    const age = Date.now() - sentAt
+    if (!Number.isFinite(sentAt) || age > MAX_PAYLOAD_AGE_MS || age < -MAX_CLOCK_SKEW_MS) {
+      throw new Error('expired-encrypted-payload')
+    }
+  }
+  const ciphertextBase64 = parts[versioned ? 3 : 1] ?? ''
+  // Bound the raw encrypted envelope before any payload-proportional work
+  // (hashing for replay detection, base64 decoding, or AES-GCM decryption).
+  const estimatedCiphertextBytes = Math.ceil((ciphertextBase64.length * 3) / 4)
+  if (estimatedCiphertextBytes > MAX_ENCRYPTED_PAYLOAD_BYTES) {
+    throw new Error('oversized-encrypted-payload')
+  }
   const id = await replayId(payload)
   if (decryptedPayloads.has(id) || decryptingPayloads.has(id)) {
     throw new Error('replayed-encrypted-payload')
   }
   decryptingPayloads.add(id)
   try {
-    const parts = payload.split(':')
-    const versioned = parts[0] === PAYLOAD_VERSION
-    if ((!versioned && parts.length !== 2) || (versioned && parts.length !== 4)) {
-      throw new Error('malformed-encrypted-payload')
-    }
-    const timestamp = versioned ? parts[1] : null
-    if (timestamp) {
-      const sentAt = Number.parseInt(timestamp, 36)
-      const age = Date.now() - sentAt
-      if (!Number.isFinite(sentAt) || age > MAX_PAYLOAD_AGE_MS || age < -MAX_CLOCK_SKEW_MS) {
-        throw new Error('expired-encrypted-payload')
-      }
-    }
-    const ciphertextBase64 = parts[versioned ? 3 : 1] ?? ''
-    // Bound the ciphertext before decoding it so an oversized encrypted
-    // payload fails before a large allocation.
-    const estimatedCiphertextBytes = Math.ceil((ciphertextBase64.length * 3) / 4)
-    if (estimatedCiphertextBytes > MAX_ENCRYPTED_PAYLOAD_BYTES) {
-      throw new Error('oversized-encrypted-payload')
-    }
     const iv = fromBase64(parts[versioned ? 2 : 0] ?? '')
     const ciphertext = fromBase64(ciphertextBase64)
     const key = await deriveAesGcmKey(secret)

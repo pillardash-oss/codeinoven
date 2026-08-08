@@ -102,6 +102,17 @@ describe('payload size limits', () => {
     )
   })
 
+  it('rejects a raw envelope above the cap before any crypto work on the payload', async () => {
+    // A structurally valid envelope whose base64 ciphertext segment is oversized
+    // but is NOT real ciphertext: the cap must fire before hashing or decrypting.
+    const timestamp = Date.now().toString(36)
+    const hugeSegment = 'A'.repeat(Math.ceil((MAX_ENCRYPTED_PAYLOAD_BYTES * 4) / 3) + 1)
+    const envelope = `v2:${timestamp}:MTIzNDU2Nzg5MDEy:${hugeSegment}`
+    await expect(decryptPayload('shared-secret', envelope)).rejects.toThrow(
+      'oversized-encrypted-payload'
+    )
+  })
+
   it('rejects a decrypted payload above the plaintext cap before decoding it', async () => {
     // Ciphertext of a payload larger than the plaintext cap but still below the
     // encrypted cap, so the plaintext check is what rejects it.
