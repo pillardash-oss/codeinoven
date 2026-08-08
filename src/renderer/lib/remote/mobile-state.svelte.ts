@@ -3,19 +3,19 @@
  *
  * The phone PWA reuses the desktop conversation stores for message streaming,
  * but it must NOT drag the desktop workspace graph (workspace/scope/provider/
- * renderer-recovery stores, sidebar and modal components) into its closure.
- * This store is the mobile replacement: it holds the selected thread and
- * project, the thread/project lists, the sidebar mode, the optional sheet
- * flags, project icons, expanded folders, and the thread actions. It talks to
- * the desktop only through the typed IPC contract.
+ * renderer-recovery stores, notification/memory stores, sidebar and modal
+ * components) into its closure. This store is the mobile replacement: it holds
+ * the selected thread and project, the thread/project lists, the sidebar mode,
+ * the optional sheet flags, project icons, expanded folders, and the thread
+ * actions. It talks to the desktop only through the typed IPC contract, and
+ * keeps its own minimal attention counter instead of importing the desktop
+ * notification/memory stores.
  */
 
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
-import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
-import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
   INBOX_PROJECT_ID,
@@ -82,6 +82,10 @@ class MobileState {
   /** The message the history sheet asked the transcript to scroll to. */
   jumpTarget = $state<MobileJumpTarget | null>(null)
 
+  /** Mobile-owned attention counter — bumped when a thread update pushes an
+   *  awaiting-approval or unread thread into the list. No desktop stores. */
+  attentionCount = $state(0)
+
   // ─── Derived lists (same grouping as the desktop sidebar) ───────────────
 
   visibleProjects = $derived(
@@ -126,9 +130,7 @@ class MobileState {
   chatMode = $derived(this.selectedThread?.projectId === INBOX_PROJECT_ID)
 
   /** One dot on the overflow trigger so nothing important hides behind it. */
-  hasOverflowAttention = $derived(
-    memoryProposalState.hasPending || notificationPanelState.totalCount > 0
-  )
+  hasOverflowAttention = $derived(this.attentionCount > 0)
 
   /** User-authored messages in the selected thread, for the history sheet. */
   userMessages = $derived(
@@ -158,7 +160,7 @@ class MobileState {
       ])
       this.projects = projectList
       this.allThreads = (threadList as Thread[]).filter((t) => !isOrchestrationChildThread(t))
-      notificationPanelState.hydrateFromThreads(this.allThreads)
+      this.refreshAttention()
       this.projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(this.projects)) {
         this.projectIcons.set(projectId, iconUrl)
@@ -169,6 +171,16 @@ class MobileState {
     } finally {
       this.loading = false
     }
+  }
+
+  /** Recompute the mobile-owned attention count from the thread list. */
+  refreshAttention(): void {
+    this.attentionCount = this.allThreads.filter(
+      (t) =>
+        (t.status === 'awaiting_approval' || t.status === 'failed') &&
+        !t.read &&
+        !isOrchestrationChildThread(t)
+    ).length
   }
 
   // ─── Thread + folder actions ────────────────────────────────────────────
@@ -211,6 +223,7 @@ class MobileState {
   async handleDelete(thread: Thread): Promise<void> {
     await invoke('thread:delete', thread.projectId, thread.id)
     this.allThreads = this.allThreads.filter((t) => t.id !== thread.id)
+    this.refreshAttention()
     if (this.selectedThread?.id === thread.id) {
       this.selectedThread = null
       this.selectedProject = null
@@ -242,6 +255,7 @@ class MobileState {
   /** Apply a pushed thread update to the list and the selection. */
   applyThreadUpdate(updated: Thread): void {
     this.allThreads = this.allThreads.map((t) => (t.id === updated.id ? updated : t))
+    this.refreshAttention()
     if (this.selectedThread?.id === updated.id) {
       this.selectedThread = updated
       if (!updated.read) {

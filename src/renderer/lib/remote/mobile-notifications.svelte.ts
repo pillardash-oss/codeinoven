@@ -20,7 +20,6 @@
 
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import { remoteBridge } from './remote-bridge'
-import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { remoteLog } from './logger'
 
 const ENABLED_KEY = 'codeinoven.remote.notificationsEnabled'
@@ -112,7 +111,12 @@ class MobileNotifications {
 
   private handle(payload: AgentNotificationPayload): void {
     if (!payload || typeof payload !== 'object') return
-    notificationPanelState.add(payload)
+    // The desktop notification-panel store is only loaded when a notification
+    // actually arrives, so the phone's connected closure never eagerly imports
+    // the desktop notifications graph.
+    void import('$lib/stores/notification-panel.svelte').then(({ notificationPanelState }) => {
+      notificationPanelState.add(payload)
+    })
     if (!this.enabled || this.permission !== 'granted') return
     void this.showSystemNotification(payload)
   }
