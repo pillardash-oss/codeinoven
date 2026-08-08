@@ -26,7 +26,7 @@
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import FolderRow from './FolderRow.svelte'
-  import ProjectSearchDropdown from './ProjectSearchDropdown.svelte'
+  import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
@@ -464,6 +464,62 @@
     const q = query.trim().toLowerCase()
     if (!q) return threads
     return threads.filter((t) => t.title.toLowerCase().includes(q))
+  }
+
+  // Threads-view global search (activation + query), mirroring the per-project
+  // search above: the popover only hosts the input, results render in the sidebar
+  // and stay put until the search is explicitly dismissed (Escape / re-click / X).
+  let threadsSearchOpen = $state(false)
+  let threadsSearchQuery = $state('')
+  let threadsSearchResults = $state<ThreadSearchResult[]>([])
+  let threadsSearching = $state(false)
+  let threadsSearchTimer: ReturnType<typeof setTimeout> | undefined
+  let threadsSearchRequestId = 0
+
+  function openThreadsSearch(): void {
+    threadsSearchOpen = true
+    if (threadsSearchQuery.trim()) runThreadsSearch(threadsSearchQuery)
+  }
+
+  function closeThreadsSearch(): void {
+    threadsSearchOpen = false
+    threadsSearchQuery = ''
+    threadsSearchResults = []
+    threadsSearching = false
+    threadsSearchRequestId++
+    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
+    threadsSearchTimer = undefined
+  }
+
+  function runThreadsSearch(raw: string): void {
+    threadsSearchQuery = raw
+    const safeQuery = raw.trim()
+    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
+    const requestId = ++threadsSearchRequestId
+    if (!safeQuery) {
+      threadsSearchResults = []
+      threadsSearching = false
+      return
+    }
+    threadsSearching = true
+    threadsSearchTimer = setTimeout(() => {
+      void invoke('threads:search', safeQuery, { limit: 50 })
+        .then((results) => {
+          if (requestId !== threadsSearchRequestId) return
+          threadsSearchResults = results.filter(
+            (r) =>
+              !isOrchestrationChildThread(r.thread) &&
+              r.thread.projectId !== INBOX_PROJECT_ID &&
+              !r.thread.archived
+          )
+          threadsSearching = false
+        })
+        .catch(() => {
+          if (requestId !== threadsSearchRequestId) return
+          threadsSearchResults = []
+          threadsSearching = false
+        })
+    }, 120)
   }
 
   /** Project icon data URLs keyed by project id. */
@@ -1578,12 +1634,18 @@
                 <Plus size={14} />
               </button>
             {/if}
-            <ThreadSearchControl
-              threads={allThreads.filter((t) => t.projectId !== INBOX_PROJECT_ID)}
-              contextLabel="threads"
+            <SidebarSearchControl
+              open={threadsSearchOpen}
+              query={threadsSearchQuery}
+              onOpenChange={(open) => {
+                if (open) openThreadsSearch()
+                else closeThreadsSearch()
+              }}
+              onQueryChange={runThreadsSearch}
+              ariaLabel="Search threads"
               title="Search threads"
-              onOpen={openThread}
-              fts={{ filter: (t) => t.projectId !== INBOX_PROJECT_ID && !t.archived }}
+              placeholder="Search threads…"
+              size="md"
             />
           </div>
         {:else}
@@ -1971,51 +2033,71 @@
           {/if}
         </div>
         <div class={mode === 'threads' ? '' : 'hidden'}>
-          <!-- Threads mode: pinned section then flat list -->
-          {#if pinnedTimelineThreads.length > 0}
-            <div class="mb-3 pb-3 border-b">
-              <div class="flex items-center gap-1.5 px-2 py-1.5">
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                  >Pinned</span
-                >
-              </div>
+          {#if threadsSearchOpen && threadsSearchQuery.trim()}
+            <!-- Threads search: results render inline in the sidebar so the user
+                 can open several results without the search dismissing. -->
+            {#if threadsSearching && threadsSearchResults.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">Searching…</p>
+            {:else if threadsSearchResults.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">No matching threads</p>
+            {:else}
               <div class="space-y-px" role="list">
-                {#each pinnedTimelineThreads as thread (thread.id)}
-                  <ThreadRow
-                    {thread}
-                    compact
-                    projectIconUrl={getThreadIcon(thread)}
-                    selected={selectedThread?.id === thread.id}
-                    pinnedOverride={true}
+                {#each threadsSearchResults as result (result.thread.id)}
+                  <ThreadSearchResultRow
+                    {result}
+                    selected={selectedThread?.id === result.thread.id}
                     onOpen={openThread}
-                    onRename={handleRename}
-                    onTogglePin={() => timelinePins.toggle(thread.id)}
-                    onDelete={handleDelete}
-                    onFork={forkThread}
                   />
                 {/each}
               </div>
+            {/if}
+          {:else}
+            <!-- Threads mode: pinned section then flat list -->
+            {#if pinnedTimelineThreads.length > 0}
+              <div class="mb-3 pb-3 border-b">
+                <div class="flex items-center gap-1.5 px-2 py-1.5">
+                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                    >Pinned</span
+                  >
+                </div>
+                <div class="space-y-px" role="list">
+                  {#each pinnedTimelineThreads as thread (thread.id)}
+                    <ThreadRow
+                      {thread}
+                      compact
+                      projectIconUrl={getThreadIcon(thread)}
+                      selected={selectedThread?.id === thread.id}
+                      pinnedOverride={true}
+                      onOpen={openThread}
+                      onRename={handleRename}
+                      onTogglePin={() => timelinePins.toggle(thread.id)}
+                      onDelete={handleDelete}
+                      onFork={forkThread}
+                    />
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            <div class="space-y-px" role="list">
+              {#each unpinnedTimelineThreads as thread (thread.id)}
+                <ThreadRow
+                  {thread}
+                  projectIconUrl={getThreadIcon(thread)}
+                  selected={selectedThread?.id === thread.id}
+                  pinnedOverride={timelinePins.isPinned(thread.id)}
+                  onOpen={openThread}
+                  onRename={handleRename}
+                  onTogglePin={() => timelinePins.toggle(thread.id)}
+                  onDelete={handleDelete}
+                  onFork={forkThread}
+                />
+              {:else}
+                <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
+                  <p class="text-xs text-muted">No threads yet</p>
+                </div>
+              {/each}
             </div>
           {/if}
-          <div class="space-y-px" role="list">
-            {#each unpinnedTimelineThreads as thread (thread.id)}
-              <ThreadRow
-                {thread}
-                projectIconUrl={getThreadIcon(thread)}
-                selected={selectedThread?.id === thread.id}
-                pinnedOverride={timelinePins.isPinned(thread.id)}
-                onOpen={openThread}
-                onRename={handleRename}
-                onTogglePin={() => timelinePins.toggle(thread.id)}
-                onDelete={handleDelete}
-                onFork={forkThread}
-              />
-            {:else}
-              <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-                <p class="text-xs text-muted">No threads yet</p>
-              </div>
-            {/each}
-          </div>
         </div>
         <div class={mode === 'projects' ? '' : 'hidden'}>
           <!-- Pinned threads above everything -->
@@ -2071,19 +2153,20 @@
                       >
                         {#snippet actions()}
                           <span class="flex shrink-0 items-center gap-0.5">
-                            <ProjectSearchDropdown
-                              projectId={project.id}
-                              projectName={project.name}
+                            <SidebarSearchControl
                               open={projectSearchOpen.has(project.id)}
                               query={projectSearchQueries.get(project.id) ?? ''}
                               onOpenChange={(open) => {
                                 if (open) openProjectSearch(project.id)
                                 else closeProjectSearch(project.id)
                               }}
-                              onQueryChange={(id, value) => {
-                                projectSearchQueries.set(id, value)
-                                runProjectSearch(id, value)
+                              onQueryChange={(value) => {
+                                projectSearchQueries.set(project.id, value)
+                                runProjectSearch(project.id, value)
                               }}
+                              ariaLabel="Search threads in {project.name}"
+                              title="Search threads"
+                              placeholder="Search threads in {project.name}…"
                             />
                             <button
                               class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -2272,19 +2355,20 @@
                     >
                       {#snippet actions()}
                         <span class="flex shrink-0 items-center gap-0.5">
-                          <ProjectSearchDropdown
-                            projectId={project.id}
-                            projectName={project.name}
+                          <SidebarSearchControl
                             open={projectSearchOpen.has(project.id)}
                             query={projectSearchQueries.get(project.id) ?? ''}
                             onOpenChange={(open) => {
                               if (open) openProjectSearch(project.id)
                               else closeProjectSearch(project.id)
                             }}
-                            onQueryChange={(id, value) => {
-                              projectSearchQueries.set(id, value)
-                              runProjectSearch(id, value)
+                            onQueryChange={(value) => {
+                              projectSearchQueries.set(project.id, value)
+                              runProjectSearch(project.id, value)
                             }}
+                            ariaLabel="Search threads in {project.name}"
+                            title="Search threads"
+                            placeholder="Search threads in {project.name}…"
                           />
                           <button
                             class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
