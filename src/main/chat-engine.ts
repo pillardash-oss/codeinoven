@@ -6291,7 +6291,6 @@ export class ChatEngine {
           sessionId,
           settings: {
             ...settings,
-            thinkingLevel: useStructuredOutput ? settings.thinkingLevel : 'minimal',
             permissionLevel: 'auto_review',
             engineeringMode: false,
             assignmentMode: false,
@@ -6515,7 +6514,6 @@ export class ChatEngine {
           sessionId,
           settings: {
             ...settings,
-            thinkingLevel: useStructuredOutput ? settings.thinkingLevel : 'minimal',
             permissionLevel: 'auto_review',
             engineeringMode: false
           },
@@ -6760,7 +6758,6 @@ export class ChatEngine {
           sessionId,
           settings: {
             ...settings,
-            thinkingLevel: useStructuredOutput ? settings.thinkingLevel : 'minimal',
             permissionLevel: 'auto_review',
             engineeringMode: false,
             assignmentMode: false,
@@ -10371,7 +10368,6 @@ export class ChatEngine {
           sessionId,
           settings: {
             ...settings,
-            thinkingLevel: 'minimal',
             permissionLevel: 'auto_review',
             engineeringMode: false
           },
