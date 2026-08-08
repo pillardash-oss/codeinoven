@@ -63,3 +63,50 @@ export function truncateToTokenBudget(text: string, maxTokens: number): string {
   const maxCharacters = maxTokens * 4
   return text.length > maxCharacters ? text.slice(0, maxCharacters) : text
 }
+
+/** Estimated tokens of each final-composition input layer. */
+export interface TurnLayerTokens {
+  /** User message text. */
+  userTokens: number
+  /** Final system/behavior/tool prompt WITHOUT the history recap. */
+  systemTokens: number
+  /** Hidden orchestration context (raw). */
+  hiddenTokens: number
+  /** History recap (raw; large when the recap should take all headroom). */
+  recapTokens: number
+}
+
+export interface BudgetedTurnLayers {
+  /** Hidden context tokens allowed after the aggregate subtraction. */
+  hiddenTokens: number
+  /** History recap tokens allowed with the remaining headroom. */
+  recapTokens: number
+  /** Total estimated input across all layers (must fit the budget). */
+  totalTokens: number
+}
+
+/**
+ * Enforce ONE aggregate selected-model input budget across the final turn
+ * composition (user text + system/behavior/tool + hidden context + history
+ * recap), with output/tool headroom reserved once by the caller's
+ * `computePromptBudget`. The hidden orchestration context is capped first and
+ * the history recap takes only the remaining headroom — no layer gets the full
+ * allowance.
+ */
+export function budgetTurnLayers(
+  layers: TurnLayerTokens,
+  availableInputTokens: number
+): BudgetedTurnLayers {
+  const userTokens = Math.max(0, layers.userTokens)
+  const systemTokens = Math.max(0, layers.systemTokens)
+  const fixed = userTokens + systemTokens
+  let remaining = Math.max(0, availableInputTokens - fixed)
+  const hiddenTokens = Math.min(Math.max(0, layers.hiddenTokens), remaining)
+  remaining -= hiddenTokens
+  const recapTokens = Math.min(Math.max(0, layers.recapTokens), remaining)
+  return {
+    hiddenTokens,
+    recapTokens,
+    totalTokens: fixed + hiddenTokens + recapTokens
+  }
+}

@@ -95,6 +95,11 @@ async function receivedData(socket: FakeSocket, invoke: unknown): Promise<void> 
   socket.receive(JSON.stringify({ type: 'relay:data', payload }))
 }
 
+async function receivedDataWithId(socket: FakeSocket, id: number, invoke: unknown): Promise<void> {
+  const payload = await encryptPayload(SECRET, JSON.stringify(invoke))
+  socket.receive(JSON.stringify({ type: 'relay:data', id, payload }))
+}
+
 /** Decrypt and parse every `relay:data` frame a socket has sent, caching so
  *  repeated reads never re-decrypt the same frame (the security layer rejects
  *  replay). */
@@ -345,6 +350,44 @@ describe('CloudRelayClient configured replay limit', () => {
 })
 
 describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
+  it('acknowledges every accepted inbound frame as the receiver', async () => {
+    const harness = makeHarness()
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    await receivedDataWithId(socket, 777, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
+    await vi.waitFor(() => {
+      expect(harness.onRpc).toHaveBeenCalledTimes(1)
+    })
+    const acks = socket.sent.filter((frame) => frame.includes('relay:ack'))
+    expect(acks).toHaveLength(1)
+    expect(JSON.parse(acks[0] ?? '{}')).toEqual({ type: 'relay:ack', id: 777 })
+    // A duplicate delivery is acknowledged again without re-processing.
+    await receivedDataWithId(socket, 777, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
+    await vi.waitFor(() => {
+      const acksAfter = socket.sent.filter((frame) => frame.includes('relay:ack'))
+      expect(acksAfter).toHaveLength(2)
+    })
+    expect(harness.onRpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('requeues an outbound frame on a retryable NACK', async () => {
+    const harness = makeHarness()
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
+    const ids = dataFrameIds(socket)
+    expect(ids).toHaveLength(1)
+    // Relay rejects the frame with a retryable NACK.
+    socket.receive(JSON.stringify({ type: 'relay:nack', id: ids[0], reason: 'expired' }))
+    // Reconnect + re-auth flushes the requeued frame with the same id.
+    socket.fail()
+    harness.client.connect()
+    const second = openAuthenticated(harness, 1)
+    await vi.waitFor(() => {
+      expect(dataFrameIds(second)).toEqual(ids)
+    })
+  })
+
   it('suppresses a duplicate invoke while the first is still processing', async () => {
     let resolveRpc: ((value: { ok: boolean; result?: unknown }) => void) | null = null
     const onRpc = vi.fn(

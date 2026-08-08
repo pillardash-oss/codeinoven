@@ -114,6 +114,7 @@ import type {
 import { INBOX_PROJECT_ID } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
 import {
+  budgetTurnLayers,
   computePromptBudget,
   estimateTextTokens,
   truncateToTokenBudget
@@ -205,6 +206,11 @@ interface StructuredMemoryProposal {
 const ACTIONABLE_AUDIT_SEVERITIES = new Set(['critical', 'high', 'medium', 'low'])
 
 const DEFAULT_QUESTION_TIMEOUT_MS = 300_000
+/** Conservative tokens reserved for the final system/behavior/tool prompt
+ *  beyond the estimated base (spec revision prompts, chat variations). */
+const SYSTEM_LAYER_RESERVE_TOKENS = 2_048
+/** Upper bound given to the recap layer so it takes all remaining headroom. */
+const MAX_RECAP_TOKENS = 2_000_000
 /** How long an image-descriptor failure waits for a user decision before auto-ignoring. */
 const IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS = 300_000
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
@@ -3464,11 +3470,65 @@ export class ChatEngine {
       // talk to the Assignment API over HTTP, so they do not need the gateway.
       (isChatThread && !chatFileSystemEnabled) || targetThread?.assignmentRole === 'worker'
     )
+    // Behavior and vision layers are branch-agnostic and needed both for the
+    // system-prompt base estimate and the final composition below, so compute
+    // them once before the history recap budget is derived.
+    const behaviorMode =
+      specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
+    const behaviorPrompt = await this.getBehaviorPrompt(
+      projectId,
+      threadId,
+      projectPath,
+      behaviorMode
+    )
+    const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
+      ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
+      : ''
+    // One aggregate selected-model input budget across user text + the final
+    // system/behavior/tool prompt + hidden orchestration context + history
+    // recap, with output/tool headroom reserved once (A-13). The recap takes
+    // only the headroom left after the fixed user/system layers and the actual
+    // hidden context consumed.
+    const brainstormingTurn = settings.engineeringMode && specAction !== 'implement'
+    const systemBasePrompt = brainstormingTurn
+      ? composeBrainstormSystemPrompt({
+          activeBrainstormTurn: Boolean(activeBrainstormTurn),
+          assignmentMode: settings.assignmentMode === true,
+          revisionPrompt: '',
+          memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+          imageDescriptorNote,
+          behaviorPrompt,
+          utilityInstructions,
+          historyRecap: ''
+        })
+      : composeTurnSystemPrompt({
+          chatPrompt: isChatThread
+            ? chatFileSystemEnabled
+              ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
+              : CHAT_SYSTEM_PROMPT
+            : '',
+          memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+          imageDescriptorNote,
+          assignmentCoordinatorSystemPrompt,
+          behaviorPrompt,
+          utilityInstructions,
+          behaviorMode,
+          historyRecap: ''
+        })
+    const budgetedLayers = budgetTurnLayers(
+      {
+        userTokens: estimateTextTokens(text),
+        systemTokens: estimateTextTokens(systemBasePrompt) + SYSTEM_LAYER_RESERVE_TOKENS,
+        hiddenTokens: hiddenConsumedTokens,
+        recapTokens: MAX_RECAP_TOKENS
+      },
+      inputBudget
+    )
     const historyRecap = await this.buildHistoryRecap(
       projectId,
       threadId,
       driverId,
-      Math.max(1, inputBudget - hiddenConsumedTokens)
+      budgetedLayers.recapTokens
     )
     if (origin === 'user') {
       this.pendingMemoryDecisions.set(sessionId, { userMessage: text, settings })
@@ -3588,15 +3648,6 @@ export class ChatEngine {
               activeSpec.annotations
             )
           : ''
-        const behaviorPrompt = await this.getBehaviorPrompt(
-          projectId,
-          threadId,
-          projectPath,
-          'brainstorm'
-        )
-        const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
-          ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
-          : ''
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -3687,17 +3738,6 @@ export class ChatEngine {
         checkpointId
       )
       this.markSessionWorking(sessionId)
-      const behaviorMode =
-        specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
-      const behaviorPrompt = await this.getBehaviorPrompt(
-        projectId,
-        threadId,
-        projectPath,
-        behaviorMode
-      )
-      const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
-        ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
-        : ''
       // Chat threads (standalone Chats-tab conversations) behave like a plain
       // browser chatbot: no file-system tools, internet-first answers. File
       // operations are granted only when the user explicitly enables the

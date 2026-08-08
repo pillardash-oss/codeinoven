@@ -7,6 +7,8 @@ import {
   fullJitterDelay,
   parseRelayAckFrame,
   parseRelayDataFrame,
+  parseRelayNackFrame,
+  serializeRelayAckFrame,
   serializeRelayDataFrame
 } from '../../renderer/lib/remote/relay-protocol'
 
@@ -284,6 +286,16 @@ export class CloudRelayClient {
       this.inFlight.delete(ack.id)
       return
     }
+    const nack = parseRelayNackFrame(text)
+    if (nack) {
+      // Explicit retryable rejection: requeue the frame for retransmission.
+      const record = this.inFlight.get(nack.id)
+      if (record) {
+        this.inFlight.delete(nack.id)
+        this.enqueue(record)
+      }
+      return
+    }
     let record: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(text)
@@ -306,18 +318,33 @@ export class CloudRelayClient {
     }
     if (record['type'] === 'relay:data' && typeof record['payload'] === 'string') {
       const frame = parseRelayDataFrame(text)
-      // Duplicate suppression: an already delivered inbound frame id is ignored.
-      if (frame && !Number.isNaN(frame.id)) {
-        if (this.seenInboundIds.has(frame.id)) return
-        this.seenInboundIds.add(frame.id)
+      const wireId = frame && !Number.isNaN(frame.id) ? frame.id : undefined
+      if (wireId !== undefined) {
+        if (this.seenInboundIds.has(wireId)) {
+          // Duplicate delivery: the receiver already accepted this frame, so
+          // acknowledge without re-decrypting (replay-protected) or re-emitting.
+          this.sendAck(wireId)
+          return
+        }
+        this.seenInboundIds.add(wireId)
       }
       void decryptPayload(this.options.controlSecret, record['payload'])
-        .then((plaintext) => this.handleEncryptedMessage(plaintext, frame?.id))
+        .then((plaintext) => {
+          // Receiver-confirmed delivery: ack every accepted frame end to end.
+          if (wireId !== undefined) this.sendAck(wireId)
+          this.handleEncryptedMessage(plaintext, wireId)
+        })
         .catch(() => {
           Logger.error('Remote cloud relay payload authentication failed')
           this.dropAndRetry('decrypt-failed')
         })
     }
+  }
+
+  /** Send a receiver-generated `relay:ack` control frame on the open socket. */
+  private sendAck(id: number): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
+    this.socket.send(serializeRelayAckFrame(id))
   }
 
   private async flushQueue(): Promise<void> {

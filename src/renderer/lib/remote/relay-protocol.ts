@@ -24,7 +24,15 @@ export interface RelayAckFrame {
   id: number
 }
 
-export type RelayEnvelopeFrame = RelayDataFrame | RelayAckFrame
+/** Retryable rejection the relay sends when an accepted frame could not be
+ *  retained (overflow, expiry). The sender should re-queue and retry. */
+export interface RelayNackFrame {
+  type: 'relay:nack'
+  id: number
+  reason?: string
+}
+
+export type RelayEnvelopeFrame = RelayDataFrame | RelayAckFrame | RelayNackFrame
 
 /** Monotonic message-id allocator so ids are never reused across frames. */
 export function createMessageIdAllocator(initial = 1): () => number {
@@ -39,6 +47,7 @@ export function createMessageIdAllocator(initial = 1): () => number {
 const EPOCH_BITS = 21
 const SEQUENCE_BITS = 32
 const EPOCH_MASK = 2 ** EPOCH_BITS - 1
+const MAX_SEQUENCE = 2 ** SEQUENCE_BITS
 
 function randomEpoch(): number {
   if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
@@ -53,13 +62,20 @@ function randomEpoch(): number {
  * `epoch * 2^32 + seq`, with a fresh random epoch per client instance. A peer
  * that reloads therefore never reuses wire ids the recipient has already seen,
  * so the recipient's duplicate-suppression set cannot drop a reloaded peer's
- * fresh frames.
+ * fresh frames. The epoch must be a non-negative integer below 2^21 (collision
+ * resistance across the id space); tests inject fixed epochs for determinism.
  */
 export function createEpochMessageIdAllocator(epoch: number = randomEpoch()): () => number {
+  if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch > EPOCH_MASK) {
+    throw new TypeError(`Relay message-id epoch must be an integer in [0, ${EPOCH_MASK}]`)
+  }
   const base = epoch * 2 ** SEQUENCE_BITS
   let seq = 0
   return () => {
     seq += 1
+    if (seq >= MAX_SEQUENCE) {
+      throw new Error('Relay message-id sequence space exhausted for this epoch')
+    }
     return base + seq
   }
 }
@@ -100,6 +116,22 @@ export function parseRelayAckFrame(value: string): RelayAckFrame | null {
     const record = parsed as Record<string, unknown>
     if (record.type !== 'relay:ack' || typeof record.id !== 'number') return null
     return { type: 'relay:ack', id: record.id }
+  } catch {
+    return null
+  }
+}
+
+export function parseRelayNackFrame(value: string): RelayNackFrame | null {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    if (record.type !== 'relay:nack' || typeof record.id !== 'number') return null
+    return {
+      type: 'relay:nack',
+      id: record.id,
+      reason: typeof record.reason === 'string' ? record.reason : undefined
+    }
   } catch {
     return null
   }

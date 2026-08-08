@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_PROMPT_BUDGET,
+  budgetTurnLayers,
   computePromptBudget,
   estimateTextTokens,
   truncateToTokenBudget
@@ -50,5 +51,57 @@ describe('token estimation and truncation', () => {
     expect(truncateToTokenBudget(text, 100)).toHaveLength(400)
     expect(truncateToTokenBudget(text, 500)).toHaveLength(1_000)
     expect(truncateToTokenBudget(text, 0)).toBe('')
+  })
+})
+
+describe('budgetTurnLayers (final-composition contract)', () => {
+  it('caps the total composition to the one aggregate input budget', () => {
+    // Reserve output/tool headroom once from the model window, then budget all
+    // four turn layers against the single remaining allowance.
+    const budget = computePromptBudget({
+      contextWindow: 32_000,
+      outputTokens: 2_000,
+      toolHeadroomTokens: 4_000
+    })
+    const layers = budgetTurnLayers(
+      {
+        userTokens: 4_000,
+        systemTokens: 6_000,
+        hiddenTokens: 8_000,
+        recapTokens: 2_000_000
+      },
+      budget.availableInputTokens
+    )
+    expect(layers.totalTokens).toBeLessThanOrEqual(budget.availableInputTokens)
+    expect(layers.totalTokens).toBe(26_000)
+    // The recap takes only the headroom left after user + system + hidden.
+    expect(layers.recapTokens).toBe(8_000)
+    expect(layers.hiddenTokens).toBe(8_000)
+  })
+
+  it('caps the hidden orchestration context first when headroom is tight', () => {
+    const layers = budgetTurnLayers(
+      { userTokens: 5_000, systemTokens: 5_000, hiddenTokens: 8_000, recapTokens: 20_000 },
+      12_000
+    )
+    expect(layers.hiddenTokens).toBe(2_000)
+    expect(layers.recapTokens).toBe(0)
+    expect(layers.totalTokens).toBe(12_000)
+  })
+
+  it('never lets dynamic layers exceed the remaining headroom', () => {
+    const fixed = 200_000
+    const available = 20_000
+    const layers = budgetTurnLayers(
+      { userTokens: 100_000, systemTokens: 100_000, hiddenTokens: 100_000, recapTokens: 100_000 },
+      available
+    )
+    // The fixed user/system layers are preserved; no hidden/recap tokens are
+    // allocated once the fixed layers already exceed the aggregate budget.
+    expect(layers.hiddenTokens).toBe(0)
+    expect(layers.recapTokens).toBe(0)
+    expect(layers.hiddenTokens + layers.recapTokens).toBeLessThanOrEqual(
+      Math.max(0, available - fixed)
+    )
   })
 })

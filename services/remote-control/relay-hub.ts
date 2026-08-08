@@ -2,15 +2,18 @@
  * Production relay hub for the CodeInOven remote-control service.
  *
  * Owns the desktop↔mobile socket registries and the delivery semantics of the
- * account relay: every `relay:data` frame carries a client-scoped monotonic
- * `id`; the hub routes it to the live peer or, when the peer is offline, stores
- * it in a bounded per-desktop buffer (with TTL). Reconnects replay buffered
- * frames. The caller decides acknowledgement from `forward()`'s result, so an
- * ACK is only ever sent for a frame that was actually accepted for delivery
- * (routed live or buffered), never for a dropped/overflowed frame.
+ * account relay. Every `relay:data` frame carries a client-scoped epoch-based
+ * `id` (unique across client restarts). Delivery is confirmed END TO END: the
+ * hub retains every accepted frame (keyed by wire id) until the RECEIVER
+ * acknowledges it, then forwards that receiver-generated ACK to the sender. The
+ * hub never acknowledges server acceptance itself, so a frame is never reported
+ * delivered unless the receiver actually got it.
  *
- * This module is framework-agnostic (no Bun/Electron imports) so it is
- * exercised directly by the app's end-to-end relay tests.
+ * Loss safety: overflow rejects the incoming frame (retryable NACK, no silent
+ * drop), TTL expiry sends a retryable NACK to the sender, and a server restart
+ * cannot lose already-ACKed work because the sender only drops frames the
+ * receiver confirmed. This module is framework-agnostic (no Bun/Electron
+ * imports) so it is exercised directly by the app's end-to-end relay tests.
  */
 
 export type RelayRole = 'desktop' | 'mobile'
@@ -21,33 +24,52 @@ export interface RelaySocket {
 }
 
 export interface RelayHubOptions {
-  /** Maximum buffered frames per desktop (deterministic FIFO overflow). */
+  /** Maximum outstanding (unacknowledged) frames per desktop. */
   bufferLimit?: number
-  /** How long a buffered frame is held before it expires. */
+  /** How long an accepted frame is retained before it expires. */
   bufferTtlMs?: number
   now?: () => number
 }
 
 export interface ForwardResult {
-  /** True when the frame was delivered live or accepted into the buffer. */
+  /** True when the frame was accepted (delivered or buffered) awaiting ack. */
   accepted: boolean
   /** True when the frame went out on the wire immediately. */
   delivered: boolean
+  /** Why a frame was rejected (`overflow`, `invalid-id`). */
+  reason?: string
 }
 
-interface BufferedFrame {
+interface OutstandingFrame {
+  id: number
+  from: RelayRole
   to: RelayRole
   frame: string
+  sender: RelaySocket
+  delivered: boolean
   expiresAt: number
 }
 
 const DEFAULT_BUFFER_LIMIT = 256
 const DEFAULT_BUFFER_TTL_MS = 60_000
 
+/** Extract and validate the wire id of a `relay:data` frame. */
+function frameId(frame: string): number | null {
+  try {
+    const parsed = JSON.parse(frame) as { type?: string; id?: unknown }
+    if (parsed.type !== 'relay:data') return null
+    return typeof parsed.id === 'number' && Number.isSafeInteger(parsed.id) && parsed.id > 0
+      ? parsed.id
+      : null
+  } catch {
+    return null
+  }
+}
+
 export class RelayHub {
   private readonly desktopSockets = new Map<string, RelaySocket>()
   private readonly mobileSockets = new Map<string, RelaySocket>()
-  private readonly buffers = new Map<string, BufferedFrame[]>()
+  private readonly outstanding = new Map<string, Map<number, OutstandingFrame>>()
   private readonly bufferLimit: number
   private readonly bufferTtlMs: number
   private readonly now: () => number
@@ -102,68 +124,115 @@ export class RelayHub {
   }
 
   /**
-   * Route a `relay:data` frame from one peer to the other. When the target is
-   * live the frame is delivered and acknowledged; when it is offline the frame
-   * is accepted into the bounded per-desktop buffer (drop-oldest on overflow)
-   * so it can be replayed on reconnect.
+   * Route a `relay:data` frame from one peer to the other and retain it until
+   * the receiver confirms delivery. No ACK is issued here — the receiver's
+   * `relay:ack` is forwarded to the sender by `acknowledge`.
    */
-  forward(desktopId: string, from: RelayRole, frame: string): ForwardResult {
+  forward(desktopId: string, from: RelayRole, sender: RelaySocket, frame: string): ForwardResult {
+    const id = frameId(frame)
+    if (id === null) return { accepted: false, delivered: false, reason: 'invalid-id' }
+    const to: RelayRole = from === 'desktop' ? 'mobile' : 'desktop'
     const target =
-      from === 'desktop' ? this.mobileSockets.get(desktopId) : this.desktopSockets.get(desktopId)
-    if (target) {
-      target.send(frame)
-      return { accepted: true, delivered: true }
+      to === 'desktop' ? this.desktopSockets.get(desktopId) : this.mobileSockets.get(desktopId)
+    const frames = this.outstanding.get(desktopId)
+    if (frames?.has(id)) {
+      // A retransmission of an already-accepted frame: re-deliver it live and
+      // extend retention so a lost receiver ACK can still resolve it.
+      const existing = frames.get(id)
+      if (existing) {
+        if (target) target.send(frame)
+        existing.delivered = Boolean(target)
+        existing.expiresAt = this.now() + this.bufferTtlMs
+        existing.sender = sender
+        return { accepted: true, delivered: Boolean(target) }
+      }
     }
-    const accepted = this.buffer(desktopId, from === 'desktop' ? 'mobile' : 'desktop', frame)
-    return { accepted, delivered: false }
+    if ((frames?.size ?? 0) >= this.bufferLimit) {
+      return { accepted: false, delivered: false, reason: 'overflow' }
+    }
+    const delivered = Boolean(target)
+    if (target) target.send(frame)
+    const entry: OutstandingFrame = {
+      id,
+      from,
+      to,
+      frame,
+      sender,
+      delivered,
+      expiresAt: this.now() + this.bufferTtlMs
+    }
+    const desktopFrames = frames ?? new Map<number, OutstandingFrame>()
+    desktopFrames.set(id, entry)
+    this.outstanding.set(desktopId, desktopFrames)
+    return { accepted: true, delivered }
   }
 
-  private buffer(desktopId: string, to: RelayRole, frame: string): boolean {
-    if (this.bufferLimit <= 0) return false
-    const frames = this.buffers.get(desktopId) ?? []
-    frames.push({ to, frame, expiresAt: this.now() + this.bufferTtlMs })
-    // Deterministic overflow: drop the oldest buffered frame for this desktop.
-    while (frames.length > this.bufferLimit) frames.shift()
-    this.buffers.set(desktopId, frames)
+  /**
+   * The receiver confirmed delivery of `id`: forward the receiver-generated
+   * `relay:ack` to the original sender and release the retained frame.
+   */
+  acknowledge(desktopId: string, id: number): boolean {
+    const frames = this.outstanding.get(desktopId)
+    const entry = frames?.get(id)
+    if (!entry) return false
+    frames?.delete(id)
+    if (frames?.size === 0) this.outstanding.delete(desktopId)
+    entry.sender.send(JSON.stringify({ type: 'relay:ack', id }))
     return true
   }
 
-  private replay(desktopId: string, role: RelayRole): string[] {
-    const frames = this.buffers.get(desktopId)
-    if (!frames) return []
-    const now = this.now()
-    const replayed: string[] = []
-    const remaining: BufferedFrame[] = []
-    for (const entry of frames) {
-      if (entry.expiresAt <= now) continue
-      if (entry.to === role) {
-        replayed.push(entry.frame)
-      } else {
-        remaining.push(entry)
-      }
-    }
-    if (remaining.length === 0) this.buffers.delete(desktopId)
-    else this.buffers.set(desktopId, remaining)
-    return replayed
-  }
-
-  /** Drop expired buffered frames; returns the number removed. */
+  /**
+   * Expire accepted frames whose retention TTL passed. Each expired frame is
+   * surfaced as a retryable NACK to its sender so no accepted-but-unconfirmed
+   * work is ever lost silently. Returns the number expired.
+   */
   sweep(): number {
     const now = this.now()
     let removed = 0
-    for (const [desktopId, frames] of this.buffers) {
-      const alive = frames.filter((entry) => entry.expiresAt > now)
-      removed += frames.length - alive.length
-      if (alive.length === 0) this.buffers.delete(desktopId)
-      else this.buffers.set(desktopId, alive)
+    for (const [desktopId, frames] of this.outstanding) {
+      for (const [id, entry] of frames) {
+        if (entry.expiresAt <= now) {
+          entry.sender.send(JSON.stringify({ type: 'relay:nack', id, reason: 'expired' }))
+          frames.delete(id)
+          removed += 1
+        }
+      }
+      if (frames.size === 0) this.outstanding.delete(desktopId)
     }
     return removed
   }
 
-  /** Number of frames currently buffered across all desktops. */
+  /** Number of frames currently retained awaiting receiver confirmation. */
+  outstandingCount(): number {
+    let count = 0
+    for (const frames of this.outstanding.values()) count += frames.size
+    return count
+  }
+
+  /** Number of frames buffered (accepted but not yet delivered). */
   bufferedCount(): number {
     let count = 0
-    for (const frames of this.buffers.values()) count += frames.length
+    for (const frames of this.outstanding.values()) {
+      for (const entry of frames.values()) if (!entry.delivered) count += 1
+    }
     return count
+  }
+
+  private replay(desktopId: string, role: RelayRole): string[] {
+    const frames = this.outstanding.get(desktopId)
+    if (!frames) return []
+    const now = this.now()
+    const replayed: string[] = []
+    const target =
+      role === 'desktop' ? this.desktopSockets.get(desktopId) : this.mobileSockets.get(desktopId)
+    for (const entry of frames.values()) {
+      if (!entry.delivered && entry.to === role && target) {
+        target.send(entry.frame)
+        entry.delivered = true
+        entry.expiresAt = now + this.bufferTtlMs
+        replayed.push(entry.frame)
+      }
+    }
+    return replayed
   }
 }
