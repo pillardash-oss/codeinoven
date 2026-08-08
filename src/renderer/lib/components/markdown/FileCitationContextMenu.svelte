@@ -12,6 +12,7 @@
     Save
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { revealCitationFile } from '$lib/reveal-file'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -129,7 +130,7 @@
 
   async function copyText(text: string, successMessage: string): Promise<void> {
     try {
-      await invoke('clipboard:writeText', text)
+      await copyTextToClipboard(text)
       toast.success(successMessage)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Copy failed.')

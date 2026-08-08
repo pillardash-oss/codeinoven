@@ -15,6 +15,7 @@
   } from '@lucide/svelte'
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -380,7 +381,7 @@
     const label = selectionLabel(paths)
     projectFilesWorkspace.setClipboard(projectId, paths, mode)
     try {
-      await navigator.clipboard.writeText(paths.map((path) => `@${path}`).join('\n'))
+      await copyText(paths.map((path) => `@${path}`).join('\n'))
       toast.success(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
     } catch {
       toast.success(mode === 'copy' ? `${label} copied` : `${label} ready to move`)
@@ -390,7 +391,7 @@
   async function copyPaths(paths: string[]): Promise<void> {
     const label = paths.length === 1 ? 'Path' : `${paths.length} paths`
     try {
-      await navigator.clipboard.writeText(paths.map((path) => `@${path}`).join('\n'))
+      await copyText(paths.map((path) => `@${path}`).join('\n'))
       toast.success(`${label} copied`)
     } catch {
       toast.error(`The ${label.toLocaleLowerCase()} could not be copied`)

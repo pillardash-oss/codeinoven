@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Check, Code2, Copy, Expand, MessageSquarePlus, X } from '@lucide/svelte'
   import { Dialog } from 'bits-ui'
+  import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
@@ -83,7 +84,7 @@
 
   async function copySource(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)

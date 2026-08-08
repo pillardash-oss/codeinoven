@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import type {
@@ -460,7 +461,7 @@
 
   async function copyCommitHash(commit: GitCommitInfo): Promise<void> {
     try {
-      await navigator.clipboard.writeText(commit.hash)
+      await copyText(commit.hash)
     } catch {
       // Clipboard may be unavailable; nothing else to do.
     }
@@ -468,7 +469,7 @@
 
   async function copyCommitMessage(commit: GitCommitInfo): Promise<void> {
     try {
-      await navigator.clipboard.writeText(commit.message)
+      await copyText(commit.message)
     } catch {
       // Clipboard may be unavailable; nothing else to do.
     }
