@@ -1305,6 +1305,12 @@ export function registerIpcHandlers(
       )
     }
   )
+  ipcMain.handle('brainstorm:resetWorkflow', (_, projectId: unknown, threadId: unknown) => {
+    brainstormEngine.resetWorkflow(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  })
   ipcMain.handle('brainstorm:getActive', (_, projectId: unknown, threadId: unknown) =>
     brainstormEngine.getActive(
       validateEntityId(projectId, 'Project ID'),

@@ -164,6 +164,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, choice: BrainstormEntryChoice],
     BrainstormWorkflowState
   >
+  'brainstorm:resetWorkflow': Contract<[projectId: string, threadId: string], void>
   'brainstorm:getActive': Contract<[projectId: string, threadId: string], BrainstormDocument | null>
   'brainstorm:listVersions': Contract<
     [projectId: string, threadId: string, brainstormId: string],
