@@ -3,6 +3,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { readFile, writeFile, mkdtemp, mkdir, stat } from 'fs/promises'
 import { tmpdir, release } from 'os'
 import { basename, dirname, extname, join } from 'path'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import type { Database } from './database/database'
 import { StorageEngine } from './storage-engine'
@@ -62,8 +63,7 @@ import {
   validateThreadSettings,
   validateThreadStatus,
   validateThreadUpdateInput,
-  PrivilegedIpcValidator,
-  originOfUrl
+  PrivilegedIpcValidator
 } from './ipc-validation'
 import { ProjectManager } from '../lib/engines/project-manager'
 import { ThreadManager } from '../lib/engines/thread-manager'
@@ -209,17 +209,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Origins the renderer may invoke privileged IPC from: the development server
- * origin while running unpackaged against `ELECTRON_RENDERER_URL`, otherwise
- * the packaged `file://` renderer origin.
+ * Exact URLs the app's own renderer document lives at. Privileged IPC sender
+ * frames and main-frame navigation are bound to these URLs.
  */
-function computeTrustedRendererOrigins(): string[] {
+function appRendererNavigationTargets(): string[] {
   const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
   if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
-    const origin = originOfUrl(process.env['ELECTRON_RENDERER_URL'])
-    if (origin) return [origin]
+    return [process.env['ELECTRON_RENDERER_URL']]
   }
-  return ['file://']
+  const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
+  return [pathToFileURL(join(mainBundleDirectory, '../renderer/index.html')).href]
 }
 
 function requireString(value: unknown, label: string, allowEmpty = false): string {
@@ -965,14 +964,21 @@ export function registerIpcHandlers(
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
+  const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
   const privilegedIpc = new PrivilegedIpcValidator({
-    trustedOrigins: computeTrustedRendererOrigins(),
+    navigationTargets: appRendererNavigationTargets(),
+    allowDevelopmentHttp: !isProduction,
     scopes: {
       projectRoots: async () =>
         (await projectManager.listProjects())
           .map((project) => project.path)
           .filter((path): path is string => typeof path === 'string' && path.length > 0),
-      configRoot: () => getConfigRoot()
+      appArtifactRoots: async () => {
+        const projects = await projectManager.listProjects()
+        return projects.map((project) =>
+          join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments')
+        )
+      }
     }
   })
 
@@ -2163,7 +2169,7 @@ export function registerIpcHandlers(
       // Remember the chosen folder for next time and record it as a
       // user-approved scope for reveal/preview operations.
       config.lastFolderDialogPath = result.filePaths[0]
-      privilegedIpc.registerUserSelectedRoot(result.filePaths[0])
+      await privilegedIpc.registerUserSelectedRoot(result.filePaths[0])
       await storage.saveConfig(config)
 
       return result.filePaths[0]
@@ -2187,7 +2193,7 @@ export function registerIpcHandlers(
       const tempDir = await mkdtemp(join(tmpdir(), 'cio-clipboard-'))
       const tempPath = join(tempDir, 'pasted-image.png')
       await writeFile(tempPath, image.toPNG())
-      privilegedIpc.registerUserSelectedFile(tempPath)
+      await privilegedIpc.registerUserSelectedFile(tempPath)
       return tempPath
     } catch (error) {
       Logger.error('clipboard:saveImage failed:', error)
@@ -2240,7 +2246,7 @@ export function registerIpcHandlers(
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
       config.lastAttachmentDialogPath = dirname(result.filePaths[0])
-      privilegedIpc.registerUserSelectedFile(result.filePaths[0])
+      await privilegedIpc.registerUserSelectedFile(result.filePaths[0])
       await storage.saveConfig(config)
       return result.filePaths[0]
     } catch (error) {
@@ -2268,7 +2274,7 @@ export function registerIpcHandlers(
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
-      privilegedIpc.registerUserSelectedFile(result.filePaths[0])
+      await privilegedIpc.registerUserSelectedFile(result.filePaths[0])
       return result.filePaths[0]
     } catch (error) {
       Logger.error('dialog:pickImage failed:', error)

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
 import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
 import { Logger } from './logger'
@@ -42,7 +42,7 @@ import {
   lockDownProductionWindow
 } from './production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
-import { PrivilegedIpcValidator, originOfUrl } from './ipc-validation'
+import { PrivilegedIpcValidator } from './ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 import type { Thread } from '../lib/types'
 
@@ -192,16 +192,21 @@ const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
 /**
  * Window/session boundary validator. It guards external window creation,
  * navigation, permission requests, and downloads against unsafe schemes and
- * foreign origins; file-path scoping lives in `ipc-handlers.ts`.
+ * foreign documents; file-path scoping lives in `ipc-handlers.ts`.
  */
-function appTrustedOrigins(): string[] {
+
+/** The exact URLs the main frame may navigate to (the app's own renderer). */
+function appRendererNavigationTargets(): string[] {
   if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
-    const origin = originOfUrl(process.env['ELECTRON_RENDERER_URL'])
-    if (origin) return [origin]
+    return [process.env['ELECTRON_RENDERER_URL']]
   }
-  return ['file://']
+  return [pathToFileURL(join(mainBundleDirectory, '../renderer/index.html')).href]
 }
-const windowBoundaryValidator = new PrivilegedIpcValidator({ trustedOrigins: appTrustedOrigins() })
+
+const windowBoundaryValidator = new PrivilegedIpcValidator({
+  navigationTargets: appRendererNavigationTargets(),
+  allowDevelopmentHttp: !isProduction
+})
 
 const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
@@ -473,9 +478,10 @@ function createWindow(): BrowserWindow {
   })
 
   // The renderer is a single-page application: never let the main frame
-  // navigate away from the app's own origin (dev server or packaged file).
+  // navigate away from the app's own renderer URL (exact match in production,
+  // same-origin to the dev server in development).
   window.webContents.on('will-navigate', (event, url) => {
-    if (!windowBoundaryValidator.isTrustedSenderFrame({ url })) {
+    if (!windowBoundaryValidator.isTrustedNavigation(url)) {
       event.preventDefault()
     }
   })
