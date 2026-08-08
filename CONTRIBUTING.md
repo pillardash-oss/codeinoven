@@ -51,7 +51,7 @@ A feature that only flatters its author does not belong here. A feature earns it
 
 1. **Open an issue or discussion first** for anything beyond a small fix. Describe the problem you hit, who else it affects, and the change you propose. This catches vanity features and duplicates early, and it lets maintainers point you at existing design.
 2. **Read the source of truth:** `APP-BIBLE.md` defines the product philosophy and engineering standards, and `DESIGN.md` defines the visual language. The top-level `AGENTS.md` contains the operational rules agents follow. If a document conflicts with `APP-BIBLE.md`, the Bible wins.
-3. **Make a plan.** Before writing code, write a short plan with your phases and keep it updated as you work. Keep all planning and progress documents under `.cio/uncategorized/<feature>/` and disposable temp work under `.cio/tmp/` — never pollute the repo root.
+3. **Make a plan.** Before writing code, write a short plan with your phases and keep it updated as you work. Keep all planning and progress documents under `agent-out/` — never pollute the repo root.
 4. **Understand the architecture** (see [Architecture rules](#architecture-rules)) so your change lands in the right layer.
 
 ---
@@ -134,7 +134,7 @@ some changes get extra review scrutiny:
 
 - **Work on a branch** (or fork) and open a pull request against `main`. The quality workflow (check + lint + test + production build) runs on every PR and must pass before merge.
 - **Commit contextually.** One unit of work per commit, scoped to the files you changed. Never `git commit .` or `git commit -A`.
-- **Never commit ignored files** (`.cio/`, `agent-out/`, `out/`, `dist/`, `.env`, logs).
+- **Never commit ignored files** (`agent-out/`, `.cio/`, `out/`, `dist/`, `.env`, logs).
 - **Write clear commit messages** that describe the change and why.
 - **Keep PRs small and reviewable.** A reviewer should be able to understand the whole PR in one sitting. Split large work into multiple PRs.
 - **Do not force-push or rewrite shared history** unless the maintainers ask.

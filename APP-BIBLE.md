@@ -210,7 +210,7 @@ Unless explicitly asked to run against the whole project:
 - **Never run `bun run dev`** as a verification step; use `bun run check` instead.
 - Only check/lint/format/test the files you worked on and the files that import them.
 - Run existing tests **before** changing code (baseline) and **after** (regression check).
-- Test output goes to `.cio/uncategorized/<feature>/test-result/` named `(feature)-baseline.txt`, `(feature)-(n).txt`, or `(feature)-final.txt`. Grep out only the failures/warnings you need — do not flood context with full logs.
+- Test output goes to `agent-out/test-result/` named `(feature)-baseline.txt`, `(feature)-(n).txt`, or `(feature)-final.txt`. Grep out only the failures/warnings you need — do not flood context with full logs.
 - Do not write new tests unless explicitly asked.
 - Before declaring any work done: run the applicable check, lint, format, and test commands and fix all errors.
 
@@ -231,7 +231,7 @@ These rules bind every AI agent contributing to this repository (see `AGENTS.md`
 
 - Before starting a task: write a plan file with the current phase declared at the top, checkbox tasks, and mark items in-progress/completed as you go.
 - After finishing: update the progress file with what was done and what's next.
-- Unless the user explicitly says otherwise, all agent outputs (reports, plans, progress, test output, walkthroughs, temp work, cloned repos, `.venv`s) live under the project's `.cio/` folder — never the repo root or the user's working tree. Feature work (plan*.md, progress*.md, test output, walkthroughs, reports) goes in `.cio/uncategorized/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. The platform owns `.cio/specs/<feature>/spec.md` and `.cio/git/pr/<n>/`; never touch those.
+- All documentation output (plan*.md, progress*.md, test output, walkthroughs) lives in `agent-out/` — never pollute the repo root.
 - If plan/progress files were overwritten by someone else since your last edit, create `plan-[feature].md` / `progress-[feature].md` instead. Never destroy another agent's records.
 - Work phases to exhaustion — don't stop halfway through a declared phase.
 - If confused at any point, **ask clarifying questions. Never assume.**
