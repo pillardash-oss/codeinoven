@@ -848,7 +848,10 @@ export class OpenCodeDriver implements HarnessDriver {
     // OpenCode 1.18.10 accepts structured prompts but its history endpoint can
     // fail to decode their stored format. Use deterministic JSON-only output.
     structuredOutput: false,
-    nativeUtilities: ['web_fetch']
+    nativeUtilities: ['web_fetch'],
+    // OpenCode schedules and performs its own provider retries (`session.status`
+    // `retry` with a `next` timestamp) — the app must not auto-resume for it.
+    scheduledRetry: true
   }
 
   private servers = new Map<string, ServerHandle>()

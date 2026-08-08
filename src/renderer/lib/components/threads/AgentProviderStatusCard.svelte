@@ -31,6 +31,8 @@
     onStop?: () => void
     onRetry?: () => void
     onDismiss?: () => void
+    /** Whether the app auto-resumes this thread once the reset time passes. */
+    autoRetryEnabled?: boolean
   }
 
   let {
@@ -46,7 +48,8 @@
     onReorderFavorite,
     onStop,
     onRetry,
-    onDismiss
+    onDismiss,
+    autoRetryEnabled = true
   }: Props = $props()
   let now = $state(Date.now())
   let showRawError = $state(false)
@@ -57,6 +60,19 @@
   const issue = $derived(status.issue)
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   const waiting = $derived(status.state === 'waiting')
+  /**
+   * A usage/rate-limit reset that the app will (or can) auto-resume: a terminal
+   * error on a harness that does not schedule its own retries, with a concrete
+   * reset time. Rendered as a warning card with a countdown.
+   */
+  const autoResume = $derived(
+    !waiting &&
+      issue.retryAt !== undefined &&
+      issue.harnessId !== 'opencode' &&
+      (issue.kind === 'quota' ||
+        issue.kind === 'rate_limit' ||
+        issue.kind === 'provider_unavailable')
+  )
 
   $effect(() => {
     if (!issue.retryAt) return
@@ -149,13 +165,13 @@
 <div
   class={[
     'rounded-xl border px-4 py-3',
-    waiting ? 'border-warning/25 bg-warning/5' : 'border-danger/20 bg-danger/5'
+    waiting || autoResume ? 'border-warning/25 bg-warning/5' : 'border-danger/20 bg-danger/5'
   ]}
   role={waiting ? 'status' : 'alert'}
   aria-live="polite"
 >
   <div class="flex items-start gap-3">
-    {#if waiting}
+    {#if waiting || autoResume}
       <Clock3 size={16} class="mt-0.5 shrink-0 text-warning" />
     {:else}
       <AlertTriangle size={16} class="mt-0.5 shrink-0 text-danger" />
@@ -176,6 +192,16 @@
           Retrying {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
           {#if issue.attempt}
             · attempt {issue.attempt}
+          {/if}
+        </p>
+      {:else if autoResume && issue.retryAt}
+        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
+          {#if autoRetryEnabled}
+            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          {:else}
+            Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(
+              issue.retryAt
+            )}
           {/if}
         </p>
       {:else if issue.retryAt}

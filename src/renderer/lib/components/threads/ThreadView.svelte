@@ -235,6 +235,8 @@
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
+  /** Whether the app auto-resumes threads after a usage/rate-limit reset. */
+  let autoRetryAfterReset = $state(true)
   /** Reactive provider catalog for this thread's project — seeded from the
    *  cache and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached())
@@ -1974,6 +1976,7 @@
       }
       agentDefaults = config.agentDefaults
       imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
+      autoRetryAfterReset = config.autoRetryAfterReset === true
       auditSettings = auditSettingsForThread()
       // Merge the newest mirror page with optimistic messages and any older
       // pages already loaded for this thread.
@@ -5818,6 +5821,7 @@
                 : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             onStop={abortRun}
             onRetry={retryConnection}
+            autoRetryEnabled={autoRetryAfterReset}
             onDismiss={() => {
               errorMessage = ''
               providerStatus = null

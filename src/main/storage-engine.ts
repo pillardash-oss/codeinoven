@@ -38,7 +38,8 @@ const DEFAULT_CONFIG: AppConfig = {
   autoInstallUpdates: true,
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
-  imageDescriptorAskAgain: false
+  imageDescriptorAskAgain: false,
+  autoRetryAfterReset: true
 }
 
 /**

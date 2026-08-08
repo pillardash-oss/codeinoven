@@ -29,6 +29,7 @@ import { WindowStateService } from './window-state'
 import { NotificationService } from './notification-service'
 import { setNotificationService, setPowerWakeService } from './thread-events'
 import { PowerWakeService } from './power-wake-service'
+import { RetrySchedulerService } from './retry-scheduler-service'
 import {
   RemoteModeController,
   DEFAULT_LAN_PORT,
@@ -187,6 +188,7 @@ const chatEngine = new ChatEngine(storage, database, computerUsePipService, harn
 const notificationService = new NotificationService(storage, database, openThreadFromNotification)
 const updaterService = new UpdaterService(storage)
 const powerWakeService = new PowerWakeService(storage, database)
+const retryScheduler = new RetrySchedulerService(storage)
 
 /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
 const remoteMode = new RemoteModeController({
@@ -298,6 +300,12 @@ function startBackgroundBoot(): void {
       setPowerWakeService(powerWakeService)
     } catch (error) {
       Logger.error('Power wake startup failed (non-fatal):', error)
+    }
+
+    try {
+      await retryScheduler.start()
+    } catch (error) {
+      Logger.error('Retry scheduler startup failed (non-fatal):', error)
     }
 
     try {
@@ -504,6 +512,7 @@ void app
       projectManager,
       projectFilesService,
       powerWakeService,
+      retryScheduler,
       harnessManifestService
     })
     registerProviderAccountIpc()
@@ -511,6 +520,7 @@ void app
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
     remoteMode.registerIpc()
     chatEngine.register()
+    chatEngine.attachRetryScheduler(retryScheduler)
 
     const window = createWindow()
     startBackgroundBoot()
@@ -606,6 +616,12 @@ async function runShutdownPipeline(): Promise<void> {
     powerWakeService.stop()
   } catch (error) {
     Logger.error('Power-wake cleanup failed during shutdown:', error)
+  }
+
+  try {
+    retryScheduler.dispose()
+  } catch (error) {
+    Logger.error('Retry scheduler cleanup failed during shutdown:', error)
   }
 
   try {
