@@ -81,6 +81,10 @@
   let agentTurnActive = $state(false)
   let activeTab = $state<TabId>('changes')
   let changesView = $state<'list' | 'tree'>('list')
+  let selectedPaths = $state<Record<string, boolean>>({})
+  let discardConfirm = $state<string[] | null>(null)
+  let commitSelection = $state(false)
+  let commitTextarea = $state<HTMLTextAreaElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let commitMessage = $state('')
@@ -469,6 +473,13 @@
     void loadGitHubAuth()
   })
 
+  $effect(() => {
+    if (commitSelection) {
+      commitTextarea?.focus()
+      commitSelection = false
+    }
+  })
+
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
     const timer = setInterval(() => {
@@ -589,6 +600,74 @@
     } else {
       await gitState.stage(projectId, paths)
     }
+  }
+
+  function toggleSelection(change: GitFileChange, additive: boolean): void {
+    const next = { ...selectedPaths }
+    if (additive && next[change.path]) {
+      delete next[change.path]
+    } else {
+      next[change.path] = true
+    }
+    selectedPaths = next
+  }
+
+  function clearSelection(): void {
+    selectedPaths = {}
+  }
+
+  const selectedPathList = $derived(Object.keys(selectedPaths))
+  const selectionChanges = $derived(changes.filter((change) => selectedPaths[change.path]))
+
+  async function stageSelectedAction(stage: boolean): Promise<void> {
+    const paths = selectedPathList
+    if (paths.length === 0) return
+    await stagePathsAction(paths, stage)
+    if (!gitState.error) clearSelection()
+  }
+
+  async function ignoreSelectedAction(): Promise<void> {
+    const paths = selectedPathList
+    if (paths.length === 0) return
+    await gitState.ignore(projectId, paths)
+    if (!gitState.error) {
+      clearSelection()
+      void refreshStatus()
+    }
+  }
+
+  async function ignorePathsAction(paths: string[]): Promise<void> {
+    if (paths.length === 0) return
+    await gitState.ignore(projectId, paths)
+    if (!gitState.error) {
+      clearSelection()
+      void refreshStatus()
+    }
+  }
+
+  function requestDiscard(paths: string[]): void {
+    discardConfirm = paths
+  }
+
+  async function confirmDiscard(): Promise<void> {
+    const paths = discardConfirm
+    if (!paths) return
+    discardConfirm = null
+    await gitState.discard(projectId, paths)
+    if (!gitState.error) {
+      clearSelection()
+      void refreshStatus()
+    }
+  }
+
+  function requestCommitSelected(): void {
+    if (selectedPathList.length === 0) return
+    void stageSelectedAction(false).then(() => {
+      if (!gitState.error) {
+        clearSelection()
+        commitSelection = true
+      }
+    })
   }
 
   async function popStash(id?: string): Promise<void> {
@@ -1102,6 +1181,125 @@
                 </div>
               {/if}
 
+              {#if selectedPathList.length > 0}
+                <div
+                  class="sticky top-0 z-10 mb-2 flex items-center gap-1.5 rounded-lg border border-primary/30 bg-surface px-2 py-1.5 shadow-md"
+                >
+                  <span class="shrink-0 text-[10px] font-medium text-foreground">
+                    {selectedPathList.length} selected
+                  </span>
+                  <span class="shrink-0 text-[9px] text-dimmed">
+                    {selectionChanges.length} change{selectionChanges.length === 1 ? '' : 's'}
+                  </span>
+                  <span class="flex-1"></span>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={() => void stageSelectedAction(false)}
+                    title="Stage the selected files"
+                  >
+                    Stage
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={() => void stageSelectedAction(true)}
+                    title="Unstage the selected files"
+                  >
+                    Unstage
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={requestCommitSelected}
+                    title="Stage the selected files and write a commit"
+                  >
+                    Commit
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={() => requestStashFor(selectedPathList)}
+                    title="Stash the selected files"
+                  >
+                    Stash
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={() => void ignoreSelectedAction()}
+                    title="Add the selected files to .gitignore"
+                  >
+                    Ignore
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
+                    disabled={gitState.isBusy([
+                      'stage',
+                      'unstage',
+                      'commit',
+                      'stash',
+                      'ignore',
+                      'discard'
+                    ])}
+                    onclick={() => requestDiscard(selectedPathList)}
+                    title="Discard changes to the selected files"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    onclick={clearSelection}
+                    title="Clear selection"
+                    aria-label="Clear selection"
+                  >
+                    ✕
+                  </button>
+                </div>
+              {/if}
+
               {#if changesView === 'tree' && fileSections.length > 0}
                 <GitChangesTree
                   sections={fileSections}
@@ -1109,11 +1307,15 @@
                   {expanded}
                   {loadingDiff}
                   {diffErrors}
+                  bind:selectedPaths
                   onToggleDiff={(change) => void toggleDiff(change)}
                   onToggleStage={(change) => void toggleStage(change)}
+                  onToggleSelect={(change, additive) => toggleSelection(change, additive)}
                   onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
                   onStashPaths={(paths) => requestStashFor(paths)}
                   onOpenInEditor={(path) => void openInEditor(path)}
+                  onIgnorePaths={(paths) => void ignorePathsAction(paths)}
+                  onDiscardPaths={(paths) => requestDiscard(paths)}
                 />
               {:else if fileSections.length > 0}
                 <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
@@ -1134,10 +1336,15 @@
                         loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
                         error={diffErrors[fileDiffKey(change)] ?? null}
                         expanded={expanded[fileDiffKey(change)] ?? false}
+                        selected={Boolean(selectedPaths[change.path])}
+                        selectable
                         onToggleDiff={() => void toggleDiff(change)}
                         onToggleStage={() => void toggleStage(change)}
+                        onToggleSelect={(item, additive) => toggleSelection(item, additive)}
                         onStash={(path) => requestStashFor([path])}
                         onOpenInEditor={(path) => void openInEditor(path)}
+                        onIgnore={(path) => void ignorePathsAction([path])}
+                        onDiscard={(path) => requestDiscard([path])}
                       />
                     {/each}
                   {/each}
@@ -1392,6 +1599,7 @@
       {/if}
       <div class="px-2 pt-2">
         <textarea
+          bind:this={commitTextarea}
           class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
           bind:value={commitMessage}></textarea>
@@ -1864,6 +2072,48 @@
             onclick={() => void confirmStashDrop()}
           >
             Discard
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}
+
+{#if discardConfirm}
+  <AlertDialog.Root open onOpenChange={() => (discardConfirm = null)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Discard changes?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          Changes to
+          {discardConfirm.length}
+          {discardConfirm.length === 1 ? 'file' : 'files'} will be permanently discarded. This cannot
+          be undone.
+        </AlertDialog.Description>
+        {#if discardConfirm.length > 4}
+          <div
+            class="mt-3 max-h-24 overflow-auto rounded-lg border border-border bg-elevated/50 p-2"
+          >
+            {#each discardConfirm as path (path)}
+              <p class="truncate font-mono text-[9px] text-dimmed">{path}</p>
+            {/each}
+          </div>
+        {/if}
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+            onclick={() => void confirmDiscard()}
+          >
+            Discard changes
           </AlertDialog.Action>
         </div>
       </AlertDialog.Content>

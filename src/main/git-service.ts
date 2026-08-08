@@ -1,4 +1,4 @@
-import { stat, open, access } from 'fs/promises'
+import { stat, open, access, readFile, writeFile, rm, unlink } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep } from 'path'
 import { simpleGit } from 'simple-git'
 import type { SimpleGit, StatusResult } from 'simple-git'
@@ -570,6 +570,96 @@ export class GitService {
       })
       return this.readStatus(directory)
     })
+  }
+
+  /** Add paths to `.gitignore` (directories get a trailing slash). */
+  async ignore(projectPath: string, paths: string[]): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(directory, 'mutation', async () => {
+        const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+        if (safePaths.length === 0) return
+        const gitignorePath = resolve(directory, '.gitignore')
+        let existing = ''
+        try {
+          existing = await readFile(gitignorePath, 'utf-8')
+        } catch {
+          // No .gitignore yet — a new one is created below.
+        }
+        const lines = existing ? existing.replace(/\r\n/gu, '\n').split('\n') : []
+        const patterns: string[] = []
+        for (const path of safePaths) {
+          const isDirectory = await this.isDirectory(directory, path)
+          const pattern = isDirectory ? `${path}/` : path
+          if (!lines.includes(pattern)) patterns.push(pattern)
+        }
+        if (patterns.length === 0) return
+        const separator = lines.length > 0 && lines[lines.length - 1]?.trim() !== '' ? '\n' : ''
+        const additions =
+          lines.length > 0 ? `${separator}${patterns.join('\n')}` : patterns.join('\n')
+        const content = existing ? `${existing}${additions}\n` : `${patterns.join('\n')}\n`
+        await writeFile(gitignorePath, content, 'utf-8')
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** Discard working-tree changes for the given paths. Tracked files are
+   *  restored from HEAD; untracked files are deleted. */
+  async discard(projectPath: string, paths: string[]): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(directory, 'mutation', async () => {
+        const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+        if (safePaths.length === 0) return
+        const git = this.client(directory)
+        const status = await git.status()
+        const tracked: string[] = []
+        const untracked: string[] = []
+        for (const path of safePaths) {
+          if (
+            status.not_added.includes(path) ||
+            status.not_added.some((p) => p.startsWith(`${path}/`))
+          ) {
+            untracked.push(path)
+          } else {
+            tracked.push(path)
+          }
+        }
+        if (tracked.length > 0) {
+          await git.checkout(['--', ...tracked])
+        }
+        for (const path of untracked) {
+          const absolute = resolve(directory, path)
+          await this.removePath(absolute)
+        }
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** True when the path resolves to a directory inside the repository. */
+  private async isDirectory(directory: string, path: string): Promise<boolean> {
+    try {
+      const info = await stat(resolve(directory, path))
+      return info.isDirectory()
+    } catch {
+      return false
+    }
+  }
+
+  /** Recursively remove a file or directory that is not tracked by git. */
+  private async removePath(absolute: string): Promise<void> {
+    try {
+      const info = await stat(absolute)
+      if (info.isDirectory()) {
+        await rm(absolute, { recursive: true, force: true })
+      } else {
+        await unlink(absolute)
+      }
+    } catch {
+      // Nothing to remove — treat as already gone.
+    }
   }
 
   /** List stashes newest-first, e.g. `stash@{0}` → `stash@{n}`. */
