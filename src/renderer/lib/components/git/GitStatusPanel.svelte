@@ -14,6 +14,7 @@
     Archive,
     ArrowLeft,
     Check,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     FileDiff,
@@ -676,7 +677,6 @@
   }
 
   const selectedPathList = $derived(Object.keys(selectedPaths))
-  const selectionChanges = $derived(changes.filter((change) => selectedPaths[change.path]))
 
   async function stageSelectedAction(stage: boolean): Promise<void> {
     const paths = selectedPathList
@@ -1249,8 +1249,88 @@
                 </p>
               </div>
             {:else if status}
-              {#if changes.length > 0}
-                <div class="mb-2 flex items-center justify-end">
+              <!-- Stable, sticky header: selection + actions + view toggle -->
+              <div
+                class="sticky top-0 z-10 mb-2 flex items-center gap-2 border-b border-border bg-app/95 px-3 py-1.5 backdrop-blur"
+              >
+                {#if changes.length > 0 && selectedPathList.length > 0}
+                  <span class="shrink-0 text-[10px] font-medium tabular-nums text-foreground">
+                    {selectedPathList.length} selected
+                  </span>
+                  <DropdownMenu.Root>
+                    <DropdownMenu.Trigger
+                      class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                      disabled={batchBusy}
+                      aria-label="Selected actions"
+                      title="Selected actions"
+                    >
+                      <ChevronDown size={12} />
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content
+                        class="z-50 min-w-44 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                        side="bottom"
+                        align="start"
+                        sideOffset={4}
+                        collisionPadding={8}
+                      >
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={() => void stageSelectedAction(false)}
+                        >
+                          <Check size={12} class="text-success" />
+                          Stage
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={() => void stageSelectedAction(true)}
+                        >
+                          <span class="inline-block w-3 text-center text-[10px] text-danger">−</span
+                          >
+                          Unstage
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={requestCommitSelected}
+                        >
+                          <GitCommit size={12} class="text-dimmed" />
+                          Commit…
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={() => requestStashFor(selectedPathList)}
+                        >
+                          <Archive size={12} class="text-dimmed" />
+                          Stash…
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={() => void ignoreSelectedAction()}
+                        >
+                          <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+                          Add to gitignore
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Separator class="my-1 h-px bg-border" />
+                        <DropdownMenu.Item
+                          class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"
+                          disabled={batchBusy}
+                          onSelect={() => requestDiscard(selectedPathList)}
+                        >
+                          <Trash2 size={12} />
+                          Discard changes
+                        </DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu.Root>
+                {/if}
+                <span class="flex-1"></span>
+                {#if changes.length > 0}
                   <div
                     class="flex items-center rounded-md bg-elevated/50 p-0.5"
                     role="group"
@@ -1283,136 +1363,60 @@
                       Tree
                     </button>
                   </div>
-                </div>
-              {/if}
-
-              {#if selectedPathList.length > 0}
-                <div
-                  class="sticky top-0 z-10 mb-2 flex items-center gap-1.5 rounded-lg border border-primary/30 bg-surface px-2 py-1.5 shadow-md"
-                >
-                  <span class="shrink-0 text-[10px] font-medium text-foreground">
-                    {selectedPathList.length} selected
-                  </span>
-                  <span class="shrink-0 text-[9px] text-dimmed">
-                    {selectionChanges.length} change{selectionChanges.length === 1 ? '' : 's'}
-                  </span>
-                  <span class="flex-1"></span>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={() => void stageSelectedAction(false)}
-                    title="Stage the selected files"
-                  >
-                    Stage
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={() => void stageSelectedAction(true)}
-                    title="Unstage the selected files"
-                  >
-                    Unstage
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={requestCommitSelected}
-                    title="Stage the selected files and write a commit"
-                  >
-                    Commit
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={() => requestStashFor(selectedPathList)}
-                    title="Stash the selected files"
-                  >
-                    Stash
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={() => void ignoreSelectedAction()}
-                    title="Add the selected files to .gitignore"
-                  >
-                    Add to gitignore
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                    disabled={batchBusy}
-                    onclick={() => requestDiscard(selectedPathList)}
-                    title="Discard changes to the selected files"
-                  >
-                    Discard
-                  </button>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    onclick={clearSelection}
-                    title="Clear selection"
-                    aria-label="Clear selection"
-                  >
-                    ✕
-                  </button>
-                </div>
-              {/if}
-
-              {#if changesView === 'tree' && fileSections.length > 0}
-                <GitChangesTree
-                  sections={fileSections}
-                  {diffs}
-                  {expanded}
-                  {loadingDiff}
-                  {diffErrors}
-                  bind:selectedPaths
-                  onToggleDiff={(change) => void toggleDiff(change)}
-                  onToggleStage={(change) => void toggleStage(change)}
-                  onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                  onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                  onStashPaths={(paths) => requestStashFor(paths)}
-                  onOpenInEditor={(path) => void openInEditor(path)}
-                  onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                  onDiscardPaths={(paths) => requestDiscard(paths)}
-                />
-              {:else if fileSections.length > 0}
-                <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
-                  {#each fileSections as section, si (section.title)}
-                    {#if si > 0}<div class="border-t border-border"></div>{/if}
-                    <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                      <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
-                        {section.title}
-                      </span>
-                      <span class="text-[8px] tabular-nums text-dimmed">
-                        {section.files.length}
-                      </span>
-                    </div>
-                    {#each section.files as change (change.path)}
-                      <GitFileRow
-                        {change}
-                        diff={diffs[fileDiffKey(change)] ?? null}
-                        loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                        error={diffErrors[fileDiffKey(change)] ?? null}
-                        expanded={expanded[fileDiffKey(change)] ?? false}
-                        selected={Boolean(selectedPaths[change.path])}
-                        selectable
-                        onToggleDiff={() => void toggleDiff(change)}
-                        onToggleStage={() => void toggleStage(change)}
-                        onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                        onStash={(path) => requestStashFor([path])}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnore={(path) => void ignorePathsAction([path])}
-                        onDiscard={(path) => requestDiscard([path])}
-                      />
+                {/if}
+              </div>
+              <div class="px-2">
+                {#if changesView === 'tree' && fileSections.length > 0}
+                  <GitChangesTree
+                    sections={fileSections}
+                    {diffs}
+                    {expanded}
+                    {loadingDiff}
+                    {diffErrors}
+                    bind:selectedPaths
+                    onToggleDiff={(change) => void toggleDiff(change)}
+                    onToggleStage={(change) => void toggleStage(change)}
+                    onToggleSelect={(change, additive) => toggleSelection(change, additive)}
+                    onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
+                    onStashPaths={(paths) => requestStashFor(paths)}
+                    onOpenInEditor={(path) => void openInEditor(path)}
+                    onIgnorePaths={(paths) => void ignorePathsAction(paths)}
+                    onDiscardPaths={(paths) => requestDiscard(paths)}
+                  />
+                {:else if fileSections.length > 0}
+                  <div class="mb-2 overflow-hidden rounded-lg border border-border bg-surface">
+                    {#each fileSections as section, si (section.title)}
+                      {#if si > 0}<div class="border-t border-border"></div>{/if}
+                      <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                        <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                          {section.title}
+                        </span>
+                        <span class="text-[8px] tabular-nums text-dimmed">
+                          {section.files.length}
+                        </span>
+                      </div>
+                      {#each section.files as change (change.path)}
+                        <GitFileRow
+                          {change}
+                          diff={diffs[fileDiffKey(change)] ?? null}
+                          loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                          error={diffErrors[fileDiffKey(change)] ?? null}
+                          expanded={expanded[fileDiffKey(change)] ?? false}
+                          selected={Boolean(selectedPaths[change.path])}
+                          selectable
+                          onToggleDiff={() => void toggleDiff(change)}
+                          onToggleStage={() => void toggleStage(change)}
+                          onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+                          onStash={(path) => requestStashFor([path])}
+                          onOpenInEditor={(path) => void openInEditor(path)}
+                          onIgnore={(path) => void ignorePathsAction([path])}
+                          onDiscard={(path) => requestDiscard([path])}
+                        />
+                      {/each}
                     {/each}
-                  {/each}
-                </div>
-              {/if}
+                  </div>
+                {/if}
+              </div>
             {/if}
           </div>
         {/if}
