@@ -26,6 +26,9 @@ import {
   encryptPayload,
   generateNonce
 } from './session-security'
+import { BoundedSet, fullJitterDelay } from './relay-protocol'
+
+export { fullJitterDelay } from './relay-protocol'
 
 export type RelayEvent =
   | { kind: 'signaling:mqtt-failed'; reason: string }
@@ -101,39 +104,6 @@ const DEFAULT_RECONNECT_MAX_ATTEMPTS = 8
 const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 500
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
 
-/**
- * Full-jitter backoff delay for the given reconnect attempt. Returns a value
- * in `[0, min(maxMs, baseMs * 2^attempt))` using the injected random source so
- * tests can drive it deterministically.
- */
-export function fullJitterDelay(
-  attempt: number,
-  baseMs: number,
-  maxMs: number,
-  random: () => number = Math.random
-): number {
-  const safeAttempt = Math.max(0, Math.floor(attempt))
-  const cap = Math.min(maxMs, baseMs * 2 ** safeAttempt)
-  if (cap <= 0) return 0
-  const sample = Math.min(1, Math.max(0, random()))
-  return Math.floor(sample * cap)
-}
-
-function parseReply(data: string): RelayReply | null {
-  try {
-    const parsed: unknown = JSON.parse(data)
-    if (typeof parsed !== 'object' || parsed === null) return null
-    const record = parsed as Record<string, unknown>
-    if (record.type !== 'relay:hello:ok' && record.type !== 'relay:error') return null
-    return {
-      type: record.type,
-      reason: typeof record.reason === 'string' ? record.reason : undefined
-    }
-  } catch {
-    return null
-  }
-}
-
 function parseDataEnvelope(data: string): DataEnvelope | null {
   try {
     const parsed: unknown = JSON.parse(data)
@@ -157,6 +127,21 @@ function parseAck(data: string): AckEnvelope | null {
     const record = parsed as Record<string, unknown>
     if (record.type !== 'remote:ack' && record.type !== 'relay:ack') return null
     return { type: record.type, id: typeof record.id === 'number' ? record.id : NaN }
+  } catch {
+    return null
+  }
+}
+
+function parseReply(data: string): RelayReply | null {
+  try {
+    const parsed: unknown = JSON.parse(data)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    if (record.type !== 'relay:hello:ok' && record.type !== 'relay:error') return null
+    return {
+      type: record.type,
+      reason: typeof record.reason === 'string' ? record.reason : undefined
+    }
   } catch {
     return null
   }
@@ -243,7 +228,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   let resolve: (result: RelayConnectResult) => void = () => undefined
   const queue: Array<{ id: number; data: string; encrypted: string | null }> = []
   const inFlight = new Map<number, { id: number; data: string; encrypted: string | null }>()
-  const seenIds = new Set<number>()
+  const seenIds = new BoundedSet(queueLimit)
 
   function clearTimers(): void {
     if (handshakeTimer !== null) {
@@ -419,11 +404,6 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
         if (envelope.id !== undefined) {
           if (seenIds.has(envelope.id)) return
           seenIds.add(envelope.id)
-          while (seenIds.size > queueLimit) {
-            const oldest = seenIds.values().next().value
-            if (oldest === undefined) break
-            seenIds.delete(oldest)
-          }
         }
         void decryptPayload(options.authSecret ?? '', envelope.payload)
           .then((plaintext) => options.onEvent({ kind: 'message', data: plaintext }))

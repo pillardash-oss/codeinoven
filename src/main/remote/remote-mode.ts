@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
 import { Logger } from '../logger'
 import { SecretVault } from '../secret-vault'
-import { CloudRelayClient, fullJitterDelay } from './cloud-relay-client'
+import { CloudRelayClient } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
@@ -79,8 +79,6 @@ export function remoteEnvInt(name: string, fallback: number): number {
 }
 
 const CLOUD_REQUEST_TIMEOUT_MS = 15_000
-const CLOUD_RECONNECT_BASE_MS = 1_000
-const CLOUD_RECONNECT_MAX_MS = 30_000
 
 /**
  * Fetch with an application-level deadline and external cancellation. The
@@ -169,9 +167,7 @@ export class RemoteModeController {
   private readonly vault: SecretVault | null
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
-  private cloudReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
-  private cloudReconnectAttempt = 0
   private cloudAbortController: AbortController | null = null
   private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
@@ -668,18 +664,22 @@ export class RemoteModeController {
       authTimeoutMs: remoteEnvInt('RELAY_AUTH_TIMEOUT_MS', 10_000),
       requestTimeoutMs: remoteEnvInt('RELAY_REQUEST_TIMEOUT_MS', 30_000),
       queueLimit: remoteEnvInt('RELAY_QUEUE_LIMIT', 1_000),
+      replayLimit: remoteEnvInt('RELAY_REPLAY_LIMIT', 4_096),
+      // The client owns reconnection: full-jitter backoff that preserves its
+      // bounded outbound queue across socket drops (same-client reconnect).
+      reconnect: {
+        initialDelayMs: remoteEnvInt('RELAY_RECONNECT_BASE_MS', 1_000),
+        maxDelayMs: remoteEnvInt('RELAY_RECONNECT_MAX_MS', 30_000)
+      },
       onAuthenticated: () => {
-        this.cloudReconnectAttempt = 0
         this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
         this.installEventForwarder()
         this.broadcast()
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
-        this.cloudRelay = null
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
         this.broadcast()
-        this.scheduleCloudReconnect()
       },
       onRpc: async (channel, args) =>
         this.rpc?.dispatch({ id: 0, channel, args }) ?? {
@@ -691,37 +691,8 @@ export class RemoteModeController {
     relay.connect()
   }
 
-  private scheduleCloudReconnect(): void {
-    if (!this.remoteModeActive || this.cloudReconnectTimer) return
-    // Full-jitter backoff: jittered within [0, min(max, base * 2^attempt)) so
-    // reconnecting clients cannot synchronize into a reconnect storm after an
-    // outage.
-    const delay = fullJitterDelay(
-      this.cloudReconnectAttempt,
-      CLOUD_RECONNECT_BASE_MS,
-      CLOUD_RECONNECT_MAX_MS
-    )
-    this.cloudReconnectAttempt += 1
-    this.cloudReconnectTimer = setTimeout(() => {
-      this.cloudReconnectTimer = null
-      void this.resumeCloudRelay()
-    }, delay)
-  }
-
-  private async resumeCloudRelay(): Promise<void> {
-    if (!this.cloudConfig || !this.vault || this.cloudRelay) return
-    try {
-      this.connectCloudRelay(await this.vault.resolve(this.cloudConfig.tokenRef))
-    } catch (error) {
-      Logger.error('Remote cloud relay credential failed:', error)
-      this.scheduleCloudReconnect()
-    }
-  }
-
   private stopCloudAccess(): void {
-    if (this.cloudReconnectTimer) clearTimeout(this.cloudReconnectTimer)
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
-    this.cloudReconnectTimer = null
     this.cloudPollTimer = null
     // Cancel any in-flight enrollment/status request and abort the relay
     // connection so nothing survives a remote-mode toggle or app shutdown.

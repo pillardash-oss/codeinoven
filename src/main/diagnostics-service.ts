@@ -11,11 +11,21 @@ import { atomicWrite, getConfigRoot } from '../lib/utils'
 import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { ThreadRepo } from './database/repositories/thread-repo'
+import type { AuxiliaryFeature, AuxiliaryUsageTotals } from './memory-service'
 
 const DEFAULT_LOG_LIMIT = 100
 const DEFAULT_PERMISSION_EVENT_LIMIT = 100
 const MAX_ENTRY_LIMIT = 500
 const MAX_LOG_MESSAGE_LENGTH = 4_000
+
+export type AuxiliaryUsageReport = Record<AuxiliaryFeature, AuxiliaryUsageTotals>
+
+function emptyAuxiliaryUsage(): AuxiliaryUsageReport {
+  return {
+    memory: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 },
+    title: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
+  }
+}
 
 export interface DiagnosticsMetadata {
   appName: string
@@ -90,6 +100,8 @@ export interface DiagnosticsReport {
   logs: DiagnosticsLogEntry[]
   permissionEvents: DiagnosticsPermissionEvent[]
   projects: DiagnosticsProjectSummary[]
+  /** Auxiliary (memory/title) token input and cost totals by feature. */
+  auxiliaryUsage: AuxiliaryUsageReport
   warnings: string[]
 }
 
@@ -268,7 +280,10 @@ export class DiagnosticsService {
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
 
-  constructor(private readonly db: Database) {
+  constructor(
+    private readonly db: Database,
+    private readonly auxiliaryUsage?: () => AuxiliaryUsageReport
+  ) {
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
   }
@@ -316,6 +331,7 @@ export class DiagnosticsService {
       logs,
       permissionEvents,
       projects,
+      auxiliaryUsage: this.auxiliaryUsage?.() ?? emptyAuxiliaryUsage(),
       warnings
     }
   }

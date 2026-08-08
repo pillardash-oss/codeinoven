@@ -93,20 +93,36 @@ export class RemoteSessionStore {
     this.secret = input.controlSecret
     this.closeChannels()
     this.dispatch({ type: 'relayProbeStart' })
+    // The account-relay client owns reconnection (full-jitter backoff that
+    // preserves its bounded queue across socket drops), so the store never
+    // spawns a duplicate client per disconnect.
     const client = createAccountRelayClient({
       desktopId: input.desktopId,
       mobileDeviceId: input.mobileDeviceId,
       controlSecret: input.controlSecret,
       relayPath: input.relayPath,
+      reconnect: {
+        initialDelayMs: 1_000,
+        maxDelayMs: 30_000
+      },
       onEvent: (event) => {
         if (event.kind === 'message') {
           this.routeMessage(event.data)
           return
         }
+        if (event.kind === 'connected' && this.accountRelayClient === client) {
+          this.accountReconnectAttempt = 0
+          this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
+          this.scheduleLanUpgrade()
+          return
+        }
+        if (event.kind === 'offline' && this.accountRelayClient === client) {
+          this.dispatch({ type: 'disconnected', reason: 'desktop-offline' })
+          return
+        }
         if (event.kind === 'disconnected' && this.accountRelayClient === client) {
-          this.accountRelayClient = null
+          // The client keeps retrying on its own; surface the state only.
           this.dispatch({ type: 'disconnected', reason: event.reason })
-          this.scheduleAccountReconnect()
         }
       }
     })
@@ -118,12 +134,11 @@ export class RemoteSessionStore {
       this.scheduleLanUpgrade()
       return
     }
-    this.accountRelayClient = null
+    // The client self-reconnects; reflect the transient failure only.
     this.dispatch({
       type: 'disconnected',
       reason: outcome === 'offline' ? 'desktop-offline' : 'relay-unreachable'
     })
-    this.scheduleAccountReconnect()
   }
 
   /** Prefer an authenticated direct LAN route, then use the account relay. */
@@ -273,17 +288,6 @@ export class RemoteSessionStore {
     this.relayClient = null
     this.accountRelayClient?.close()
     this.accountRelayClient = null
-  }
-
-  private scheduleAccountReconnect(): void {
-    if (!this.accountRoute || this.accountReconnectTimer !== null) return
-    const delay = Math.min(30_000, 1_000 * 2 ** this.accountReconnectAttempt)
-    this.accountReconnectAttempt += 1
-    this.accountReconnectTimer = window.setTimeout(() => {
-      this.accountReconnectTimer = null
-      const route = this.accountRoute
-      if (route) void this.connectCloud(route)
-    }, delay)
   }
 
   private scheduleLanUpgrade(): void {

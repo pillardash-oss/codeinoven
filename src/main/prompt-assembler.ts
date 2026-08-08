@@ -1,10 +1,70 @@
-import { readFile } from 'fs/promises'
+import { readFile, stat } from 'fs/promises'
 import { join, resolve } from 'path'
 import { createHash } from 'node:crypto'
 import { APP_NAME } from '../lib/brand'
 import type { MemoryService } from './memory-service'
 
 const NESTED_AGENTS_DEPTH_LIMIT = 3
+const INSTRUCTION_CACHE_LIMIT = 256
+
+interface CachedInstructionFile {
+  mtimeMs: number
+  size: number
+  /** SHA-256 of the cached content (integrity/hash key for the entry). */
+  contentHash: string
+  content: string
+}
+
+/** Instruction files (AGENTS.md and nested AGENTS.md) cached by path with
+ *  mtime+size invalidation so per-turn prompt assembly never re-reads
+ *  unchanged files from disk (A-13). */
+const instructionCache = new Map<string, CachedInstructionFile>()
+
+function evictInstructionCache(): void {
+  while (instructionCache.size > INSTRUCTION_CACHE_LIMIT) {
+    const oldest = instructionCache.keys().next().value
+    if (oldest === undefined) break
+    instructionCache.delete(oldest)
+  }
+}
+
+/** Number of instruction files currently cached (development/test helper). */
+export function instructionCacheSize(): number {
+  return instructionCache.size
+}
+
+/** Clear the instruction cache (test isolation). */
+export function clearInstructionCache(): void {
+  instructionCache.clear()
+}
+
+async function readCachedInstructionFile(filePath: string): Promise<string> {
+  let fileStat
+  try {
+    fileStat = await stat(filePath)
+  } catch {
+    instructionCache.delete(filePath)
+    return ''
+  }
+  const cached = instructionCache.get(filePath)
+  if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
+    return cached.content
+  }
+  try {
+    const content = await readFile(filePath, 'utf-8')
+    instructionCache.set(filePath, {
+      mtimeMs: fileStat.mtimeMs,
+      size: fileStat.size,
+      contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
+      content
+    })
+    evictInstructionCache()
+    return content
+  } catch {
+    instructionCache.delete(filePath)
+    return ''
+  }
+}
 
 export interface BehaviorLayer {
   title: string
@@ -272,11 +332,7 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
 }
 
 async function readAgentsMd(projectPath: string): Promise<string> {
-  try {
-    return await readFile(join(projectPath, 'AGENTS.md'), 'utf-8')
-  } catch {
-    return ''
-  }
+  return readCachedInstructionFile(join(projectPath, 'AGENTS.md'))
 }
 
 async function scanNestedAgentsMd(
@@ -293,14 +349,12 @@ async function scanNestedAgentsMd(
     )
     for (const dir of dirs) {
       const dirPath = join(projectPath, dir)
-      try {
-        const agentPath = join(dirPath, 'AGENTS.md')
-        const content = await readFile(agentPath, 'utf-8')
-        if (content.trim()) {
-          const relativePath = resolve(projectPath, dir)
-          results.push({ path: relativePath, content })
-        }
-      } catch {
+      const agentPath = join(dirPath, 'AGENTS.md')
+      const content = await readCachedInstructionFile(agentPath)
+      if (content.trim()) {
+        const relativePath = resolve(projectPath, dir)
+        results.push({ path: relativePath, content })
+      } else {
         const nested = await scanNestedAgentsMd(dirPath, depth - 1)
         results.push(...nested)
       }
