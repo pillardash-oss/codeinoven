@@ -3417,9 +3417,7 @@ export class ChatEngine {
           text: driverText,
           attachments,
           systemPrompt: [
-            activeBrainstormTurn
-              ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT
-              : SPEC_BRAINSTORM_SYSTEM_PROMPT,
+            activeBrainstormTurn ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT : '',
             activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
             !activeBrainstormTurn && settings.assignmentMode === true
               ? ASSIGNMENT_GENERATION_INSTRUCTION
@@ -3505,11 +3503,13 @@ export class ChatEngine {
         checkpointId
       )
       this.markSessionWorking(sessionId)
+      const behaviorMode =
+        specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
       const behaviorPrompt = await this.getBehaviorPrompt(
         projectId,
         threadId,
         projectPath,
-        specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
+        behaviorMode
       )
       const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
         ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
@@ -3525,7 +3525,6 @@ export class ChatEngine {
         attachments,
         systemPrompt:
           [
-            specAction === 'implement' ? SPEC_IMPLEMENT_SYSTEM_PROMPT : '',
             isChatThread
               ? chatFileSystemEnabled
                 ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
@@ -3536,8 +3535,8 @@ export class ChatEngine {
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
             utilityInstructions,
-            specAction === 'implement' ? undefined : MERMAID_OUTPUT_INSTRUCTION,
-            settings.engineeringMode ? undefined : QUESTION_TOOL_INSTRUCTION,
+            behaviorMode === 'chat' ? MERMAID_OUTPUT_INSTRUCTION : undefined,
+            behaviorMode === 'chat' ? QUESTION_TOOL_INSTRUCTION : undefined,
             historyRecap
           ]
             .filter(Boolean)

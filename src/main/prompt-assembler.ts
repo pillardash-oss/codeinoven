@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises'
 import { join, resolve } from 'path'
+import { createHash } from 'node:crypto'
 import { APP_NAME } from '../lib/brand'
 import type { MemoryService } from './memory-service'
 
@@ -42,6 +43,35 @@ export interface DriverInfo {
  * - `'chat'` — engineering prompts are omitted while shared behavior and memory remain active.
  */
 export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
+
+/**
+ * Collapse every whitespace run into a single space so structurally identical
+ * instruction layers hash equally regardless of line wrapping or indentation.
+ * Used only to derive normalized development hashes — the content itself is
+ * never logged or emitted.
+ */
+export function normalizeLayerContent(content: string): string {
+  return content.replace(/\s+/gu, ' ').trim()
+}
+
+/** Stable development hash of a layer's normalized content. */
+export function layerDevHash(content: string): string {
+  return createHash('sha256').update(normalizeLayerContent(content), 'utf8').digest('hex')
+}
+
+export interface LayerSizeReport {
+  /** Raw character count of the layer content. */
+  characters: number
+  /** Heuristic token estimate (~4 characters per token) for development
+   *  accounting. Does not include content. */
+  estimatedTokens: number
+}
+
+/** Per-layer character/token accounting without exposing the layer content. */
+export function layerSize(content: string): LayerSizeReport {
+  const characters = content.length
+  return { characters, estimatedTokens: Math.ceil(characters / 4) }
+}
 
 export class PromptAssembler {
   constructor(private readonly memoryService: MemoryService) {}

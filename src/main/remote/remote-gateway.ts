@@ -370,9 +370,19 @@ export class RemoteGateway {
         return
       }
       peer.buffer = Buffer.concat([peer.buffer, chunk])
-      const { frames, remaining } = decodeWsFrames(peer.buffer)
-      peer.buffer = remaining
-      for (const frame of frames) {
+      let frames: ReturnType<typeof decodeWsFrames>
+      try {
+        frames = decodeWsFrames(peer.buffer)
+      } catch {
+        // A frame declaring a payload above the decoded-size cap must not
+        // allocate or copy it; drop the peer instead of crashing the process.
+        peer.closing = true
+        closePeer()
+        socket.destroy()
+        return
+      }
+      peer.buffer = frames.remaining
+      for (const frame of frames.frames) {
         // RFC 6455 requires browser/client frames to be masked. This gateway
         // intentionally does not implement fragmented messages; rejecting
         // them keeps buffering bounded and the parser deterministic.

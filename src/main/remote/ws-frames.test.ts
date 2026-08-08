@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_FRAME_PAYLOAD_BYTES,
+  WsFrameTooLargeError,
   acceptWebSocketKey,
   buildUpgradeResponse,
   decodeWsFrames,
@@ -70,5 +72,40 @@ describe('encodeTextFrame / decodeWsFrames', () => {
     const { frames } = decodeWsFrames(encodeCloseFrame())
     expect(frames).toHaveLength(1)
     expect(frames[0].opcode).toBe(0x8)
+  })
+
+  it('throws before allocating when a 16-bit frame declares an oversized payload', () => {
+    // Declares 4096 payload bytes but carries none of them.
+    const frame = Buffer.from([0x81, 126, 0x10, 0x00])
+    expect(() => decodeWsFrames(frame, { maxPayloadBytes: 100 })).toThrow(WsFrameTooLargeError)
+  })
+
+  it('throws before allocating when a 64-bit frame declares an oversized payload', () => {
+    // Declares 2^32 payload bytes but carries only the 10-byte header.
+    const frame = Buffer.from([0x81, 127, 0, 0, 0, 0x01, 0, 0, 0, 0])
+    expect(() => decodeWsFrames(frame, { maxPayloadBytes: 100 })).toThrow(
+      'ws-frame-payload-too-large'
+    )
+  })
+
+  it('rejects frames above the default 1 MiB cap even without explicit options', () => {
+    // Declares MAX_FRAME_PAYLOAD_BYTES + 1 payload bytes (64-bit length form):
+    // 0x00000000_00100001 = 1,048,577.
+    const header = Buffer.from([0x81, 127, 0, 0, 0, 0, 0, 0x10, 0x00, 0x01])
+    try {
+      decodeWsFrames(header)
+      expect.unreachable('oversized frame must throw')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WsFrameTooLargeError)
+      expect((error as WsFrameTooLargeError).declaredBytes).toBe(MAX_FRAME_PAYLOAD_BYTES + 1)
+    }
+  })
+
+  it('accepts a frame sized exactly at the configured cap', () => {
+    const payload = 'x'.repeat(100)
+    const frame = encodeMaskedTextFrame(payload)
+    const { frames } = decodeWsFrames(frame, { maxPayloadBytes: 100 })
+    expect(frames).toHaveLength(1)
+    expect(frames[0].payload.toString('utf8')).toBe(payload)
   })
 })
