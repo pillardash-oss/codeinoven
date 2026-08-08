@@ -5838,7 +5838,7 @@
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             busy={auditBusy}
-            onViewReport={openAssignmentAuditWork}
+            onViewReport={openAuditStudio}
             onComplete={completeAudit}
             onCancel={returnAuditToOffer}
             onReaudit={reaudit}
