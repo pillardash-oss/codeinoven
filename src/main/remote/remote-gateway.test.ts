@@ -515,7 +515,7 @@ describe('RemoteGateway', () => {
     const { gateway } = await makeGateway()
     try {
       const info = gateway.info()
-      expect(info.pairingUrl).toMatch(/^https:\/\/.+:\d+\/remote\.html\?pair=/)
+      expect(info.pairingUrl).toMatch(/^https:\/\/.+:\d+\/remote\.html#pair=/)
       expect(info.pairingUrl).toContain(encodeURIComponent(SECRET))
       expect(info.url).not.toContain('pair=')
     } finally {

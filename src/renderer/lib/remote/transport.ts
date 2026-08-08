@@ -13,12 +13,7 @@
 
 import type { PeerRef } from './routes'
 import { remoteLog } from './logger'
-import {
-  createHandshakeToken,
-  decryptPayload,
-  encryptPayload,
-  generateNonce
-} from './session-security'
+import { createHandshakeToken, decryptPayload, encryptPayload } from './session-security'
 
 export type TransportEvent =
   | { kind: 'connecting'; peer: PeerRef }
@@ -71,8 +66,9 @@ interface HelloMessage {
 }
 
 interface ReplyMessage {
-  type: 'remote:hello:ok' | 'remote:error'
+  type: 'remote:challenge' | 'remote:hello:ok' | 'remote:error'
   reason?: string
+  nonce?: string
 }
 
 interface DataEnvelope {
@@ -85,10 +81,16 @@ function parseReply(data: string): ReplyMessage | null {
     const parsed: unknown = JSON.parse(data)
     if (typeof parsed !== 'object' || parsed === null) return null
     const record = parsed as Record<string, unknown>
-    if (record.type !== 'remote:hello:ok' && record.type !== 'remote:error') return null
+    if (
+      record.type !== 'remote:challenge' &&
+      record.type !== 'remote:hello:ok' &&
+      record.type !== 'remote:error'
+    )
+      return null
     return {
       type: record.type,
-      reason: typeof record.reason === 'string' ? record.reason : undefined
+      reason: typeof record.reason === 'string' ? record.reason : undefined,
+      nonce: typeof record.nonce === 'string' ? record.nonce : undefined
     }
   } catch {
     return null
@@ -146,20 +148,6 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
       socket.onopen = () => {
         if (settled) return
         options.onEvent({ kind: 'handshaking', peer })
-        const nonce = generateNonce()
-        const secret = options.authSecret ?? ''
-        void createHandshakeToken(secret, nonce).then((token) => {
-          if (settled) return
-          const hello: HelloMessage = {
-            type: 'remote:hello',
-            version: 1,
-            nonce,
-            token,
-            ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-            ...(options.deviceName ? { deviceName: options.deviceName } : {})
-          }
-          socket.send(JSON.stringify(hello))
-        })
         handshakeTimer = setTimeout(() => {
           remoteLog.error(`LAN handshake timed out for ${url}`)
           finish('failed', { kind: 'disconnected', peer, reason: 'handshake-timeout' })
@@ -170,6 +158,22 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
       socket.onmessage = (event) => {
         const reply = parseReply(event.data)
         if (reply) {
+          if (reply.type === 'remote:challenge' && reply.nonce) {
+            const secret = options.authSecret ?? ''
+            void createHandshakeToken(secret, reply.nonce).then((token) => {
+              if (settled) return
+              const hello: HelloMessage = {
+                type: 'remote:hello',
+                version: 2,
+                nonce: reply.nonce ?? '',
+                token,
+                ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+                ...(options.deviceName ? { deviceName: options.deviceName } : {})
+              }
+              socket.send(JSON.stringify(hello))
+            })
+            return
+          }
           if (reply.type === 'remote:hello:ok') {
             open = true
             remoteLog.dev(`LAN handshake accepted for ${url}`)

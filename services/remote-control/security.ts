@@ -1,10 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  randomBytes,
-  timingSafeEqual
-} from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { password as bunPassword } from 'bun'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -50,32 +44,6 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 export function validatePassword(value: unknown): string | null {
   if (typeof value !== 'string') return null
   return value.length >= 12 && value.length <= 256 ? value : null
-}
-
-export function loadMasterKey(encoded: string | undefined): Buffer {
-  if (!encoded) throw new Error('REMOTE_MASTER_KEY must be a base64-encoded 32-byte key')
-  const key = Buffer.from(encoded, 'base64')
-  if (key.length !== 32) throw new Error('REMOTE_MASTER_KEY must decode to exactly 32 bytes')
-  return key
-}
-
-export function encryptSecret(key: Buffer, plaintext: string): string {
-  const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', key, iv)
-  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()])
-  const tag = cipher.getAuthTag()
-  return `${iv.toString('base64url')}.${tag.toString('base64url')}.${ciphertext.toString('base64url')}`
-}
-
-export function decryptSecret(key: Buffer, envelope: string): string {
-  const [ivValue, tagValue, ciphertextValue] = envelope.split('.')
-  if (!ivValue || !tagValue || !ciphertextValue) throw new Error('Invalid encrypted secret')
-  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivValue, 'base64url'))
-  decipher.setAuthTag(Buffer.from(tagValue, 'base64url'))
-  return Buffer.concat([
-    decipher.update(Buffer.from(ciphertextValue, 'base64url')),
-    decipher.final()
-  ]).toString('utf8')
 }
 
 export function createEnrollmentCode(): string {

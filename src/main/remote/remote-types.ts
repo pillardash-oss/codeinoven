@@ -14,10 +14,20 @@ export interface RemoteGatewayInfo {
   url: string | null
   /**
    * The pairing URL a human scans as a QR code. Embeds the shared peer secret
-   * as `?pair=<secret>` so the phone opens the PWA pre-configured and connects
+   * as `#pair=<secret>` so the phone opens the PWA pre-configured and connects
    * automatically — no typing, no account.
    */
   pairingUrl: string | null
+}
+
+export interface RemoteCloudStatus {
+  configured: boolean
+  state: 'disabled' | 'enrollment-pending' | 'connecting' | 'online' | 'offline' | 'error'
+  apiOrigin: string | null
+  desktopId: string | null
+  enrollmentCode: string | null
+  enrollmentExpiresAt: number | null
+  lastError: string | null
 }
 
 /** A phone device currently connected to the desktop gateway. */
@@ -34,6 +44,7 @@ export interface RemoteModeStatus {
   phase: RemoteModePhase
   blockedQuit: boolean
   gateway: RemoteGatewayInfo
+  cloud: RemoteCloudStatus
   /** Connected phone devices, newest first. */
   devices: RemoteDeviceInfo[]
 }

@@ -32,6 +32,10 @@ export function installRemoteApiShim(): void {
       get: async () => ({}) as never,
       update: async () => ({}) as never
     } as AppBridge['config'],
+    windowInfo: {
+      platform: 'linux',
+      trafficLight: { present: false, side: null, offset: 0 }
+    },
     readFile: async () => new Uint8Array(0),
     getPathForFile: () => ''
   }

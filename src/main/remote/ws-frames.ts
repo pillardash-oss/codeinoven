@@ -62,6 +62,8 @@ export function encodeCloseFrame(): Buffer {
 
 export interface DecodedWsFrame {
   opcode: number
+  fin: boolean
+  masked: boolean
   payload: Buffer
 }
 
@@ -76,6 +78,7 @@ export function decodeWsFrames(buffer: Buffer): { frames: DecodedWsFrame[]; rema
     const first = buffer[offset]
     const second = buffer[offset + 1]
     const opcode = first & 0x0f
+    const fin = (first & 0x80) !== 0
     const masked = (second & 0x80) !== 0
     let length = second & 0x7f
     let headerLength = 2
@@ -105,7 +108,7 @@ export function decodeWsFrames(buffer: Buffer): { frames: DecodedWsFrame[]; rema
         payload[index] ^= mask[index % 4]
       }
     }
-    frames.push({ opcode, payload })
+    frames.push({ opcode, fin, masked, payload })
     offset += totalLength
   }
   return { frames, remaining: buffer.subarray(offset) }

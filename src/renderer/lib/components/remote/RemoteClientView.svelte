@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, RefreshCw, ShieldCheck } from '@lucide/svelte'
+  import { ArrowLeft, Globe2, RefreshCw, ShieldCheck } from '@lucide/svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import RemoteStatus from '$lib/components/remote/RemoteStatus.svelte'
   import PeerConnect from '$lib/components/remote/PeerConnect.svelte'
@@ -109,6 +109,26 @@
     await invoke('remote:disconnectDevice', deviceId)
   }
 
+  async function beginCloudEnrollment(): Promise<void> {
+    if (!desktop || busy) return
+    busy = true
+    try {
+      remoteStatus = await invoke('remote:beginCloudEnrollment')
+    } finally {
+      busy = false
+    }
+  }
+
+  async function resetCloudEnrollment(): Promise<void> {
+    if (!desktop || busy) return
+    busy = true
+    try {
+      remoteStatus = await invoke('remote:resetCloudEnrollment')
+    } finally {
+      busy = false
+    }
+  }
+
   async function syncRemoteStatus(): Promise<void> {
     if (!desktop) return
     try {
@@ -138,7 +158,7 @@
     return unsubscribe
   })
 
-  // The phone client reads `?pair=<secret>` from the QR code and connects
+  // The phone client reads `#pair=<secret>` from the QR code and connects
   // automatically — the human never types anything. If the first attempt fails
   // (e.g. the desktop was mid-restart), retry in the background so returning to
   // the page eventually connects without a manual tap.
@@ -146,8 +166,9 @@
   let pwaRetryTimer: number | null = null
   $effect(() => {
     if (!pwa || typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const pair = params.get('pair')
+    const queryParams = new URLSearchParams(window.location.search)
+    const fragmentParams = new URLSearchParams(window.location.hash.slice(1))
+    const pair = fragmentParams.get('pair') ?? queryParams.get('pair')
     if (pair && pair.length > 0 && pwaPair.length === 0) {
       pwaPair = pair
       secret = pair
@@ -255,6 +276,65 @@
             >
           </p>
         {/if}
+      </section>
+
+      <section class="rounded-xl border bg-surface p-4" aria-label="Internet access">
+        <div class="flex items-center gap-1.5">
+          <Globe2 size={14} class="text-muted" />
+          <h2 class="text-sm font-semibold text-foreground">Internet access</h2>
+        </div>
+        {#if !remoteStatus?.cloud.configured}
+          <p class="mt-2 text-xs leading-relaxed text-muted">
+            Set <span class="font-mono text-foreground">REMOTE_API_ORIGIN</span> to your hosted mobile
+            origin to enroll this desktop.
+          </p>
+        {:else if remoteStatus.cloud.state === 'enrollment-pending'}
+          <p class="mt-2 text-xs text-muted">Enter this one-time code in the mobile PWA:</p>
+          <p
+            class="mt-2 select-all rounded-lg bg-raised px-3 py-2 text-center font-mono text-sm font-semibold tracking-wider text-foreground"
+          >
+            {remoteStatus.cloud.enrollmentCode}
+          </p>
+          <p class="mt-2 text-[11px] text-dimmed">
+            The code expires automatically. It never contains the desktop control secret.
+          </p>
+        {:else}
+          <div class="mt-2 flex items-center justify-between gap-3 text-xs">
+            <span class="text-muted">Cloud relay</span>
+            <span class="font-medium text-foreground">
+              {remoteStatus?.cloud.state === 'online'
+                ? 'Online'
+                : remoteStatus?.cloud.state === 'connecting'
+                  ? 'Connecting…'
+                  : remoteStatus?.cloud.desktopId
+                    ? 'Offline'
+                    : 'Not enrolled'}
+            </span>
+          </div>
+          {#if remoteStatus?.cloud.lastError}
+            <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
+          {/if}
+        {/if}
+        <div class="mt-3 flex gap-2">
+          <button
+            type="button"
+            class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
+            disabled={busy || !remoteStatus?.cloud.configured}
+            onclick={() => void beginCloudEnrollment()}
+          >
+            {remoteStatus?.cloud.desktopId ? 'Create new code' : 'Enroll desktop'}
+          </button>
+          {#if remoteStatus?.cloud.desktopId}
+            <button
+              type="button"
+              class="h-9 rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              onclick={() => void resetCloudEnrollment()}
+            >
+              Remove enrollment
+            </button>
+          {/if}
+        </div>
       </section>
     {/if}
 

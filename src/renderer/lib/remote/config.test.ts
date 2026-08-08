@@ -87,13 +87,13 @@ describe('buildRemoteConfig', () => {
     expect(config.relay.enabled).toBe(false)
   })
 
-  it('enables the relay in production once the credentials are provisioned', () => {
+  it('does not expose the legacy environment-token relay in production', () => {
     const config = buildRemoteConfig({
       ...PROD,
       RELAY_URL: 'wss://relay.example.test',
       RELAY_TOKEN: 'relay-token'
     })
-    expect(config.relay.enabled).toBe(true)
+    expect(config.relay.enabled).toBe(false)
     expect(config.relay.url).toBe('wss://relay.example.test')
     expect(config.relay.token).toBe('relay-token')
   })
@@ -141,7 +141,7 @@ describe('buildRemoteConfig', () => {
     expect(config.relay.enabled).toBe(false)
   })
 
-  it('accepts a complete production configuration', () => {
+  it('keeps production renderer secrets out of the effective configuration', () => {
     const config = buildRemoteConfig({
       ...PROD,
       RELAY_URL: 'wss://relay.example.test',
@@ -154,7 +154,7 @@ describe('buildRemoteConfig', () => {
 
     expect(config.relay.token).toBe('token')
     expect(config.relay.mqtt.username).toBe('user')
-    expect(config.peer.authSecret).toBe('peer-secret')
+    expect(config.peer.authSecret).toBeNull()
   })
 
   it('honours an explicit production override regardless of env flags', () => {

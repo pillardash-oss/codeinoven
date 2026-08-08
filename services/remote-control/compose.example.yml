@@ -1,0 +1,33 @@
+services:
+  remote-control:
+    build:
+      context: ../..
+      dockerfile: services/remote-control/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      REMOTE_ALLOWED_ORIGINS: https://${REMOTE_PUBLIC_HOST:?set REMOTE_PUBLIC_HOST}
+    volumes:
+      - remote-data:/data
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      - remote-control
+    environment:
+      REMOTE_PUBLIC_HOST: ${REMOTE_PUBLIC_HOST:?set REMOTE_PUBLIC_HOST}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
+      - ../../out/renderer:/srv/codeinoven/renderer:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  remote-data:
+  caddy-data:
+  caddy-config:
