@@ -80,6 +80,20 @@ let splashWindow: BrowserWindow | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
+// The database, IPC handlers, and remote gateway are process-wide resources.
+// Running two app instances against them causes duplicate startup work and port
+// collisions, so subsequent launches focus the existing window and exit.
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
+
+app.on('second-instance', () => {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  if (!window.isVisible()) window.show()
+  window.focus()
+})
+
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
  * button) or quits (Cmd+Q / Dock) while threads are still working, the close
@@ -366,14 +380,9 @@ function startBackgroundBoot(): void {
       .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
 
     try {
-      ptyService.register()
-      providerConnection.register()
-      harnessUpdateService.register()
-      harnessInstallService.register()
-      harnessManifestService.register()
       providerConnection.warmUp()
     } catch (error) {
-      Logger.error('Provider service startup failed (non-fatal):', error)
+      Logger.error('Provider service warm-up failed (non-fatal):', error)
     }
 
     try {
@@ -518,6 +527,7 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
 void app
   .whenReady()
   .then(async () => {
+    if (!hasSingleInstanceLock) return
     // Show the splash before any awaited work so the app feels instant.
     createSplashWindow()
 
@@ -555,7 +565,9 @@ void app
     Logger.info(`${APP_NAME} main process initialized`)
 
     updaterService.setChatEngine(chatEngine)
-    updaterService.addActivitySource({ activeSessionCount: () => ptyService.activeSessionCount() })
+    updaterService.addActivitySource({
+      activeSessionCount: () => ptyService.activeSessionCount()
+    })
     updaterService.addActivitySource({
       activeSessionCount: () => (remoteMode.status.blockedQuit ? 1 : 0)
     })
@@ -574,6 +586,11 @@ void app
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
     remoteMode.registerIpc()
     chatEngine.register()
+    ptyService.register()
+    providerConnection.register()
+    harnessUpdateService.register()
+    harnessInstallService.register()
+    harnessManifestService.register()
     chatEngine.attachRetryScheduler(retryScheduler)
 
     // Deny every permission request from the renderer (camera, microphone,
