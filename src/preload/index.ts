@@ -319,7 +319,8 @@ const INVOKE_CHANNELS = [
   'remote:listDevices',
   'remote:disconnectDevice',
   'remote:renameDevice',
-  'app:confirmClose'
+  'app:confirmClose',
+  'app:requestClose'
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>
@@ -338,6 +339,7 @@ const EVENT_CHANNELS = [
   'thread:updated',
   'window:beforeQuit',
   'window:confirmClose',
+  'window:closeShortcut',
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',

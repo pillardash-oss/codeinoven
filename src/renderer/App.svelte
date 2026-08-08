@@ -13,6 +13,7 @@
   import { toast } from 'svelte-sonner'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import {
     rendererRecovery,
     isSettingsSection,
@@ -838,12 +839,16 @@
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }
     })
+    const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
+      handleCloseShortcut()
+    })
     updaterState.init()
     return () => {
       unsubscribeClick()
       unsubscribeShow()
       unsubscribeConfirmClose()
       unsubscribeThreadUpdated()
+      unsubscribeCloseShortcut()
       updaterState.destroy()
     }
   })
@@ -857,6 +862,43 @@
     })
     return unsubscribe
   })
+
+  /**
+   * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
+   * or the open thread. Only when nothing is active does it close the window
+   * (through the working-threads confirmation gate in the main process).
+   */
+  function handleCloseShortcut(): void {
+    // App-managed palettes first — they float above every view.
+    if (fileSearchPaletteOpen) {
+      fileSearchPaletteOpen = false
+      resetFileSearch()
+      return
+    }
+    if (commandPaletteOpen) {
+      commandPaletteOpen = false
+      return
+    }
+    // Reusable modals (Modal / DockableModal) register their close behavior.
+    if (requestCloseTopOverlay()) return
+    // Bits-ui dialogs and element-level overlay Escape handlers.
+    if (closeTopVisibleDialog()) return
+    // On a Settings page: leave back to the previous view.
+    if (isSettingsView(activeView)) {
+      navigate(lastViewBeforeSettings)
+      return
+    }
+    // An open thread: deselect it back to the thread list.
+    if (
+      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      workspaceState.selectedThread
+    ) {
+      workspaceState.clearThread()
+      return
+    }
+    // Nothing active — close the window through the confirmation gate.
+    void invoke('app:requestClose')
+  }
 
   function handleFind(): void {
     const active = document.activeElement instanceof Element ? document.activeElement : null
@@ -890,6 +932,16 @@
   /** Global application shortcuts. */
   $effect(() => {
     const onKeydown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
+        // Primary path is the main process `before-input-event` → the
+        // `window:closeShortcut` event. This is a fallback for platforms where
+        // the key still reaches the renderer (the main process preventDefaults
+        // the page keydown, so this normally never fires twice).
+        e.preventDefault()
+        if (e.repeat) return
+        handleCloseShortcut()
+        return
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault()
         if (e.repeat) return

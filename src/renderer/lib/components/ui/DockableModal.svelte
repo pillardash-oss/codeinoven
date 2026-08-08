@@ -3,6 +3,7 @@
   import type { Snippet } from 'svelte'
   import { APP_SLUG } from '$shared/brand'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { registerOverlayClose } from '$lib/overlay-close.svelte'
 
   interface Props {
     open: boolean
@@ -176,6 +177,21 @@
     }
     persistSnapshot()
   }
+
+  // Let the Cmd/Ctrl+W "close the active surface" shortcut mirror the Escape
+  // behavior: expand a minimized panel, close a closable one, otherwise minimize.
+  $effect(() => {
+    if (!open) return
+    return registerOverlayClose(() => {
+      if (minimized) {
+        onExpand()
+      } else if (closable) {
+        onClose()
+      } else {
+        onMinimize()
+      }
+    })
+  })
 </script>
 
 <svelte:window

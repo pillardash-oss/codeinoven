@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X } from '@lucide/svelte'
   import type { Snippet } from 'svelte'
+  import { registerOverlayClose } from '$lib/overlay-close.svelte'
 
   interface Props {
     open: boolean
@@ -18,6 +19,12 @@
     lg: 'max-w-2xl',
     xl: 'max-w-5xl'
   } as const
+
+  // Let the Cmd/Ctrl+W "close the active surface" shortcut close this modal.
+  $effect(() => {
+    if (!open) return
+    return registerOverlayClose(onClose)
+  })
 </script>
 
 <svelte:window
