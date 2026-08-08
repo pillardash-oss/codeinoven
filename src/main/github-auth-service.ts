@@ -20,11 +20,21 @@ const GITHUB_TOKEN_REF = 'github_oauth_token'
 const DEVICE_CODE_URL = 'https://github.com/login/device/code'
 const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token'
 const GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
+const REFRESH_GRANT_TYPE = 'refresh_token'
 
 const NETWORK_TIMEOUT_MS = 15_000
+const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000
 
 /** Refuse to inline an avatar larger than this (guards the IPC payload). */
 const AVATAR_MAX_BYTES = 512 * 1024
+
+interface StoredGitHubCredentials {
+  version: 1
+  accessToken: string
+  refreshToken?: string
+  accessTokenExpiresAt?: number
+  refreshTokenExpiresAt?: number
+}
 
 /**
  * GitHub device-flow OAuth for the Git sidebar.
@@ -38,6 +48,8 @@ const AVATAR_MAX_BYTES = 512 * 1024
  * never serialized into IPC payloads or logs.
  */
 export class GitHubAuthService {
+  private refreshPromise: Promise<string | null> | null = null
+
   constructor(private readonly vault: SecretVault) {}
 
   /**
@@ -82,7 +94,7 @@ export class GitHubAuthService {
 
   /** Resolve the public profile of the signed-in user (never the token). */
   private async fetchUserProfile(): Promise<GitHubAuthStatus['user']> {
-    const token = await this.vault.resolve(GITHUB_TOKEN_REF)
+    const token = await this.resolveToken()
     if (!token) return null
     try {
       const controller = new AbortController()
@@ -159,7 +171,7 @@ export class GitHubAuthService {
       const record = response as Record<string, unknown>
       const token = this.readString(record, 'access_token')
       if (token) {
-        await this.vault.save(token, GITHUB_TOKEN_REF)
+        await this.saveCredentials(record)
         Logger.info('GitHub OAuth token stored in secure vault')
         return { status: 'authorized' }
       }
@@ -181,13 +193,97 @@ export class GitHubAuthService {
     }
   }
 
-  async resolveToken(): Promise<string | null> {
+  async resolveToken(forceRefresh = false): Promise<string | null> {
     if (!(await this.vault.exists(GITHUB_TOKEN_REF))) return null
-    return this.vault.resolve(GITHUB_TOKEN_REF)
+    const stored = this.parseCredentials(await this.vault.resolve(GITHUB_TOKEN_REF))
+    if (!stored.refreshToken) return stored.accessToken
+
+    const now = Date.now()
+    const shouldRefresh =
+      forceRefresh ||
+      (stored.accessTokenExpiresAt !== undefined &&
+        stored.accessTokenExpiresAt - now <= TOKEN_REFRESH_LEEWAY_MS)
+    if (!shouldRefresh) return stored.accessToken
+    if (stored.refreshTokenExpiresAt !== undefined && stored.refreshTokenExpiresAt <= now) {
+      return stored.accessToken
+    }
+    if (this.refreshPromise) return this.refreshPromise
+
+    const refresh = this.refreshCredentials(stored)
+    this.refreshPromise = refresh
+    try {
+      return await refresh
+    } finally {
+      if (this.refreshPromise === refresh) this.refreshPromise = null
+    }
   }
 
   async logout(): Promise<void> {
     await this.vault.remove(GITHUB_TOKEN_REF)
+  }
+
+  private async refreshCredentials(stored: StoredGitHubCredentials): Promise<string | null> {
+    if (!stored.refreshToken) return stored.accessToken
+    const response = await this.postJson(ACCESS_TOKEN_URL, {
+      client_id: this.clientId,
+      grant_type: REFRESH_GRANT_TYPE,
+      refresh_token: stored.refreshToken
+    })
+    const record = response as Record<string, unknown>
+    const accessToken = this.readString(record, 'access_token')
+    if (!accessToken) {
+      const error = this.readString(record, 'error') ?? 'unknown_error'
+      throw new Error(`GitHub token refresh failed: ${error}`)
+    }
+    await this.saveCredentials(record, stored.refreshToken)
+    Logger.info('GitHub OAuth token refreshed')
+    return accessToken
+  }
+
+  private async saveCredentials(
+    record: Record<string, unknown>,
+    fallbackRefreshToken?: string
+  ): Promise<void> {
+    const accessToken = this.readString(record, 'access_token')
+    if (!accessToken) throw new Error('GitHub token response did not include an access token')
+    const now = Date.now()
+    const expiresIn = this.readNumber(record, 'expires_in')
+    const refreshTokenExpiresIn = this.readNumber(record, 'refresh_token_expires_in')
+    const refreshToken = this.readString(record, 'refresh_token') ?? fallbackRefreshToken
+    const credentials: StoredGitHubCredentials = {
+      version: 1,
+      accessToken,
+      ...(refreshToken ? { refreshToken } : {}),
+      ...(expiresIn > 0 ? { accessTokenExpiresAt: now + expiresIn * 1000 } : {}),
+      ...(refreshTokenExpiresIn > 0
+        ? { refreshTokenExpiresAt: now + refreshTokenExpiresIn * 1000 }
+        : {})
+    }
+    await this.vault.save(JSON.stringify(credentials), GITHUB_TOKEN_REF)
+  }
+
+  private parseCredentials(value: string): StoredGitHubCredentials {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      if (typeof parsed !== 'object' || parsed === null) throw new Error('Invalid credentials')
+      const record = parsed as Record<string, unknown>
+      const accessToken = this.readString(record, 'accessToken')
+      if (record['version'] !== 1 || !accessToken) throw new Error('Invalid credentials')
+      const refreshToken = this.readString(record, 'refreshToken')
+      const accessTokenExpiresAt = this.readNumber(record, 'accessTokenExpiresAt')
+      const refreshTokenExpiresAt = this.readNumber(record, 'refreshTokenExpiresAt')
+      return {
+        version: 1,
+        accessToken,
+        ...(refreshToken ? { refreshToken } : {}),
+        ...(accessTokenExpiresAt > 0 ? { accessTokenExpiresAt } : {}),
+        ...(refreshTokenExpiresAt > 0 ? { refreshTokenExpiresAt } : {})
+      }
+    } catch {
+      // Existing installations stored the access token directly. Keep accepting
+      // it; the next successful device flow migrates the entry to versioned JSON.
+      return { version: 1, accessToken: value }
+    }
   }
 
   private async postJson(url: string, body: Record<string, string>): Promise<unknown> {

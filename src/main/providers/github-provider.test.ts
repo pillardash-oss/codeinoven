@@ -78,13 +78,30 @@ describe('GitHubProvider', () => {
     }
   })
 
-  it('surfaces errors without leaking the Authorization header', async () => {
+  it('refreshes once after a 401 and still surfaces errors without leaking credentials', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'Bad credentials' }, 401))
     const provider = new GitHubProvider('ghp_never_leak_this')
 
     await expect(
       provider.mergePullRequest({ owner: 'acme', repo: 'app', pullNumber: 1, method: 'squash' })
     ).rejects.toThrow('Provider returned HTTP 401: Bad credentials')
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'Bad credentials' }, 401))
+    fetchMock.mockResolvedValueOnce(jsonResponse({ merged: true, message: 'Pull request merged' }))
+    const refreshAccessToken = vi.fn().mockResolvedValue('ghu_refreshed')
+    const refreshableProvider = new GitHubProvider('ghu_expired', undefined, refreshAccessToken)
+
+    await expect(
+      refreshableProvider.mergePullRequest({
+        owner: 'acme',
+        repo: 'app',
+        pullNumber: 2,
+        method: 'squash'
+      })
+    ).resolves.toMatchObject({ number: 2 })
+    expect(refreshAccessToken).toHaveBeenCalledOnce()
+    const retryHeaders = fetchMock.mock.calls[2]?.[1]?.headers as Record<string, string>
+    expect(retryHeaders['Authorization']).toBe('Bearer ghu_refreshed')
   })
 
   it('lists pull requests and maps each to a reference', async () => {

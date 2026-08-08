@@ -47,7 +47,8 @@ const USER_AGENT = 'CodeInOven'
 export class GitHubProvider implements GitProvider {
   constructor(
     private readonly token: string,
-    private readonly baseUrl = resolveProviderBaseUrl()
+    private readonly baseUrl = resolveProviderBaseUrl(),
+    private readonly refreshAccessToken?: () => Promise<string | null>
   ) {}
 
   async createPullRequest(draft: PrDraft): Promise<PullRequestReference> {
@@ -343,17 +344,15 @@ export class GitHubProvider implements GitProvider {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), PROVIDER_FETCH_TIMEOUT_MS)
     try {
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        headers: {
-          Accept: GITHUB_API_ACCEPT,
-          'X-GitHub-Api-Version': GITHUB_API_VERSION,
-          'User-Agent': USER_AGENT,
-          Authorization: `Bearer ${this.token}`,
-          ...init.headers
-        },
-        signal: controller.signal
-      })
+      let token = this.token
+      let response = await this.fetch(path, init, token, controller.signal)
+      if (response.status === 401 && this.refreshAccessToken) {
+        const refreshedToken = await this.refreshAccessToken()
+        if (refreshedToken && refreshedToken !== token) {
+          token = refreshedToken
+          response = await this.fetch(path, init, token, controller.signal)
+        }
+      }
       if (!response.ok) {
         const message = await this.readErrorMessage(response)
         throw new Error(`Provider returned HTTP ${response.status}${message ? `: ${message}` : ''}`)
@@ -368,6 +367,25 @@ export class GitHubProvider implements GitProvider {
     } finally {
       clearTimeout(timer)
     }
+  }
+
+  private fetch(
+    path: string,
+    init: RequestInit,
+    token: string,
+    signal: AbortSignal
+  ): Promise<Response> {
+    return fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        Accept: GITHUB_API_ACCEPT,
+        'X-GitHub-Api-Version': GITHUB_API_VERSION,
+        'User-Agent': USER_AGENT,
+        Authorization: `Bearer ${token}`,
+        ...init.headers
+      },
+      signal
+    })
   }
 
   /** Read a provider error body's `message` field without touching headers. */
