@@ -7,9 +7,7 @@
     assignment: AssignmentPlan
     threads: Thread[]
     auditThread?: Thread
-    auditState?: Thread['auditState']
     finalComplete?: boolean
-    reportAvailable?: boolean
     selectedThreadId: string
     width: number
     coordinatorWorking: boolean
@@ -26,9 +24,7 @@
     assignment,
     threads,
     auditThread,
-    auditState,
     finalComplete = false,
-    reportAvailable = false,
     selectedThreadId,
     width,
     coordinatorWorking,
@@ -79,7 +75,6 @@
   const stalled = $derived(
     completed < assignment.content.tasks.length && !coordinatorWorking && !workersWorking
   )
-  const auditWorkAvailable = $derived(auditState === 'offered' && !finalComplete)
 
   function clampWidth(nextWidth: number): number {
     const viewportMaximum = Math.max(MIN_WIDTH, window.innerWidth - 480)
@@ -196,7 +191,7 @@
         {/if}
         <ArrowUpRight size={13} />
       </button>
-      {#if auditWorkAvailable && onOpenAuditWork}
+      {#if onOpenAuditWork}
         <button
           type="button"
           class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
@@ -206,7 +201,7 @@
           Audit Work
         </button>
       {/if}
-      {#if reportAvailable && !finalComplete && onViewReport}
+      {#if onViewReport}
         <button
           type="button"
           class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"

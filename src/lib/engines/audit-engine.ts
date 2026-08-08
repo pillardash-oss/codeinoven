@@ -6,6 +6,7 @@ import type {
   AuditReport,
   AuditReportContent,
   AuditSectionId,
+  Project,
   SpecProvenance
 } from '../types'
 import { exportAuditReportMarkdown } from '../audit/audit-markdown'
@@ -61,13 +62,30 @@ export class AuditEngine {
       createdAt: now,
       updatedAt: now
     }
-    this.writeStored(report)
+    await this.write(report)
     return report
   }
 
   getActive(projectId: string, threadId: string): AuditReport | null {
     const row = this.db.get<{ data: string }>(
       'SELECT data FROM audit_reports WHERE project_id=? AND thread_id=? ORDER BY version DESC LIMIT 1',
+      projectId,
+      threadId
+    )
+    return row ? (JSON.parse(row.data) as AuditReport) : null
+  }
+
+  /** Fetch one persisted audit report version, or null when it does not exist. */
+  getVersion(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number
+  ): AuditReport | null {
+    const row = this.db.get<{ data: string }>(
+      'SELECT data FROM audit_reports WHERE report_id=? AND version=? AND project_id=? AND thread_id=?',
+      reportId,
+      version,
       projectId,
       threadId
     )
@@ -84,7 +102,7 @@ export class AuditEngine {
 
   async save(report: AuditReport): Promise<AuditReport> {
     const updated = { ...report, updatedAt: this.now() }
-    this.writeStored(updated)
+    await this.write(updated)
     return updated
   }
 
@@ -173,8 +191,16 @@ export class AuditEngine {
 
   private async write(report: AuditReport): Promise<void> {
     this.writeStored(report)
+    // Remote projects have no local filesystem root to materialize into; the DB
+    // remains the source of truth there. Local projects always get the markdown
+    // artifacts so agents and the file system can read the report.
+    let project: Project
+    try {
+      project = requireLocalProject(this.db, report.projectId)
+    } catch {
+      return
+    }
     const featureSlug = await ensureFeatureSlug(this.db, report.projectId, report.threadId)
-    const project = requireLocalProject(this.db, report.projectId)
     const markdown = exportAuditReportMarkdown(report)
     await Promise.all([
       this.storage.writeProjectSpecRaw(
