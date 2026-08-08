@@ -102,6 +102,7 @@ describe('handshake enforcement across routes', () => {
 
     const connectPromise = transport.connect()
     socket.open()
+    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'server-challenge' }))
     await vi.waitFor(() => {
       expect(socket.sent.length).toBe(1)
     })

@@ -1,0 +1,21 @@
+{$REMOTE_PUBLIC_HOST} {
+  encode zstd gzip
+
+  @backend path /v1/* /healthz
+  handle @backend {
+    reverse_proxy remote-control:8877
+  }
+
+  handle {
+    root * /srv/codeinoven/renderer
+    try_files {path} /remote.html
+    header {
+      Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+      Referrer-Policy no-referrer
+      X-Content-Type-Options nosniff
+      X-Frame-Options DENY
+      Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+    file_server
+  }
+}

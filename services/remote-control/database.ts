@@ -1,5 +1,11 @@
 import { Database } from 'bun:sqlite'
-import type { AuthenticatedSession, DesktopRecord, EnrollmentRecord, UserRecord } from './types'
+import type {
+  AuthenticatedSession,
+  DesktopRecord,
+  EnrollmentRecord,
+  MobileDeviceRecord,
+  UserRecord
+} from './types'
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -30,6 +36,7 @@ CREATE TABLE IF NOT EXISTS desktops (
   user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   platform TEXT NOT NULL,
+  lan_endpoint TEXT,
   token_hash TEXT NOT NULL UNIQUE,
   control_secret_cipher TEXT NOT NULL,
   created_at INTEGER NOT NULL,
@@ -44,9 +51,24 @@ CREATE TABLE IF NOT EXISTS enrollments (
   code_hash TEXT NOT NULL UNIQUE,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
-  claimed_at INTEGER
+  claimed_at INTEGER,
+  mobile_device_id TEXT,
+  mobile_public_key TEXT,
+  grant_ciphertext TEXT,
+  desktop_public_key TEXT
 );
 CREATE INDEX IF NOT EXISTS enrollments_expiry_idx ON enrollments(expires_at);
+
+CREATE TABLE IF NOT EXISTS mobile_devices (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS mobile_devices_user_idx ON mobile_devices(user_id, revoked_at);
 
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
@@ -65,6 +87,8 @@ export class RemoteControlDatabase {
   constructor(path: string) {
     this.db = new Database(path)
     this.db.exec(SCHEMA)
+    this.ensureLanEndpointColumn()
+    this.ensureEnrollmentGrantColumns()
   }
 
   close(): void {
@@ -111,6 +135,15 @@ export class RemoteControlDatabase {
     return row ?? null
   }
 
+  activeSessionById(id: string): AuthenticatedSession | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, user_id AS userId, expires_at AS expiresAt FROM sessions WHERE id = ? AND expires_at > ?'
+      )
+      .get(id, Date.now()) as AuthenticatedSession | undefined
+    return row ?? null
+  }
+
   touchSession(id: string): void {
     this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').run(Date.now(), id)
   }
@@ -123,19 +156,27 @@ export class RemoteControlDatabase {
     this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(Date.now())
   }
 
+  expiredSessionIds(): string[] {
+    return this.db
+      .prepare('SELECT id FROM sessions WHERE expires_at <= ?')
+      .all(Date.now())
+      .map((row) => (row as { id: string }).id)
+  }
+
   createDesktop(desktop: DesktopRecord): void {
     this.db
       .prepare(
         `INSERT INTO desktops(
-          id, user_id, name, platform, token_hash, control_secret_cipher,
+          id, user_id, name, platform, lan_endpoint, token_hash, control_secret_cipher,
           created_at, last_seen_at, revoked_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         desktop.id,
         desktop.user_id,
         desktop.name,
         desktop.platform,
+        desktop.lan_endpoint,
         desktop.token_hash,
         desktop.control_secret_cipher,
         desktop.created_at,
@@ -198,10 +239,24 @@ export class RemoteControlDatabase {
     )
   }
 
+  revokeDesktopByTokenHash(hash: string): DesktopRecord | null {
+    const desktop = this.findDesktopByTokenHash(hash)
+    if (!desktop) return null
+    this.db.prepare('UPDATE desktops SET revoked_at = ? WHERE id = ?').run(Date.now(), desktop.id)
+    return desktop
+  }
+
+  deleteEnrollmentForDesktop(desktopId: string): void {
+    this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(desktopId)
+  }
+
   createEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
     this.db
       .prepare(
-        'INSERT INTO enrollments(id, desktop_id, code_hash, created_at, expires_at, claimed_at) VALUES(?, ?, ?, ?, ?, ?)'
+        `INSERT INTO enrollments(
+          id, desktop_id, code_hash, created_at, expires_at, claimed_at,
+          mobile_device_id, mobile_public_key, grant_ciphertext, desktop_public_key
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         enrollment.id,
@@ -209,7 +264,11 @@ export class RemoteControlDatabase {
         enrollment.code_hash,
         createdAt,
         enrollment.expires_at,
-        enrollment.claimed_at
+        enrollment.claimed_at,
+        enrollment.mobile_device_id,
+        enrollment.mobile_public_key,
+        enrollment.grant_ciphertext,
+        enrollment.desktop_public_key
       )
   }
 
@@ -230,8 +289,89 @@ export class RemoteControlDatabase {
     )
   }
 
-  markEnrollmentClaimed(id: string): void {
-    this.db.prepare('UPDATE enrollments SET claimed_at = ? WHERE id = ?').run(Date.now(), id)
+  findMobileDevice(id: string): MobileDeviceRecord | null {
+    return (
+      (this.db.prepare('SELECT * FROM mobile_devices WHERE id = ?').get(id) as
+        MobileDeviceRecord | undefined) ?? null
+    )
+  }
+
+  registerMobileDevice(input: {
+    id: string
+    userId: string
+    name: string
+    publicKey: string
+  }): boolean {
+    const existing = this.findMobileDevice(input.id)
+    if (existing && existing.user_id !== input.userId) return false
+    const now = Date.now()
+    this.db
+      .prepare(
+        `INSERT INTO mobile_devices(id, user_id, name, public_key, created_at, last_seen_at, revoked_at)
+         VALUES(?, ?, ?, ?, ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+           name = excluded.name,
+           public_key = excluded.public_key,
+           last_seen_at = excluded.last_seen_at,
+           revoked_at = NULL
+         WHERE mobile_devices.user_id = excluded.user_id`
+      )
+      .run(input.id, input.userId, input.name, input.publicKey, now, now)
+    return true
+  }
+
+  bindEnrollmentToMobile(id: string, mobileDeviceId: string, mobilePublicKey: string): void {
+    this.db
+      .prepare(
+        'UPDATE enrollments SET claimed_at = ?, mobile_device_id = ?, mobile_public_key = ? WHERE id = ?'
+      )
+      .run(Date.now(), mobileDeviceId, mobilePublicKey, id)
+  }
+
+  saveDesktopGrant(
+    desktopId: string,
+    mobileDeviceId: string,
+    desktopPublicKey: string,
+    grantCiphertext: string
+  ): boolean {
+    return (
+      this.db
+        .prepare(
+          `UPDATE enrollments SET desktop_public_key = ?, grant_ciphertext = ?
+           WHERE desktop_id = ? AND mobile_device_id = ? AND claimed_at IS NOT NULL`
+        )
+        .run(desktopPublicKey, grantCiphertext, desktopId, mobileDeviceId).changes === 1
+    )
+  }
+
+  enrollmentGrant(
+    desktopId: string,
+    userId: string,
+    mobileDeviceId: string
+  ): EnrollmentRecord | null {
+    return (
+      (this.db
+        .prepare(
+          `SELECT e.* FROM enrollments e
+           JOIN desktops d ON d.id = e.desktop_id
+           JOIN mobile_devices m ON m.id = e.mobile_device_id
+           WHERE e.desktop_id = ? AND d.user_id = ? AND e.mobile_device_id = ?
+             AND d.revoked_at IS NULL AND m.revoked_at IS NULL`
+        )
+        .get(desktopId, userId, mobileDeviceId) as EnrollmentRecord | undefined) ?? null
+    )
+  }
+
+  deleteExpiredEnrollments(): void {
+    const now = Date.now()
+    this.db.prepare('DELETE FROM enrollments WHERE expires_at <= ? AND claimed_at IS NULL').run(now)
+    this.db
+      .prepare(
+        `DELETE FROM desktops
+         WHERE user_id IS NULL AND revoked_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM enrollments e WHERE e.desktop_id = desktops.id)`
+      )
+      .run()
   }
 
   audit(kind: string, userId: string | null, desktopId: string | null): void {
@@ -240,5 +380,26 @@ export class RemoteControlDatabase {
         'INSERT INTO audit_events(id, user_id, desktop_id, kind, metadata_json, created_at) VALUES(?, ?, ?, ?, ?, ?)'
       )
       .run(crypto.randomUUID(), userId, desktopId, kind, '{}', Date.now())
+  }
+
+  private ensureLanEndpointColumn(): void {
+    const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(desktops)').all()
+    if (!columns.some((column) => column.name === 'lan_endpoint')) {
+      this.db.exec('ALTER TABLE desktops ADD COLUMN lan_endpoint TEXT')
+    }
+  }
+
+  private ensureEnrollmentGrantColumns(): void {
+    const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(enrollments)').all()
+    const names = new Set(columns.map((column) => column.name))
+    const additions = [
+      ['mobile_device_id', 'TEXT'],
+      ['mobile_public_key', 'TEXT'],
+      ['grant_ciphertext', 'TEXT'],
+      ['desktop_public_key', 'TEXT']
+    ] as const
+    for (const [name, type] of additions) {
+      if (!names.has(name)) this.db.exec(`ALTER TABLE enrollments ADD COLUMN ${name} ${type}`)
+    }
   }
 }

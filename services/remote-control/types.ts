@@ -5,6 +5,8 @@ export interface RelaySocketData {
   role: RelayRole | null
   desktopId: string | null
   userId: string | null
+  sessionId: string | null
+  mobileDeviceId: string | null
   connectedAt: number
 }
 
@@ -19,6 +21,7 @@ export interface DesktopRecord {
   user_id: string | null
   name: string
   platform: string
+  lan_endpoint: string | null
   token_hash: string
   control_secret_cipher: string
   created_at: number
@@ -40,4 +43,18 @@ export interface EnrollmentRecord {
   code_hash: string
   expires_at: number
   claimed_at: number | null
+  mobile_device_id: string | null
+  mobile_public_key: string | null
+  grant_ciphertext: string | null
+  desktop_public_key: string | null
+}
+
+export interface MobileDeviceRecord {
+  id: string
+  user_id: string
+  name: string
+  public_key: string
+  created_at: number
+  last_seen_at: number
+  revoked_at: number | null
 }

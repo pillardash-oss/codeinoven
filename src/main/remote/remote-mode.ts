@@ -10,10 +10,14 @@
 
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { join } from 'node:path'
+import { hostname, platform } from 'node:os'
 import { Logger } from '../logger'
+import { SecretVault } from '../secret-vault'
+import { CloudRelayClient } from './cloud-relay-client'
+import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
-import type { RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
+import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { loadOrCreatePeerSecret } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
@@ -43,6 +47,23 @@ export interface RemoteModeOptions {
 }
 
 export const DEFAULT_LAN_PORT = 4455
+const CLOUD_CONFIG_PATH = 'remote/cloud-access.json'
+
+interface CloudAccessConfig {
+  apiOrigin: string
+  desktopId: string
+  enrollmentId: string
+  tokenRef: string
+  enrollmentExpiresAt: number
+}
+
+interface EnrollmentResponse {
+  enrollmentId: string
+  desktopId: string
+  deviceToken: string | null
+  code: string
+  expiresAt: number
+}
 
 /** Read a positive integer env var, falling back to `fallback`. */
 export function remoteEnvInt(name: string, fallback: number): number {
@@ -55,6 +76,43 @@ export function remoteEnvInt(name: string, fallback: number): number {
 /** Resolve the shared peer auth secret for the gateway, if configured. */
 export function remotePeerSecret(): string | null {
   return process.env['PEER_SECRET_AUTH'] ?? process.env['VITE_PEER_SECRET_AUTH'] ?? null
+}
+
+function resolveCloudApiOrigin(): string | null {
+  const value = process.env['REMOTE_API_ORIGIN']?.trim()
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) return null
+    url.pathname = '/'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (
+    typeof record['enrollmentId'] !== 'string' ||
+    typeof record['desktopId'] !== 'string' ||
+    (record['deviceToken'] !== null && typeof record['deviceToken'] !== 'string') ||
+    typeof record['code'] !== 'string' ||
+    typeof record['expiresAt'] !== 'number'
+  ) {
+    return null
+  }
+  return {
+    enrollmentId: record['enrollmentId'],
+    desktopId: record['desktopId'],
+    deviceToken: record['deviceToken'] as string | null,
+    code: record['code'],
+    expiresAt: record['expiresAt']
+  }
 }
 
 export class RemoteModeController {
@@ -70,6 +128,14 @@ export class RemoteModeController {
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage-engine').StorageEngine | null
   private readonly onSessionActiveChange?: (active: boolean) => void
+  private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
+  private readonly vault: SecretVault | null
+  private cloudConfig: CloudAccessConfig | null = null
+  private cloudRelay: CloudRelayClient | null = null
+  private cloudReconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
+  private cloudReconnectAttempt = 0
+  private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
   /** Persisted device-name overrides, keyed by device id. */
@@ -83,7 +149,17 @@ export class RemoteModeController {
     this.iconPath = options.iconPath
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
+    this.vault = this.storage ? new SecretVault(this.storage) : null
     this.onSessionActiveChange = options.onSessionActiveChange
+    this.cloudStatus = {
+      configured: this.cloudApiOrigin !== null,
+      state: 'disabled',
+      apiOrigin: this.cloudApiOrigin,
+      desktopId: null,
+      enrollmentCode: null,
+      enrollmentExpiresAt: null,
+      lastError: null
+    }
   }
 
   /** Load persisted device names so renames survive restarts. */
@@ -108,6 +184,7 @@ export class RemoteModeController {
     await this.loadDeviceNames()
     this.keepAlive.dispatch({ type: 'arm' })
     await this.startGateway()
+    await this.restoreCloudAccess()
     this.ensureTray()
     this.syncTray()
     this.broadcast()
@@ -137,7 +214,10 @@ export class RemoteModeController {
    * restarts. The QR pairing URL embeds this secret.
    */
   private async resolvePeerSecret(): Promise<string | null> {
-    if (this.peerSecret) return this.peerSecret
+    if (this.peerSecret) {
+      this.resolvedPeerSecret = this.peerSecret
+      return this.peerSecret
+    }
     if (this.resolvedPeerSecret !== null) return this.resolvedPeerSecret
     try {
       this.resolvedPeerSecret = await loadOrCreatePeerSecret(
@@ -161,6 +241,7 @@ export class RemoteModeController {
         url: null,
         pairingUrl: null
       },
+      cloud: { ...this.cloudStatus },
       devices: this.devices
     }
   }
@@ -173,7 +254,7 @@ export class RemoteModeController {
   toggleRemoteMode(enabled: boolean): RemoteModeStatus {
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
-      void this.startGateway()
+      void this.startGateway().then(() => this.restoreCloudAccess())
       this.ensureTray()
       void this.persistEnabled(true)
       Logger.info('Remote mode enabled')
@@ -184,6 +265,7 @@ export class RemoteModeController {
       this.tray?.destroy()
       this.tray = null
       this.onSessionActiveChange?.(false)
+      this.stopCloudAccess()
       void this.persistEnabled(false)
       Logger.info('Remote mode disabled')
     }
@@ -222,7 +304,7 @@ export class RemoteModeController {
     } else if (!isLive && wasLive) {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
-      setRemoteEventForwarder(null)
+      if (this.cloudStatus.state !== 'online') setRemoteEventForwarder(null)
       this.onSessionActiveChange?.(false)
     }
     this.syncTray()
@@ -254,6 +336,7 @@ export class RemoteModeController {
   private installEventForwarder(): void {
     setRemoteEventForwarder((channel, payload) => {
       this.gateway?.sendToPeer({ rpc: 'event', channel, payload })
+      void this.cloudRelay?.send({ rpc: 'event', channel, payload })
     })
   }
 
@@ -265,6 +348,7 @@ export class RemoteModeController {
   async dispose(): Promise<void> {
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
+    this.stopCloudAccess()
     this.onSessionActiveChange?.(false)
     if (this.gateway) {
       const gateway = this.gateway
@@ -310,6 +394,278 @@ export class RemoteModeController {
         return this.renameDevice(typeof deviceId === 'string' ? deviceId : '', String(name))
       }
     )
+    ipcMain.handle('remote:beginCloudEnrollment', (): Promise<RemoteModeStatus> => {
+      return this.beginCloudEnrollment()
+    })
+    ipcMain.handle('remote:resetCloudEnrollment', (): Promise<RemoteModeStatus> => {
+      return this.resetCloudEnrollment()
+    })
+  }
+
+  async beginCloudEnrollment(): Promise<RemoteModeStatus> {
+    if (!this.cloudApiOrigin) throw new Error('REMOTE_API_ORIGIN is not configured')
+    if (!this.storage || !this.vault) throw new Error('Secure desktop storage is unavailable')
+    if (!this.vault.isAvailable()) throw new Error('OS credential encryption is unavailable')
+    if (!(await this.resolvePeerSecret())) throw new Error('Remote control secret is unavailable')
+
+    const previous =
+      this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
+    const existingToken = previous?.tokenRef ? await this.vault.resolve(previous.tokenRef) : null
+
+    this.stopCloudAccess()
+    this.cloudStatus = {
+      ...this.cloudStatus,
+      state: 'connecting',
+      lastError: null,
+      enrollmentCode: null,
+      enrollmentExpiresAt: null
+    }
+    this.broadcast()
+
+    const response = await fetch(new URL('/v1/device-enrollments', this.cloudApiOrigin), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(existingToken ? { Authorization: `Bearer ${existingToken}` } : {})
+      },
+      body: JSON.stringify({
+        name: hostname(),
+        platform: platform(),
+        lanEndpoint: this.gateway?.info().url ?? null
+      })
+    })
+    if (!response.ok) {
+      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment failed' }
+      this.broadcast()
+      throw new Error('Cloud desktop enrollment failed')
+    }
+    const payload = parseEnrollmentResponse(await response.json())
+    if (!payload) throw new Error('Cloud service returned an invalid enrollment response')
+
+    const deviceToken = payload.deviceToken ?? existingToken
+    if (!deviceToken) throw new Error('Cloud service did not issue a desktop credential')
+    const tokenRef = await this.vault.save(deviceToken, previous?.tokenRef)
+    this.cloudConfig = {
+      apiOrigin: this.cloudApiOrigin,
+      desktopId: payload.desktopId,
+      enrollmentId: payload.enrollmentId,
+      tokenRef,
+      enrollmentExpiresAt: payload.expiresAt
+    }
+    await this.storage.write(CLOUD_CONFIG_PATH, this.cloudConfig)
+    if (!this.remoteModeActive) this.toggleRemoteMode(true)
+    this.cloudStatus = {
+      configured: true,
+      state: 'enrollment-pending',
+      apiOrigin: this.cloudApiOrigin,
+      desktopId: payload.desktopId,
+      enrollmentCode: payload.code,
+      enrollmentExpiresAt: payload.expiresAt,
+      lastError: null
+    }
+    this.scheduleEnrollmentPoll(0)
+    this.broadcast()
+    return this.status
+  }
+
+  async resetCloudEnrollment(): Promise<RemoteModeStatus> {
+    const config =
+      this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
+    if (config && this.vault) {
+      const token = await this.vault.resolve(config.tokenRef)
+      const response = await fetch(
+        new URL(`/v1/device-enrollments/${encodeURIComponent(config.desktopId)}`, config.apiOrigin),
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (!response.ok && response.status !== 404) {
+        throw new Error('Could not revoke desktop access from the remote service')
+      }
+    }
+    this.stopCloudAccess()
+    if (config?.tokenRef && this.vault) {
+      await this.vault.remove(config.tokenRef)
+    }
+    if (this.storage) await this.storage.remove(CLOUD_CONFIG_PATH)
+    this.cloudConfig = null
+    this.cloudStatus = {
+      configured: this.cloudApiOrigin !== null,
+      state: 'disabled',
+      apiOrigin: this.cloudApiOrigin,
+      desktopId: null,
+      enrollmentCode: null,
+      enrollmentExpiresAt: null,
+      lastError: null
+    }
+    this.broadcast()
+    return this.status
+  }
+
+  private async restoreCloudAccess(): Promise<void> {
+    if (!this.remoteModeActive || !this.storage || !this.vault || !this.cloudApiOrigin) return
+    const config = await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)
+    if (!config || config.apiOrigin !== this.cloudApiOrigin) return
+    this.cloudConfig = config
+    this.cloudStatus = {
+      ...this.cloudStatus,
+      state: 'connecting',
+      desktopId: config.desktopId,
+      enrollmentExpiresAt: config.enrollmentExpiresAt,
+      lastError: null
+    }
+    this.broadcast()
+    await this.checkEnrollmentStatus()
+  }
+
+  private scheduleEnrollmentPoll(delayMs: number): void {
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudPollTimer = setTimeout(() => void this.checkEnrollmentStatus(), delayMs)
+  }
+
+  private async checkEnrollmentStatus(): Promise<void> {
+    const config = this.cloudConfig
+    if (!config || !this.vault || !this.remoteModeActive) return
+    try {
+      const token = await this.vault.resolve(config.tokenRef)
+      const response = await fetch(
+        new URL(
+          `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/status`,
+          config.apiOrigin
+        ),
+        { headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (!response.ok) throw new Error('Enrollment status rejected')
+      const payload = (await response.json()) as Record<string, unknown>
+      if (payload['revoked'] === true) {
+        this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Desktop revoked' }
+        this.broadcast()
+        return
+      }
+      if (payload['claimed'] === true) {
+        this.cloudStatus = {
+          ...this.cloudStatus,
+          state: 'connecting',
+          enrollmentCode: null,
+          lastError: null
+        }
+        if (payload['grantReady'] !== true) {
+          const mobileDeviceId = payload['mobileDeviceId']
+          const mobilePublicKey = payload['mobilePublicKey']
+          const controlSecret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
+          if (
+            typeof mobileDeviceId !== 'string' ||
+            typeof mobilePublicKey !== 'object' ||
+            mobilePublicKey === null ||
+            !controlSecret
+          ) {
+            throw new Error('Enrollment grant request is invalid')
+          }
+          const grant = await createDesktopControlGrant({
+            desktopId: config.desktopId,
+            mobileDeviceId,
+            mobilePublicKey: mobilePublicKey as JsonWebKey,
+            controlSecret
+          })
+          const grantResponse = await fetch(
+            new URL(
+              `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/grant`,
+              config.apiOrigin
+            ),
+            {
+              method: 'PUT',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                mobileDeviceId,
+                desktopPublicKey: grant.desktopPublicKey,
+                ciphertext: grant.ciphertext
+              })
+            }
+          )
+          if (!grantResponse.ok) throw new Error('Control grant upload failed')
+        }
+        this.connectCloudRelay(token)
+        return
+      }
+      if (Date.now() >= config.enrollmentExpiresAt) {
+        this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment expired' }
+        this.broadcast()
+        return
+      }
+      this.cloudStatus = { ...this.cloudStatus, state: 'enrollment-pending' }
+      this.broadcast()
+      this.scheduleEnrollmentPoll(2_000)
+    } catch (error) {
+      Logger.error('Remote cloud enrollment status failed:', error)
+      this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'Service unreachable' }
+      this.broadcast()
+      this.scheduleEnrollmentPoll(5_000)
+    }
+  }
+
+  private connectCloudRelay(deviceToken: string): void {
+    const config = this.cloudConfig
+    const controlSecret = this.resolvedPeerSecret
+    if (!config || !controlSecret || !this.rpc || this.cloudRelay) return
+    const relay = new CloudRelayClient({
+      apiOrigin: config.apiOrigin,
+      deviceToken,
+      controlSecret,
+      onAuthenticated: () => {
+        this.cloudReconnectAttempt = 0
+        this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+        this.installEventForwarder()
+        this.broadcast()
+      },
+      onDisconnected: (reason) => {
+        if (this.cloudRelay !== relay) return
+        this.cloudRelay = null
+        this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
+        this.broadcast()
+        this.scheduleCloudReconnect()
+      },
+      onRpc: async (channel, args) =>
+        this.rpc?.dispatch({ id: 0, channel, args }) ?? {
+          ok: false,
+          message: 'RPC unavailable'
+        }
+    })
+    this.cloudRelay = relay
+    relay.connect()
+  }
+
+  private scheduleCloudReconnect(): void {
+    if (!this.remoteModeActive || this.cloudReconnectTimer) return
+    const delay = Math.min(30_000, 1_000 * 2 ** this.cloudReconnectAttempt)
+    this.cloudReconnectAttempt += 1
+    this.cloudReconnectTimer = setTimeout(() => {
+      this.cloudReconnectTimer = null
+      void this.resumeCloudRelay()
+    }, delay)
+  }
+
+  private async resumeCloudRelay(): Promise<void> {
+    if (!this.cloudConfig || !this.vault || this.cloudRelay) return
+    try {
+      this.connectCloudRelay(await this.vault.resolve(this.cloudConfig.tokenRef))
+    } catch (error) {
+      Logger.error('Remote cloud relay credential failed:', error)
+      this.scheduleCloudReconnect()
+    }
+  }
+
+  private stopCloudAccess(): void {
+    if (this.cloudReconnectTimer) clearTimeout(this.cloudReconnectTimer)
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudReconnectTimer = null
+    this.cloudPollTimer = null
+    this.cloudRelay?.close()
+    this.cloudRelay = null
+    if (this.devices.length === 0) setRemoteEventForwarder(null)
+    if (this.cloudStatus.state !== 'disabled') {
+      this.cloudStatus = { ...this.cloudStatus, state: 'offline' }
+    }
   }
 
   private async startGateway(): Promise<void> {
@@ -326,6 +682,7 @@ export class RemoteModeController {
       peerSecret,
       certificateDir: join(app.getPath('userData'), 'remote-gateway'),
       staticRoot: this.staticRoot,
+      allowedOrigins: this.cloudApiOrigin ? [new URL(this.cloudApiOrigin).origin] : [],
       handlers: {
         onDevicesChange: (devices) => this.onDevicesChange(devices),
         onRpc: this.rpc

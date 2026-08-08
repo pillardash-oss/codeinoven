@@ -54,6 +54,15 @@ export function createRemoteTray(
     phase: 'IDLE',
     blockedQuit: false,
     gateway: { listening: false, port: 0, url: null, pairingUrl: null },
+    cloud: {
+      configured: false,
+      state: 'disabled',
+      apiOrigin: null,
+      desktopId: null,
+      enrollmentCode: null,
+      enrollmentExpiresAt: null,
+      lastError: null
+    },
     devices: []
   }
 

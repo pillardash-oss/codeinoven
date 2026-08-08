@@ -18,7 +18,7 @@
  * Only successful responses are cached — caching a 404 would poison the cache
  * and keep replaying that failure.
  */
-const CACHE_NAME = 'codeinoven-remote-v2'
+const CACHE_NAME = 'codeinoven-remote-v3'
 const CORE_ASSETS = ['./remote.html', './manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
@@ -87,6 +87,10 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
+  // Account, desktop, and connection responses may contain private state or a
+  // desktop control secret. They must always go to the network and must never
+  // enter Cache Storage or be replayed after sign-out/revocation.
+  if (url.pathname.startsWith('/v1/') || url.pathname === '/healthz') return
 
   const isShell = request.mode === 'navigate' || url.pathname.endsWith('/remote.html')
 

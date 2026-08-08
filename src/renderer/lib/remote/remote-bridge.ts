@@ -74,7 +74,10 @@ class RemoteRpcBridge {
   /** Invoke a desktop channel; returns the result or rejects on error. */
   async invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     this.ensureListening()
-    if (remoteSession.snapshot.route.kind !== 'LAN_CONNECTED') {
+    if (
+      remoteSession.snapshot.route.kind !== 'LAN_CONNECTED' &&
+      remoteSession.snapshot.route.kind !== 'RELAY_CONNECTED'
+    ) {
       throw new Error('Not connected to the desktop yet')
     }
     const id = this.nextId++
@@ -108,7 +111,10 @@ export const remoteBridge = new RemoteRpcBridge()
 
 /** Whether the phone is connected to a desktop over the remote bridge. */
 export function isRemoteConnected(): boolean {
-  return remoteSession.snapshot.route.kind === 'LAN_CONNECTED'
+  return (
+    remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
+    remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
+  )
 }
 
 /** Convenience wrapper used by the phone chat stores. */

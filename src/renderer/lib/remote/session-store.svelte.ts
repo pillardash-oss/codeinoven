@@ -18,6 +18,7 @@ import { loadRemoteConfig } from './config'
 import { discoverPeers, type DiscoveredPeer } from './discovery'
 import { createLanTransport, type LanTransport } from './transport'
 import { createRelayClient, type RelayClient } from './relay'
+import { createAccountRelayClient, type AccountRelayClient } from './account-relay'
 import { remoteLog } from './logger'
 import { loadDeviceIdentity, type DeviceIdentity } from './device-identity'
 import { SvelteSet } from 'svelte/reactivity'
@@ -32,12 +33,25 @@ export interface RemoteConnectionTarget {
   scheme: 'ws' | 'wss'
 }
 
+interface AccountDesktopRoute {
+  desktopId: string
+  mobileDeviceId: string
+  controlSecret: string
+  relayPath?: string
+  lanTarget?: RemoteConnectionTarget
+}
+
 export class RemoteSessionStore {
   snapshot = $state<SessionSnapshot>(initialSession())
 
   private secret = ''
   private lanTransport: LanTransport | null = null
   private relayClient: RelayClient | null = null
+  private accountRelayClient: AccountRelayClient | null = null
+  private accountRoute: AccountDesktopRoute | null = null
+  private lanUpgradeTimer: number | null = null
+  private accountReconnectTimer: number | null = null
+  private accountReconnectAttempt = 0
   private messageListeners = new SvelteSet<(plaintext: string) => void>()
   private identity: DeviceIdentity = loadDeviceIdentity()
 
@@ -62,7 +76,65 @@ export class RemoteSessionStore {
       await this.relayClient.send(data)
       return
     }
+    if (this.accountRelayClient) {
+      await this.accountRelayClient.send(data)
+      return
+    }
     remoteLog.error('Remote session payload send attempted before the channel was open')
+  }
+
+  /** Connect to one account-owned desktop through the hosted same-origin relay. */
+  async connectCloud(input: {
+    desktopId: string
+    mobileDeviceId: string
+    controlSecret: string
+    relayPath?: string
+  }): Promise<void> {
+    this.secret = input.controlSecret
+    this.closeChannels()
+    this.dispatch({ type: 'relayProbeStart' })
+    const client = createAccountRelayClient({
+      desktopId: input.desktopId,
+      mobileDeviceId: input.mobileDeviceId,
+      controlSecret: input.controlSecret,
+      relayPath: input.relayPath,
+      onEvent: (event) => {
+        if (event.kind === 'message') {
+          this.routeMessage(event.data)
+          return
+        }
+        if (event.kind === 'disconnected' && this.accountRelayClient === client) {
+          this.accountRelayClient = null
+          this.dispatch({ type: 'disconnected', reason: event.reason })
+          this.scheduleAccountReconnect()
+        }
+      }
+    })
+    this.accountRelayClient = client
+    const outcome = await client.connect()
+    if (outcome === 'open') {
+      this.accountReconnectAttempt = 0
+      this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
+      this.scheduleLanUpgrade()
+      return
+    }
+    this.accountRelayClient = null
+    this.dispatch({
+      type: 'disconnected',
+      reason: outcome === 'offline' ? 'desktop-offline' : 'relay-unreachable'
+    })
+    this.scheduleAccountReconnect()
+  }
+
+  /** Prefer an authenticated direct LAN route, then use the account relay. */
+  async connectAccountDesktop(input: AccountDesktopRoute): Promise<void> {
+    this.accountRoute = input
+    if (input.lanTarget) {
+      await this.connect(input.controlSecret, input.lanTarget)
+      this.accountRoute = input
+      if (this.snapshot.route.kind === 'LAN_CONNECTED') return
+    }
+    await this.connectCloud(input)
   }
 
   private routeMessage(plaintext: string): void {
@@ -170,6 +242,7 @@ export class RemoteSessionStore {
         if (event.kind === 'disconnected' && this.lanTransport === session) {
           this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           this.lanTransport = null
+          if (this.accountRoute) void this.connectCloud(this.accountRoute)
         }
       }
     })
@@ -184,15 +257,72 @@ export class RemoteSessionStore {
 
   /** Tear down any open channel and return to DISCONNECTED. */
   disconnect(): void {
+    this.accountRoute = null
     this.closeChannels()
     this.dispatch({ type: 'disconnected' })
   }
 
   private closeChannels(): void {
+    if (this.lanUpgradeTimer !== null) window.clearTimeout(this.lanUpgradeTimer)
+    this.lanUpgradeTimer = null
+    if (this.accountReconnectTimer !== null) window.clearTimeout(this.accountReconnectTimer)
+    this.accountReconnectTimer = null
     this.lanTransport?.close()
     this.lanTransport = null
     this.relayClient?.close()
     this.relayClient = null
+    this.accountRelayClient?.close()
+    this.accountRelayClient = null
+  }
+
+  private scheduleAccountReconnect(): void {
+    if (!this.accountRoute || this.accountReconnectTimer !== null) return
+    const delay = Math.min(30_000, 1_000 * 2 ** this.accountReconnectAttempt)
+    this.accountReconnectAttempt += 1
+    this.accountReconnectTimer = window.setTimeout(() => {
+      this.accountReconnectTimer = null
+      const route = this.accountRoute
+      if (route) void this.connectCloud(route)
+    }, delay)
+  }
+
+  private scheduleLanUpgrade(): void {
+    if (!this.accountRoute?.lanTarget || this.lanUpgradeTimer !== null) return
+    this.lanUpgradeTimer = window.setTimeout(() => {
+      this.lanUpgradeTimer = null
+      void this.tryLanUpgrade()
+    }, 30_000)
+  }
+
+  private async tryLanUpgrade(): Promise<void> {
+    const route = this.accountRoute
+    const target = route?.lanTarget
+    if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
+    const peer: DiscoveredPeer = { host: target.host, port: target.port, source: 'manual' }
+    const probe = createLanTransport({
+      peer,
+      authSecret: route.controlSecret,
+      scheme: target.scheme,
+      handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
+      deviceId: this.identity.id,
+      deviceName: this.identity.name,
+      onEvent: () => undefined
+    })
+    const reachable = (await probe.connect()) === 'open'
+    probe.close()
+    if (!reachable) {
+      this.scheduleLanUpgrade()
+      return
+    }
+    this.accountRelayClient?.close()
+    this.accountRelayClient = null
+    if (await this.openLanSession(peer, route.controlSecret, target.scheme)) {
+      this.dispatch({ type: 'lanConnected', peer })
+      this.dispatch({ type: 'peerReachableChanged', reachable: true })
+      remoteLog.info('Remote session upgraded from cloud relay to LAN')
+      return
+    }
+    await this.connectCloud(route)
   }
 
   /** Update the desktop keep-alive phase surfaced to the phone client. */

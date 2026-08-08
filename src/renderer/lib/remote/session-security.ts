@@ -14,6 +14,12 @@ const decoder = new TextDecoder()
 const SALT = encoder.encode('codeinoven-remote-session')
 const PBKDF2_ITERATIONS = 120_000
 const IV_LENGTH = 12
+const PAYLOAD_VERSION = 'v2'
+const MAX_PAYLOAD_AGE_MS = 5 * 60 * 1_000
+const MAX_CLOCK_SKEW_MS = 60 * 1_000
+const MAX_REPLAY_CACHE = 4_096
+const decryptedPayloads = new Set<string>()
+const decryptingPayloads = new Set<string>()
 
 function toBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -108,25 +114,60 @@ async function deriveAesGcmKey(secret: string): Promise<CryptoKey> {
   return key
 }
 
-/** Encrypt a payload, returning `base64(iv):base64(ciphertext)`. */
+/** Encrypt a timestamp-bound payload for replay-resistant transport. */
 export async function encryptPayload(secret: string, plaintext: string): Promise<string> {
   const key = await deriveAesGcmKey(secret)
   const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH))
+  const timestamp = Date.now().toString(36)
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    { name: 'AES-GCM', iv, additionalData: encoder.encode(`${PAYLOAD_VERSION}:${timestamp}`) },
     key,
     encoder.encode(plaintext)
   )
-  return `${toBase64(iv)}:${toBase64(new Uint8Array(ciphertext))}`
+  return `${PAYLOAD_VERSION}:${timestamp}:${toBase64(iv)}:${toBase64(new Uint8Array(ciphertext))}`
 }
 
 /** Decrypt a payload produced by `encryptPayload`. */
 export async function decryptPayload(secret: string, payload: string): Promise<string> {
-  const separator = payload.indexOf(':')
-  if (separator === -1) throw new Error('malformed-encrypted-payload')
-  const iv = fromBase64(payload.slice(0, separator))
-  const ciphertext = fromBase64(payload.slice(separator + 1))
-  const key = await deriveAesGcmKey(secret)
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext)
-  return decoder.decode(plaintext)
+  if (decryptedPayloads.has(payload) || decryptingPayloads.has(payload)) {
+    throw new Error('replayed-encrypted-payload')
+  }
+  decryptingPayloads.add(payload)
+  try {
+    const parts = payload.split(':')
+    const versioned = parts[0] === PAYLOAD_VERSION
+    if ((!versioned && parts.length !== 2) || (versioned && parts.length !== 4)) {
+      throw new Error('malformed-encrypted-payload')
+    }
+    const timestamp = versioned ? parts[1] : null
+    if (timestamp) {
+      const sentAt = Number.parseInt(timestamp, 36)
+      const age = Date.now() - sentAt
+      if (!Number.isFinite(sentAt) || age > MAX_PAYLOAD_AGE_MS || age < -MAX_CLOCK_SKEW_MS) {
+        throw new Error('expired-encrypted-payload')
+      }
+    }
+    const iv = fromBase64(parts[versioned ? 2 : 0] ?? '')
+    const ciphertext = fromBase64(parts[versioned ? 3 : 1] ?? '')
+    const key = await deriveAesGcmKey(secret)
+    const plaintext = await crypto.subtle.decrypt(
+      timestamp
+        ? {
+            name: 'AES-GCM',
+            iv,
+            additionalData: encoder.encode(`${PAYLOAD_VERSION}:${timestamp}`)
+          }
+        : { name: 'AES-GCM', iv },
+      key,
+      ciphertext
+    )
+    decryptedPayloads.add(payload)
+    if (decryptedPayloads.size > MAX_REPLAY_CACHE) {
+      const oldest = decryptedPayloads.values().next().value
+      if (typeof oldest === 'string') decryptedPayloads.delete(oldest)
+    }
+    return decoder.decode(plaintext)
+  } finally {
+    decryptingPayloads.delete(payload)
+  }
 }

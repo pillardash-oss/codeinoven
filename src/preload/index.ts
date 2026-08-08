@@ -319,6 +319,8 @@ const INVOKE_CHANNELS = [
   'remote:listDevices',
   'remote:disconnectDevice',
   'remote:renameDevice',
+  'remote:beginCloudEnrollment',
+  'remote:resetCloudEnrollment',
   'app:confirmClose',
   'app:requestClose'
 ] as const satisfies readonly InvokeChannel[]

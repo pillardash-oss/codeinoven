@@ -29,6 +29,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import type { Duplex } from 'node:stream'
 import { Logger } from '../logger'
 import {
@@ -71,6 +72,8 @@ export interface RemoteGatewayOptions {
   handlers: GatewayHandlers
   /** How long an unauthenticated peer may hold a connection open. */
   unauthenticatedTimeoutMs?: number
+  /** Exact hosted PWA origins allowed to attempt an authenticated LAN upgrade. */
+  allowedOrigins?: string[]
 }
 
 interface PeerConnection {
@@ -81,6 +84,7 @@ interface PeerConnection {
   deviceId: string
   deviceName: string
   connectedAt: number
+  authChallenge: string
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -109,6 +113,7 @@ const ALLOWED_STATIC: ReadonlySet<string> = new Set([
 ])
 
 const UNAUTHENTICATED_TIMEOUT_MS = 10_000
+const MAX_PEER_BUFFER_BYTES = 1024 * 1024
 export class RemoteGateway {
   private httpsServer: HttpsServer | null = null
   private httpServer: Server | null = null
@@ -137,7 +142,7 @@ export class RemoteGateway {
       url: listening ? `https://${this.advertisedHost()}:${this.port}/remote.html` : null,
       pairingUrl:
         listening && secret
-          ? `https://${this.advertisedHost()}:${this.port}/remote.html?pair=${encodeURIComponent(secret)}`
+          ? `https://${this.advertisedHost()}:${this.port}/remote.html#pair=${encodeURIComponent(secret)}`
           : null
     }
   }
@@ -332,9 +337,11 @@ export class RemoteGateway {
       closing: false,
       deviceId: '',
       deviceName: '',
-      connectedAt: 0
+      connectedAt: 0,
+      authChallenge: randomBytes(32).toString('base64url')
     }
     this.peers.add(peer)
+    socketSend(peer, { type: 'remote:challenge', nonce: peer.authChallenge })
 
     const closePeer = (): void => {
       if (!this.peers.has(peer)) return
@@ -356,10 +363,25 @@ export class RemoteGateway {
     }, this.options.unauthenticatedTimeoutMs ?? UNAUTHENTICATED_TIMEOUT_MS) as unknown as number
 
     socket.on('data', (chunk: Buffer) => {
+      if (peer.buffer.length + chunk.length > MAX_PEER_BUFFER_BYTES) {
+        peer.closing = true
+        closePeer()
+        socket.destroy()
+        return
+      }
       peer.buffer = Buffer.concat([peer.buffer, chunk])
       const { frames, remaining } = decodeWsFrames(peer.buffer)
       peer.buffer = remaining
       for (const frame of frames) {
+        // RFC 6455 requires browser/client frames to be masked. This gateway
+        // intentionally does not implement fragmented messages; rejecting
+        // them keeps buffering bounded and the parser deterministic.
+        if (!frame.masked || !frame.fin || frame.payload.length > MAX_PEER_BUFFER_BYTES) {
+          peer.closing = true
+          closePeer()
+          socket.destroy()
+          return
+        }
         if (frame.opcode === 0x8) {
           peer.closing = true
           if (!socket.destroyed) socket.end(encodeCloseFrame())
@@ -396,6 +418,7 @@ export class RemoteGateway {
     const origin = request.headers['origin']
     if (!origin || origin === 'null') return true
     try {
+      if (this.options.allowedOrigins?.includes(new URL(origin).origin)) return true
       const stripPort = (host: string): string => host.split(':')[0]
       const originHost = stripPort(new URL(origin).host)
       if (originPolicy === 'local') {
@@ -430,7 +453,10 @@ export class RemoteGateway {
       const token = typeof record.token === 'string' ? record.token : ''
       const deviceId = typeof record.deviceId === 'string' ? record.deviceId.trim() : ''
       const deviceName = typeof record.deviceName === 'string' ? record.deviceName.trim() : ''
-      void authenticateHandshake(this.options.peerSecret, nonce, token).then((accepted) => {
+      const challengeAccepted = nonce === peer.authChallenge && peer.authChallenge.length > 0
+      peer.authChallenge = ''
+      void authenticateHandshake(this.options.peerSecret, nonce, token).then((verified) => {
+        const accepted = challengeAccepted && verified
         if (this.stopped || !this.peers.has(peer)) return
         if (!accepted) {
           socketSend(peer, { type: 'remote:error', reason: 'auth-failed' })
