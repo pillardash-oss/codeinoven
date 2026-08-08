@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
-import { readFile, stat } from 'node:fs/promises'
-import { basename, extname } from 'node:path'
+import { readFile, stat, readdir } from 'node:fs/promises'
+import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PromptAttachment } from '../lib/types'
 import {
@@ -193,9 +193,10 @@ function sniffImageMagic(buffer: Buffer): string | undefined {
 export async function assertReadablePartSource(entry: ResolvedImageEntry): Promise<void> {
   if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return
   if (/^https?:\/\//u.test(entry.attachment.url)) return
-  const path = entry.attachment.url.startsWith('file://')
-    ? fileURLToPath(entry.attachment.url)
-    : entry.attachment.url
+  const path = await resolveReadablePartPath(entry)
+  if (!path) {
+    throw new Error(`Image descriptor source is not a readable file: ${entry.source}`)
+  }
   let details
   try {
     details = await stat(path)
@@ -208,13 +209,50 @@ export async function assertReadablePartSource(entry: ResolvedImageEntry): Promi
   }
 }
 
+/**
+ * Resolve a local `part` source to a readable path. macOS screenshot names use a
+ * non-breaking space (U+00A0) between the time and AM/PM; a model echoing the path
+ * back into a tool call often normalizes it to a regular space (U+0020), so the
+ * exact path can be absent while the file exists. When the exact path is missing,
+ * scan the parent directory for a sibling whose name matches after whitespace
+ * normalization.
+ */
+export async function resolveReadablePartPath(entry: ResolvedImageEntry): Promise<string | null> {
+  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return null
+  if (/^https?:\/\//u.test(entry.attachment.url)) return null
+  const exact = entry.attachment.url.startsWith('file://')
+    ? fileURLToPath(entry.attachment.url)
+    : entry.attachment.url
+  try {
+    const details = await stat(exact)
+    return details.isFile() ? exact : null
+  } catch {
+    // Fall through to the whitespace-tolerant lookup.
+  }
+  const wanted = normalizeFilenameSpaces(basename(exact))
+  let entries: string[]
+  try {
+    entries = await readdir(dirname(exact))
+  } catch {
+    return null
+  }
+  const match = entries.find(
+    (candidate) => normalizeFilenameSpaces(candidate) === wanted && candidate !== basename(exact)
+  )
+  return match ? join(dirname(exact), match) : null
+}
+
+/** Collapse non-breaking spaces and other Unicode whitespace to U+0020. */
+function normalizeFilenameSpaces(name: string): string {
+  return name.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000\s]/gu, ' ')
+}
+
 /** Read a local part source into a data URL when the harness cannot fetch it. */
 export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Buffer | null> {
   if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return null
   if (/^https?:\/\//u.test(entry.attachment.url)) return null
-  const path = entry.attachment.url.startsWith('file://')
-    ? fileURLToPath(entry.attachment.url)
-    : entry.attachment.url
+  const path = await resolveReadablePartPath(entry)
+  if (!path) return null
   return readFile(path)
 }
 
@@ -224,7 +262,9 @@ export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Bu
  * re-reading the original file path — essential for transient sources (temp
  * screenshots, pasted images) that may be deleted before the harness resolves
  * the attachment. Remote `http(s)` and already-embedded `data:` sources are
- * returned unchanged (the harness fetches or decodes those itself).
+ * returned unchanged (the harness fetches or decodes those itself). An
+ * unresolvable local file throws a clear error instead of handing the vision
+ * session a dead file URL.
  */
 export async function resolveSelfContainedAttachment(
   entry: ResolvedImageEntry
@@ -233,8 +273,21 @@ export async function resolveSelfContainedAttachment(
     return entry.attachment
   }
   if (/^https?:\/\//u.test(entry.attachment.url)) return entry.attachment
-  const bytes = await readPartSourceBytes(entry)
-  if (bytes === null) return entry.attachment
+  const path = await resolveReadablePartPath(entry)
+  if (!path) {
+    throw new Error(
+      `Image descriptor source is not a readable file: ${entry.source}. The file may have been moved, renamed, or deleted.`
+    )
+  }
+  let bytes: Buffer
+  try {
+    bytes = await readFile(path)
+  } catch (error) {
+    throw new Error(
+      `Image descriptor source could not be read: ${entry.source}. ${error instanceof Error ? error.message : 'Unknown read error'}`,
+      { cause: error }
+    )
+  }
   const mime =
     entry.attachment.mime === 'image/*'
       ? (sniffImageMagic(bytes.subarray(0, 32)) ?? 'image/png')
