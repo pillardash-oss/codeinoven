@@ -67,7 +67,8 @@ const defaultConfig: AppConfig = {
   autoInstallUpdates: true,
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
-  imageDescriptorAskAgain: false
+  imageDescriptorAskAgain: false,
+  autoRetryAfterReset: false
 }
 
 beforeEach(async () => {
