@@ -53,6 +53,7 @@
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -1079,7 +1080,7 @@
     const project = projects.find((p) => p.id === projectId)
     if (!project?.path) return
     try {
-      await navigator.clipboard.writeText(project.path)
+      await copyText(project.path)
     } catch {
       // Clipboard not available
     }

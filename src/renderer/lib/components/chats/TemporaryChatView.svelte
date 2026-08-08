@@ -20,6 +20,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { messageId } from '$shared/id'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { isImageMime } from '$lib/mime'
@@ -110,7 +111,7 @@
 
   async function copyMessage(message: AgentMessage): Promise<void> {
     try {
-      await navigator.clipboard.writeText(textFor(message))
+      await copyText(textFor(message))
       copiedMessageId = message.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)

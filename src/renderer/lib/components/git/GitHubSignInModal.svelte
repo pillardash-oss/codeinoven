@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { gitState } from '$lib/stores/git.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { GitHubDeviceCode } from '$shared/types'
@@ -88,13 +88,13 @@
     if (!device) return
     copyError = ''
     try {
-      await invoke('clipboard:writeText', device.userCode)
+      await copyText(device.userCode)
       copied = true
       if (copyTimer) clearTimeout(copyTimer)
       copyTimer = setTimeout(() => (copied = false), 1500)
-    } catch (reason) {
+    } catch {
       copied = false
-      copyError = reason instanceof Error ? reason.message : 'The device code could not be copied.'
+      copyError = 'The device code could not be copied. Select the code and copy it manually.'
     }
   }
 
@@ -133,7 +133,7 @@
         aria-label="Copy device code"
         onclick={() => void copyCode()}
       >
-        <span class="font-mono text-3xl font-semibold tracking-[0.2em] text-foreground">
+        <span class="select-all font-mono text-3xl font-semibold tracking-[0.2em] text-foreground">
           {device.userCode}
         </span>
         {#if copied}

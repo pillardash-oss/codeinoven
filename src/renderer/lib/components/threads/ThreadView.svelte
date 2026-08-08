@@ -76,6 +76,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
@@ -4822,7 +4823,7 @@
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
-      await navigator.clipboard.writeText(messageText(msg))
+      await copyText(messageText(msg))
       copiedMessageId = msg.id
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)

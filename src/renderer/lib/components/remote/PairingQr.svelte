@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Copy, QrCode, Smartphone, Wifi } from '@lucide/svelte'
+  import { copyText } from '$lib/copy-text'
 
   interface Props {
     /** The full pairing URL to encode (includes the peer secret). */
@@ -32,7 +33,7 @@
   async function copyPairingUrl(): Promise<void> {
     if (!pairingUrl) return
     try {
-      await navigator.clipboard.writeText(pairingUrl)
+      await copyText(pairingUrl)
       copied = true
       setTimeout(() => (copied = false), 1500)
     } catch {

@@ -2,6 +2,7 @@
   import { ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -374,7 +375,7 @@
 
   async function copyText(text: string, successMessage: string): Promise<void> {
     try {
-      await invoke('clipboard:writeText', text)
+      await copyTextToClipboard(text)
       toast.success(successMessage)
     } catch (copyError) {
       toast.error(copyError instanceof Error ? copyError.message : 'Clipboard copy failed.')

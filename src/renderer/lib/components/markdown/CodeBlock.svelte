@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte'
+  import { copyText } from '$lib/copy-text'
   import { highlightCode } from './markdown'
 
   interface Props {
@@ -19,7 +20,7 @@
 
   async function copy(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
