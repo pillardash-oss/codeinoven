@@ -2823,7 +2823,9 @@ export function registerIpcHandlers(
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────
   const providerForProject = async (projectId: string): Promise<GitProvider | null> => {
     const oauthToken = await githubAuthService.resolveToken()
-    if (oauthToken) return new GitHubProvider(oauthToken)
+    if (oauthToken) {
+      return new GitHubProvider(oauthToken, undefined, () => githubAuthService.resolveToken(true))
+    }
     const tokenRef = gitCredentialRef(projectId)
     if (!(await vault.exists(tokenRef))) return null
     const token = await vault.resolve(tokenRef)

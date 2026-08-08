@@ -71,16 +71,62 @@ describe('GitHubAuthService', () => {
     })
   })
 
-  it('saves the access token to the vault when the poll succeeds', async () => {
+  it('saves refreshable credentials when the poll succeeds and rotates them when expired', async () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
-    fetchMock.mockResolvedValueOnce(jsonResponse({ access_token: 'gho_approved' }))
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        access_token: 'ghu_approved',
+        expires_in: 28_800,
+        refresh_token: 'ghr_initial',
+        refresh_token_expires_in: 15_897_600
+      })
+    )
     const vault = mockVault()
     const service = new GitHubAuthService(vault)
 
     const result = await service.pollAccessToken('device-abc')
 
     expect(result).toEqual({ status: 'authorized' })
-    expect(vault.save).toHaveBeenCalledWith('gho_approved', 'github_oauth_token')
+    const saved = JSON.parse(String(vi.mocked(vault.save).mock.calls[0]?.[0])) as Record<
+      string,
+      unknown
+    >
+    expect(saved).toMatchObject({
+      version: 1,
+      accessToken: 'ghu_approved',
+      refreshToken: 'ghr_initial'
+    })
+    expect(saved['accessTokenExpiresAt']).toEqual(expect.any(Number))
+    expect(saved['refreshTokenExpiresAt']).toEqual(expect.any(Number))
+    expect(vault.save).toHaveBeenCalledWith(expect.any(String), 'github_oauth_token')
+
+    vi.mocked(vault.exists).mockResolvedValue(true)
+    vi.mocked(vault.resolve).mockResolvedValue(
+      JSON.stringify({
+        version: 1,
+        accessToken: 'ghu_expired',
+        refreshToken: 'ghr_initial',
+        accessTokenExpiresAt: Date.now() - 1,
+        refreshTokenExpiresAt: Date.now() + 60_000
+      })
+    )
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        access_token: 'ghu_refreshed',
+        expires_in: 28_800,
+        refresh_token: 'ghr_rotated',
+        refresh_token_expires_in: 15_897_600
+      })
+    )
+
+    await expect(service.resolveToken()).resolves.toBe('ghu_refreshed')
+    const refreshRequest = fetchMock.mock.calls[1]
+    expect(refreshRequest?.[0]).toBe('https://github.com/login/oauth/access_token')
+    expect(JSON.parse(String((refreshRequest?.[1] as RequestInit | undefined)?.body))).toEqual({
+      client_id: 'Iv1.someClientId',
+      grant_type: 'refresh_token',
+      refresh_token: 'ghr_initial'
+    })
   })
 
   it('reports pending for authorization_pending and slow_down', async () => {
