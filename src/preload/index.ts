@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { readFile } from 'node:fs/promises'
 import type { AppConfig, AppConfigPatch } from '../lib/types'
 import {
   NO_TRAFFIC_LIGHT,
@@ -124,6 +123,7 @@ const INVOKE_CHANNELS = [
   'dialog:pickFile',
   'dialog:pickImage',
   'diagnostics:export',
+  'file:read',
   'file:readAsDataUrl',
   'editors:detect',
   'editors:getPreferred',
@@ -411,7 +411,9 @@ export interface AppBridge {
     platform: NodeJS.Platform
     trafficLight: TrafficLightInfo
   }
-  /** Read a local file into bytes for renderer-side preview use. */
+  /** Read a local file into bytes for renderer-side preview use. The read is
+   *  performed by the validated main-process `file:read` channel so the preload
+   *  never touches the filesystem directly and only scoped paths can be read. */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
   /** Resolve the native path of a File object dropped/pasted in the renderer. */
   getPathForFile: (file: File) => string
@@ -468,13 +470,9 @@ const bridge: AppBridge = {
       defaultTrafficLight(process.platform)
   },
   readFile: async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
-    const buffer = await readFile(path)
-    // Uint8Array clones reliably across the context bridge, unlike a raw
-    // ArrayBuffer which can arrive empty or detached in some Electron builds.
-    const bytes = new Uint8Array(
-      buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-    )
-    return bytes
+    const data = await ipcRenderer.invoke('file:read', path)
+    if (data === null) throw new Error('Could not read the requested file')
+    return data as Uint8Array<ArrayBuffer>
   },
   getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
