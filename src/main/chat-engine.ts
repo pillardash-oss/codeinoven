@@ -5059,10 +5059,11 @@ export class ChatEngine {
     assignment: AssignmentPlan,
     settings: ThreadSettings,
     prompt: string,
-    presentation?: UserMessagePresentation
+    presentation?: UserMessagePresentation,
+    force = false
   ): Promise<boolean> {
     const snapshotHash = await this.assignmentEngine.claimCoordinatorSnapshot(assignment.id)
-    if (!snapshotHash) return false
+    if (!snapshotHash && !force) return false
     try {
       await this.sendPrompt(
         assignment.projectId,
@@ -5080,9 +5081,22 @@ export class ChatEngine {
       )
       return true
     } catch (error) {
-      this.assignmentEngine.releaseCoordinatorSnapshot(assignment.id, snapshotHash)
+      if (snapshotHash)
+        this.assignmentEngine.releaseCoordinatorSnapshot(assignment.id, snapshotHash)
       throw error
     }
+  }
+
+  private assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): boolean {
+    return assignment.content.tasks.some(
+      (task) =>
+        task.status === 'ready' ||
+        task.status === 'rework' ||
+        task.status === 'reported' ||
+        task.status === 'attention' ||
+        task.status === 'failed' ||
+        (task.owner === 'senior' && task.status === 'running')
+    )
   }
 
   private coordinatorAssignmentPrompt(assignment: AssignmentPlan): string {
@@ -5093,6 +5107,7 @@ export class ChatEngine {
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks.',
+      'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for routine implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
       'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
@@ -5290,7 +5305,7 @@ export class ChatEngine {
       'POST JSON endpoints:',
       '- /v1/assignments/get — { "assignmentId": "..." }',
       '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
-      '- /v1/assignments/submit-test-evidence (worker capability only) — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }',
+      '- /v1/assignments/submit-test-evidence — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }. Worker capabilities submit for their own task; the coordinator submits for a running senior-owned task using the coordinator thread ID.',
       '- /v1/assignments/report-task — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }',
       '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }',
       '- /v1/assignments/reopen-task — { "assignmentId": "...", "taskId": "..." }',
@@ -5928,6 +5943,7 @@ export class ChatEngine {
     if (
       path !== '/v1/assignments/get' &&
       path !== '/v1/assignments/assign-task' &&
+      path !== '/v1/assignments/submit-test-evidence' &&
       path !== '/v1/assignments/report-task' &&
       path !== '/v1/assignments/review-task' &&
       path !== '/v1/assignments/reopen-task' &&
@@ -5940,7 +5956,9 @@ export class ChatEngine {
       throw new AssignmentApiRequestError(403, 'Coordinator capability cannot call this endpoint')
     }
     if (
-      (path === '/v1/assignments/review-task' || path === '/v1/assignments/report-task') &&
+      (path === '/v1/assignments/review-task' ||
+        path === '/v1/assignments/report-task' ||
+        path === '/v1/assignments/submit-test-evidence') &&
       (path === '/v1/assignments/review-task' ? body.coordinatorThreadId : body.workerThreadId) !==
         capability.threadId
     ) {
@@ -8178,17 +8196,20 @@ export class ChatEngine {
     try {
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
-        if (thread.settings?.loopMode !== true) continue
         const assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
         if (assignment?.status === 'draft') {
           continue
         }
         if (assignment && assignment.status !== 'completed') {
+          if (!this.assignmentNeedsCoordinatorTurn(assignment)) continue
+          if (!thread.settings) continue
           await this.ensureAssignmentApi()
           const dispatched = await this.sendAssignmentCoordinatorPrompt(
             assignment,
             thread.settings,
-            this.coordinatorAssignmentPrompt(assignment)
+            this.coordinatorAssignmentPrompt(assignment),
+            undefined,
+            true
           )
           if (!dispatched) {
             Logger.info('Assignment recovery skipped because its snapshot is unchanged', {
@@ -8198,6 +8219,7 @@ export class ChatEngine {
           }
           continue
         }
+        if (thread.settings?.loopMode !== true) continue
         const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
         if (activeSpec?.status !== 'approved' || thread.settings.engineeringMode) {
           continue
@@ -10005,6 +10027,10 @@ export class ChatEngine {
     this.pendingAutoTitles.delete(sessionId)
     let assistantResponse = ''
     let completedSuccessfully = false
+    let assignmentContinuation: {
+      assignment: AssignmentPlan
+      settings: ThreadSettings
+    } | null = null
     try {
       const driver = this.drivers.get(info.driverId)
       if (!driver) return
@@ -10124,8 +10150,19 @@ export class ChatEngine {
       }
       if (!failure) {
         const assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
+        const coordinatorSettings = finishedThread?.settings
         if (assignment && assignment.status !== 'completed') {
-          await this.assignmentEngine.rememberCoordinatorSnapshot(assignment.id)
+          if (
+            !awaitingUser &&
+            !userAborted &&
+            finishedThread?.assignmentRole === 'coordinator' &&
+            coordinatorSettings &&
+            this.assignmentNeedsCoordinatorTurn(assignment)
+          ) {
+            assignmentContinuation = { assignment, settings: coordinatorSettings }
+          } else {
+            await this.assignmentEngine.rememberCoordinatorSnapshot(assignment.id)
+          }
         }
         if (
           assignment?.status === 'draft' &&
@@ -10185,6 +10222,28 @@ export class ChatEngine {
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
+    }
+    if (assignmentContinuation) {
+      try {
+        await this.ensureAssignmentApi()
+        const dispatched = await this.sendAssignmentCoordinatorPrompt(
+          assignmentContinuation.assignment,
+          assignmentContinuation.settings,
+          this.coordinatorAssignmentPrompt(assignmentContinuation.assignment)
+        )
+        if (!dispatched) {
+          Logger.info('Assignment continuation skipped because its snapshot is unchanged', {
+            assignmentId: assignmentContinuation.assignment.id,
+            threadId: assignmentContinuation.assignment.coordinatorThreadId
+          })
+        }
+      } catch (error) {
+        Logger.error('Assignment continuation failed', {
+          assignmentId: assignmentContinuation.assignment.id,
+          threadId: assignmentContinuation.assignment.coordinatorThreadId,
+          error: rawErrorMessage(error)
+        })
+      }
     }
     const titleTask =
       pendingTitle && completedSuccessfully

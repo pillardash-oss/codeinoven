@@ -936,7 +936,7 @@ export class AssignmentEngine {
 
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
-    if (task.owner !== 'worker' || task.threadId !== workerThreadId) {
+    if (task.threadId !== workerThreadId) {
       throw new AssignmentEngineError('unauthorized', 'Worker thread does not own this task')
     }
     if (task.status !== 'running') {
@@ -946,11 +946,13 @@ export class AssignmentEngine {
       )
     }
     const worker = await this.threads.getThread(active.projectId, workerThreadId)
-    if (
-      worker?.assignmentId !== assignmentId ||
-      worker.assignmentTaskId !== taskId ||
-      worker.coordinatorThreadId !== active.coordinatorThreadId
-    ) {
+    const validOwner =
+      task.owner === 'senior'
+        ? workerThreadId === active.coordinatorThreadId && worker?.assignmentRole === 'coordinator'
+        : worker?.assignmentId === assignmentId &&
+          worker.assignmentTaskId === taskId &&
+          worker.coordinatorThreadId === active.coordinatorThreadId
+    if (!validOwner) {
       throw new AssignmentEngineError('unauthorized', 'Task thread metadata does not match')
     }
     if (!content.trim() || content.length > 750_000) {
