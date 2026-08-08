@@ -6,6 +6,7 @@ import type { StorageEngine } from './storage-engine'
 import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { ThreadRepo } from './database/repositories/thread-repo'
+import { AssignmentRepo } from './database/repositories/assignment-repo'
 import type { Thread, ThreadStatus } from '../lib/types'
 import type {
   AgentNotificationKind,
@@ -34,6 +35,7 @@ export class NotificationService {
   private readonly storage: StorageEngine
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
+  private readonly assignmentRepo: AssignmentRepo
   private readonly onThreadClicked: ThreadClickedHandler
   private readonly lastObservedStatus = new Map<string, ThreadStatus>()
   private readonly activeNotifications = new Map<string, Notification>()
@@ -55,6 +57,7 @@ export class NotificationService {
     this.storage = storage
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
+    this.assignmentRepo = new AssignmentRepo(db)
     this.onThreadClicked = onThreadClicked
   }
 
@@ -114,6 +117,58 @@ export class NotificationService {
   }
 
   /**
+   * The Sr. Engineer (coordinator) thread is the one that owns an Achievement
+   * or Assignment workflow and is the only orchestration thread that may
+   * notify the user.
+   */
+  private isCoordinatorThread(thread: Thread): boolean {
+    return thread.achievementRole === 'coordinator' || thread.assignmentRole === 'coordinator'
+  }
+
+  /**
+   * Any thread that participates in Achievement or Assignment orchestration:
+   * coordinator, durable workers, and auditors all carry at least one of
+   * achievementRole, assignmentRole, assignmentId, or coordinatorThreadId.
+   */
+  private isOrchestrationThread(thread: Thread): boolean {
+    return (
+      thread.achievementRole !== undefined ||
+      thread.assignmentRole !== undefined ||
+      thread.assignmentId !== undefined ||
+      thread.coordinatorThreadId !== undefined
+    )
+  }
+
+  /**
+   * Worker and auditor threads are orchestration internals: their progress and
+   * outcomes are surfaced through the coordinator instead, so they never
+   * notify on their own.
+   */
+  private isSuppressedOrchestration(thread: Thread): boolean {
+    return this.isOrchestrationThread(thread) && !this.isCoordinatorThread(thread)
+  }
+
+  /**
+   * The coordinator notifies on `completed` only when the whole process is
+   * over. While its Achievement loop is still enabled or its Assignment is
+   * still running, a `completed` turn is an intermediate step (dispatch,
+   * review) that must not notify.
+   */
+  private isPrematureCoordinatorCompletion(thread: Thread): boolean {
+    if (thread.status !== 'completed' || !this.isCoordinatorThread(thread)) return false
+    if (thread.settings?.loopMode === true) return true
+    if (thread.assignmentId) {
+      try {
+        const assignment = this.assignmentRepo.getActive(thread.projectId, thread.id)
+        if (assignment && assignment.status !== 'completed') return true
+      } catch (error) {
+        Logger.dev('Assignment state lookup failed for notification suppression:', error)
+      }
+    }
+    return false
+  }
+
+  /**
    * Dismiss every delivered notification for a thread — closes its OS
    * notifications (including side-chat notifications piped through it) and
    * drops the thread from the app-icon badge. Called whenever the thread is
@@ -152,7 +207,12 @@ export class NotificationService {
       const threads = this.threadRepo.listAll()
       const validKeys = new Set<string>()
       for (const thread of threads) {
-        if (NOTIFIABLE_STATUSES.has(thread.status) && !thread.read) {
+        if (
+          NOTIFIABLE_STATUSES.has(thread.status) &&
+          !thread.read &&
+          !this.isSuppressedOrchestration(thread) &&
+          !this.isPrematureCoordinatorCompletion(thread)
+        ) {
           validKeys.add(`${thread.projectId}:${thread.id}`)
         }
       }
@@ -213,6 +273,12 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
+    // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
+    // notifies, and only when the whole process is over or human intervention
+    // is needed. Worker/auditor threads never notify, and the coordinator's
+    // intermediate turn completions do not.
+    if (this.isSuppressedOrchestration(thread)) return
+    if (this.isPrematureCoordinatorCompletion(thread)) return
     const previous = this.lastObservedStatus.get(threadKey)
     this.lastObservedStatus.set(threadKey, thread.status)
 
@@ -303,6 +369,9 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
+    // Side chats piped through a worker or auditor parent thread stay quiet in
+    // Achievement/Assignment mode; only the Sr. Engineer thread notifies.
+    if (this.isSuppressedOrchestration(thread)) return
 
     let projectName = ''
     try {
