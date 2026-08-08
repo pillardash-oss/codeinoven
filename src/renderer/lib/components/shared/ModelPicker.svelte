@@ -8,6 +8,7 @@
     Cpu,
     GripVertical,
     ListFilter,
+    RefreshCw,
     Search,
     Star,
     SquareTerminal,
@@ -379,6 +380,15 @@
     if (projectId) void providerCatalog.refresh(projectId)
   }
 
+  /** True while the current project's catalog is being re-probed by the store. */
+  let refreshing = $derived(projectId ? providerCatalog.refreshing(projectId) : false)
+
+  /** Force a fresh catalog from the harness drivers, bypassing the TTL cache. */
+  function refreshCatalog(): void {
+    if (!projectId) return
+    void providerCatalog.refresh(projectId, true)
+  }
+
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
     close()
     onSelect(nextProviderId, nextModelId, nextHarnessId)
@@ -513,6 +523,18 @@
               onclick={() => (search = '')}
             >
               <X size={11} />
+            </button>
+          {/if}
+          {#if projectId}
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              title="Refresh model list"
+              aria-label="Refresh model list"
+              disabled={refreshing}
+              onclick={() => void refreshCatalog()}
+            >
+              <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
             </button>
           {/if}
         </div>
