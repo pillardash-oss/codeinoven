@@ -34,7 +34,7 @@ export type GitOperation =
   | 'commit'
   | 'amend'
   | 'reset'
-  | 'revert'
+  | 'delete-commit'
   | 'init'
   | 'checkout'
   | 'fetch'
@@ -738,15 +738,15 @@ export class GitState {
     }
   }
 
-  async revert(projectId: string, target: string): Promise<void> {
-    this.markBusy('revert', true)
+  async deleteCommit(projectId: string, target: string): Promise<void> {
+    this.markBusy('delete-commit', true)
     this.error = null
     try {
-      this.status = await invoke('git:revert', projectId, target)
+      this.status = await invoke('git:deleteCommit', projectId, target)
     } catch (reason) {
-      this.error = errorMessage(reason, 'Revert failed')
+      this.error = errorMessage(reason, 'Commit could not be deleted')
     } finally {
-      this.markBusy('revert', false)
+      this.markBusy('delete-commit', false)
     }
   }
 
