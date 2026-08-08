@@ -1333,6 +1333,47 @@
     if (cycleStatus === 'completed') return undefined
     return auditState
   })
+  function delegatedThreadWorking(candidate: Thread | undefined): boolean {
+    return (
+      candidate !== undefined &&
+      (candidate.status === 'planning' ||
+        candidate.status === 'executing' ||
+        agentRuns.isBusy(candidate.projectId, candidate.id))
+    )
+  }
+  let activeAssignmentWorkerCount = $derived(
+    assignmentThreads.filter((worker) => delegatedThreadWorking(worker)).length
+  )
+  let assignmentAuditorWorking = $derived(
+    assignmentAuditState === 'running' || delegatedThreadWorking(assignmentAuditThread)
+  )
+  let achievementAuditorWorking = $derived(
+    auditState === 'running' || delegatedThreadWorking(achievementAuditThread)
+  )
+  let delegatedWorkBusy = $derived.by(() => {
+    if (assignment?.coordinatorThreadId === thread.id) {
+      return activeAssignmentWorkerCount > 0 || assignmentAuditorWorking
+    }
+    return achievementOnly && thread.achievementRole !== 'auditor' && achievementAuditorWorking
+  })
+  let delegatedActivityLabel = $derived.by((): string => {
+    const assignmentCoordinator = assignment?.coordinatorThreadId === thread.id
+    const workerCount = assignmentCoordinator ? activeAssignmentWorkerCount : 0
+    const auditorWorking = assignmentCoordinator
+      ? assignmentAuditorWorking
+      : achievementAuditorWorking
+    if (workerCount > 0 && auditorWorking) {
+      return busy
+        ? `Sr. Engineer, ${workerCount} ${workerCount === 1 ? 'worker' : 'workers'}, and the auditor are working`
+        : `${workerCount} ${workerCount === 1 ? 'worker' : 'workers'} and the auditor are working`
+    }
+    if (workerCount > 0) {
+      return busy
+        ? `Sr. Engineer and ${workerCount} ${workerCount === 1 ? 'worker are' : 'workers are'} working`
+        : `${workerCount} ${workerCount === 1 ? 'worker is' : 'workers are'} working`
+    }
+    return busy ? 'Sr. Engineer and the auditor are working' : 'The auditor is working'
+  })
   let assignmentFinalComplete = $derived(assignment?.auditCycle?.status === 'completed')
   let achievementAutonomous = $derived(
     settings.loopMode === true &&
@@ -5806,10 +5847,10 @@
             />
           {/if}
 
-          {#if (busy || specFormulating) && (messages.length === 0 || messages[messages.length - 1]?.role === 'user')}
+          {#if delegatedWorkBusy || ((busy || specFormulating) && (messages.length === 0 || messages[messages.length - 1]?.role === 'user'))}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
-              <span>{activityLabel}</span>
+              <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>
               <span class="text-[11px]">…</span>
             </div>
           {/if}
@@ -6182,9 +6223,11 @@
                     ? 'Achievement is auditing the implementation…'
                     : specFormulating
                       ? 'Formulating specification…'
-                      : busy
-                        ? `${APP_NAME} is working — type to queue a message`
-                        : 'Send a message...'}
+                      : delegatedWorkBusy
+                        ? `${delegatedActivityLabel} — type to steer coordination`
+                        : busy
+                          ? `${APP_NAME} is working — type to queue a message`
+                          : 'Send a message...'}
               disabled={specFormulating || loopAuditing}
               working={busy}
               onStop={abortRun}
@@ -6292,7 +6335,7 @@
         threads={assignmentThreads}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
-        coordinatorWorking={busy}
+        coordinatorWorking={busy || delegatedWorkBusy}
         onOpenAssignment={openAssignmentStudio}
         onOpenAuditWork={openAssignmentAuditWork}
         onViewReport={openAuditStudio}
@@ -6315,7 +6358,7 @@
         projectId={thread.projectId}
         favoriteModels={rendererRecovery.favoriteModels}
         recentModels={rendererRecovery.recentModels}
-        coordinatorWorking={busy}
+        coordinatorWorking={busy || delegatedWorkBusy}
         onOpenAudit={() => void generateAudit(auditSettings)}
         onViewReport={openAuditStudio}
         onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
