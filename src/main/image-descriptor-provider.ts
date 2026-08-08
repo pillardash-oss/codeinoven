@@ -165,8 +165,12 @@ function toDataUrl(source: string): string {
 
 /** Best-effort mime detection from base64 image magic bytes. */
 function sniffImageMime(base64: string): string | undefined {
+  return sniffImageMagic(Buffer.from(base64.slice(0, 32), 'base64'))
+}
+
+/** Best-effort mime detection from the first bytes of an image buffer. */
+function sniffImageMagic(buffer: Buffer): string | undefined {
   try {
-    const buffer = Buffer.from(base64.slice(0, 32), 'base64')
     if (buffer.length < 8) return undefined
     const magic = [...buffer.subarray(0, 8)]
     if (magic[0] === 0x89 && magic[1] === 0x50 && magic[2] === 0x4e && magic[3] === 0x47) {
@@ -212,4 +216,32 @@ export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Bu
     ? fileURLToPath(entry.attachment.url)
     : entry.attachment.url
   return readFile(path)
+}
+
+/**
+ * Resolve a local `part` source into a self-contained data-URL attachment by
+ * reading its bytes in the main process. This keeps the vision session from
+ * re-reading the original file path — essential for transient sources (temp
+ * screenshots, pasted images) that may be deleted before the harness resolves
+ * the attachment. Remote `http(s)` and already-embedded `data:` sources are
+ * returned unchanged (the harness fetches or decodes those itself).
+ */
+export async function resolveSelfContainedAttachment(
+  entry: ResolvedImageEntry
+): Promise<PromptAttachment> {
+  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) {
+    return entry.attachment
+  }
+  if (/^https?:\/\//u.test(entry.attachment.url)) return entry.attachment
+  const bytes = await readPartSourceBytes(entry)
+  if (bytes === null) return entry.attachment
+  const mime =
+    entry.attachment.mime === 'image/*'
+      ? (sniffImageMagic(bytes.subarray(0, 32)) ?? 'image/png')
+      : entry.attachment.mime
+  return {
+    mime,
+    url: `data:${mime};base64,${bytes.toString('base64')}`,
+    filename: entry.attachment.filename
+  }
 }
