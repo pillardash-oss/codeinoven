@@ -821,6 +821,11 @@ export interface IpcInvokeContract {
   'projectFiles:delete': Contract<[projectId: string, relativePath: string], void>
   'projectFiles:info': Contract<[projectId: string, relativePath: string], ProjectFileInfo>
   'projectFiles:openInEditor': Contract<[projectId: string, relativePath: string], void>
+  'projectFiles:openInEditorWith': Contract<
+    [projectId: string, relativePath: string, editorId: EditorId],
+    void
+  >
+  'projectFiles:saveAs': Contract<[projectId: string, relativePath: string], string | null>
   'projectFiles:paste': Contract<
     [
       sourceProjectId: string,

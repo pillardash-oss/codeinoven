@@ -3,6 +3,7 @@
   import type { Token, Tokens } from 'marked'
   import CodeBlock from './CodeBlock.svelte'
   import MermaidDiagram from './MermaidDiagram.svelte'
+  import FileCitationContextMenu from './FileCitationContextMenu.svelte'
   import { blockHtml, fileCitationTarget, lexMarkdown } from './markdown'
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
@@ -163,6 +164,18 @@
       void openInBrowser(href)
     }
   }
+
+  /** Mirror of the citation click path — used by the file context menu's
+   *  "Open file" action so both interactions behave identically. */
+  function openCitationFromMenu(path: string, line?: number): void {
+    if (onCiteFile) {
+      if (line !== undefined && onCiteFile.length < 2) {
+        onCiteFile(`${path}:${line}`)
+      } else {
+        onCiteFile(path, line)
+      }
+    }
+  }
 </script>
 
 <!--
@@ -207,17 +220,19 @@
   {/each}
 {/snippet}
 
-<div
-  class={['markdown-body min-w-0 max-w-full', className]}
-  role="presentation"
-  onclick={handleClick}
-  onpointerover={handlePointerOver}
-  onpointerout={handlePointerOut}
-  onfocusin={handleFocusIn}
-  onfocusout={handleFocusOut}
->
-  {@render renderBlocks(tokens)}
-</div>
+<FileCitationContextMenu onOpenFile={openCitationFromMenu}>
+  <div
+    class={['markdown-body min-w-0 max-w-full', className]}
+    role="presentation"
+    onclick={handleClick}
+    onpointerover={handlePointerOver}
+    onpointerout={handlePointerOut}
+    onfocusin={handleFocusIn}
+    onfocusout={handleFocusOut}
+  >
+    {@render renderBlocks(tokens)}
+  </div>
+</FileCitationContextMenu>
 
 {#if tooltip}
   <div

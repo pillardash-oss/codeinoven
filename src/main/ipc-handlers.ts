@@ -1524,7 +1524,13 @@ export function registerIpcHandlers(
   )
   privileged(
     'brainstorm:openInEditor',
-    async (_event, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+    async (
+      _event,
+      projectId: unknown,
+      threadId: unknown,
+      brainstormId: unknown,
+      version: unknown
+    ) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
@@ -1550,7 +1556,13 @@ export function registerIpcHandlers(
   )
   privileged(
     'brainstorm:revealInFiles',
-    async (_event, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+    async (
+      _event,
+      projectId: unknown,
+      threadId: unknown,
+      brainstormId: unknown,
+      version: unknown
+    ) => {
       const validProjectId = validateEntityId(projectId, 'Project ID')
       const validThreadId = validateEntityId(threadId, 'Thread ID')
       const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
@@ -2470,6 +2482,19 @@ export function registerIpcHandlers(
       await editorService.openInEditor(config.preferredEditor, target, 'file')
     }
   )
+  privileged(
+    'projectFiles:openInEditorWith',
+    async (_event, projectId: unknown, relativePath: unknown, editorId: unknown) => {
+      if (typeof editorId !== 'string' || !EDITOR_IDS.has(editorId as EditorId)) {
+        throw new TypeError('Unknown editor')
+      }
+      const target = await projectFilesService.resolveForExternalEditor(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path')
+      )
+      await editorService.openInEditor(editorId as EditorId, target, 'file')
+    }
+  )
   ipcMain.handle('projectFiles:read', (_, projectId: unknown, relativePath: unknown) =>
     projectFilesService.readText(
       validateEntityId(projectId, 'Project ID'),
@@ -2531,6 +2556,25 @@ export function registerIpcHandlers(
       )
     }
   )
+  ipcMain.handle('projectFiles:saveAs', async (_, projectId: unknown, relativePath: unknown) => {
+    const safeRelativePath = requireString(relativePath, 'Project file path')
+    const textFile = await projectFilesService.readText(
+      validateEntityId(projectId, 'Project ID'),
+      safeRelativePath
+    )
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const options: Electron.SaveDialogOptions = {
+      title: 'Save file as',
+      defaultPath: basename(safeRelativePath),
+      filters: [{ name: 'All Files', extensions: ['*'] }]
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await atomicWrite(result.filePath, textFile.content)
+    return result.filePath
+  })
   ipcMain.handle('repository:preflight', (_, projectPath: string) =>
     repositoryService.preflight(projectPath)
   )
