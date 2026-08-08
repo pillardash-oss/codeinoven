@@ -3125,7 +3125,8 @@
           .filter(
             (candidate) =>
               candidate.assignmentId === activeAssignment.id &&
-              candidate.assignmentRole === 'worker'
+              candidate.assignmentRole === 'worker' &&
+              activeAssignment.content.tasks.some((task) => task.threadId === candidate.id)
           )
           .sort((left, right) => {
             const taskThreadIds = activeAssignment.content.tasks.map((task) => task.threadId)
