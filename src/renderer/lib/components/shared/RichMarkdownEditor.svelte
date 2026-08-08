@@ -10,7 +10,8 @@
     renderRichMarkdown,
     selectedBlockTag,
     serializeRichMarkdown,
-    syncCodeBlockLanguages
+    syncCodeBlockLanguages,
+    unlistListItem
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
 
@@ -587,6 +588,15 @@
         event.preventDefault()
         deleteCodeBlock(prevSibling)
         return
+      }
+      if (paragraph.tagName === 'LI' && isCursorAtBoundary(paragraph, true)) {
+        const historyEntry = captureHistoryEntry()
+        if (unlistListItem(editor, paragraph)) {
+          event.preventDefault()
+          emitEditorValue()
+          commitHistory(historyEntry)
+          publishCaretText()
+        }
       }
     }
 
