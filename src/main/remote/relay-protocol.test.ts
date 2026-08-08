@@ -101,11 +101,11 @@ class HubBridge {
       } catch {
         return
       }
-      if (frame.type === 'relay:ack' && typeof frame.id === 'number') {
+      if (frame.type === 'relay:ack' && typeof frame.id === 'string') {
         this.hub.acknowledge(this.desktopId, frame.id, this.role, this.peerSocket)
         return
       }
-      if (frame.type === 'relay:data' && typeof frame.id === 'number') {
+      if (frame.type === 'relay:data' && typeof frame.id === 'string') {
         const outcome = this.hub.forward(this.desktopId, this.role, this.peerSocket, data)
         if (!outcome.accepted) {
           client.deliver(
@@ -404,8 +404,8 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     await sendMobileData(firstMobile.mobile, { rpc: 'event', channel: 'a', payload: 1 })
     const firstId = firstMobile.client.sent
       .filter((frame) => frame.includes('relay:data'))
-      .map((frame) => (JSON.parse(frame) as { id: number }).id)[0]
-    expect(firstId).toBeGreaterThanOrEqual(2 ** 20)
+      .map((frame) => (JSON.parse(frame) as { id: string }).id)[0]
+    expect(firstId).toMatch(/^[0-9a-f-]+:\d+$/)
 
     // A reloaded client gets a fresh epoch -> a non-overlapping id space.
     const secondMobile = wireMobile(hub, () => undefined)
@@ -413,9 +413,10 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     await sendMobileData(secondMobile.mobile, { rpc: 'event', channel: 'a', payload: 2 })
     const secondId = secondMobile.client.sent
       .filter((frame) => frame.includes('relay:data'))
-      .map((frame) => (JSON.parse(frame) as { id: number }).id)[0]
-    const epochOf = (id: number): number => Math.floor(id / 2 ** 20)
-    expect(epochOf(secondId)).not.toBe(epochOf(firstId))
+      .map((frame) => (JSON.parse(frame) as { id: string }).id)[0]
+    // Distinct sender instances (UUID prefix) across reloads.
+    const instanceOf = (id: string): string => id.split(':')[0] ?? ''
+    expect(instanceOf(secondId)).not.toBe(instanceOf(firstId))
 
     firstMobile.mobile.close()
     secondMobile.mobile.close()
@@ -445,7 +446,11 @@ describe('RelayHub loss-safety unit semantics', () => {
       DESKTOP_ID,
       'mobile',
       sender.socket,
-      JSON.stringify({ type: 'relay:data', id: 42, payload: 'x' })
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:1',
+        payload: 'x'
+      })
     )
     expect(outcome).toEqual({ accepted: true, delivered: true })
     // No premature ACK from the hub.
@@ -454,10 +459,26 @@ describe('RelayHub loss-safety unit semantics', () => {
 
     // The receiver confirms -> the receiver-generated ACK is forwarded to the
     // sender and the retained frame is released.
-    expect(hub.acknowledge(DESKTOP_ID, 42, 'desktop', receiver.socket)).toBe(true)
-    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:ack', id: 42 })])
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:1',
+        'desktop',
+        receiver.socket
+      )
+    ).toBe(true)
+    expect(sender.sent).toEqual([
+      JSON.stringify({ type: 'relay:ack', id: '12345678-1234-1234-1234-123456789abc:1' })
+    ])
     expect(hub.outstandingCount()).toBe(0)
-    expect(hub.acknowledge(DESKTOP_ID, 42, 'desktop', receiver.socket)).toBe(false)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:1',
+        'desktop',
+        receiver.socket
+      )
+    ).toBe(false)
   })
 
   it('rejects a malformed or non-positive wire id without accepting it', () => {
@@ -480,7 +501,7 @@ describe('RelayHub loss-safety unit semantics', () => {
         DESKTOP_ID,
         'mobile',
         sender.socket,
-        JSON.stringify({ type: 'relay:data', id: -1, payload: 'x' })
+        JSON.stringify({ type: 'relay:data', id: 'not-a-valid-id', payload: 'x' })
       )
     ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
     expect(
@@ -488,7 +509,7 @@ describe('RelayHub loss-safety unit semantics', () => {
         DESKTOP_ID,
         'mobile',
         sender.socket,
-        JSON.stringify({ type: 'relay:data', id: 1.5, payload: 'x' })
+        JSON.stringify({ type: 'relay:data', id: 'not-a-uuid:0', payload: 'x' })
       )
     ).toEqual({ accepted: false, delivered: false, reason: 'invalid-id' })
     expect(hub.outstandingCount()).toBe(0)
@@ -505,19 +526,41 @@ describe('RelayHub loss-safety unit semantics', () => {
       DESKTOP_ID,
       'mobile',
       sender.socket,
-      JSON.stringify({ type: 'relay:data', id: 77, payload: 'x' })
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:2',
+        payload: 'x'
+      })
     )
     expect(outcome.accepted).toBe(true)
     // The sender (mobile) tries to ack its own frame -> rejected, no ACK.
-    expect(hub.acknowledge(DESKTOP_ID, 77, 'mobile', sender.socket)).toBe(false)
+    expect(
+      hub.acknowledge(DESKTOP_ID, '12345678-1234-1234-1234-123456789abc:2', 'mobile', sender.socket)
+    ).toBe(false)
     expect(hub.outstandingCount()).toBe(1)
     expect(sender.sent).toEqual([])
     // The intended receiver (desktop) acking with a non-live socket is also
     // rejected; the current live receiver socket succeeds.
-    expect(hub.acknowledge(DESKTOP_ID, 77, 'desktop', sender.socket)).toBe(false)
-    expect(hub.acknowledge(DESKTOP_ID, 77, 'desktop', receiver.socket)).toBe(true)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:2',
+        'desktop',
+        sender.socket
+      )
+    ).toBe(false)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:2',
+        'desktop',
+        receiver.socket
+      )
+    ).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
-    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:ack', id: 77 })])
+    expect(sender.sent).toEqual([
+      JSON.stringify({ type: 'relay:ack', id: '12345678-1234-1234-1234-123456789abc:2' })
+    ])
   })
 
   it('rejects a cross-direction wire-id collision instead of aliasing it', () => {
@@ -527,14 +570,22 @@ describe('RelayHub loss-safety unit semantics', () => {
     hub.connectMobile(DESKTOP_ID, mobile.socket)
     hub.connectDesktop(DESKTOP_ID, desktop.socket)
     // Mobile sends id 500; retained awaiting receiver confirmation.
-    const mobileFrame = JSON.stringify({ type: 'relay:data', id: 500, payload: 'mobile' })
+    const mobileFrame = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:3',
+      payload: 'mobile'
+    })
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, mobileFrame).accepted).toBe(true)
     // Desktop tries the same wire id in the opposite direction -> rejected.
-    const desktopFrame = JSON.stringify({ type: 'relay:data', id: 500, payload: 'desktop' })
+    const desktopFrame = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:3',
+      payload: 'desktop'
+    })
     expect(hub.forward(DESKTOP_ID, 'desktop', desktop.socket, desktopFrame)).toEqual({
       accepted: false,
       delivered: false,
-      reason: 'cross-direction-collision'
+      reason: 'id-collision'
     })
     // A same-direction retransmission is accepted and re-delivered.
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, mobileFrame).accepted).toBe(true)
@@ -549,8 +600,16 @@ describe('RelayHub loss-safety unit semantics', () => {
     hub.connectDesktop(DESKTOP_ID, desktop.socket)
     // Two distinct messages from the same sender (different sequence ids) are
     // two separate outstanding entries, never treated as the same frame.
-    const first = JSON.stringify({ type: 'relay:data', id: 1_048_576, payload: 'one' })
-    const second = JSON.stringify({ type: 'relay:data', id: 1_048_577, payload: 'two' })
+    const first = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:4',
+      payload: 'one'
+    })
+    const second = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:5',
+      payload: 'two'
+    })
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, first).accepted).toBe(true)
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, second).accepted).toBe(true)
     expect(hub.outstandingCount()).toBe(2)
@@ -560,8 +619,22 @@ describe('RelayHub loss-safety unit semantics', () => {
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, first).accepted).toBe(true)
     expect(hub.outstandingCount()).toBe(2)
     expect(desktop.sent.filter((f) => f.includes('relay:data'))).toHaveLength(3)
-    expect(hub.acknowledge(DESKTOP_ID, 1_048_576, 'desktop', desktop.socket)).toBe(true)
-    expect(hub.acknowledge(DESKTOP_ID, 1_048_577, 'desktop', desktop.socket)).toBe(true)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:4',
+        'desktop',
+        desktop.socket
+      )
+    ).toBe(true)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:5',
+        'desktop',
+        desktop.socket
+      )
+    ).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
   })
 
@@ -570,12 +643,16 @@ describe('RelayHub loss-safety unit semantics', () => {
     const sender = recordingSocket()
     hub.connectMobile(DESKTOP_ID, sender.socket)
     // Receiver offline: frames are retained, then the third overflows.
-    for (const id of [1, 2]) {
+    for (const seq of [1, 2]) {
       const outcome = hub.forward(
         DESKTOP_ID,
         'mobile',
         sender.socket,
-        JSON.stringify({ type: 'relay:data', id, payload: String(id) })
+        JSON.stringify({
+          type: 'relay:data',
+          id: `12345678-1234-1234-1234-123456789abc:${seq}`,
+          payload: String(seq)
+        })
       )
       expect(outcome.accepted).toBe(true)
     }
@@ -583,7 +660,11 @@ describe('RelayHub loss-safety unit semantics', () => {
       DESKTOP_ID,
       'mobile',
       sender.socket,
-      JSON.stringify({ type: 'relay:data', id: 3, payload: '3' })
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:3',
+        payload: '3'
+      })
     )
     expect(overflow).toEqual({ accepted: false, delivered: false, reason: 'overflow' })
     expect(hub.outstandingCount()).toBe(2)
@@ -598,12 +679,22 @@ describe('RelayHub loss-safety unit semantics', () => {
       DESKTOP_ID,
       'mobile',
       sender.socket,
-      JSON.stringify({ type: 'relay:data', id: 9, payload: 'x' })
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:9',
+        payload: 'x'
+      })
     )
     ;(hub as unknown as { now: () => number }).now = () => now + 6_000
     expect(hub.sweep()).toBe(1)
     expect(hub.outstandingCount()).toBe(0)
-    expect(sender.sent).toEqual([JSON.stringify({ type: 'relay:nack', id: 9, reason: 'expired' })])
+    expect(sender.sent).toEqual([
+      JSON.stringify({
+        type: 'relay:nack',
+        id: '12345678-1234-1234-1234-123456789abc:9',
+        reason: 'expired'
+      })
+    ])
   })
 
   it('forwards a late receiver ACK to a stale (disconnected) sender harmlessly', () => {
@@ -616,14 +707,25 @@ describe('RelayHub loss-safety unit semantics', () => {
       DESKTOP_ID,
       'mobile',
       sender.socket,
-      JSON.stringify({ type: 'relay:data', id: 11, payload: 'x' })
+      JSON.stringify({
+        type: 'relay:data',
+        id: '12345678-1234-1234-1234-123456789abc:11',
+        payload: 'x'
+      })
     )
     // The sender disconnects after sending; its socket is no longer live.
     hub.disconnect(DESKTOP_ID, 'mobile', sender.socket)
     // The receiver confirms; the ACK is authenticated (receiver role + its
     // current socket), forwarded to the stale sender socket (harmless), and the
     // retained frame is released.
-    expect(hub.acknowledge(DESKTOP_ID, 11, 'desktop', receiver.socket)).toBe(true)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:11',
+        'desktop',
+        receiver.socket
+      )
+    ).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
   })
 
@@ -633,7 +735,11 @@ describe('RelayHub loss-safety unit semantics', () => {
     const receiver = recordingSocket()
     hub.connectMobile(DESKTOP_ID, sender.socket)
     hub.connectDesktop(DESKTOP_ID, receiver.socket)
-    const frame = JSON.stringify({ type: 'relay:data', id: 5, payload: 'x' })
+    const frame = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:5',
+      payload: 'x'
+    })
     hub.forward(DESKTOP_ID, 'mobile', sender.socket, frame)
     // Retransmission (same id) is accepted and delivered again.
     const retry = hub.forward(DESKTOP_ID, 'mobile', sender.socket, frame)
@@ -641,7 +747,14 @@ describe('RelayHub loss-safety unit semantics', () => {
     expect(receiver.sent.filter((f) => f.includes('relay:data'))).toHaveLength(2)
     expect(hub.outstandingCount()).toBe(1)
     // One receiver confirmation resolves the single retained entry.
-    expect(hub.acknowledge(DESKTOP_ID, 5, 'desktop', receiver.socket)).toBe(true)
+    expect(
+      hub.acknowledge(
+        DESKTOP_ID,
+        '12345678-1234-1234-1234-123456789abc:5',
+        'desktop',
+        receiver.socket
+      )
+    ).toBe(true)
     expect(hub.outstandingCount()).toBe(0)
   })
 })

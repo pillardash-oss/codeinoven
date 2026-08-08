@@ -61,7 +61,7 @@ interface RelayFrame {
 }
 
 interface OutboundRecord {
-  id: number
+  id: string
   data: string
   encrypted: string | null
 }
@@ -156,7 +156,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   }
 
   /** Send a receiver-generated `relay:ack` control frame on the open socket. */
-  function sendAck(id: number): void {
+  function sendAck(id: string): void {
     if (!socket || !open || socket.readyState !== WebSocket.OPEN) return
     socket.send(serializeRelayAckFrame(id))
   }
@@ -226,7 +226,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       }
       if (frame.type === 'relay:data' && frame.payload) {
         const dataFrame = parseRelayDataFrame(event.data)
-        const wireId = dataFrame && !Number.isNaN(dataFrame.id) ? dataFrame.id : undefined
+        const wireId = dataFrame && dataFrame.id ? dataFrame.id : undefined
         if (wireId !== undefined) {
           if (seenInboundIds.has(wireId)) {
             // Duplicate delivery of a successfully-decrypted frame: the receiver
@@ -235,9 +235,9 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
             return
           }
           if (inboundProcessing.has(wireId)) {
-            // A concurrent duplicate of a frame being decrypted: ack without
-            // re-decrypting so exactly one dispatch happens.
-            sendAck(wireId)
+            // A concurrent duplicate of a frame being decrypted is
+            // coalesced/ignored — the single in-flight decrypt will emit exactly
+            // one ACK on success and none on failure so replay stays possible.
             return
           }
           inboundProcessing.add(wireId)

@@ -46,7 +46,7 @@ export interface CloudRelayClientOptions {
 }
 
 interface OutboundRecord {
-  id: number
+  id: string
   payload: unknown
 }
 
@@ -89,11 +89,11 @@ export class CloudRelayClient {
   private authTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectAttempt = 0
-  private readonly nextMessageId: () => number
+  private readonly nextMessageId: () => string
   private readonly queue: OutboundRecord[] = []
   private readonly inFlight: BoundedMap<OutboundRecord>
   private readonly replay: BoundedMap<RpcOutcome>
-  private readonly processing = new Set<number>()
+  private readonly processing = new Set<string>()
   private readonly seenInboundIds: BoundedSet
   private readonly inboundProcessing: BoundedSet
   private readonly onAbort: () => void
@@ -320,7 +320,7 @@ export class CloudRelayClient {
     }
     if (record['type'] === 'relay:data' && typeof record['payload'] === 'string') {
       const frame = parseRelayDataFrame(text)
-      const wireId = frame && !Number.isNaN(frame.id) ? frame.id : undefined
+      const wireId = frame && frame.id ? frame.id : undefined
       if (wireId !== undefined) {
         if (this.seenInboundIds.has(wireId)) {
           // Duplicate delivery of a successfully-decrypted frame: the receiver
@@ -329,9 +329,9 @@ export class CloudRelayClient {
           return
         }
         if (this.inboundProcessing.has(wireId)) {
-          // A concurrent duplicate of a frame being decrypted/dispatched: ack
-          // without re-decrypting so exactly one decrypt/dispatch happens.
-          this.sendAck(wireId)
+          // A concurrent duplicate of a frame being decrypted/dispatched is
+          // coalesced/ignored — the single in-flight decrypt will emit exactly
+          // one ACK on success and none on failure so replay stays possible.
           return
         }
         this.inboundProcessing.add(wireId)
@@ -356,7 +356,7 @@ export class CloudRelayClient {
   }
 
   /** Send a receiver-generated `relay:ack` control frame on the open socket. */
-  private sendAck(id: number): void {
+  private sendAck(id: string): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
     this.socket.send(serializeRelayAckFrame(id))
   }
@@ -369,7 +369,7 @@ export class CloudRelayClient {
     }
   }
 
-  private handleEncryptedMessage(plaintext: string, wireId?: number): void {
+  private handleEncryptedMessage(plaintext: string, wireId?: string): void {
     let record: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(plaintext)
@@ -382,7 +382,7 @@ export class CloudRelayClient {
     const id = record['id']
     // Deduplicate and replay by the sender's wire id (epoch-scoped), so a
     // reloaded peer's fresh invokes are never mistaken for a retry.
-    const dedupKey = typeof wireId === 'number' && !Number.isNaN(wireId) ? wireId : id
+    const dedupKey = typeof wireId === 'string' && wireId.length > 0 ? wireId : `rpc:${id}`
     // Duplicate suppression: an invoke already being processed is ignored.
     if (this.processing.has(dedupKey)) return
     // Idempotent result replay: an already answered invoke is replayed verbatim.

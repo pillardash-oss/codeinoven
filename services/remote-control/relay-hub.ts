@@ -41,7 +41,7 @@ export interface ForwardResult {
 }
 
 interface OutstandingFrame {
-  id: number
+  id: string
   from: RelayRole
   to: RelayRole
   frame: string
@@ -53,14 +53,19 @@ interface OutstandingFrame {
 const DEFAULT_BUFFER_LIMIT = 256
 const DEFAULT_BUFFER_TTL_MS = 60_000
 
-/** Extract and validate the wire id of a `relay:data` frame. */
-function frameId(frame: string): number | null {
+/** Full wire-id shape: `<uuid sender instance>:<seq>`. */
+const WIRE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[1-9]\d*$/i
+
+function isValidWireId(id: string): boolean {
+  return WIRE_ID_PATTERN.test(id)
+}
+
+/** Extract and validate the full wire id of a `relay:data` frame. */
+function frameId(frame: string): string | null {
   try {
     const parsed = JSON.parse(frame) as { type?: string; id?: unknown }
     if (parsed.type !== 'relay:data') return null
-    return typeof parsed.id === 'number' && Number.isSafeInteger(parsed.id) && parsed.id > 0
-      ? parsed.id
-      : null
+    return typeof parsed.id === 'string' && isValidWireId(parsed.id) ? parsed.id : null
   } catch {
     return null
   }
@@ -69,7 +74,7 @@ function frameId(frame: string): number | null {
 export class RelayHub {
   private readonly desktopSockets = new Map<string, RelaySocket>()
   private readonly mobileSockets = new Map<string, RelaySocket>()
-  private readonly outstanding = new Map<string, Map<number, OutstandingFrame>>()
+  private readonly outstanding = new Map<string, Map<string, OutstandingFrame>>()
   private readonly bufferLimit: number
   private readonly bufferTtlMs: number
   private readonly now: () => number
@@ -138,18 +143,17 @@ export class RelayHub {
     if (frames?.has(id)) {
       const existing = frames.get(id)
       if (existing) {
-        // A wire id collision from the OPPOSITE direction is a protocol
-        // violation: a different sender must never alias another's outstanding
-        // frame. Same-direction retransmission re-delivers and extends
-        // retention so a lost receiver ACK can still resolve it.
-        if (existing.from !== from) {
-          return { accepted: false, delivered: false, reason: 'cross-direction-collision' }
+        // A retransmission is accepted ONLY when it is the same direction AND
+        // the exact retained frame identity (byte-identical). Any other id
+        // collision is rejected without delivery or sender replacement so a
+        // different message can never alias an outstanding frame.
+        if (existing.from === from && existing.frame === frame) {
+          if (target) target.send(frame)
+          existing.delivered = Boolean(target)
+          existing.expiresAt = this.now() + this.bufferTtlMs
+          return { accepted: true, delivered: Boolean(target) }
         }
-        if (target) target.send(frame)
-        existing.delivered = Boolean(target)
-        existing.expiresAt = this.now() + this.bufferTtlMs
-        existing.sender = sender
-        return { accepted: true, delivered: Boolean(target) }
+        return { accepted: false, delivered: false, reason: 'id-collision' }
       }
     }
     if ((frames?.size ?? 0) >= this.bufferLimit) {
@@ -166,7 +170,7 @@ export class RelayHub {
       delivered,
       expiresAt: this.now() + this.bufferTtlMs
     }
-    const desktopFrames = frames ?? new Map<number, OutstandingFrame>()
+    const desktopFrames = frames ?? new Map<string, OutstandingFrame>()
     desktopFrames.set(id, entry)
     this.outstanding.set(desktopId, desktopFrames)
     return { accepted: true, delivered }
@@ -178,7 +182,7 @@ export class RelayHub {
    * is authenticated against the retained intended receiver role and that
    * role's CURRENT live socket, so a sender can never self-ACK its own frame.
    */
-  acknowledge(desktopId: string, id: number, ackRole: RelayRole, ackSocket: RelaySocket): boolean {
+  acknowledge(desktopId: string, id: string, ackRole: RelayRole, ackSocket: RelaySocket): boolean {
     const frames = this.outstanding.get(desktopId)
     const entry = frames?.get(id)
     if (!entry) return false

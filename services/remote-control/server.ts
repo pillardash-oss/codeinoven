@@ -522,7 +522,7 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
   // Receiver-generated end-to-end confirmation: authenticate the ACK against
   // the retained intended receiver role + current socket, forward it to the
   // sender, and release the retained frame in the hub.
-  if (record['type'] === 'relay:ack' && typeof record['id'] === 'number') {
+  if (record['type'] === 'relay:ack' && typeof record['id'] === 'string') {
     const ackDesktopId = socket.data.desktopId
     if (ackDesktopId && socket.data.role) {
       relayHub.acknowledge(ackDesktopId, record['id'], socket.data.role, socket)
@@ -535,7 +535,7 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
   if (!desktopId) return
   if (socket.data.role === 'desktop') {
     const outcome = relayHub.forward(desktopId, 'desktop', socket, text)
-    if (!outcome.accepted && typeof record['id'] === 'number') {
+    if (!outcome.accepted && typeof record['id'] === 'string') {
       socket.send(
         JSON.stringify({
           type: 'relay:nack',
@@ -551,7 +551,7 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     return
   }
   const outcome = relayHub.forward(desktopId, 'mobile', socket, text)
-  if (!outcome.accepted && typeof record['id'] === 'number') {
+  if (!outcome.accepted && typeof record['id'] === 'string') {
     socket.send(
       JSON.stringify({
         type: 'relay:nack',

@@ -89,13 +89,13 @@ interface RelayReply {
 
 interface DataEnvelope {
   type: 'remote:data'
-  id?: number
+  id?: string
   payload: string
 }
 
 interface AckEnvelope {
   type: 'remote:ack' | 'relay:ack'
-  id: number
+  id: string
 }
 
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
@@ -112,7 +112,7 @@ function parseDataEnvelope(data: string): DataEnvelope | null {
     if (record.type !== 'remote:data') return null
     return {
       type: 'remote:data',
-      id: typeof record.id === 'number' ? record.id : undefined,
+      id: typeof record.id === 'string' ? record.id : undefined,
       payload: typeof record.payload === 'string' ? record.payload : ''
     }
   } catch {
@@ -126,7 +126,7 @@ function parseAck(data: string): AckEnvelope | null {
     if (typeof parsed !== 'object' || parsed === null) return null
     const record = parsed as Record<string, unknown>
     if (record.type !== 'remote:ack' && record.type !== 'relay:ack') return null
-    return { type: record.type, id: typeof record.id === 'number' ? record.id : NaN }
+    return { type: record.type, id: typeof record.id === 'string' ? record.id : '' }
   } catch {
     return null
   }
@@ -226,8 +226,8 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   let reconnectAttempt = 0
   const nextMessageId = createEpochMessageIdAllocator()
   let resolve: (result: RelayConnectResult) => void = () => undefined
-  const queue: Array<{ id: number; data: string; encrypted: string | null }> = []
-  const inFlight = new Map<number, { id: number; data: string; encrypted: string | null }>()
+  const queue: Array<{ id: string; data: string; encrypted: string | null }> = []
+  const inFlight = new Map<string, { id: string; data: string; encrypted: string | null }>()
   const seenIds = new BoundedSet(queueLimit)
 
   function clearTimers(): void {
@@ -249,7 +249,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
     resolve(result)
   }
 
-  function enqueue(record: { id: number; data: string; encrypted: string | null }): void {
+  function enqueue(record: { id: string; data: string; encrypted: string | null }): void {
     if (queueLimit <= 0) return
     if (queue.length >= queueLimit) queue.shift()
     queue.push(record)
@@ -261,7 +261,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   }
 
   async function transmit(record: {
-    id: number
+    id: string
     data: string
     encrypted: string | null
   }): Promise<void> {
