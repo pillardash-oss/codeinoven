@@ -15,6 +15,7 @@
     MessageSquare,
     MoreVertical,
     PanelLeft,
+    Plus,
     Power,
     Share,
     X
@@ -33,7 +34,8 @@
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
-  import { workspaceState, threadSort } from '$lib/stores/workspace.svelte'
+  import { workspaceState, threadSort, findEmptyNewThread } from '$lib/stores/workspace.svelte'
+  import { threadSettings, chatEffectiveSettings } from '$lib/stores/thread-settings.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
@@ -41,6 +43,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
   import {
+    DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
     type Project,
@@ -325,6 +328,46 @@
     workspaceState.openThread(forked, project)
   }
 
+  /** Start a new thread in the current context: a project thread when one is
+   *  selected (mirroring the desktop shell), otherwise a standalone chat. */
+  async function createNewThread(): Promise<void> {
+    try {
+      if (selectedThread && !chatMode && selectedProject) {
+        const existing = findEmptyNewThread(allThreads, selectedProject.id, undefined)
+        if (existing) {
+          if (workspaceState.selectedThread?.id === existing.id) {
+            workspaceState.requestFocusComposer()
+          } else {
+            workspaceState.openThread(existing, selectedProject)
+          }
+          return
+        }
+        const thread = await invoke('thread:create', {
+          projectId: selectedProject.id,
+          providerId: 'opencode',
+          title: DEFAULT_THREAD_TITLE,
+          workingDirectory: selectedProject.path,
+          settings: { ...threadSettings.lastUsed }
+        })
+        allThreads = [thread, ...allThreads]
+        workspaceState.openThread(thread, selectedProject)
+        return
+      }
+      const thread = await invoke('thread:create', {
+        projectId: INBOX_PROJECT_ID,
+        providerId: 'opencode',
+        title: DEFAULT_THREAD_TITLE,
+        workingDirectory: '',
+        settings: chatEffectiveSettings()
+      })
+      allThreads = [thread, ...allThreads]
+      workspaceState.openThread(thread, null)
+    } catch {
+      // The desktop app owns thread persistence; a failed create is rare and the
+      // sidebar refreshes on the next load, so there is nothing to recover here.
+    }
+  }
+
   function toggleFolder(projectId: string): void {
     if (expandedFolders.has(projectId)) expandedFolders.delete(projectId)
     else expandedFolders.add(projectId)
@@ -362,10 +405,11 @@
   class="mobile-shell flex w-full flex-col overflow-hidden bg-app text-foreground"
   style="height: {shellHeight}"
 >
-  <!-- Header: menu · centred thread title · overflow menu. The side slots are
-       the same width so the title sits on the true centre line. -->
+  <!-- Header: menu · centred thread title · new-thread + overflow menu. The
+       left slot stays narrow; the right slot holds two actions so the title
+       shrinks and truncates instead. -->
   <div class="shrink-0 border-b border-border bg-surface pt-[env(safe-area-inset-top)]">
-    <header class="grid h-14 grid-cols-[2.75rem_1fr_2.75rem] items-center gap-1 px-2">
+    <header class="grid h-14 grid-cols-[2.75rem_1fr_5.5rem] items-center gap-1 px-2">
       <button
         type="button"
         class="flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
@@ -377,7 +421,7 @@
       </button>
 
       <div class="min-w-0 px-1 text-center">
-        <p class="truncate text-[14px] font-semibold tracking-tight">
+        <p class="truncate text-[13px] font-semibold tracking-tight">
           {selectedThread?.title ?? 'CodeInOven'}
         </p>
         {#if selectedProject && selectedThread && selectedProject.id !== INBOX_PROJECT_ID}
@@ -385,90 +429,101 @@
         {/if}
       </div>
 
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          class="relative flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-          aria-label="More options"
-          title="More options"
+      <div class="flex items-center justify-end gap-0.5">
+        <button
+          type="button"
+          class="flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+          aria-label="Start a new chat"
+          title="Start a new chat"
+          onclick={() => void createNewThread()}
         >
-          <MoreVertical size={19} />
-          {#if hasOverflowAttention}
-            <span class="absolute top-1.5 right-1.5 flex items-start">
-              <StatusBadge kind="attention" title="Items need your attention" />
-            </span>
-          {/if}
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            side="bottom"
-            align="end"
-            sideOffset={6}
-            collisionPadding={8}
-            class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
+          <Plus size={19} />
+        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="relative flex h-11 w-11 items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+            aria-label="More options"
+            title="More options"
           >
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground data-[disabled]:opacity-40"
-              disabled={workspaceState.messageCount === 0}
-              onSelect={() => (historyOpen = true)}
-            >
-              <History size={16} />
-              <span class="flex-1 text-left">Message history</span>
-            </DropdownMenu.Item>
-
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-              onSelect={() => (memoryOpen = true)}
-            >
-              <BrainCircuit size={16} />
-              <span class="flex-1 text-left">Memory</span>
-              {#if memoryProposalState.hasPending}
-                <StatusBadge kind="attention" title="Memory proposals needing attention" />
-              {/if}
-            </DropdownMenu.Item>
-
-            {#if selectedThread && !chatMode}
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (gitOpen = true)}
-              >
-                <GitBranch size={16} />
-                <span class="flex-1 text-left">Git</span>
-              </DropdownMenu.Item>
+            <MoreVertical size={19} />
+            {#if hasOverflowAttention}
+              <span class="absolute top-1.5 right-1.5 flex items-start">
+                <StatusBadge kind="attention" title="Items need your attention" />
+              </span>
             {/if}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              <DropdownMenu.Item
+                class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground data-[disabled]:opacity-40"
+                disabled={workspaceState.messageCount === 0}
+                onSelect={() => (historyOpen = true)}
+              >
+                <History size={16} />
+                <span class="flex-1 text-left">Message history</span>
+              </DropdownMenu.Item>
 
-            {#if selectedThread && workspaceState.specStudioAvailable}
               <DropdownMenu.Item
                 class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => workspaceState.toggleSpecStudio?.()}
+                onSelect={() => (memoryOpen = true)}
               >
-                <FileText size={16} />
-                <span class="flex-1 text-left">Specification</span>
-                {#if workspaceState.specStudioOpen}
-                  <Check size={15} class="text-primary" />
+                <BrainCircuit size={16} />
+                <span class="flex-1 text-left">Memory</span>
+                {#if memoryProposalState.hasPending}
+                  <StatusBadge kind="attention" title="Memory proposals needing attention" />
                 {/if}
               </DropdownMenu.Item>
-            {/if}
 
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-              onSelect={() => (notificationsOpen = true)}
-            >
-              <Bell size={16} />
-              <span class="flex-1 text-left">Notifications</span>
-              {#if notificationPanelState.totalCount > 0}
-                <span class="flex items-start gap-px">
-                  {#if notificationPanelState.hasCompleted}
-                    <StatusBadge kind="completed" title="Completed notifications" />
-                  {/if}
-                  {#if notificationPanelState.hasAttention}
-                    <StatusBadge kind="attention" title="Notifications needing attention" />
-                  {/if}
-                </span>
+              {#if selectedThread && !chatMode}
+                <DropdownMenu.Item
+                  class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                  onSelect={() => (gitOpen = true)}
+                >
+                  <GitBranch size={16} />
+                  <span class="flex-1 text-left">Git</span>
+                </DropdownMenu.Item>
               {/if}
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+
+              {#if selectedThread && workspaceState.specStudioAvailable}
+                <DropdownMenu.Item
+                  class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                  onSelect={() => workspaceState.toggleSpecStudio?.()}
+                >
+                  <FileText size={16} />
+                  <span class="flex-1 text-left">Specification</span>
+                  {#if workspaceState.specStudioOpen}
+                    <Check size={15} class="text-primary" />
+                  {/if}
+                </DropdownMenu.Item>
+              {/if}
+
+              <DropdownMenu.Item
+                class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (notificationsOpen = true)}
+              >
+                <Bell size={16} />
+                <span class="flex-1 text-left">Notifications</span>
+                {#if notificationPanelState.totalCount > 0}
+                  <span class="flex items-start gap-px">
+                    {#if notificationPanelState.hasCompleted}
+                      <StatusBadge kind="completed" title="Completed notifications" />
+                    {/if}
+                    {#if notificationPanelState.hasAttention}
+                      <StatusBadge kind="attention" title="Notifications needing attention" />
+                    {/if}
+                  </span>
+                {/if}
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
     </header>
   </div>
 
