@@ -537,6 +537,10 @@ void app
     Logger.info(`${APP_NAME} main process initialized`)
 
     updaterService.setChatEngine(chatEngine)
+    updaterService.addActivitySource({ activeSessionCount: () => ptyService.activeSessionCount() })
+    updaterService.addActivitySource({
+      activeSessionCount: () => (remoteMode.status.blockedQuit ? 1 : 0)
+    })
     const projectManager = new ProjectManager(database)
     const projectFilesService = new ProjectFilesService(projectManager)
     installFilePreviewProtocol(projectFilesService)
