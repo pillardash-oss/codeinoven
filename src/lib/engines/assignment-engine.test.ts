@@ -175,6 +175,36 @@ describe('AssignmentEngine', () => {
     expect(await restartedEngine.claimCoordinatorSnapshot(activated.id)).not.toBeNull()
     await restartedEngine.rememberCoordinatorSnapshot(activated.id)
     expect(await engine.claimCoordinatorSnapshot(activated.id)).toBeNull()
+
+    await engine.submitTaskTestEvidence(
+      activated.id,
+      'setup',
+      coordinatorId,
+      'baseline',
+      'baseline passed',
+      'setup-baseline'
+    )
+    await engine.submitTaskTestEvidence(
+      activated.id,
+      'setup',
+      coordinatorId,
+      'check',
+      'final check passed',
+      'setup-check'
+    )
+    const reported = await engine.reportTask(
+      activated.id,
+      'setup',
+      coordinatorId,
+      {
+        status: 'ready_for_audit',
+        summary: 'Senior-owned setup is ready.',
+        evidence: ['Baseline and final check passed.'],
+        reportedAt: 100
+      },
+      'report-setup'
+    )
+    expect(reported.task?.status).toBe('reported')
   })
 
   it('rebinds a draft assignment to a revised specification', async () => {
