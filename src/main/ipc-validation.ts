@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, relative, resolve, sep } from 'path'
+import type { WebFrameMain } from 'electron'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -785,16 +786,30 @@ export function isTrustedOrigin(url: string, trustedOrigins: ReadonlySet<string>
 export interface PrivilegedScopeResolvers {
   /** Registered local project root directories, resolved lazily. */
   projectRoots: () => Promise<readonly string[]> | readonly string[]
-  /** CodeInOven's own config directory. */
-  configRoot: () => string
+  /** Concrete app-owned artifact directories (per project) that reveal/preview
+   *  may target — never the whole config root, which holds secrets. */
+  appArtifactRoots: () => Promise<readonly string[]> | readonly string[]
 }
 
 export interface PrivilegedIpcValidatorOptions {
-  /** Origins the renderer may invoke privileged IPC from. */
-  trustedOrigins: Iterable<string>
+  /** Exact URLs the app's own renderer document lives at. Privileged IPC and
+   *  main-frame navigation are bound to these URLs, not to URL origins alone,
+   *  so packaged foreign `file:` documents can never be reached. */
+  navigationTargets?: Iterable<string>
   /** Resolvers for the file scopes reveal/preview operations may target. */
   scopes?: PrivilegedScopeResolvers
+  /** Whether plain `http:` localhost URLs may be opened (development only). */
+  allowDevelopmentHttp?: boolean
 }
+
+/** Minimal structural view of a frame for identity checks. */
+export interface FrameIdentity {
+  url: string
+  parent?: FrameIdentity | null
+}
+
+/** A frame that can be checked for a trusted main-frame identity. */
+export type TrustedFrameCandidate = FrameIdentity | WebFrameMain
 
 /**
  * Shared privileged-IPC validation wrapper. Every renderer-exposed operation
@@ -803,24 +818,38 @@ export interface PrivilegedIpcValidatorOptions {
  * paths are validated consistently across the main process.
  */
 export class PrivilegedIpcValidator {
-  readonly trustedOrigins: ReadonlySet<string>
+  readonly #navigationTargets: ReadonlySet<string>
   readonly #scopes: PrivilegedScopeResolvers | undefined
+  readonly #allowDevelopmentHttp: boolean
   readonly #userSelectedFiles = new Set<string>()
   readonly #userSelectedRoots = new Set<string>()
 
   constructor(options: PrivilegedIpcValidatorOptions) {
-    this.trustedOrigins = new Set(options.trustedOrigins)
+    this.#navigationTargets = new Set(
+      [...(options.navigationTargets ?? [])]
+        .map((url) => this.#normalizeUrl(url))
+        .filter((url): url is string => url !== null)
+    )
     this.#scopes = options.scopes
+    this.#allowDevelopmentHttp = options.allowDevelopmentHttp ?? false
   }
 
-  /** Whether the IPC sender frame originates from a trusted renderer origin. */
-  isTrustedSenderFrame(frame: { url: string } | null | undefined): boolean {
+  /**
+   * Whether the IPC sender frame is the app's own trusted main frame. Only the
+   * top-level frame (no parent) may invoke privileged IPC, and its document URL
+   * must exactly match one of the app's own renderer URLs — never a foreign or
+   * arbitrary same-origin document.
+   */
+  isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {
     if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
-    return isTrustedOrigin(frame.url, this.trustedOrigins)
+    if (frame.parent != null) return false
+    return this.#isTrustedRendererUrl(frame.url)
   }
 
   /** Reject a privileged IPC call whose sender frame is not trusted. */
-  assertTrustedSender(event: { senderFrame?: { url: string } | null } | null | undefined): void {
+  assertTrustedSender(
+    event: { senderFrame?: TrustedFrameCandidate | null } | null | undefined
+  ): void {
     if (!this.isTrustedSenderFrame(event?.senderFrame)) {
       throw new Error('Privileged IPC rejected: sender frame is not trusted')
     }
@@ -828,9 +857,10 @@ export class PrivilegedIpcValidator {
 
   /**
    * Validate a URL for `shell.openExternal` / window-open. Only parsed `https:`
-   * URLs and intentionally supported development `http:` URLs are permitted;
-   * credentials, control characters, malformed input, and non-web schemes are
-   * rejected. Returns the normalized URL.
+   * URLs are permitted; plain `http:` is permitted only for intentionally
+   * supported localhost development origins and only when development HTTP is
+   * enabled (never in production). Credentials, control characters, malformed
+   * input, and non-web schemes are rejected. Returns the normalized URL.
    */
   validateExternalUrl(value: unknown): string {
     if (typeof value !== 'string' || value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) {
@@ -852,37 +882,67 @@ export class PrivilegedIpcValidator {
       throw new TypeError('External URL must not contain credentials')
     }
     if (parsed.protocol === 'http:') {
+      if (!this.#allowDevelopmentHttp) {
+        throw new TypeError('External http: URLs are only supported in development')
+      }
       const hostname = parsed.hostname.replace(/^\[|\]$/gu, '')
       if (!DEV_HTTP_HOSTNAMES.has(hostname)) {
-        throw new TypeError('External http: URLs are only supported for localhost development origins')
+        throw new TypeError(
+          'External http: URLs are only supported for localhost development origins'
+        )
       }
     }
     return parsed.toString()
   }
 
-  /** Record a file the user explicitly selected through an OS dialog. */
-  registerUserSelectedFile(path: string): void {
-    if (typeof path === 'string' && path.length > 0) this.#userSelectedFiles.add(path)
+  /**
+   * Whether the main frame may navigate to the given URL. Only the exact
+   * canonical app renderer document is navigable, so arbitrary same-origin or
+   * `file:` targets are never reachable.
+   */
+  isTrustedNavigation(url: string): boolean {
+    return this.#isTrustedRendererUrl(url)
+  }
+
+  #isTrustedRendererUrl(url: string): boolean {
+    const normalized = this.#normalizeUrl(url)
+    return normalized !== null && this.#navigationTargets.has(normalized)
+  }
+
+  #normalizeUrl(url: string): string | null {
+    try {
+      return new URL(url).href
+    } catch {
+      return null
+    }
+  }
+
+  /** Record a file the user explicitly selected through an OS dialog. The
+   *  canonical (symlink-resolved) path is what grants preview/reveal, so a
+   *  later swap to a symlink can never widen the grant. */
+  async registerUserSelectedFile(path: string): Promise<void> {
+    const canonical = await this.#canonicalizeIfExists(path)
+    if (canonical) this.#userSelectedFiles.add(canonical)
   }
 
   /** Record a directory the user explicitly selected through an OS dialog. */
-  registerUserSelectedRoot(path: string): void {
-    if (typeof path === 'string' && path.length > 0) this.#userSelectedRoots.add(path)
+  async registerUserSelectedRoot(path: string): Promise<void> {
+    const canonical = await this.#canonicalizeIfExists(path)
+    if (canonical) this.#userSelectedRoots.add(canonical)
   }
 
   /**
    * Validate a local path for file preview/reveal. The candidate must be a
    * bounded absolute path (or `file://` URL) free of control characters that,
-   * after symlink resolution, lives inside a registered project root, the
-   * config root, or a user-selected directory, or exactly matches a
-   * user-selected file. Returns the canonical resolved path.
+   * after symlink resolution, lives inside a registered project root, a
+   * concrete app-owned artifact root, or a user-selected directory, or exactly
+   * matches a user-selected file (by canonical path only). Returns the
+   * canonical path.
    */
   async resolveScopedPath(value: unknown): Promise<string> {
     const candidate = this.#decodeCandidatePath(value)
     const canonical = await this.#canonicalize(candidate)
-    if (this.#userSelectedFiles.has(candidate) || this.#userSelectedFiles.has(canonical)) {
-      return canonical
-    }
+    if (this.#userSelectedFiles.has(canonical)) return canonical
     const scopes = await this.#resolveScopes()
     for (const scope of scopes) {
       if (isWithinRoot(scope, canonical)) return canonical
@@ -891,11 +951,7 @@ export class PrivilegedIpcValidator {
   }
 
   #decodeCandidatePath(value: unknown): string {
-    if (
-      typeof value !== 'string' ||
-      value.length === 0 ||
-      value.length > MAX_SCOPED_PATH_LENGTH
-    ) {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SCOPED_PATH_LENGTH) {
       throw new TypeError('Path must be a string of at most 16384 characters')
     }
     if (containsControlCharacter(value)) {
@@ -916,6 +972,14 @@ export class PrivilegedIpcValidator {
     }
   }
 
+  async #canonicalizeIfExists(path: string): Promise<string | null> {
+    try {
+      return await realpath(path)
+    } catch {
+      return null
+    }
+  }
+
   async #canonicalize(path: string): Promise<string> {
     try {
       return await realpath(path)
@@ -926,12 +990,13 @@ export class PrivilegedIpcValidator {
 
   async #resolveScopes(): Promise<string[]> {
     if (!this.#scopes) return []
-    const projectRoots = await this.#scopes.projectRoots()
-    const candidates = [
-      ...projectRoots,
-      this.#scopes.configRoot(),
-      ...this.#userSelectedRoots
-    ].filter((root) => typeof root === 'string' && root.length > 0)
+    const [projectRoots, artifactRoots] = await Promise.all([
+      this.#scopes.projectRoots(),
+      this.#scopes.appArtifactRoots()
+    ])
+    const candidates = [...projectRoots, ...artifactRoots, ...this.#userSelectedRoots].filter(
+      (root) => typeof root === 'string' && root.length > 0
+    )
     const resolved: string[] = []
     for (const root of candidates) {
       try {
