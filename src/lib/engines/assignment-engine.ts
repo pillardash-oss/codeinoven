@@ -263,6 +263,16 @@ export class AssignmentEngine {
     this.repo.removeApiCapabilitiesForAssignment(assignmentId)
   }
 
+  /** Revoke the durable capability of a worker that is no longer assigned. */
+  removeApiCapabilitiesForThread(assignmentId: string, threadId: string): void {
+    this.repo.removeApiCapabilitiesForThread(assignmentId, threadId)
+  }
+
+  /** Revoke one stale durable capability discovered during request validation. */
+  removeApiCapability(token: string): void {
+    this.repo.removeApiCapability(token)
+  }
+
   async markdownPath(projectId: string, coordinatorThreadId: string): Promise<string> {
     const featureSlug = await ensureFeatureSlug(this.db, projectId, coordinatorThreadId)
     return this.storage.resolveProjectSpecArtifact(
@@ -770,10 +780,11 @@ export class AssignmentEngine {
 
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
-    if (!['ready', 'rework', 'failed'].includes(task.status)) {
+    const retryingStoppedTask = task.status === 'attention' && task.report === undefined
+    if (!['ready', 'rework', 'failed'].includes(task.status) && !retryingStoppedTask) {
       throw new AssignmentEngineError(
         'invalid_transition',
-        `Task ${taskId} is ${task.status}, not ready for assignment`
+        `Task ${taskId} is ${task.status}, not ready or retryable for assignment`
       )
     }
 
@@ -790,18 +801,19 @@ export class AssignmentEngine {
     // thread is created for the retry — never reuse the crashed worker's thread.
     // The abandoned thread is unlinked from the Assignment so a late harness
     // session error on it cannot report as this task's current worker.
-    const staleThreadId = task.status === 'failed' ? task.threadId : undefined
-    const dispatchBase =
-      task.status === 'failed'
-        ? {
-            ...task,
-            report: undefined,
-            review: undefined,
-            workerName: undefined,
-            threadId: undefined
-          }
-        : task
+    const replacingWorker = task.status === 'failed' || retryingStoppedTask
+    const staleThreadId = replacingWorker ? task.threadId : undefined
+    const dispatchBase = replacingWorker
+      ? {
+          ...task,
+          report: undefined,
+          review: undefined,
+          workerName: undefined,
+          threadId: undefined
+        }
+      : task
     if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
+      this.removeApiCapabilitiesForThread(active.id, staleThreadId)
       await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
     }
 

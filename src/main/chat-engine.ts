@@ -9,7 +9,7 @@ import { ProjectManager } from '../lib/engines/project-manager'
 import { ThreadManager, remapCopiedMessages } from '../lib/engines/thread-manager'
 import { SpecEngine } from '../lib/engines/spec-engine'
 import { AuditEngine } from '../lib/engines/audit-engine'
-import { AssignmentEngine } from '../lib/engines/assignment-engine'
+import { AssignmentEngine, AssignmentEngineError } from '../lib/engines/assignment-engine'
 import { ScopeManager } from '../lib/engines/scope-manager'
 import { OpenCodeDriver, type IsolatedHandle } from './drivers/opencode-driver'
 import { ClaudeCodeDriver } from './drivers/claude-code-driver'
@@ -777,6 +777,16 @@ interface PendingInitialSpecGeneration {
   skipSubmittedRead?: boolean
 }
 
+class AssignmentApiRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string
+  ) {
+    super(message)
+    this.name = 'AssignmentApiRequestError'
+  }
+}
+
 /**
  * ChatEngine — orchestrates harness drivers and exposes the unified `agent:*`
  * IPC surface consumed by the renderer.
@@ -867,6 +877,8 @@ export class ChatEngine {
   private assignmentApiServer: Server | null = null
   private assignmentApiBaseUrl = ''
   private readonly assignmentApiCapabilities = new Map<string, AssignmentApiCapability>()
+  /** Per-Assignment request tails prevent stale whole-plan snapshots from overwriting each other. */
+  private readonly assignmentApiQueues = new Map<string, Promise<void>>()
   private memoryService: MemoryService
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
@@ -1665,6 +1677,7 @@ export class ChatEngine {
     this.userAbortedSessions.clear()
     this.providerCache.clear()
     this.assignmentApiCapabilities.clear()
+    this.assignmentApiQueues.clear()
   }
 
   /**
@@ -4981,7 +4994,7 @@ export class ChatEngine {
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks.',
-      'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. Re-dispatch it by calling assign-task again: the API returns a fresh worker thread for the retry. Do not wait for an audit-feedback state to recover a failed task; assign-task is the recovery path.',
+      'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
           role: 'coordinator',
@@ -5124,7 +5137,11 @@ export class ChatEngine {
       routedThreadIds.add(task.threadId)
       routed.push(context)
     }
-    await Promise.all(routed.map((context) => this.steerAssignmentWorker(context, instruction)))
+    for (const context of routed) {
+      await this.withAssignmentApiLock(context.assignment.id, () =>
+        this.steerAssignmentWorker(context, instruction)
+      )
+    }
     return { directCoordinatorTasks, routed }
   }
 
@@ -5173,7 +5190,7 @@ export class ChatEngine {
       `Authorization header: Bearer ${token}`,
       'POST JSON endpoints:',
       '- /v1/assignments/get — { "assignmentId": "..." }',
-      '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }',
+      '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
       '- /v1/assignments/submit-test-evidence (worker capability only) — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }',
       '- /v1/assignments/report-task — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }',
       '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }',
@@ -5181,8 +5198,8 @@ export class ChatEngine {
       '- /v1/assignments/add-followup-task — { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
       '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }',
       '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked) — { "assignmentId": "..." }',
-      '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "..." }',
-      '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }',
+      '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
+      '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.',
       'Use Content-Type: application/json. Reusing an operationId safely returns the original result.'
     ].join('\n')
   }
@@ -5208,6 +5225,17 @@ export class ChatEngine {
     this.assignmentApiBaseUrl = `http://127.0.0.1:${boundPort}`
     this.assignmentEngine.saveApiPort(boundPort)
     for (const [token, capability] of this.assignmentEngine.loadApiCapabilities()) {
+      if (capability.role === 'worker' && !this.assignmentWorkerCapabilityIsCurrent(capability)) {
+        this.assignmentEngine.removeApiCapability(token)
+        void this.retireOrphanedAssignmentWorker(capability).catch((error: unknown) => {
+          Logger.info('Stale Assignment worker cleanup was incomplete', {
+            assignmentId: capability.assignmentId,
+            threadId: capability.threadId,
+            error: error instanceof Error ? error.message : String(error)
+          })
+        })
+        continue
+      }
       this.assignmentApiCapabilities.set(token, capability)
     }
     Logger.info('Assignment API listening', { baseUrl: this.assignmentApiBaseUrl })
@@ -5245,244 +5273,268 @@ export class ChatEngine {
       }
       const body = await this.readAssignmentApiBody(request)
       const path = new URL(request.url ?? '/', this.assignmentApiBaseUrl).pathname
-      this.assertAssignmentApiCapability(capability, path, body)
-      if (path === '/v1/assignments/get') {
-        const assignmentId = this.apiString(body.assignmentId, 'assignmentId')
-        const assignment = this.assignmentEngine.listVersions(assignmentId).at(-1)
-        let auditReport: AuditReport | null = null
-        if (assignment?.auditCycle?.reportId && assignment.auditCycle.reportVersion !== undefined) {
-          try {
-            auditReport =
-              this.auditEngine.getVersion(
-                assignment.projectId,
-                assignment.coordinatorThreadId,
-                assignment.auditCycle.reportId,
-                assignment.auditCycle.reportVersion
-              ) ?? null
-          } catch {
-            auditReport = null
+      this.assertAssignmentApiCapability(token, capability, path, body)
+      const requestAssignmentId = this.apiString(body.assignmentId, 'assignmentId')
+      await this.withAssignmentApiLock(requestAssignmentId, async () => {
+        if (path === '/v1/assignments/get') {
+          const assignmentId = this.apiString(body.assignmentId, 'assignmentId')
+          const assignment = this.assignmentEngine.listVersions(assignmentId).at(-1)
+          let auditReport: AuditReport | null = null
+          if (
+            assignment?.auditCycle?.reportId &&
+            assignment.auditCycle.reportVersion !== undefined
+          ) {
+            try {
+              auditReport =
+                this.auditEngine.getVersion(
+                  assignment.projectId,
+                  assignment.coordinatorThreadId,
+                  assignment.auditCycle.reportId,
+                  assignment.auditCycle.reportVersion
+                ) ?? null
+            } catch {
+              auditReport = null
+            }
           }
-        }
-        this.writeAssignmentApiResponse(response, assignment ? 200 : 404, {
-          assignment: assignment ?? null,
-          auditReport
-        })
-        return
-      }
-      if (path === '/v1/assignments/assign-task') {
-        const result = await this.assignmentEngine.assignTask(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.taskId, 'taskId'),
-          this.apiString(body.operationId, 'operationId')
-        )
-        this.writeAssignmentApiResponse(response, 200, result)
-        void this.dispatchAssignmentWorker(result).catch((error: unknown) => {
-          Logger.error('Assignment worker dispatch failed', {
-            assignmentId: result.assignment.id,
-            taskId: result.task?.id,
-            threadId: result.thread?.id,
-            error: error instanceof Error ? error.message : String(error)
+          this.writeAssignmentApiResponse(response, assignment ? 200 : 404, {
+            assignment: assignment ?? null,
+            auditReport
           })
-        })
-        return
-      }
-      if (path === '/v1/assignments/report-task') {
-        const report = this.apiTaskReport(body.report)
-        const result = await this.assignmentEngine.reportTask(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.taskId, 'taskId'),
-          this.apiString(body.workerThreadId, 'workerThreadId'),
-          report,
-          this.apiString(body.operationId, 'operationId')
-        )
-        if (!result.idempotent && result.task?.owner === 'worker') {
-          await this.promptCoordinatorForAudit(result.assignment, result.task.id, report)
+          return
         }
-        this.writeAssignmentApiResponse(response, 200, result)
-        return
-      }
-      if (path === '/v1/assignments/submit-test-evidence') {
-        const kind = this.apiTestEvidenceKind(body.kind)
-        const content = this.apiTestEvidenceContent(body.content)
-        const result = await this.assignmentEngine.submitTaskTestEvidence(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.taskId, 'taskId'),
-          this.apiString(body.workerThreadId, 'workerThreadId'),
-          kind,
-          content,
-          this.apiString(body.operationId, 'operationId')
-        )
-        this.writeAssignmentApiResponse(response, 200, {
-          status: 'stored',
-          kind,
-          bytes: Buffer.byteLength(content),
-          ...result
-        })
-        return
-      }
-      if (path === '/v1/assignments/review-task') {
-        const result = await this.assignmentEngine.reviewTask(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.taskId, 'taskId'),
-          this.apiString(body.coordinatorThreadId, 'coordinatorThreadId'),
-          this.apiTaskReview(body.review),
-          this.apiString(body.operationId, 'operationId')
-        )
-        if (
-          result.assignment.status === 'completed' &&
-          result.assignment.auditCycle?.status === 'available'
-        ) {
-          const coordinator = await this.threadManager.getThread(
-            result.assignment.projectId,
-            result.assignment.coordinatorThreadId
+        if (path === '/v1/assignments/assign-task') {
+          const previousTask = this.assignmentEngine
+            .listVersions(requestAssignmentId)
+            .at(-1)
+            ?.content.tasks.find((task) => task.id === body.taskId)
+          const result = await this.assignmentEngine.assignTask(
+            requestAssignmentId,
+            this.apiString(body.taskId, 'taskId'),
+            this.apiString(body.operationId, 'operationId')
           )
-          await this.threadManager.setAuditState(
-            result.assignment.projectId,
-            result.assignment.coordinatorThreadId,
-            'offered'
+          if (previousTask?.threadId && previousTask.threadId !== result.task?.threadId) {
+            this.revokeAssignmentWorkerCapabilities(requestAssignmentId, previousTask.threadId)
+          }
+          this.writeAssignmentApiResponse(response, 200, result)
+          void this.dispatchAssignmentWorker(result).catch((error: unknown) => {
+            Logger.error('Assignment worker dispatch failed', {
+              assignmentId: result.assignment.id,
+              taskId: result.task?.id,
+              threadId: result.thread?.id,
+              error: error instanceof Error ? error.message : String(error)
+            })
+          })
+          return
+        }
+        if (path === '/v1/assignments/report-task') {
+          const report = this.apiTaskReport(body.report)
+          const result = await this.assignmentEngine.reportTask(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            this.apiString(body.taskId, 'taskId'),
+            this.apiString(body.workerThreadId, 'workerThreadId'),
+            report,
+            this.apiString(body.operationId, 'operationId')
           )
-          await this.threadManager.setStatus(
-            result.assignment.projectId,
-            result.assignment.coordinatorThreadId,
-            'awaiting_approval',
-            { read: false }
+          if (!result.idempotent && result.task?.owner === 'worker') {
+            await this.promptCoordinatorForAudit(result.assignment, result.task.id, report)
+          }
+          this.writeAssignmentApiResponse(response, 200, result)
+          return
+        }
+        if (path === '/v1/assignments/submit-test-evidence') {
+          const kind = this.apiTestEvidenceKind(body.kind)
+          const content = this.apiTestEvidenceContent(body.content)
+          const result = await this.assignmentEngine.submitTaskTestEvidence(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            this.apiString(body.taskId, 'taskId'),
+            this.apiString(body.workerThreadId, 'workerThreadId'),
+            kind,
+            content,
+            this.apiString(body.operationId, 'operationId')
           )
-          if (coordinator?.settings?.loopMode === true) {
-            void this.continueLoop(
+          this.writeAssignmentApiResponse(response, 200, {
+            status: 'stored',
+            kind,
+            bytes: Buffer.byteLength(content),
+            ...result
+          })
+          return
+        }
+        if (path === '/v1/assignments/review-task') {
+          const result = await this.assignmentEngine.reviewTask(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            this.apiString(body.taskId, 'taskId'),
+            this.apiString(body.coordinatorThreadId, 'coordinatorThreadId'),
+            this.apiTaskReview(body.review),
+            this.apiString(body.operationId, 'operationId')
+          )
+          if (
+            result.assignment.status === 'completed' &&
+            result.assignment.auditCycle?.status === 'available'
+          ) {
+            const coordinator = await this.threadManager.getThread(
               result.assignment.projectId,
               result.assignment.coordinatorThreadId
             )
+            await this.threadManager.setAuditState(
+              result.assignment.projectId,
+              result.assignment.coordinatorThreadId,
+              'offered'
+            )
+            await this.threadManager.setStatus(
+              result.assignment.projectId,
+              result.assignment.coordinatorThreadId,
+              'awaiting_approval',
+              { read: false }
+            )
+            if (coordinator?.settings?.loopMode === true) {
+              void this.continueLoop(
+                result.assignment.projectId,
+                result.assignment.coordinatorThreadId
+              )
+            }
+            this.revokeAssignmentCapabilities(result.assignment.id)
           }
+          this.writeAssignmentApiResponse(response, 200, result)
+          return
         }
-        this.writeAssignmentApiResponse(response, 200, result)
-        return
-      }
-      if (path === '/v1/assignments/reopen-task') {
-        const current = this.assignmentEngine
-          .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
-          .at(-1)
-        if (!current) throw new Error('Assignment not found')
-        const assignment = await this.assignmentEngine.reopenCompletedTask(
-          current.projectId,
-          capability.threadId,
-          this.apiString(body.taskId, 'taskId')
-        )
-        this.writeAssignmentApiResponse(response, 200, { assignment })
-        return
-      }
-      if (path === '/v1/assignments/add-followup-task') {
-        const current = this.assignmentEngine
-          .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
-          .at(-1)
-        if (!current) throw new Error('Assignment not found')
-        const assignment = await this.assignmentEngine.appendFollowUpTask(
-          current.projectId,
-          capability.threadId,
-          this.apiFollowUpTask(body.task)
-        )
-        this.writeAssignmentApiResponse(response, 200, { assignment })
-        return
-      }
-      if (path === '/v1/assignments/propose-rework-assignment') {
-        const current = this.assignmentEngine
-          .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
-          .at(-1)
-        if (!current) throw new Error('Assignment not found')
-        const coordinator = await this.threadManager.getThread(
-          current.projectId,
-          capability.threadId
-        )
-        if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
-        const assignment = await this.assignmentEngine.proposeAuditReworkDraft(
-          current.projectId,
-          capability.threadId,
-          parseGeneratedAssignmentContent(body.assignment),
-          {
-            source: 'agent',
-            actor: 'Sr. Engineer',
-            harnessId: coordinator.settings.harnessId,
-            providerId: coordinator.settings.providerId,
-            modelId: coordinator.settings.modelId
+        if (path === '/v1/assignments/reopen-task') {
+          const current = this.assignmentEngine
+            .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
+            .at(-1)
+          if (!current) throw new AssignmentApiRequestError(404, 'Assignment not found')
+          const assignment = await this.assignmentEngine.reopenCompletedTask(
+            current.projectId,
+            capability.threadId,
+            this.apiString(body.taskId, 'taskId')
+          )
+          this.writeAssignmentApiResponse(response, 200, { assignment })
+          return
+        }
+        if (path === '/v1/assignments/add-followup-task') {
+          const current = this.assignmentEngine
+            .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
+            .at(-1)
+          if (!current) throw new AssignmentApiRequestError(404, 'Assignment not found')
+          const assignment = await this.assignmentEngine.appendFollowUpTask(
+            current.projectId,
+            capability.threadId,
+            this.apiFollowUpTask(body.task)
+          )
+          this.writeAssignmentApiResponse(response, 200, { assignment })
+          return
+        }
+        if (path === '/v1/assignments/propose-rework-assignment') {
+          const current = this.assignmentEngine
+            .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
+            .at(-1)
+          if (!current) throw new AssignmentApiRequestError(404, 'Assignment not found')
+          const coordinator = await this.threadManager.getThread(
+            current.projectId,
+            capability.threadId
+          )
+          if (!coordinator?.settings) {
+            throw new AssignmentApiRequestError(409, 'Sr. Engineer settings are missing')
           }
-        )
-        await this.threadManager.setStatus(
-          current.projectId,
-          capability.threadId,
-          'awaiting_approval',
-          {
-            read: false
-          }
-        )
-        this.writeAssignmentApiResponse(response, 200, {
-          assignment,
-          status: 'awaiting_user_review'
-        })
-        return
-      }
-      if (path === '/v1/assignments/request-reaudit') {
-        const current = this.assignmentEngine
-          .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
-          .at(-1)
-        if (!current) throw new Error('Assignment not found')
-        const assignment =
-          current.auditCycle?.status === 'available'
-            ? current
-            : await this.assignmentEngine.makeAuditAvailable(current.projectId, capability.threadId)
-        await this.threadManager.setAuditState(current.projectId, capability.threadId, 'offered')
-        await this.threadManager.setStatus(
-          current.projectId,
-          capability.threadId,
-          'awaiting_approval',
-          {
-            read: false
-          }
-        )
-        this.writeAssignmentApiResponse(response, 200, { assignment, status: 'audit_available' })
-        return
-      }
-      if (path === '/v1/assignments/steer-worker') {
-        const { assignment, task, worker } = await this.requireAssignmentWorker(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.workerThreadId, 'workerThreadId')
-        )
-        const updatedAssignment = await this.steerAssignmentWorker(
-          { assignment, task, worker },
-          this.apiString(body.instruction, 'instruction')
-        )
-        this.writeAssignmentApiResponse(response, 200, {
-          status: 'steered',
-          assignmentId: assignment.id,
-          taskId: task.id,
-          taskTitle: task.title,
-          workerName: task.workerName ?? worker.title,
-          workerThreadId: worker.id,
-          workerThreadTitle: worker.title,
-          assignment: updatedAssignment
-        })
-        return
-      }
-      if (path === '/v1/assignments/stop-worker') {
-        const { worker } = await this.requireAssignmentWorker(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          this.apiString(body.workerThreadId, 'workerThreadId')
-        )
-        await this.abort(worker.projectId, worker.id)
-        const assignment = await this.assignmentEngine.stopWorker(
-          this.apiString(body.assignmentId, 'assignmentId'),
-          worker.id
-        )
-        this.writeAssignmentApiResponse(response, 200, {
-          status: 'stopped',
-          workerThreadId: worker.id,
-          assignment
-        })
-        return
-      }
-      this.writeAssignmentApiResponse(response, 404, { error: 'Endpoint not found' })
+          const assignment = await this.assignmentEngine.proposeAuditReworkDraft(
+            current.projectId,
+            capability.threadId,
+            parseGeneratedAssignmentContent(body.assignment),
+            {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: coordinator.settings.harnessId,
+              providerId: coordinator.settings.providerId,
+              modelId: coordinator.settings.modelId
+            }
+          )
+          await this.threadManager.setStatus(
+            current.projectId,
+            capability.threadId,
+            'awaiting_approval',
+            {
+              read: false
+            }
+          )
+          this.writeAssignmentApiResponse(response, 200, {
+            assignment,
+            status: 'awaiting_user_review'
+          })
+          return
+        }
+        if (path === '/v1/assignments/request-reaudit') {
+          const current = this.assignmentEngine
+            .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
+            .at(-1)
+          if (!current) throw new AssignmentApiRequestError(404, 'Assignment not found')
+          const assignment =
+            current.auditCycle?.status === 'available'
+              ? current
+              : await this.assignmentEngine.makeAuditAvailable(
+                  current.projectId,
+                  capability.threadId
+                )
+          await this.threadManager.setAuditState(current.projectId, capability.threadId, 'offered')
+          await this.threadManager.setStatus(
+            current.projectId,
+            capability.threadId,
+            'awaiting_approval',
+            {
+              read: false
+            }
+          )
+          this.writeAssignmentApiResponse(response, 200, { assignment, status: 'audit_available' })
+          return
+        }
+        if (path === '/v1/assignments/steer-worker') {
+          const { assignment, task, worker } = await this.requireAssignmentWorker(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            this.apiString(body.workerThreadId, 'workerThreadId')
+          )
+          const updatedAssignment = await this.steerAssignmentWorker(
+            { assignment, task, worker },
+            validateBoundedString(body.instruction, 'instruction', 1, 20_000)
+          )
+          this.writeAssignmentApiResponse(response, 200, {
+            status: 'steered',
+            assignmentId: assignment.id,
+            taskId: task.id,
+            taskTitle: task.title,
+            workerName: task.workerName ?? worker.title,
+            workerThreadId: worker.id,
+            workerThreadTitle: worker.title,
+            assignment: updatedAssignment
+          })
+          return
+        }
+        if (path === '/v1/assignments/stop-worker') {
+          const { worker } = await this.requireAssignmentWorker(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            this.apiString(body.workerThreadId, 'workerThreadId')
+          )
+          await this.abort(worker.projectId, worker.id)
+          const assignment = await this.assignmentEngine.stopWorker(
+            this.apiString(body.assignmentId, 'assignmentId'),
+            worker.id
+          )
+          this.writeAssignmentApiResponse(response, 200, {
+            status: 'stopped',
+            workerThreadId: worker.id,
+            assignment
+          })
+          return
+        }
+        this.writeAssignmentApiResponse(response, 404, { error: 'Endpoint not found' })
+      })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Assignment API request failed'
-      Logger.error('Assignment API request failed', { error: message })
-      this.writeAssignmentApiResponse(response, 400, { error: message })
+      const statusCode = this.assignmentApiErrorStatus(error)
+      if (statusCode >= 500) {
+        Logger.error('Assignment API request failed', { error: message })
+      } else {
+        Logger.info('Assignment API request rejected', { statusCode, error: message })
+      }
+      this.writeAssignmentApiResponse(response, statusCode, { error: message })
     }
   }
 
@@ -5523,14 +5575,16 @@ export class ChatEngine {
     workerThreadId: string
   ): Promise<AssignmentWorkerContext> {
     const assignment = this.assignmentEngine.listVersions(assignmentId).at(-1)
-    if (!assignment) throw new Error('Assignment not found')
+    if (!assignment) throw new AssignmentApiRequestError(404, 'Assignment not found')
     const task = assignment.content.tasks.find(
       (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
     )
-    if (!task) throw new Error('Worker does not belong to this Assignment')
+    if (!task) {
+      throw new AssignmentApiRequestError(403, 'Worker does not belong to this Assignment')
+    }
     const worker = await this.threadManager.getThread(assignment.projectId, workerThreadId)
     if (!worker || worker.assignmentId !== assignmentId || worker.assignmentRole !== 'worker') {
-      throw new Error('Assignment worker thread not found')
+      throw new AssignmentApiRequestError(404, 'Assignment worker thread not found')
     }
     return { assignment, task, worker }
   }
@@ -5616,7 +5670,7 @@ export class ChatEngine {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
         size += buffer.length
         if (size > 1_000_000) {
-          rejectBody(new Error('Assignment API payload is too large'))
+          rejectBody(new AssignmentApiRequestError(413, 'Assignment API payload is too large'))
           request.destroy()
           return
         }
@@ -5625,7 +5679,9 @@ export class ChatEngine {
       request.on('end', () => {
         try {
           const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf-8') || '{}')
-          if (!isRecord(parsed)) throw new Error('Assignment API body must be an object')
+          if (!isRecord(parsed)) {
+            throw new AssignmentApiRequestError(400, 'Assignment API body must be an object')
+          }
           resolveBody(parsed)
         } catch (error) {
           rejectBody(error)
@@ -5644,6 +5700,85 @@ export class ChatEngine {
     response.end(JSON.stringify(body))
   }
 
+  private async withAssignmentApiLock<T>(
+    assignmentId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.assignmentApiQueues.get(assignmentId) ?? Promise.resolve()
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolveGate) => {
+      release = resolveGate
+    })
+    const tail = previous.catch(() => undefined).then(() => gate)
+    this.assignmentApiQueues.set(assignmentId, tail)
+    await previous.catch(() => undefined)
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (this.assignmentApiQueues.get(assignmentId) === tail) {
+        this.assignmentApiQueues.delete(assignmentId)
+      }
+    }
+  }
+
+  private assignmentApiErrorStatus(error: unknown): number {
+    if (error instanceof AssignmentApiRequestError) return error.statusCode
+    if (error instanceof AssignmentEngineError) {
+      if (error.code === 'unauthorized') return 403
+      if (error.code === 'not_found') return 404
+      if (error.code === 'invalid_transition' || error.code === 'immutable') return 409
+      return 422
+    }
+    if (error instanceof TypeError) return 422
+    if (error instanceof SyntaxError) return 400
+    return 500
+  }
+
+  private assignmentWorkerCapabilityIsCurrent(capability: AssignmentApiCapability): boolean {
+    if (capability.role !== 'worker' || !capability.taskId) return false
+    const assignment = this.assignmentEngine.listVersions(capability.assignmentId).at(-1)
+    return (
+      assignment?.content.tasks.some(
+        (task) => task.id === capability.taskId && task.threadId === capability.threadId
+      ) === true
+    )
+  }
+
+  private revokeAssignmentWorkerCapabilities(assignmentId: string, threadId: string): void {
+    for (const [token, capability] of this.assignmentApiCapabilities) {
+      if (capability.assignmentId === assignmentId && capability.threadId === threadId) {
+        this.assignmentApiCapabilities.delete(token)
+      }
+    }
+    this.assignmentEngine.removeApiCapabilitiesForThread(assignmentId, threadId)
+  }
+
+  private revokeAssignmentCapabilities(assignmentId: string): void {
+    for (const [token, capability] of this.assignmentApiCapabilities) {
+      if (capability.assignmentId === assignmentId) this.assignmentApiCapabilities.delete(token)
+    }
+    this.assignmentEngine.removeApiCapabilitiesForAssignment(assignmentId)
+  }
+
+  private async retireOrphanedAssignmentWorker(capability: AssignmentApiCapability): Promise<void> {
+    if (capability.role !== 'worker') return
+    const assignment = this.assignmentEngine.listVersions(capability.assignmentId).at(-1)
+    if (
+      !assignment ||
+      assignment.content.tasks.some((task) => task.threadId === capability.threadId)
+    ) {
+      return
+    }
+    const worker = await this.threadManager.getThread(assignment.projectId, capability.threadId)
+    if (!worker || worker.assignmentId !== assignment.id || worker.assignmentRole !== 'worker')
+      return
+    if (worker.status === 'planning' || worker.status === 'executing') {
+      await this.abort(worker.projectId, worker.id)
+    }
+    await this.threadManager.unlinkAssignmentThread(worker.projectId, worker.id)
+  }
+
   private assignmentApiCapability(capability: AssignmentApiCapability): string {
     const existing = [...this.assignmentApiCapabilities.entries()].find(
       ([, candidate]) =>
@@ -5660,22 +5795,34 @@ export class ChatEngine {
   }
 
   private assertAssignmentApiCapability(
+    token: string,
     capability: AssignmentApiCapability,
     path: string,
     body: Record<string, unknown>
   ): void {
     const assignmentId = this.apiString(body.assignmentId, 'assignmentId')
     if (assignmentId !== capability.assignmentId) {
-      throw new Error('Capability does not grant access to this Assignment')
+      throw new AssignmentApiRequestError(
+        403,
+        'Capability does not grant access to this Assignment'
+      )
     }
     if (capability.role === 'worker') {
+      if (!this.assignmentWorkerCapabilityIsCurrent(capability)) {
+        this.assignmentApiCapabilities.delete(token)
+        this.assignmentEngine.removeApiCapability(token)
+        throw new AssignmentApiRequestError(401, 'Worker capability has expired')
+      }
       if (
         (path !== '/v1/assignments/report-task' &&
           path !== '/v1/assignments/submit-test-evidence') ||
         body.taskId !== capability.taskId ||
         body.workerThreadId !== capability.threadId
       ) {
-        throw new Error('Worker capability permits only its own task report')
+        throw new AssignmentApiRequestError(
+          403,
+          'Worker capability permits only its own task report'
+        )
       }
       return
     }
@@ -5691,14 +5838,14 @@ export class ChatEngine {
       path !== '/v1/assignments/steer-worker' &&
       path !== '/v1/assignments/stop-worker'
     ) {
-      throw new Error('Coordinator capability cannot call this endpoint')
+      throw new AssignmentApiRequestError(403, 'Coordinator capability cannot call this endpoint')
     }
     if (
       (path === '/v1/assignments/review-task' || path === '/v1/assignments/report-task') &&
       (path === '/v1/assignments/review-task' ? body.coordinatorThreadId : body.workerThreadId) !==
         capability.threadId
     ) {
-      throw new Error('Coordinator capability does not match the thread')
+      throw new AssignmentApiRequestError(403, 'Coordinator capability does not match the thread')
     }
   }
 

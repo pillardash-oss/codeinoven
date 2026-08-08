@@ -226,4 +226,18 @@ export class AssignmentRepo {
   removeApiCapabilitiesForAssignment(assignmentId: string): void {
     this.db.run('DELETE FROM assignment_api_capabilities WHERE assignment_id=?', assignmentId)
   }
+
+  /** Drop every capability issued to one worker thread after it is replaced. */
+  removeApiCapabilitiesForThread(assignmentId: string, threadId: string): void {
+    this.db.run(
+      'DELETE FROM assignment_api_capabilities WHERE assignment_id=? AND thread_id=?',
+      assignmentId,
+      threadId
+    )
+  }
+
+  /** Drop one capability that no longer matches the persisted Assignment graph. */
+  removeApiCapability(token: string): void {
+    this.db.run('DELETE FROM assignment_api_capabilities WHERE token=?', token)
+  }
 }
