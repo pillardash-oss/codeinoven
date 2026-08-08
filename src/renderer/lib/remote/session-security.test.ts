@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  MAX_ENCRYPTED_PAYLOAD_BYTES,
+  MAX_PLAINTEXT_BYTES,
+  MAX_REPLAY_CACHE,
   authenticateHandshake,
   createHandshakeToken,
   decryptPayload,
   encryptPayload,
   generateNonce,
+  replayCacheSize,
   verifyHandshakeToken
 } from './session-security'
 import { createLanTransport, type TransportSocket } from './transport'
@@ -84,6 +88,52 @@ describe('payload encryption', () => {
     await expect(decryptPayload('shared-secret', 'not-a-payload')).rejects.toThrow(
       'malformed-encrypted-payload'
     )
+  })
+})
+
+describe('payload size limits', () => {
+  it('rejects an encrypted payload above the ciphertext cap before decrypting', async () => {
+    const oversized = await encryptPayload(
+      'shared-secret',
+      'x'.repeat(MAX_ENCRYPTED_PAYLOAD_BYTES + 1024)
+    )
+    await expect(decryptPayload('shared-secret', oversized)).rejects.toThrow(
+      'oversized-encrypted-payload'
+    )
+  })
+
+  it('rejects a decrypted payload above the plaintext cap before decoding it', async () => {
+    // Ciphertext of a payload larger than the plaintext cap but still below the
+    // encrypted cap, so the plaintext check is what rejects it.
+    const oversized = await encryptPayload('shared-secret', 'y'.repeat(MAX_PLAINTEXT_BYTES + 1024))
+    expect(oversized.length).toBeGreaterThan(0)
+    await expect(decryptPayload('shared-secret', oversized)).rejects.toThrow(
+      'oversized-plaintext-payload'
+    )
+  })
+
+  it('accepts a payload within both caps', async () => {
+    const small = await encryptPayload('shared-secret', 'small payload')
+    await expect(decryptPayload('shared-secret', small)).resolves.toBe('small payload')
+  })
+})
+
+describe('replay protection', () => {
+  it('rejects the same encrypted payload on a second decrypt', async () => {
+    const ciphertext = await encryptPayload('shared-secret', 'one-time-message')
+    await expect(decryptPayload('shared-secret', ciphertext)).resolves.toBe('one-time-message')
+    await expect(decryptPayload('shared-secret', ciphertext)).rejects.toThrow(
+      'replayed-encrypted-payload'
+    )
+  })
+
+  it('keeps the replay store bounded at the fixed-size cap', async () => {
+    const before = replayCacheSize()
+    for (let index = 0; index < MAX_REPLAY_CACHE + 8; index += 1) {
+      const ciphertext = await encryptPayload('shared-secret', `payload-${index}`)
+      await decryptPayload('shared-secret', ciphertext)
+    }
+    expect(replayCacheSize() - before).toBeLessThanOrEqual(MAX_REPLAY_CACHE)
   })
 })
 

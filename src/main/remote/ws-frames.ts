@@ -11,6 +11,21 @@ import { createHash } from 'node:crypto'
 
 export const WEBSOCKET_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 
+/**
+ * Maximum decoded frame payload accepted before allocation (1 MiB). Matches the
+ * gateway's peer-buffer bound so a hostile header can never force a large
+ * payload copy before the length is validated.
+ */
+export const MAX_FRAME_PAYLOAD_BYTES = 1024 * 1024
+
+/** Error thrown when a frame declares a payload larger than the accepted cap. */
+export class WsFrameTooLargeError extends Error {
+  constructor(public readonly declaredBytes: number) {
+    super('ws-frame-payload-too-large')
+    this.name = 'WsFrameTooLargeError'
+  }
+}
+
 /** Compute the `Sec-WebSocket-Accept` value for a client handshake key. */
 export function acceptWebSocketKey(clientKey: string): string {
   return createHash('sha1')
@@ -70,8 +85,16 @@ export interface DecodedWsFrame {
 /**
  * Decode every complete frame in a buffer. Returns the decoded frames and the
  * unconsumed trailing bytes (a partially-received frame).
+ *
+ * A frame whose header declares a payload larger than `maxPayloadBytes` throws
+ * `WsFrameTooLargeError` before any payload is sliced or copied, so oversized
+ * encrypted/decoded messages fail before large allocation.
  */
-export function decodeWsFrames(buffer: Buffer): { frames: DecodedWsFrame[]; remaining: Buffer } {
+export function decodeWsFrames(
+  buffer: Buffer,
+  options: { maxPayloadBytes?: number } = {}
+): { frames: DecodedWsFrame[]; remaining: Buffer } {
+  const maxPayloadBytes = options.maxPayloadBytes ?? MAX_FRAME_PAYLOAD_BYTES
   let offset = 0
   const frames: DecodedWsFrame[] = []
   while (offset + 2 <= buffer.length) {
@@ -92,6 +115,9 @@ export function decodeWsFrames(buffer: Buffer): { frames: DecodedWsFrame[]; rema
       const low = buffer.readUInt32BE(offset + 6)
       length = high * 0x100000000 + low
       headerLength = 10
+    }
+    if (length > maxPayloadBytes) {
+      throw new WsFrameTooLargeError(length)
     }
     const maskLength = masked ? 4 : 0
     const totalLength = headerLength + maskLength + length

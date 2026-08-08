@@ -17,9 +17,28 @@ const IV_LENGTH = 12
 const PAYLOAD_VERSION = 'v2'
 const MAX_PAYLOAD_AGE_MS = 5 * 60 * 1_000
 const MAX_CLOCK_SKEW_MS = 60 * 1_000
-const MAX_REPLAY_CACHE = 4_096
+/** Maximum ciphertext bytes accepted before decryption (1 MiB). */
+export const MAX_ENCRYPTED_PAYLOAD_BYTES = 1024 * 1024
+/** Maximum decrypted plaintext bytes accepted before decoding (768 KiB). */
+export const MAX_PLAINTEXT_BYTES = 768 * 1024
+/** Maximum number of replay identifiers retained (bounded, fixed-size entries). */
+export const MAX_REPLAY_CACHE = 4_096
+/**
+ * Replay protection stores SHA-256 hashes of each encrypted payload, never the
+ * ciphertext itself, so the retained identifiers are fixed-size and bounded.
+ */
 const decryptedPayloads = new Set<string>()
 const decryptingPayloads = new Set<string>()
+
+/** Number of replay identifiers currently retained (development/test helper). */
+export function replayCacheSize(): number {
+  return decryptedPayloads.size
+}
+
+async function replayId(payload: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', encoder.encode(payload))
+  return toBase64(new Uint8Array(digest))
+}
 
 function toBase64(bytes: Uint8Array): string {
   let binary = ''
@@ -129,10 +148,11 @@ export async function encryptPayload(secret: string, plaintext: string): Promise
 
 /** Decrypt a payload produced by `encryptPayload`. */
 export async function decryptPayload(secret: string, payload: string): Promise<string> {
-  if (decryptedPayloads.has(payload) || decryptingPayloads.has(payload)) {
+  const id = await replayId(payload)
+  if (decryptedPayloads.has(id) || decryptingPayloads.has(id)) {
     throw new Error('replayed-encrypted-payload')
   }
-  decryptingPayloads.add(payload)
+  decryptingPayloads.add(id)
   try {
     const parts = payload.split(':')
     const versioned = parts[0] === PAYLOAD_VERSION
@@ -147,8 +167,15 @@ export async function decryptPayload(secret: string, payload: string): Promise<s
         throw new Error('expired-encrypted-payload')
       }
     }
+    const ciphertextBase64 = parts[versioned ? 3 : 1] ?? ''
+    // Bound the ciphertext before decoding it so an oversized encrypted
+    // payload fails before a large allocation.
+    const estimatedCiphertextBytes = Math.ceil((ciphertextBase64.length * 3) / 4)
+    if (estimatedCiphertextBytes > MAX_ENCRYPTED_PAYLOAD_BYTES) {
+      throw new Error('oversized-encrypted-payload')
+    }
     const iv = fromBase64(parts[versioned ? 2 : 0] ?? '')
-    const ciphertext = fromBase64(parts[versioned ? 3 : 1] ?? '')
+    const ciphertext = fromBase64(ciphertextBase64)
     const key = await deriveAesGcmKey(secret)
     const plaintext = await crypto.subtle.decrypt(
       timestamp
@@ -161,13 +188,16 @@ export async function decryptPayload(secret: string, payload: string): Promise<s
       key,
       ciphertext
     )
-    decryptedPayloads.add(payload)
+    if (plaintext.byteLength > MAX_PLAINTEXT_BYTES) {
+      throw new Error('oversized-plaintext-payload')
+    }
+    decryptedPayloads.add(id)
     if (decryptedPayloads.size > MAX_REPLAY_CACHE) {
       const oldest = decryptedPayloads.values().next().value
       if (typeof oldest === 'string') decryptedPayloads.delete(oldest)
     }
     return decoder.decode(plaintext)
   } finally {
-    decryptingPayloads.delete(payload)
+    decryptingPayloads.delete(id)
   }
 }

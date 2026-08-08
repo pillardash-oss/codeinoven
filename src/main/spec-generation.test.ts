@@ -5,6 +5,14 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() }
 }))
 
+vi.mock('./memory-service', () => ({
+  MemoryService: class {
+    async formatCurrent(): Promise<string> {
+      return 'Test memory layer content.'
+    }
+  }
+}))
+
 import {
   DEPLOYMENT_URL_SYSTEM_INSTRUCTION,
   DEPLOYMENT_URL_SPEC_INSTRUCTION,
@@ -15,6 +23,8 @@ import {
   mergeAgentMessages,
   assertHarnessRequestCapabilities
 } from './chat-engine'
+import { PromptAssembler, layerDevHash, layerSize, normalizeLayerContent } from './prompt-assembler'
+import { MemoryService } from './memory-service'
 
 const validContent = {
   problem: 'Users need a reliable specification workflow.',
@@ -257,5 +267,79 @@ describe('provider-neutral session helpers', () => {
         'auto_review'
       )
     ).not.toThrow()
+  })
+})
+
+describe('prompt assembly owns planning and implementation layers', () => {
+  const constants = {
+    SPEC_BRAINSTORM_SYSTEM_PROMPT,
+    SPEC_IMPLEMENT_SYSTEM_PROMPT
+  }
+  const assembler = new PromptAssembler(new MemoryService())
+  // A path with no AGENTS.md keeps the assembled layers deterministic.
+  const projectPath = '/nonexistent-prompt-assembler-test-project'
+
+  it('normalizes content so structurally identical layers hash equally', () => {
+    expect(normalizeLayerContent('a  \n b\t')).toBe('a b')
+    expect(layerDevHash('a  \n b\t')).toBe(layerDevHash('a b'))
+    expect(layerDevHash('a b')).not.toBe(layerDevHash('a c'))
+  })
+
+  it('accounts per-layer characters and estimated tokens without content', () => {
+    const report = layerSize('hello world')
+    expect(report.characters).toBe(11)
+    expect(report.estimatedTokens).toBe(3)
+    expect(report).not.toHaveProperty('content')
+  })
+
+  it('keeps every brainstorm layer distinct and the planning prompt single', async () => {
+    const layers = await assembler.getLayers(
+      'project',
+      'thread',
+      projectPath,
+      null,
+      constants,
+      'brainstorm'
+    )
+    const hashes = layers.map((layer) => layerDevHash(layer.content))
+    expect(new Set(hashes).size).toBe(hashes.length)
+    const planningLayers = layers.filter((layer) =>
+      normalizeLayerContent(layer.content).includes(
+        normalizeLayerContent(SPEC_BRAINSTORM_SYSTEM_PROMPT)
+      )
+    )
+    expect(planningLayers).toHaveLength(1)
+  })
+
+  it('keeps every implement layer distinct and the implementation prompt single', async () => {
+    const layers = await assembler.getLayers(
+      'project',
+      'thread',
+      projectPath,
+      null,
+      constants,
+      'implement'
+    )
+    const hashes = layers.map((layer) => layerDevHash(layer.content))
+    expect(new Set(hashes).size).toBe(hashes.length)
+    const implementLayers = layers.filter((layer) =>
+      normalizeLayerContent(layer.content).includes(
+        normalizeLayerContent(SPEC_IMPLEMENT_SYSTEM_PROMPT)
+      )
+    )
+    expect(implementLayers).toHaveLength(1)
+  })
+
+  it('excludes planning and implementation prompts from chat-mode layers', async () => {
+    const layers = await assembler.getLayers(
+      'project',
+      'thread',
+      projectPath,
+      null,
+      constants,
+      'chat'
+    )
+    const appLayer = layers.find((layer) => layer.title.startsWith('Application: CodeInOven'))
+    expect(appLayer?.content).toBe('No application prompts configured.')
   })
 })
