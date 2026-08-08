@@ -142,6 +142,9 @@ jobs:
       - name: Production build
         run: bun run build:production
 
+      - name: Bundle budgets
+        run: bun run check:bundle
+
   verify-release:
     name: Release verification
     runs-on: macos-latest

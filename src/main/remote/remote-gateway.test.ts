@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { connect as netConnect, type Socket } from 'node:net'
 import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import { request as httpsRequest } from 'node:https'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
 import type { RemoteDeviceInfo } from './remote-types'
@@ -69,7 +70,8 @@ function waitForMessage(events: TransportEvent[], data: string, timeoutMs = 3_00
 
 function httpsGet(
   port: number,
-  path: string
+  path: string,
+  headers: Record<string, string> = {}
 ): Promise<{
   status: number
   body: string
@@ -77,7 +79,7 @@ function httpsGet(
 }> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
-      { host: '127.0.0.1', port, path, rejectUnauthorized: false },
+      { host: '127.0.0.1', port, path, headers, rejectUnauthorized: false },
       (response) => {
         let body = ''
         response.on('data', (chunk: Buffer) => {
@@ -91,6 +93,45 @@ function httpsGet(
     request.on('error', reject)
     request.end()
   })
+}
+
+function httpsGetRaw(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {}
+): Promise<{
+  status: number
+  body: Buffer
+  headers: Record<string, string | string[] | undefined>
+}> {
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(
+      { host: '127.0.0.1', port, path, headers, rejectUnauthorized: false },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => {
+          chunks.push(chunk)
+        })
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks),
+            headers: response.headers
+          })
+        )
+      }
+    )
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+function gunzipBuffer(data: Buffer): Buffer {
+  return gunzipSync(data)
+}
+
+function brotliDecompressBuffer(data: Buffer): Buffer {
+  return brotliDecompressSync(data)
 }
 
 function rawHandshake(
@@ -210,6 +251,163 @@ describe('RemoteGateway', () => {
       // A chunk never referenced by the PWA stays blocked.
       const other = await httpsGet(port, '/assets/other-unrelated.js')
       expect(other.status).toBe(404)
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves gzip-compressed assets with correct headers and an intact body', async () => {
+    const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(
+        join(root, 'assets', 'remote-abc123.js'),
+        'export const phrase = "compressed-asset-body";',
+        'utf8'
+      )
+    })
+    try {
+      const raw = await httpsGetRaw(port, '/assets/remote-abc123.js', {
+        'Accept-Encoding': 'gzip'
+      })
+      expect(raw.status).toBe(200)
+      expect(raw.headers['content-encoding']).toBe('gzip')
+      expect(raw.headers['vary']).toBe('Accept-Encoding')
+      expect(Number(raw.headers['content-length'])).toBe(raw.body.length)
+      expect(gunzipBuffer(raw.body).toString('utf8')).toContain('compressed-asset-body')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves brotli-compressed assets when br is advertised', async () => {
+    const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(
+        join(root, 'assets', 'remote-abc123.js'),
+        'export const phrase = "brotli-compressed-asset-body";',
+        'utf8'
+      )
+    })
+    try {
+      const raw = await httpsGetRaw(port, '/assets/remote-abc123.js', {
+        'Accept-Encoding': 'br, gzip'
+      })
+      expect(raw.status).toBe(200)
+      expect(raw.headers['content-encoding']).toBe('br')
+      expect(brotliDecompressBuffer(raw.body).toString('utf8')).toContain(
+        'brotli-compressed-asset-body'
+      )
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves hashed assets with immutable caching and a repeat 304', async () => {
+    const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(join(root, 'assets', 'remote-abc123.js'), 'export default 1;', 'utf8')
+    })
+    try {
+      const first = await httpsGet(port, '/assets/remote-abc123.js')
+      expect(first.status).toBe(200)
+      expect(first.headers?.['cache-control']).toBe('public, max-age=31536000, immutable')
+      const etag = first.headers?.['etag']
+      expect(etag).toBeTruthy()
+
+      const repeat = await httpsGet(port, '/assets/remote-abc123.js', {
+        'If-None-Match': etag as string
+      })
+      expect(repeat.status).toBe(304)
+      expect(repeat.body).toBe('')
+      expect(repeat.headers?.['etag']).toBe(etag)
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves mutable shell endpoints with no-store and never immutable', async () => {
+    const { gateway, port, staticRoot } = await makeGateway(SECRET, {}, async (root) => {
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(join(root, 'assets', 'remote-abc123.js'), 'export default 1;', 'utf8')
+      await writeFile(join(root, 'manifest.webmanifest'), '{"name":"test"}', 'utf8')
+    })
+    try {
+      const html = await httpsGet(port, '/remote.html')
+      expect(html.headers?.['cache-control']).toBe('no-store')
+      expect(html.headers?.['cache-control']).not.toContain('immutable')
+
+      const manifest = await httpsGet(port, '/manifest.webmanifest')
+      expect(manifest.headers?.['cache-control']).toBe('no-store')
+      expect(manifest.headers?.['cache-control']).not.toContain('immutable')
+
+      // A mutable public asset (agent icon) is never immutable.
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(staticRoot, 'assets/agents'), { recursive: true })
+      await writeFile(join(staticRoot, 'assets/agents/openai.svg'), '<svg/>', 'utf8')
+      const icon = await httpsGet(port, '/assets/agents/openai.svg')
+      expect(icon.headers?.['cache-control']).toBe('no-store')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('serves a generated service worker and precache manifest from the asset graph', async () => {
+    const { gateway, port } = await makeGateway(SECRET, {}, async (root) => {
+      await writeFile(
+        join(root, 'remote.html'),
+        '<script type="module" src="./assets/remote-abc123.js"></script>',
+        'utf8'
+      )
+      const { mkdir } = await import('node:fs/promises')
+      await mkdir(join(root, 'assets'), { recursive: true })
+      await writeFile(join(root, 'assets', 'remote-abc123.js'), 'export default 1;', 'utf8')
+      // A realistic service-worker template: the gateway injects the precache
+      // manifest and a build version into the placeholders before serving.
+      await writeFile(
+        join(root, 'service-worker.js'),
+        'const PRECACHE_MANIFEST = /*__PRECACHE_MANIFEST__*/[];\n' +
+          'const PRECACHE_VERSION = /*__PRECACHE_VERSION__*/"dev";\n',
+        'utf8'
+      )
+    })
+    try {
+      const worker = await httpsGet(port, '/service-worker.js')
+      expect(worker.status).toBe(200)
+      expect(worker.headers?.['cache-control']).toBe('no-store')
+      // The precache manifest is injected by the gateway.
+      expect(worker.body).toContain('/remote.html')
+      expect(worker.body).toContain('/assets/remote-abc123.js')
+      expect(worker.body).toContain('PRECACHE_VERSION')
+
+      const manifest = await httpsGet(port, '/precache-manifest.json')
+      expect(manifest.status).toBe(200)
+      const parsed = JSON.parse(manifest.body) as { urls: string[] }
+      expect(parsed.urls).toContain('/remote.html')
+      expect(parsed.urls).toContain('/assets/remote-abc123.js')
     } finally {
       await gateway.stop()
     }

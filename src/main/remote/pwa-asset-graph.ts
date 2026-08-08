@@ -13,11 +13,26 @@
  * chunk (static `from` imports, dynamic `import()`, and preload dep lists).
  * Only files in that closure are ever served — the desktop app's own entry
  * (`index.html`, `index-*.js`, unrelated chunks) is never exposed.
+ *
+ * The same graph also classifies the closure for HTTP caching:
+ *
+ * - **Hashed build outputs** (every file reached from `remote.html` and its
+ *   chunks) have content-derived names, so they are safe to serve with
+ *   `Cache-Control: public, max-age=31536000, immutable`.
+ * - **Public runtime assets** (agent icon SVGs loaded through
+ *   `publicAssetUrl`) keep stable, unhashed names and are therefore mutable —
+ *   they must never be cached as immutable.
+ *
+ * It additionally exposes the **disconnected-shell precache manifest** (the
+ * initial assets `remote.html` references directly, plus the shell files) that
+ * the service worker precaches, and **bundle-budget metadata** for the initial
+ * remote JavaScript closure (raw + gzip) used by `scripts/check-bundle-budgets.ts`.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 
 /**
  * Match a relative asset reference inside a chunk. Vite emits several shapes:
@@ -50,6 +65,58 @@ async function collectPublicAssetDir(staticRoot: string, relativeDir: string): P
     }
   }
   return paths
+}
+
+/**
+ * Collect the assets `remote.html` references directly. These form the
+ * disconnected shell: the entry chunk, its modulepreload deps, and stylesheets
+ * are what a phone needs to paint the pairing screen before any code-split
+ * feature loads. Files that do not exist on disk are skipped.
+ */
+async function collectInitialAssetRefs(staticRoot: string): Promise<string[]> {
+  const assetsDir = join(staticRoot, 'assets')
+  let html: string
+  try {
+    html = await readFile(join(staticRoot, 'remote.html'), 'utf8')
+  } catch {
+    return []
+  }
+  const refs: string[] = []
+  for (const match of html.matchAll(/\.\/assets\/([^"')\s]+)/g)) {
+    const name = match[1]
+    const path = `/assets/${name}`
+    if (!refs.includes(path) && existsSync(join(assetsDir, name))) refs.push(path)
+  }
+  return refs.sort()
+}
+
+/** Per-chunk raw + gzip byte sizes of the initial remote JavaScript closure. */
+export interface PwaBudgetChunk {
+  url: string
+  rawBytes: number
+  gzipBytes: number
+}
+
+/** Aggregate bundle-budget metadata for the initial remote JavaScript. */
+export interface PwaBundleBudget {
+  initialJsRawBytes: number
+  initialJsGzipBytes: number
+  maxInitialChunkGzipBytes: number
+  chunks: PwaBudgetChunk[]
+}
+
+/** The full cache-classified view of the PWA asset graph. */
+export interface PwaAssetGraph {
+  /** Full transitive closure — the serving allow-list. */
+  closure: ReadonlySet<string>
+  /** Hashed build outputs — safe to cache immutable. */
+  immutable: ReadonlySet<string>
+  /** Public, unhashed runtime assets — never cached as immutable. */
+  mutable: ReadonlySet<string>
+  /** Disconnected-shell precache manifest (absolute paths). */
+  precache: string[]
+  /** Bundle-budget metadata for the initial remote JS closure. */
+  budget: PwaBundleBudget
 }
 
 /**
@@ -108,4 +175,59 @@ export async function computePwaAssetClosure(staticRoot: string): Promise<Set<st
   }
 
   return allowed
+}
+
+/** Root-level shell files the disconnected PWA needs to render and install. */
+const ROOT_SHELL_FILES = [
+  '/remote.html',
+  '/manifest.webmanifest',
+  '/apple-touch-icon.png',
+  '/icon.png',
+  '/logo.png',
+  '/favicon.ico'
+]
+
+/**
+ * Compute the full cache-classified asset graph, precache manifest, and bundle
+ * budget. `precache` deliberately excludes the hashed connected-client closure:
+ * only the disconnected shell (root files + initial `remote.html` references)
+ * is precached, so first-install offline and interrupted-update scenarios keep a
+ * usable pairing screen without pinning stale feature chunks.
+ */
+export async function computePwaAssetGraph(staticRoot: string): Promise<PwaAssetGraph> {
+  const closure = await computePwaAssetClosure(staticRoot)
+  const publicAssets = new Set(await collectPublicAssetDir(staticRoot, 'assets/agents'))
+
+  const immutable = new Set<string>()
+  const mutable = new Set<string>()
+  for (const path of closure) {
+    if (publicAssets.has(path)) mutable.add(path)
+    else immutable.add(path)
+  }
+
+  const initial = await collectInitialAssetRefs(staticRoot)
+  const precache = [...ROOT_SHELL_FILES, ...initial]
+
+  const budget = computeInitialJsBudget(staticRoot, initial)
+
+  return { closure, immutable, mutable, precache, budget }
+}
+
+/** Raw + gzip sizes of the initial remote JavaScript closure. */
+function computeInitialJsBudget(staticRoot: string, initialRefs: string[]): PwaBundleBudget {
+  const chunks: PwaBudgetChunk[] = []
+  for (const url of initialRefs) {
+    if (!url.endsWith('.js') && !url.endsWith('.mjs')) continue
+    let raw: Buffer
+    try {
+      raw = readFileSync(join(staticRoot, url.slice(1)))
+    } catch {
+      continue
+    }
+    chunks.push({ url, rawBytes: raw.byteLength, gzipBytes: gzipSync(raw).byteLength })
+  }
+  const initialJsRawBytes = chunks.reduce((sum, chunk) => sum + chunk.rawBytes, 0)
+  const initialJsGzipBytes = chunks.reduce((sum, chunk) => sum + chunk.gzipBytes, 0)
+  const maxInitialChunkGzipBytes = chunks.reduce((max, chunk) => Math.max(max, chunk.gzipBytes), 0)
+  return { initialJsRawBytes, initialJsGzipBytes, maxInitialChunkGzipBytes, chunks }
 }

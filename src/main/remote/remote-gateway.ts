@@ -29,7 +29,9 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import { readFile, stat } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { brotliCompress, gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import type { Duplex } from 'node:stream'
 import { Logger } from '../logger'
 import {
@@ -44,7 +46,7 @@ import {
   encryptPayload
 } from '../../renderer/lib/remote/session-security'
 import { loadOrCreateSelfSignedCertificate } from './self-signed-cert'
-import { computePwaAssetClosure } from './pwa-asset-graph'
+import { computePwaAssetGraph } from './pwa-asset-graph'
 import type { RemoteDeviceInfo } from './remote-types'
 
 export interface GatewayHandlers {
@@ -87,6 +89,15 @@ interface PeerConnection {
   authChallenge: string
 }
 
+/** An on-disk file with its raw bytes, ETag, and lazily-compressed variants. */
+interface CachedAsset {
+  /** `mtimeMs:size` stamp used to invalidate the cache on rebuild. */
+  stamp: string
+  raw: Buffer
+  etag: string
+  compressed: Partial<Record<'br' | 'gzip', Buffer>>
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -106,11 +117,71 @@ const ALLOWED_STATIC: ReadonlySet<string> = new Set([
   '/remote.html',
   '/manifest.webmanifest',
   '/service-worker.js',
+  '/precache-manifest.json',
   '/apple-touch-icon.png',
   '/icon.png',
   '/logo.png',
   '/favicon.ico'
 ])
+
+/** Text-like types worth compressing; binary assets are served as-is. */
+const COMPRESSIBLE_TYPES: ReadonlySet<string> = new Set([
+  '.html',
+  '.js',
+  '.mjs',
+  '.css',
+  '.json',
+  '.webmanifest',
+  '.svg',
+  '.txt'
+])
+
+const brotliCompressAsync = promisify(brotliCompress)
+const gzipAsync = promisify(gzip)
+
+/**
+ * Pick the strongest acceptable content encoding, or `null` for identity.
+ * Brotli wins over gzip when both are advertised; q-values are honoured so a
+ * client can explicitly refuse either.
+ */
+function negotiateEncoding(acceptEncoding: string | undefined): 'br' | 'gzip' | null {
+  if (!acceptEncoding) return null
+  let br = 0
+  let gzip = 0
+  for (const part of acceptEncoding.split(',')) {
+    const [token, ...params] = part.trim().split(';')
+    const name = token.trim().toLowerCase()
+    let quality = 1
+    for (const param of params) {
+      const [key, value] = param.trim().split('=')
+      if (key === 'q') {
+        const parsed = Number.parseFloat(value)
+        if (Number.isFinite(parsed)) quality = parsed
+      }
+    }
+    if (name === 'br') br = quality
+    else if (name === 'gzip') gzip = quality
+  }
+  if (br > 0 && br >= gzip) return 'br'
+  if (gzip > 0) return 'gzip'
+  return null
+}
+
+/**
+ * Whether `If-None-Match` matches our validator. `*` matches any current
+ * representation; otherwise the opaque tag portion of each listed tag is
+ * compared (weak/strong prefixes are ignored for revalidation purposes).
+ */
+function ifNoneMatchMatches(header: string | undefined, etag: string): boolean {
+  if (!header) return false
+  const ours = etag.replace(/^W\//, '')
+  for (const candidate of header.split(',')) {
+    const trimmed = candidate.trim()
+    if (trimmed === '*') return true
+    if (trimmed.replace(/^W\//, '') === ours) return true
+  }
+  return false
+}
 
 const UNAUTHENTICATED_TIMEOUT_MS = 10_000
 const MAX_PEER_BUFFER_BYTES = 1024 * 1024
@@ -125,7 +196,15 @@ export class RemoteGateway {
   private stopped = false
   /** Asset paths the PWA actually references (computed from the build output). */
   private allowedAssets = new Set<string>()
-  /** Fingerprint of the `remote.html` the closure was computed from. */
+  /** Hashed build outputs that may be served with immutable caching. */
+  private immutableAssets = new Set<string>()
+  /** Public runtime assets (agent icons) that must never be immutable. */
+  private mutableAssets = new Set<string>()
+  /** Disconnected-shell precache manifest (absolute paths). */
+  private precache: string[] = []
+  /** In-memory asset cache keyed by file path (invalidated by mtime/size). */
+  private readonly assetCache = new Map<string, CachedAsset>()
+  /** Fingerprint of the `remote.html` the graph was computed from. */
   private closureStamp: string | null = null
 
   constructor(private readonly options: RemoteGatewayOptions) {
@@ -256,9 +335,18 @@ export class RemoteGateway {
       return
     }
     if (stamp === this.closureStamp) return
-    this.allowedAssets = await computePwaAssetClosure(this.options.staticRoot)
+    const graph = await computePwaAssetGraph(this.options.staticRoot)
+    this.allowedAssets = new Set(graph.closure)
+    this.immutableAssets = new Set(graph.immutable)
+    this.mutableAssets = new Set(graph.mutable)
+    this.precache = graph.precache
     this.closureStamp = stamp
-    Logger.dev('PWA asset closure refreshed', { assetCount: this.allowedAssets.size })
+    Logger.dev('PWA asset graph refreshed', {
+      assetCount: graph.closure.size,
+      immutableCount: graph.immutable.size,
+      mutableCount: graph.mutable.size,
+      precacheCount: graph.precache.length
+    })
   }
 
   private handleHttp(request: IncomingMessage, response: ServerResponse): void {
@@ -268,24 +356,210 @@ export class RemoteGateway {
   private serveHttp(request: IncomingMessage, response: ServerResponse): void {
     const urlPath = request.url ?? '/'
     const pathOnly = urlPath.split('?')[0]
-    const filePath = this.resolvePwaPath(pathOnly)
-    if (!filePath) {
-      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-      response.end('Not found')
+
+    if (pathOnly === '/service-worker.js') {
+      this.serveServiceWorker(response)
       return
     }
-    void readFile(filePath)
-      .then((data) => {
-        response.writeHead(200, {
-          'Content-Type': CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
-          'Cache-Control': 'no-store'
-        })
-        response.end(data)
-      })
-      .catch(() => {
-        response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-        response.end('Not found')
-      })
+    if (pathOnly === '/precache-manifest.json') {
+      this.servePrecacheManifest(response)
+      return
+    }
+
+    const filePath = this.resolvePwaPath(pathOnly)
+    if (!filePath) {
+      this.writeResponse(
+        response,
+        404,
+        'text/plain; charset=utf-8',
+        'no-store',
+        null,
+        null,
+        null,
+        'Not found'
+      )
+      return
+    }
+
+    void this.readAsset(filePath).then((asset) => {
+      if (!asset) {
+        this.writeResponse(
+          response,
+          404,
+          'text/plain; charset=utf-8',
+          'no-store',
+          null,
+          null,
+          null,
+          'Not found'
+        )
+        return
+      }
+      void this.serveAsset(request, response, filePath, pathOnly, asset)
+    })
+  }
+
+  /** Serve a single asset with compression, caching, ETag, and 304 handling. */
+  private async serveAsset(
+    request: IncomingMessage,
+    response: ServerResponse,
+    filePath: string,
+    pathOnly: string,
+    asset: CachedAsset
+  ): Promise<void> {
+    const contentType = CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream'
+    const compressible = COMPRESSIBLE_TYPES.has(extname(filePath))
+    const cacheControl = this.cacheControlFor(pathOnly)
+    const encoding = compressible ? negotiateEncoding(request.headers['accept-encoding']) : null
+    let body: Buffer
+    if (encoding === 'br') {
+      asset.compressed['br'] ??= await brotliCompressAsync(asset.raw)
+      body = asset.compressed['br']
+    } else if (encoding === 'gzip') {
+      asset.compressed['gzip'] ??= await gzipAsync(asset.raw)
+      body = asset.compressed['gzip']
+    } else {
+      body = asset.raw
+    }
+    const etag = asset.etag
+
+    const common: Record<string, string> = {
+      'Content-Type': contentType,
+      'Cache-Control': cacheControl,
+      ETag: etag
+    }
+    if (compressible) common['Vary'] = 'Accept-Encoding'
+
+    if (ifNoneMatchMatches(request.headers['if-none-match'], etag)) {
+      // 304 carries the validator + cache headers but never a body,
+      // Content-Length, or Content-Encoding.
+      response.writeHead(304, common)
+      response.end()
+      return
+    }
+
+    const headers: Record<string, string> = { ...common }
+    if (encoding) headers['Content-Encoding'] = encoding
+    headers['Content-Length'] = String(body.length)
+    response.writeHead(200, headers)
+    response.end(body)
+  }
+
+  /** Serve the generated service worker with the precache manifest injected. */
+  private serveServiceWorker(response: ServerResponse): void {
+    const source = this.generateServiceWorkerSource()
+    const body = Buffer.from(source, 'utf8')
+    this.writeResponse(
+      response,
+      200,
+      'text/javascript; charset=utf-8',
+      'no-store',
+      null,
+      null,
+      this.etagFor(body),
+      body
+    )
+  }
+
+  /** Serve the precache manifest the service worker fetches on install. */
+  private servePrecacheManifest(response: ServerResponse): void {
+    const body = Buffer.from(JSON.stringify({ urls: this.precache }), 'utf8')
+    this.writeResponse(
+      response,
+      200,
+      'application/json; charset=utf-8',
+      'no-store',
+      null,
+      null,
+      this.etagFor(body),
+      body
+    )
+  }
+
+  private writeResponse(
+    response: ServerResponse,
+    status: number,
+    contentType: string,
+    cacheControl: string,
+    contentEncoding: string | null,
+    vary: string | null,
+    etag: string | null,
+    body: Buffer | string | null
+  ): void {
+    const headers: Record<string, string> = { 'Content-Type': contentType }
+    headers['Cache-Control'] = cacheControl
+    if (contentEncoding) headers['Content-Encoding'] = contentEncoding
+    if (vary) headers['Vary'] = vary
+    if (etag) headers['ETag'] = etag
+    const bytes = typeof body === 'string' ? Buffer.from(body, 'utf8') : body
+    if (bytes) headers['Content-Length'] = String(bytes.length)
+    response.writeHead(status, headers)
+    response.end(bytes)
+  }
+
+  /** Read and cache an asset (with compressed variants) from disk. */
+  private async readAsset(filePath: string): Promise<CachedAsset | null> {
+    const cached = this.assetCache.get(filePath)
+    if (cached) {
+      const current = await this.fileStamp(filePath)
+      if (current === cached.stamp) return cached
+    }
+    try {
+      const data = await readFile(filePath)
+      const stamp = await this.fileStamp(filePath)
+      if (stamp === null) return null
+      const asset: CachedAsset = {
+        stamp,
+        raw: data,
+        etag: this.etagFor(data),
+        compressed: {}
+      }
+      this.assetCache.set(filePath, asset)
+      return asset
+    } catch {
+      return null
+    }
+  }
+
+  private async fileStamp(filePath: string): Promise<string | null> {
+    try {
+      const info = await stat(filePath)
+      return `${info.mtimeMs}:${info.size}`
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Weak ETag over the raw file bytes. The same resource is served in multiple
+   * content-encodings (identity/gzip/brotli), so a strong validator would have
+   * to differ per representation; a weak one is spec-correct and still
+   * revalidates `If-None-Match` for GET.
+   */
+  private etagFor(data: Buffer): string {
+    return `W/"${createHash('sha1').update(data).digest('hex').slice(0, 16)}"`
+  }
+  /** Cache-Control for a served path: immutable for hashed build outputs. */
+  private cacheControlFor(pathOnly: string): string {
+    if (pathOnly === '/cert.pem') return 'no-store'
+    if (this.immutableAssets.has(pathOnly)) return 'public, max-age=31536000, immutable'
+    // Mutable shell/API endpoints and unhashed public assets (agent icons) are
+    // never cached as immutable — the service worker owns their lifecycle.
+    if (this.mutableAssets.has(pathOnly)) return 'no-store'
+    return 'no-store'
+  }
+
+  /** Generate the service-worker source with the current precache injected. */
+  private generateServiceWorkerSource(): string {
+    try {
+      const template = readFileSync(join(this.options.staticRoot, 'service-worker.js'), 'utf8')
+      const version = JSON.stringify(this.closureStamp ?? 'dev')
+      return template
+        .replace('/*__PRECACHE_MANIFEST__*/[]', JSON.stringify(this.precache))
+        .replace('/*__PRECACHE_VERSION__*/"dev"', version)
+    } catch {
+      return 'self.onfetch=()=>{}'
+    }
   }
 
   /** Resolve a request path to a PWA asset — allow-list enforced. */

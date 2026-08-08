@@ -1,8 +1,14 @@
 /**
  * CodeInOven Remote — service worker.
  *
- * Classic worker that keeps the installable phone client working offline
- * without ever pinning it to a stale build.
+ * Classic worker that keeps the installable phone client working offline.
+ *
+ * The gateway injects the build-time asset graph into this file when it serves
+ * it: the `PRECACHE_MANIFEST` and `PRECACHE_VERSION` placeholder constants below
+ * are replaced with the current precache list and a build fingerprint. Every
+ * production rebuild changes the hashed chunk names in `remote.html`, so the
+ * precache list and version are regenerated on each serve. In development the
+ * raw template is served with an empty precache and a `"dev"` version.
  *
  * Caching is split by request kind, because the two have opposite requirements:
  *
@@ -15,17 +21,25 @@
  * - **Hashed `/assets/...` files** stay cache-first, which is safe precisely
  *   because the hash changes whenever the content does.
  *
- * Only successful responses are cached — caching a 404 would poison the cache
- * and keep replaying that failure.
+ * Upgrades are safe because the precache version changes with the build: the
+ * new shell is written to a fresh cache while `activate` retains **one bounded
+ * previous-good shell** for fallback when the newest build is interrupted or
+ * cannot be fetched. Only successful responses are cached — caching a 404 would
+ * poison the cache and keep replaying that failure.
  */
-const CACHE_NAME = 'codeinoven-remote-v3'
+const PRECACHE_MANIFEST = /*__PRECACHE_MANIFEST__*/[]
+const PRECACHE_VERSION = /*__PRECACHE_VERSION__*/"dev"
+const CACHE_PREFIX = 'codeinoven-remote-shell-'
+const CACHE_NAME = CACHE_PREFIX + PRECACHE_VERSION
 const CORE_ASSETS = ['./remote.html', './manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE_NAME)
-      .then((cache) => cache.addAll(CORE_ASSETS))
+      .then((cache) =>
+        cache.addAll(PRECACHE_MANIFEST.length > 0 ? PRECACHE_MANIFEST : CORE_ASSETS)
+      )
       .catch(() => undefined)
   )
   self.skipWaiting()
@@ -35,9 +49,21 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))
-      )
+      .then((keys) => {
+        const shellKeys = keys
+          .filter((key) => key.startsWith(CACHE_PREFIX))
+          .sort()
+        // Retain the current shell plus exactly one bounded previous-good shell.
+        // Anything older than the immediate predecessor is removed so upgrades
+        // never accumulate unbounded caches while an interrupted update still
+        // has a working shell to fall back to.
+        const keep = new Set([CACHE_NAME])
+        const previous = shellKeys.filter((key) => key !== CACHE_NAME).pop()
+        if (previous) keep.add(previous)
+        return Promise.all(
+          keys.filter((key) => !keep.has(key)).map((key) => caches.delete(key))
+        )
+      })
       .then(() => self.clients.claim())
   )
 })
@@ -89,8 +115,15 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return
   // Account, desktop, and connection responses may contain private state or a
   // desktop control secret. They must always go to the network and must never
-  // enter Cache Storage or be replayed after sign-out/revocation.
-  if (url.pathname.startsWith('/v1/') || url.pathname === '/healthz') return
+  // enter Cache Storage or be replayed after sign-out/revocation. The precache
+  // manifest is mutable version metadata, never cached either.
+  if (
+    url.pathname.startsWith('/v1/') ||
+    url.pathname === '/healthz' ||
+    url.pathname === '/precache-manifest.json'
+  ) {
+    return
+  }
 
   const isShell = request.mode === 'navigate' || url.pathname.endsWith('/remote.html')
 
