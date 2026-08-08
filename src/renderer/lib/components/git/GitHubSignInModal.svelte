@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { GitHubDeviceCode } from '$shared/types'
@@ -18,10 +19,12 @@
   let phase = $state<'starting' | 'waiting' | 'authorized' | 'expired' | 'error'>('starting')
   let message = $state('')
   let copied = $state(false)
+  let copyError = $state('')
   let polling = $state(false)
   let remaining = $state(0)
   let timer: ReturnType<typeof setTimeout> | undefined
   let ticker: ReturnType<typeof setInterval> | undefined
+  let copyTimer: ReturnType<typeof setTimeout> | undefined
 
   /** Human-readable countdown, e.g. "14 min 59 sec" → "14:59". */
   const countdown = $derived.by(() => {
@@ -83,12 +86,15 @@
 
   async function copyCode(): Promise<void> {
     if (!device) return
+    copyError = ''
     try {
-      await navigator.clipboard.writeText(device.userCode)
+      await invoke('clipboard:writeText', device.userCode)
       copied = true
-      setTimeout(() => (copied = false), 1500)
-    } catch {
-      // Clipboard may be unavailable; the code is still visible.
+      if (copyTimer) clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => (copied = false), 1500)
+    } catch (reason) {
+      copied = false
+      copyError = reason instanceof Error ? reason.message : 'The device code could not be copied.'
     }
   }
 
@@ -103,6 +109,7 @@
   onDestroy(() => {
     if (timer) clearTimeout(timer)
     if (ticker) clearInterval(ticker)
+    if (copyTimer) clearTimeout(copyTimer)
   })
 </script>
 
@@ -135,6 +142,10 @@
           <Copy size={16} class="text-dimmed" />
         {/if}
       </button>
+
+      {#if copyError}
+        <p role="alert" class="text-center text-[10px] text-danger">{copyError}</p>
+      {/if}
 
       <div class="rounded-lg border border-border bg-surface px-3 py-2">
         <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
