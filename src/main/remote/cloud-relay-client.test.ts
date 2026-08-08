@@ -222,7 +222,7 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
       expect(ids).toHaveLength(2)
     })
     // Epoch-scoped ids: strictly increasing and unique across client restarts.
-    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 32)
+    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 20)
     expect(ids[1]).toBeGreaterThan(ids[0])
     socket.receive(JSON.stringify({ type: 'relay:ack', id: ids[0] }))
     socket.fail()
@@ -403,6 +403,29 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     const second = openAuthenticated(harness, 1)
     await receivedDataWithId(second, 123, { rpc: 'invoke', id: 9, channel: 'chat', args: [] })
     await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
+  })
+
+  it('dispatches exactly once for concurrent duplicates of the same inbound id', async () => {
+    const harness = makeHarness()
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    const payload1 = await encryptPayload(
+      SECRET,
+      JSON.stringify({ rpc: 'invoke', id: 3, channel: 'chat', args: [] })
+    )
+    const payload2 = await encryptPayload(
+      SECRET,
+      JSON.stringify({ rpc: 'invoke', id: 3, channel: 'chat', args: [] })
+    )
+    // Deliver both frames back-to-back before the first decrypt resolves: the
+    // bounded inbound-processing set suppresses the concurrent duplicate.
+    socket.receive(JSON.stringify({ type: 'relay:data', id: 777, payload: payload1 }))
+    socket.receive(JSON.stringify({ type: 'relay:data', id: 777, payload: payload2 }))
+    await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
+    // Both deliveries are acknowledged as the receiver.
+    await vi.waitFor(() => {
+      expect(socket.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(2)
+    })
   })
 
   it('suppresses a duplicate invoke while the first is still processing', async () => {

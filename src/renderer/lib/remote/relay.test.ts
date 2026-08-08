@@ -212,7 +212,7 @@ describe('createRelayClient', () => {
       .map((frame) => JSON.parse(frame) as { id: number; payload: string })
     const ids = envelopes.map((envelope) => envelope.id)
     // Epoch-scoped ids: strictly increasing and unique across client restarts.
-    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 32)
+    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 20)
     expect(ids[1]).toBeGreaterThan(ids[0])
     await expect(decryptPayload('peer-secret', envelopes[0].payload)).resolves.toBe('one')
     await expect(decryptPayload('peer-secret', envelopes[1].payload)).resolves.toBe('two')

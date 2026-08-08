@@ -44,45 +44,50 @@ export function createMessageIdAllocator(initial = 1): () => number {
   }
 }
 
-const EPOCH_BITS = 21
-const SEQUENCE_BITS = 32
-const EPOCH_MASK = 2 ** EPOCH_BITS - 1
+// Sender-instance ID (32 bits) + monotonic sequence (20 bits). The full id is
+// `instanceId * 2^20 + seq`; with a 32-bit random instance the space is
+// genuinely collision-resistant across clients while staying within JS safe
+// integers (max id ≈ 2^52).
+const INSTANCE_BITS = 32
+const SEQUENCE_BITS = 20
+const INSTANCE_MASK = 2 ** INSTANCE_BITS - 1
 const MAX_SEQUENCE = 2 ** SEQUENCE_BITS
 
-/** Unbiased crypto-random epoch in [0, 2^EPOCH_BITS) — genuinely random so
- *  two independent clients collide with negligible probability. */
-function randomEpoch(): number {
+/** Unbiased crypto-random sender-instance ID in [0, 2^INSTANCE_BITS). */
+function randomInstanceId(): number {
   if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
-    const value = crypto.getRandomValues(new Uint32Array(1))[0]
-    return value & EPOCH_MASK
+    // Uint32Array elements are unsigned, so the raw value is already in
+    // [0, 2^32); avoid bitwise AND which would sign-extend through Int32.
+    return crypto.getRandomValues(new Uint32Array(1))[0]
   }
-  return Math.floor(Math.random() * (EPOCH_MASK + 1))
+  return Math.min(INSTANCE_MASK, Math.floor(Math.random() * (INSTANCE_MASK + 1)))
 }
 
 /**
  * Message-id allocator whose ids stay unique across client restarts: each id is
- * `epoch * 2^32 + seq`, with a fresh random epoch per client instance. A peer
- * that reloads therefore never reuses wire ids the recipient has already seen,
- * so the recipient's duplicate-suppression set cannot drop a reloaded peer's
- * fresh frames. The epoch must be a non-negative integer below 2^21 (collision
- * resistance across the id space); tests inject fixed epochs for determinism.
+ * `senderInstanceId * 2^20 + seq`, with a fresh 32-bit crypto-random sender
+ * instance ID per client instance plus a monotonic sequence. A peer that
+ * reloads therefore never reuses wire ids the recipient has already seen, so
+ * the recipient's duplicate-suppression set cannot drop a reloaded peer's fresh
+ * frames. The instance ID must be a non-negative integer below 2^32; tests
+ * inject fixed instance IDs for determinism.
  */
-export function createEpochMessageIdAllocator(epoch: number = randomEpoch()): () => number {
-  if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch > EPOCH_MASK) {
-    throw new TypeError(`Relay message-id epoch must be an integer in [0, ${EPOCH_MASK}]`)
+export function createEpochMessageIdAllocator(epoch: number = randomInstanceId()): () => number {
+  if (!Number.isSafeInteger(epoch) || epoch < 0 || epoch > INSTANCE_MASK) {
+    throw new TypeError(`Relay message-id instance must be an integer in [0, ${INSTANCE_MASK}]`)
   }
   const base = epoch * 2 ** SEQUENCE_BITS
   let seq = 0
   return () => {
     seq += 1
     if (seq >= MAX_SEQUENCE) {
-      throw new Error('Relay message-id sequence space exhausted for this epoch')
+      throw new Error('Relay message-id sequence space exhausted for this instance')
     }
     return base + seq
   }
 }
 
-/** Derive the sender epoch from an epoch-scoped wire id. */
+/** Derive the sender instance ID from an instance-scoped wire id. */
 export function epochOfWireId(id: number): number {
   return Math.floor(id / 2 ** SEQUENCE_BITS)
 }
@@ -222,6 +227,10 @@ export class BoundedSet {
       if (oldest === undefined) break
       this.entries.delete(oldest)
     }
+  }
+
+  delete(key: number): boolean {
+    return this.entries.delete(key)
   }
 
   clear(): void {

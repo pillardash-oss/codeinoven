@@ -13,77 +13,97 @@ vi.mock('./memory-service', () => ({
 
 import { composeBrainstormSystemPrompt, composeTurnSystemPrompt } from './chat-engine'
 import {
-  budgetTurnLayers,
+  composeBudgetedSend,
   computePromptBudget,
   estimateTextTokens,
   truncateToTokenBudget
 } from '../lib/prompt-budget'
 
 /**
- * Production send-composition contract: the final composed system prompt (built
- * with the real compose functions), the user text, and the budgeted hidden
- * context must all fit the ONE aggregate selected-model input budget derived
- * from `budgetTurnLayers`, with output/tool headroom reserved once.
+ * Production send-composition contract coverage for the EXACT function
+ * ChatEngine uses (`composeBudgetedSend`) with the REAL system-prompt compose
+ * functions, including large recap/hidden/user/system inputs and deterministic
+ * rejection of fixed user+system overflow.
  */
-function compositionTotals(): {
-  system: string
-  recap: string
-  hidden: string
-  user: string
-  totalTokens: number
-  available: number
-} {
-  const budget = computePromptBudget({
+
+function modelBudget(): number {
+  return computePromptBudget({
     contextWindow: 32_000,
     outputTokens: 2_000,
     toolHeadroomTokens: 4_000
-  })
-  const available = budget.availableInputTokens
+  }).availableInputTokens
+}
 
-  const baseParts = {
+function implementSystemBase(recap: string): string {
+  return composeTurnSystemPrompt({
     chatPrompt: 'You are the CodeInOven engineering agent.',
     memoryInstruction: 'Treat these as user preferences.',
     imageDescriptorNote: 'Describe any images with the vision model.',
     assignmentCoordinatorSystemPrompt: 'The coordinator thread controls this assignment.',
     behaviorPrompt: 'Implement only the approved specification.',
     utilityInstructions: 'Tools are available for the current project.',
-    behaviorMode: 'implement' as const
-  }
-  const systemBase = composeTurnSystemPrompt({ ...baseParts, historyRecap: '' })
-  const userText = 'Implement the login form with validation.'
-  const hiddenContext = 'User requested the login form. Project references: src/main/auth.ts.'
-
-  const layers = budgetTurnLayers(
-    {
-      userTokens: estimateTextTokens(userText),
-      systemTokens: estimateTextTokens(systemBase),
-      hiddenTokens: estimateTextTokens(hiddenContext),
-      recapTokens: 2_000_000
-    },
-    available
-  )
-  const recapText = truncateToTokenBudget('Past messages', layers.recapTokens)
-  const system = composeTurnSystemPrompt({ ...baseParts, historyRecap: recapText })
-  const hidden = truncateToTokenBudget(hiddenContext, layers.hiddenTokens)
-  const total =
-    estimateTextTokens(system) + estimateTextTokens(userText) + estimateTextTokens(hidden)
-  return { system, recap: recapText, hidden, user: userText, totalTokens: total, available }
+    behaviorMode: 'implement',
+    historyRecap: recap
+  })
 }
 
-describe('production send-composition budget contract', () => {
-  it('keeps the implement/chat composition within the one aggregate input budget', () => {
-    const { totalTokens, available } = compositionTotals()
-    expect(totalTokens).toBeLessThanOrEqual(available)
+describe('production send-composition budget (composeBudgetedSend)', () => {
+  it('caps large recap + hidden layers so the composed turn fits the budget', () => {
+    const available = modelBudget()
+    const systemBase = implementSystemBase('')
+    const composition = composeBudgetedSend({
+      availableInputTokens: available,
+      userText: 'Implement the login form with validation.',
+      systemPrompt: systemBase,
+      hiddenText: 'o'.repeat(50_000),
+      recapText: 'h'.repeat(80_000),
+      systemReserveTokens: 2_048
+    })
+    const finalSystem = implementSystemBase(composition.recapText)
+    // driverText already contains the hidden context + user message; the final
+    // system prompt already contains the recap.
+    const total = estimateTextTokens(finalSystem) + estimateTextTokens(composition.driverText)
+    expect(total).toBeLessThanOrEqual(available)
+    expect(composition.driverText).toContain('Implement the login form with validation.')
+    expect(composition.recapText.length).toBeLessThan(80_000)
+    expect(composition.hiddenText.length).toBeLessThanOrEqual(50_000)
+  })
+
+  it('caps the hidden orchestration context first when headroom is tight', () => {
+    const available = modelBudget()
+    const systemBase = implementSystemBase('')
+    const composition = composeBudgetedSend({
+      availableInputTokens: available,
+      userText: 'u'.repeat(4_000),
+      systemPrompt: systemBase,
+      hiddenText: 'h'.repeat(200_000),
+      recapText: 'r'.repeat(200_000)
+    })
+    expect(composition.driverText).toContain('User message:')
+    expect(
+      estimateTextTokens(composition.driverText) +
+        estimateTextTokens(systemBase) +
+        estimateTextTokens(composition.recapText)
+    ).toBeLessThanOrEqual(available)
+  })
+
+  it('rejects deterministically when fixed user + system layers exceed the budget', () => {
+    const available = modelBudget()
+    const hugeSystem = implementSystemBase('').repeat(500)
+    expect(() =>
+      composeBudgetedSend({
+        availableInputTokens: available,
+        userText: 'u'.repeat(100_000),
+        systemPrompt: hugeSystem,
+        hiddenText: 'hidden',
+        recapText: 'recap'
+      })
+    ).toThrow(/too small/)
   })
 
   it('keeps the brainstorm composition within the budget', () => {
-    const budget = computePromptBudget({
-      contextWindow: 32_000,
-      outputTokens: 2_000,
-      toolHeadroomTokens: 4_000
-    })
-    const available = budget.availableInputTokens
-    const base = composeBrainstormSystemPrompt({
+    const available = modelBudget()
+    const brainstormBase = composeBrainstormSystemPrompt({
       activeBrainstormTurn: false,
       assignmentMode: true,
       revisionPrompt: 'Revise the existing specification.',
@@ -93,17 +113,14 @@ describe('production send-composition budget contract', () => {
       utilityInstructions: '',
       historyRecap: ''
     })
-    const userTokens = 1_000
-    const layers = budgetTurnLayers(
-      {
-        userTokens,
-        systemTokens: estimateTextTokens(base),
-        hiddenTokens: 0,
-        recapTokens: 2_000_000
-      },
-      available
-    )
-    const system = composeBrainstormSystemPrompt({
+    const composition = composeBudgetedSend({
+      availableInputTokens: available,
+      userText: 'Specify the login flow.',
+      systemPrompt: brainstormBase,
+      hiddenText: '',
+      recapText: truncateToTokenBudget('Prior conversation context', 6_000)
+    })
+    const finalSystem = composeBrainstormSystemPrompt({
       activeBrainstormTurn: false,
       assignmentMode: true,
       revisionPrompt: 'Revise the existing specification.',
@@ -111,33 +128,9 @@ describe('production send-composition budget contract', () => {
       imageDescriptorNote: '',
       behaviorPrompt: 'Generate the engineering specification.',
       utilityInstructions: '',
-      historyRecap: truncateToTokenBudget('Prior context', layers.recapTokens)
+      historyRecap: composition.recapText
     })
-    const total = estimateTextTokens(system) + userTokens
+    const total = estimateTextTokens(finalSystem) + estimateTextTokens(composition.driverText)
     expect(total).toBeLessThanOrEqual(available)
-  })
-
-  it('caps dynamic layers to zero when fixed user/system layers exceed the budget', () => {
-    const available = 10_000
-    const layers = budgetTurnLayers(
-      { userTokens: 8_000, systemTokens: 8_000, hiddenTokens: 5_000, recapTokens: 5_000 },
-      available
-    )
-    // Fixed layers alone exceed the budget: no dynamic layer is allocated.
-    expect(layers.hiddenTokens).toBe(0)
-    expect(layers.recapTokens).toBe(0)
-    expect(layers.totalTokens).toBeGreaterThanOrEqual(available)
-    // The user text is preserved; the harness enforces its own truncation.
-    const composed = composeTurnSystemPrompt({
-      chatPrompt: 'a'.repeat(8_000 * 4),
-      memoryInstruction: 'x'.repeat(8_000 * 4),
-      imageDescriptorNote: '',
-      assignmentCoordinatorSystemPrompt: '',
-      behaviorPrompt: '',
-      utilityInstructions: '',
-      behaviorMode: 'chat',
-      historyRecap: ''
-    })
-    expect(composed.length).toBeGreaterThan(0)
   })
 })
