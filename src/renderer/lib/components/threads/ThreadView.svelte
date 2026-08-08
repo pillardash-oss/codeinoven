@@ -2311,6 +2311,7 @@
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : 'The image descriptor could not be retried.'
+      throw error
     }
   }
 
@@ -5740,6 +5741,24 @@
         </button>
       {/if}
       <div class="mx-auto w-full max-w-3xl">
+        {#if pendingImageDescriptorError && !achievementAutonomous}
+          {#key pendingImageDescriptorError.id}
+            <ImageDescriptorErrorCard
+              request={pendingImageDescriptorError}
+              {providers}
+              projectId={thread.projectId}
+              favoriteModels={rendererRecovery.favoriteModels}
+              recentModels={rendererRecovery.recentModels}
+              onRetry={(requestId, selection) =>
+                replyImageDescriptor(requestId, 'retry', selection)}
+              onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+              onToggleFavorite={(providerId, modelId) =>
+                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            />
+          {/key}
+        {/if}
         {#if isAssignmentAuditorThread}
           <AuditGeneratedCard
             state={assignmentAuditState}
@@ -5781,24 +5800,6 @@
               onAllowAlways={allowPermissionAlways}
               onReject={rejectPermission}
               onAlternative={providePermissionAlternative}
-            />
-          {/key}
-        {:else if pendingImageDescriptorError && !achievementAutonomous}
-          {#key pendingImageDescriptorError.id}
-            <ImageDescriptorErrorCard
-              request={pendingImageDescriptorError}
-              {providers}
-              projectId={thread.projectId}
-              favoriteModels={rendererRecovery.favoriteModels}
-              recentModels={rendererRecovery.recentModels}
-              {busy}
-              onRetry={(requestId, selection) =>
-                void replyImageDescriptor(requestId, 'retry', selection)}
-              onIgnore={(requestId) => void replyImageDescriptor(requestId, 'ignore')}
-              onToggleFavorite={(providerId, modelId) =>
-                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             />
           {/key}
         {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}

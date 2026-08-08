@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { AlertTriangle, Check, RotateCw, Send } from '@lucide/svelte'
+  import { AlertTriangle, Check, Loader2, RotateCw, Send } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentModelSelection,
@@ -13,9 +13,8 @@
     projectId: string
     favoriteModels?: string[]
     recentModels?: string[]
-    busy?: boolean
-    onRetry: (requestId: string, selection: AgentModelSelection) => void
-    onIgnore: (requestId: string) => void
+    onRetry: (requestId: string, selection: AgentModelSelection) => Promise<void>
+    onIgnore: (requestId: string) => Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
@@ -30,7 +29,6 @@
     projectId,
     favoriteModels = [],
     recentModels = [],
-    busy = false,
     onRetry,
     onIgnore,
     onToggleFavorite,
@@ -52,16 +50,33 @@
         override.modelId !== request.selection.modelId ||
         override.harnessId !== request.selection.harnessId)
   )
+  let working = $state(false)
   let actionError = $state('')
 
-  function retry(): void {
+  async function retry(): Promise<void> {
+    if (working) return
     actionError = ''
-    onRetry(request.id, visionSelection)
+    working = true
+    try {
+      await onRetry(request.id, visionSelection)
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'The retry could not be sent.'
+    } finally {
+      working = false
+    }
   }
 
-  function ignore(): void {
+  async function ignore(): Promise<void> {
+    if (working) return
     actionError = ''
-    onIgnore(request.id)
+    working = true
+    try {
+      await onIgnore(request.id)
+    } catch (error) {
+      actionError = error instanceof Error ? error.message : 'The instruction could not be sent.'
+    } finally {
+      working = false
+    }
   }
 </script>
 
@@ -78,8 +93,8 @@
     </div>
     <button
       class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-30"
-      disabled={busy}
-      onclick={ignore}
+      disabled={working}
+      onclick={() => void ignore()}
       aria-label="Ignore the vision model error and continue with whatever description was generated"
       title="Ignore and continue"
     >
@@ -99,8 +114,8 @@
       </p>
       <p class="mt-2 text-xs leading-relaxed text-muted">
         {changed
-          ? 'Retry with the selected vision model, or ignore and let the model work with whatever description was generated.'
-          : 'Pick a different vision model and retry, or ignore and let the model work with whatever description was generated.'}
+          ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
+          : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
       </p>
     </div>
 
@@ -119,7 +134,7 @@
         visionOnly
         side="top"
         variant="field"
-        disabled={busy}
+        disabled={working}
         onSelect={(providerId, modelId, harnessId) => {
           override = { harnessId, providerId, modelId }
         }}
@@ -136,18 +151,22 @@
   <div class="flex items-center justify-between gap-2 border-t px-4 py-2.5">
     <button
       class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
-      disabled={busy}
-      onclick={ignore}
+      disabled={working}
+      onclick={() => void ignore()}
     >
       <Send size={13} />
       Ignore and send
     </button>
     <button
       class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-      disabled={busy}
-      onclick={retry}
+      disabled={working}
+      onclick={() => void retry()}
     >
-      <RotateCw size={13} />
+      {#if working}
+        <Loader2 size={13} class="animate-spin" />
+      {:else}
+        <RotateCw size={13} />
+      {/if}
       {changed ? 'Retry with this model' : 'Retry'}
     </button>
   </div>
