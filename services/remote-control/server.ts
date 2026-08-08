@@ -9,6 +9,7 @@ import {
 } from './auth'
 import { RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
+import { RelayHub } from './relay-hub'
 import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
@@ -28,8 +29,10 @@ const allowedOrigins = new Set(
 
 await migrateAuthSchema()
 const database = new RemoteControlDatabase(authDatabasePath)
-const desktopSockets = new Map<string, ServerWebSocket<RelaySocketData>>()
-const mobileSockets = new Map<string, ServerWebSocket<RelaySocketData>>()
+const relayHub = new RelayHub({
+  bufferLimit: positiveInteger(process.env['RELAY_BUFFER_LIMIT'], 256),
+  bufferTtlMs: positiveInteger(process.env['RELAY_BUFFER_TTL_MS'], 60_000)
+})
 const sessionSockets = new Map<string, Set<ServerWebSocket<RelaySocketData>>>()
 const rateBuckets = new Map<string, { count: number; resetAt: number }>()
 
@@ -148,16 +151,7 @@ function normalizedPublicKey(value: unknown): string | null {
 }
 
 function closeDesktop(desktopId: string, code: number, reason: string): void {
-  const desktop = desktopSockets.get(desktopId)
-  if (desktop) {
-    desktopSockets.delete(desktopId)
-    desktop.close(code, reason)
-  }
-  const mobile = mobileSockets.get(desktopId)
-  if (mobile) {
-    mobileSockets.delete(desktopId)
-    mobile.close(code, reason)
-  }
+  relayHub.closePeer(desktopId, code, reason)
 }
 
 function closeSessionSockets(sessionId: string, code: number, reason: string): void {
@@ -312,7 +306,7 @@ function listDesktops(session: AuthenticatedSession): Response {
       id: desktop.id,
       name: desktop.name,
       platform: desktop.platform,
-      online: desktopSockets.has(desktop.id),
+      online: relayHub.desktopOnline(desktop.id),
       lastSeenAt: desktop.last_seen_at,
       createdAt: desktop.created_at
     }))
@@ -336,7 +330,7 @@ function desktopConnection(
       id: desktop.id,
       name: desktop.name,
       platform: desktop.platform,
-      online: desktopSockets.has(desktop.id)
+      online: relayHub.desktopOnline(desktop.id)
     },
     grant: {
       mobileDeviceId,
@@ -510,16 +504,17 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
       socket.close(4001, 'authentication-failed')
       return
     }
-    const previous = desktopSockets.get(desktop.id)
-    if (previous && previous !== socket) previous.close(4000, 'replaced')
+    const replayed = relayHub.connectDesktop(desktop.id, socket)
     socket.data.authenticated = true
     socket.data.desktopId = desktop.id
     socket.data.userId = desktop.user_id
-    desktopSockets.set(desktop.id, socket)
     database.touchDesktop(desktop.id)
     database.audit('relay.desktop-connected', desktop.user_id, desktop.id)
     socket.send(JSON.stringify({ type: 'relay:authenticated', desktopId: desktop.id }))
-    mobileSockets.get(desktop.id)?.send(JSON.stringify({ type: 'relay:presence', online: true }))
+    for (const frame of replayed) socket.send(frame)
+    relayHub
+      .mobileSocket(desktop.id)
+      ?.send(JSON.stringify({ type: 'relay:presence', online: true }))
     return
   }
 
@@ -527,14 +522,20 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
   const desktopId = socket.data.desktopId
   if (!desktopId) return
   if (socket.data.role === 'desktop') {
-    mobileSockets.get(desktopId)?.send(text)
+    const outcome = relayHub.forward(desktopId, 'desktop', text)
+    if (outcome.accepted && typeof record['id'] === 'number') {
+      socket.send(JSON.stringify({ type: 'relay:ack', id: record['id'] }))
+    }
     return
   }
   if (!socket.data.sessionId || !database.activeSessionById(socket.data.sessionId)) {
     socket.close(4003, 'session-ended')
     return
   }
-  desktopSockets.get(desktopId)?.send(text)
+  const outcome = relayHub.forward(desktopId, 'mobile', text)
+  if (outcome.accepted && typeof record['id'] === 'number') {
+    socket.send(JSON.stringify({ type: 'relay:ack', id: record['id'] }))
+  }
 }
 
 const server: Server<RelaySocketData> = serve<RelaySocketData>({
@@ -546,9 +547,7 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
     maxPayloadLength: MAX_RELAY_BYTES,
     open(socket) {
       if (socket.data.role === 'mobile' && socket.data.desktopId && socket.data.sessionId) {
-        const previous = mobileSockets.get(socket.data.desktopId)
-        if (previous && previous !== socket) previous.close(4000, 'replaced')
-        mobileSockets.set(socket.data.desktopId, socket)
+        const replayed = relayHub.connectMobile(socket.data.desktopId, socket)
         const sockets = sessionSockets.get(socket.data.sessionId) ?? new Set()
         sockets.add(socket)
         sessionSockets.set(socket.data.sessionId, sockets)
@@ -556,9 +555,10 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
           JSON.stringify({
             type: 'relay:authenticated',
             desktopId: socket.data.desktopId,
-            online: desktopSockets.has(socket.data.desktopId)
+            online: relayHub.desktopOnline(socket.data.desktopId)
           })
         )
+        for (const frame of replayed) socket.send(frame)
       } else {
         socket.send(JSON.stringify({ type: 'relay:authentication-required' }))
       }
@@ -567,14 +567,14 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
     close(socket) {
       const desktopId = socket.data.desktopId
       if (!desktopId) return
-      if (socket.data.role === 'desktop' && desktopSockets.get(desktopId) === socket) {
-        desktopSockets.delete(desktopId)
-        mobileSockets
-          .get(desktopId)
+      if (socket.data.role === 'desktop' && relayHub.desktopOnline(desktopId)) {
+        relayHub.disconnect(desktopId, 'desktop', socket)
+        relayHub
+          .mobileSocket(desktopId)
           ?.send(JSON.stringify({ type: 'relay:presence', online: false }))
         database.audit('relay.desktop-disconnected', socket.data.userId, desktopId)
-      } else if (mobileSockets.get(desktopId) === socket) {
-        mobileSockets.delete(desktopId)
+      } else if (socket.data.role === 'mobile' && relayHub.mobileOnline(desktopId)) {
+        relayHub.disconnect(desktopId, 'mobile', socket)
       }
       const sessionId = socket.data.sessionId
       if (sessionId) {
@@ -592,6 +592,7 @@ const cleanupTimer = setInterval(() => {
   }
   database.deleteExpiredSessions()
   database.deleteExpiredEnrollments()
+  relayHub.sweep()
   const now = Date.now()
   for (const [key, bucket] of rateBuckets) {
     if (bucket.resetAt <= now) rateBuckets.delete(key)

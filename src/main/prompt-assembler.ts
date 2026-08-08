@@ -7,35 +7,39 @@ import type { MemoryService } from './memory-service'
 const NESTED_AGENTS_DEPTH_LIMIT = 3
 const INSTRUCTION_CACHE_LIMIT = 256
 
-interface CachedInstructionFile {
+interface CachedInstructionMeta {
   mtimeMs: number
   size: number
-  /** SHA-256 of the cached content (integrity/hash key for the entry). */
+  /** SHA-256 of the content — the operative content identity. */
   contentHash: string
-  content: string
 }
 
-/** Instruction files (AGENTS.md and nested AGENTS.md) cached by path with
- *  mtime+size invalidation so per-turn prompt assembly never re-reads
- *  unchanged files from disk (A-13). */
-const instructionCache = new Map<string, CachedInstructionFile>()
+/**
+ * Instruction files (AGENTS.md and nested AGENTS.md) cached by path with
+ * mtime+size as the cheap invalidation probe and the content hash as the
+ * operative identity: identical content across paths shares one blob, and a
+ * changed path entry re-reads + re-hashes to invalidate (A-13).
+ */
+const instructionPathIndex = new Map<string, CachedInstructionMeta>()
+const instructionContentByHash = new Map<string, string>()
 
 function evictInstructionCache(): void {
-  while (instructionCache.size > INSTRUCTION_CACHE_LIMIT) {
-    const oldest = instructionCache.keys().next().value
+  while (instructionContentByHash.size > INSTRUCTION_CACHE_LIMIT) {
+    const oldest = instructionContentByHash.keys().next().value
     if (oldest === undefined) break
-    instructionCache.delete(oldest)
+    instructionContentByHash.delete(oldest)
   }
 }
 
-/** Number of instruction files currently cached (development/test helper). */
+/** Number of distinct instruction blobs currently cached (test helper). */
 export function instructionCacheSize(): number {
-  return instructionCache.size
+  return instructionContentByHash.size
 }
 
 /** Clear the instruction cache (test isolation). */
 export function clearInstructionCache(): void {
-  instructionCache.clear()
+  instructionPathIndex.clear()
+  instructionContentByHash.clear()
 }
 
 async function readCachedInstructionFile(filePath: string): Promise<string> {
@@ -43,25 +47,29 @@ async function readCachedInstructionFile(filePath: string): Promise<string> {
   try {
     fileStat = await stat(filePath)
   } catch {
-    instructionCache.delete(filePath)
+    instructionPathIndex.delete(filePath)
     return ''
   }
-  const cached = instructionCache.get(filePath)
-  if (cached && cached.mtimeMs === fileStat.mtimeMs && cached.size === fileStat.size) {
-    return cached.content
+  const meta = instructionPathIndex.get(filePath)
+  if (meta && meta.mtimeMs === fileStat.mtimeMs && meta.size === fileStat.size) {
+    const cached = instructionContentByHash.get(meta.contentHash)
+    if (cached !== undefined) return cached
   }
   try {
     const content = await readFile(filePath, 'utf-8')
-    instructionCache.set(filePath, {
+    const contentHash = createHash('sha256').update(content, 'utf8').digest('hex')
+    if (!instructionContentByHash.has(contentHash)) {
+      instructionContentByHash.set(contentHash, content)
+      evictInstructionCache()
+    }
+    instructionPathIndex.set(filePath, {
       mtimeMs: fileStat.mtimeMs,
       size: fileStat.size,
-      contentHash: createHash('sha256').update(content, 'utf8').digest('hex'),
-      content
+      contentHash
     })
-    evictInstructionCache()
     return content
   } catch {
-    instructionCache.delete(filePath)
+    instructionPathIndex.delete(filePath)
     return ''
   }
 }

@@ -113,7 +113,11 @@ import type {
 } from '../lib/types'
 import { INBOX_PROJECT_ID } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
-import { computePromptBudget, truncateToTokenBudget } from '../lib/prompt-budget'
+import {
+  computePromptBudget,
+  estimateTextTokens,
+  truncateToTokenBudget
+} from '../lib/prompt-budget'
 import {
   AUDIT_REPORT_SCHEMA,
   ASSIGNMENT_PLAN_SCHEMA,
@@ -3180,8 +3184,13 @@ export class ChatEngine {
     const hiddenContext = [hiddenPromptContext, projectReferenceContext]
       .filter(Boolean)
       .join('\n\n')
+    const steerInputBudget = this.selectedModelInputBudget(
+      thread.settings?.providerId,
+      thread.settings?.modelId,
+      projectId
+    )
     const driverText = hiddenContext
-      ? `${this.budgetHiddenContext(hiddenContext, projectId, thread.settings)}\n\nUser message:\n${text}`
+      ? `${this.budgetHiddenContext(hiddenContext, steerInputBudget)}\n\nUser message:\n${text}`
       : text
     const userMessage = await this.persistOutboundMessage(
       projectId,
@@ -3263,9 +3272,17 @@ export class ChatEngine {
     const hiddenContext = [hiddenPromptContext, projectReferenceContext]
       .filter(Boolean)
       .join('\n\n')
-    const driverText = hiddenContext
-      ? `${this.budgetHiddenContext(hiddenContext, projectId, settings)}\n\nUser message:\n${text}`
-      : text
+    // One aggregate selected-model input budget for the turn: the hidden
+    // orchestration context is capped against it first and the history recap
+    // later consumes only the remaining headroom (A-13).
+    const inputBudget = this.selectedModelInputBudget(
+      settings.providerId,
+      settings.modelId,
+      projectId
+    )
+    const budgetedHidden = this.budgetHiddenContext(hiddenContext, inputBudget)
+    const hiddenConsumedTokens = estimateTextTokens(budgetedHidden)
+    const driverText = budgetedHidden ? `${budgetedHidden}\n\nUser message:\n${text}` : text
     if (
       specAction !== undefined &&
       specAction !== 'request' &&
@@ -3447,7 +3464,12 @@ export class ChatEngine {
       // talk to the Assignment API over HTTP, so they do not need the gateway.
       (isChatThread && !chatFileSystemEnabled) || targetThread?.assignmentRole === 'worker'
     )
-    const historyRecap = await this.buildHistoryRecap(projectId, threadId, driverId)
+    const historyRecap = await this.buildHistoryRecap(
+      projectId,
+      threadId,
+      driverId,
+      Math.max(1, inputBudget - hiddenConsumedTokens)
+    )
     if (origin === 'user') {
       this.pendingMemoryDecisions.set(sessionId, { userMessage: text, settings })
     }
@@ -4649,38 +4671,46 @@ export class ChatEngine {
     text: string
   ): Promise<string | null> {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
-    const title = await driver.generateTitle(projectPath, { settings, message: text })
-    if (title) {
+    try {
+      return await driver.generateTitle(projectPath, { settings, message: text })
+    } finally {
+      // Record input/cost for every actual title model attempt, including
+      // null results and failed calls.
       this.memoryService.recordAuxiliaryUsage('title', estimateTokens(text), text.length)
     }
-    return title
   }
 
   /** Recap of the mirrored transcript when no reusable harness session exists. */
   private async buildHistoryRecap(
     projectId: string,
     threadId: string,
-    driverId: string
+    driverId: string,
+    maxInputTokens?: number
   ): Promise<string> {
     const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
     if (mirror.length === 0) return ''
     const thread = await this.threadManager.getThread(projectId, threadId)
     const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
+    const fallbackBudget = this.selectedModelInputBudget(
+      thread?.settings?.providerId,
+      thread?.settings?.modelId,
+      projectId
+    )
+    const budget = maxInputTokens ?? fallbackBudget
     if (thread?.sessionId && sameHarness) {
-      // `ensureSession` already confirmed the harness holds the conversation —
-      // skip the redundant provider history load entirely (A-13).
-      if (this.sessionNativeHistory.get(thread.sessionId) === true) return ''
+      // `ensureSession` already confirmed whether the harness natively holds
+      // the conversation — skip the redundant provider history load entirely
+      // (A-13), whether the first load returned messages or zero.
+      const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
+      if (nativeHistory === true) return ''
+      if (nativeHistory === false) {
+        return formatHistoryRecap(mirror, { maxInputTokens: budget })
+      }
       try {
         const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
           const priorMessages = mirror.at(-1)?.role === 'user' ? mirror.slice(0, -1) : mirror
-          return formatHistoryRecap(priorMessages, {
-            maxInputTokens: this.selectedModelInputBudget(
-              thread.settings?.providerId,
-              thread.settings?.modelId,
-              projectId
-            )
-          })
+          return formatHistoryRecap(priorMessages, { maxInputTokens: budget })
         }
         const held = await driver.loadMessages(projectPath, thread.sessionId)
         if (held.length > 0) return ''
@@ -4688,13 +4718,7 @@ export class ChatEngine {
         // Session unreachable — treat it as fresh and replay the mirror.
       }
     }
-    return formatHistoryRecap(mirror, {
-      maxInputTokens: this.selectedModelInputBudget(
-        thread?.settings?.providerId,
-        thread?.settings?.modelId,
-        projectId
-      )
-    })
+    return formatHistoryRecap(mirror, { maxInputTokens: budget })
   }
 
   /**
@@ -4723,21 +4747,12 @@ export class ChatEngine {
   }
 
   /**
-   * Cap the hidden orchestration context by the selected model's available
-   * input budget (reserved output/tool headroom already subtracted) so the
-   * prompt never crowds the model window with injected context (A-13).
+   * Cap the hidden orchestration context by the turn's available input budget
+   * (reserved output/tool headroom already subtracted). The caller computes the
+   * single aggregate budget so the history recap consumes only the remainder.
    */
-  private budgetHiddenContext(
-    context: string,
-    projectId: string,
-    settings: Pick<ThreadSettings, 'providerId' | 'modelId'> | undefined
-  ): string {
-    const available = this.selectedModelInputBudget(
-      settings?.providerId,
-      settings?.modelId,
-      projectId
-    )
-    return truncateToTokenBudget(context, available)
+  private budgetHiddenContext(context: string, availableInputTokens: number): string {
+    return truncateToTokenBudget(context, availableInputTokens)
   }
 
   /** Abort the thread's running session. */
@@ -10815,8 +10830,9 @@ export class ChatEngine {
 
     // Deterministic extraction gate (A-06): skip the auxiliary model call when
     // no durable candidate is detected, the conversation is debounced, or the
-    // material exceeds the separately configurable cheap-model budget. The
-    // capped inputs and estimated tokens are recorded for per-feature cost.
+    // material exceeds the separately configurable cheap-model budget. Input
+    // and cost for every actual model attempt are recorded inside
+    // `generateMemoryProposal` (each structured/fallback attempt).
     const extraction = await this.memoryService.evaluateMemoryExtraction({
       userMessage,
       assistantResponse,
@@ -10824,11 +10840,6 @@ export class ChatEngine {
       threadId
     })
     if (!extraction.run) return
-    this.memoryService.recordAuxiliaryUsage(
-      'memory',
-      extraction.inputTokens,
-      extraction.userInput.length + extraction.assistantInput.length
-    )
 
     let decision: StructuredMemoryProposal
     try {
@@ -10927,6 +10938,13 @@ export class ChatEngine {
       const completion = this.waitForSessionCompletion(sessionId, 90_000, 'Memory extraction')
 
       try {
+        // Record input/cost for EVERY actual model attempt (structured and
+        // fallback), before the send so a failed attempt is still counted.
+        this.memoryService.recordAuxiliaryUsage(
+          'memory',
+          estimateTokens(userMessage + assistantResponse),
+          userMessage.length + assistantResponse.length
+        )
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
