@@ -3250,7 +3250,13 @@ export class ChatEngine {
       sessionId,
       projectPath,
       settings.permissionLevel,
-      isChatThread && !chatFileSystemEnabled
+      // Assignment workers must stay on the pooled project server. Spawning a
+      // per-session isolated opencode server for every worker (because of the
+      // utility gateway) makes N+1 opencode processes all write to the single
+      // global opencode.db, which is exactly the `database is locked` cascade
+      // that crashed six of seven workers in the milogs assignment. Workers
+      // talk to the Assignment API over HTTP, so they do not need the gateway.
+      (isChatThread && !chatFileSystemEnabled) || targetThread?.assignmentRole === 'worker'
     )
     const historyRecap = await this.buildHistoryRecap(projectId, threadId, driverId)
     if (origin === 'user') {
@@ -5131,18 +5137,40 @@ export class ChatEngine {
     const server = createServer((request, response) => {
       void this.handleAssignmentApiRequest(request, response)
     })
-    await new Promise<void>((resolveListen, rejectListen) => {
-      server.once('error', rejectListen)
-      server.listen(0, '127.0.0.1', () => resolveListen())
-    })
-    const address = server.address()
-    if (!address || typeof address === 'string') {
-      server.close()
-      throw new Error('Assignment API could not bind a local port')
+    const persistedPort = this.assignmentEngine.loadApiPort()
+    let boundPort: number | null = null
+    if (persistedPort !== null) {
+      try {
+        boundPort = await this.listenAssignmentApi(server, persistedPort)
+      } catch {
+        Logger.info('Assignment API port is unavailable; binding a fresh port', {
+          persistedPort
+        })
+      }
     }
+    boundPort ??= await this.listenAssignmentApi(server, 0)
     this.assignmentApiServer = server
-    this.assignmentApiBaseUrl = `http://127.0.0.1:${address.port}`
+    this.assignmentApiBaseUrl = `http://127.0.0.1:${boundPort}`
+    this.assignmentEngine.saveApiPort(boundPort)
+    for (const [token, capability] of this.assignmentEngine.loadApiCapabilities()) {
+      this.assignmentApiCapabilities.set(token, capability)
+    }
     Logger.info('Assignment API listening', { baseUrl: this.assignmentApiBaseUrl })
+  }
+
+  private listenAssignmentApi(server: Server, port: number): Promise<number> {
+    return new Promise<number>((resolveListen, rejectListen) => {
+      server.once('error', rejectListen)
+      server.listen(port, '127.0.0.1', () => {
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          server.close()
+          rejectListen(new Error('Assignment API could not bind a local port'))
+          return
+        }
+        resolveListen(address.port)
+      })
+    })
   }
 
   private async handleAssignmentApiRequest(
@@ -5557,6 +5585,7 @@ export class ChatEngine {
     if (existing) return existing[0]
     const token = randomBytes(32).toString('hex')
     this.assignmentApiCapabilities.set(token, capability)
+    this.assignmentEngine.saveApiCapability(token, capability)
     return token
   }
 
