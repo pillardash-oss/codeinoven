@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import type { Component } from 'svelte'
-  import { DropdownMenu, AlertDialog } from 'bits-ui'
+  import { DropdownMenu, AlertDialog, Dialog } from 'bits-ui'
   import {
     Bell,
     BrainCircuit,
@@ -23,7 +23,6 @@
     Trash2,
     X
   } from '@lucide/svelte'
-  import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
@@ -49,14 +48,17 @@
 
   interface Props {
     onDisconnect?: () => void
+    /** Called once the shell is connected and mounted — the app root uses it
+     *  to sync the desktop theme through the bridge. */
+    onConnected?: () => void
   }
 
-  let { onDisconnect = () => undefined }: Props = $props()
+  let { onDisconnect = () => undefined, onConnected = () => undefined }: Props = $props()
 
   // ─── Viewport height (visual viewport accounts for the phone keyboard) ──
   let viewportHeight = $state<number | null>(null)
 
-  $effect(() => {
+  onMount(() => {
     const viewport = window.visualViewport
     if (!viewport) return
     const sync = (): void => {
@@ -178,6 +180,7 @@
   }
 
   onMount(() => {
+    onConnected()
     void mobileState.loadData()
     const unsubscribeThreadUpdates = subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
@@ -338,7 +341,7 @@
   <!-- History jump sheet. -->
   {#if mobileState.historyOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/50"
+      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.historyOpen = false)}
     ></div>
@@ -381,7 +384,7 @@
   <!-- Notifications sheet — the panel lazy-loads at open time. -->
   {#if mobileState.notificationsOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/50"
+      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.notificationsOpen = false)}
     ></div>
@@ -443,7 +446,7 @@
   <!-- Memory sheet — the desktop panel lazy-loads at open time. -->
   {#if mobileState.memoryOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/50"
+      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.memoryOpen = false)}
     ></div>
@@ -478,7 +481,7 @@
   <!-- Git sheet — the desktop panel lazy-loads at open time. -->
   {#if mobileState.gitOpen && mobileState.selectedThread && !mobileState.chatMode}
     <div
-      class="fixed inset-0 z-40 bg-black/50"
+      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.gitOpen = false)}
     ></div>
@@ -519,7 +522,7 @@
   <!-- Sidebar drawer. -->
   {#if mobileState.sidebarOpen}
     <div
-      class="fixed inset-0 z-50 bg-black/50"
+      class="fixed inset-0 z-50 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.sidebarOpen = false)}
     ></div>
@@ -938,7 +941,7 @@
   <!-- iOS "Add to Home Screen" guide sheet. -->
   {#if mobileState.installGuideOpen}
     <div
-      class="fixed inset-0 z-40 bg-black/50"
+      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
       role="presentation"
       onclick={() => (mobileState.installGuideOpen = false)}
     ></div>
@@ -1071,49 +1074,62 @@
     </aside>
   {/if}
 
-  <!-- Rename thread modal. -->
-  <Modal open={renameTarget !== null} title="Rename Thread" onClose={() => (renameTarget = null)}>
-    <form
-      class="space-y-3"
-      onsubmit={(event: SubmitEvent) => {
-        event.preventDefault()
-        void confirmRename()
-      }}
-    >
-      <div>
-        <label class="mb-1 block text-xs font-medium text-muted" for="mobile-rename-input"
-          >Title</label
+  <!-- Rename thread dialog (bits-ui Dialog — no desktop modal graph). -->
+  <Dialog.Root
+    open={renameTarget !== null}
+    onOpenChange={(open) => {
+      if (!open) renameTarget = null
+    }}
+  >
+    <Dialog.Portal>
+      <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+      <Dialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl outline-none"
+      >
+        <Dialog.Title class="text-sm font-semibold text-foreground">Rename Thread</Dialog.Title>
+        <Dialog.Description class="sr-only">Change the title of this thread.</Dialog.Description>
+        <form
+          class="mt-4 space-y-3"
+          onsubmit={(event: SubmitEvent) => {
+            event.preventDefault()
+            void confirmRename()
+          }}
         >
-        <input
-          id="mobile-rename-input"
-          type="text"
-          class="w-full cursor-text rounded-lg border border-border bg-elevated px-3 py-2 text-sm text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          bind:value={renameValue}
-        />
-      </div>
-      {#if renameError}
-        <p class="text-xs text-danger">{renameError}</p>
-      {/if}
-    </form>
-
-    {#snippet footer()}
-      <button
-        type="button"
-        class="cursor-pointer rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-        onclick={() => (renameTarget = null)}
-      >
-        Cancel
-      </button>
-      <button
-        type="button"
-        class="cursor-pointer rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        disabled={!renameValue.trim() || renameBusy}
-        onclick={() => void confirmRename()}
-      >
-        {renameBusy ? 'Saving…' : 'Save'}
-      </button>
-    {/snippet}
-  </Modal>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-muted" for="mobile-rename-input"
+              >Title</label
+            >
+            <input
+              id="mobile-rename-input"
+              type="text"
+              class="w-full cursor-text rounded-lg border border-border bg-elevated px-3 py-2 text-sm text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              bind:value={renameValue}
+            />
+          </div>
+          {#if renameError}
+            <p class="text-xs text-danger">{renameError}</p>
+          {/if}
+        </form>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+            onclick={() => (renameTarget = null)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={!renameValue.trim() || renameBusy}
+            onclick={() => void confirmRename()}
+          >
+            {renameBusy ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
 
   <!-- Delete thread confirmation. -->
   <AlertDialog.Root
