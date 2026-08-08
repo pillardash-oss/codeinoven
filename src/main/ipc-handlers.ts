@@ -83,6 +83,7 @@ import {
   type AddAssignmentAnnotationInput
 } from '../lib/engines/assignment-engine'
 import { validateAuditReportContent } from '../lib/audit/audit-validation'
+import { exportAuditReportMarkdown } from '../lib/audit/audit-markdown'
 import { exportAssignmentMarkdown } from '../lib/assignment/assignment-markdown'
 import { validateAssignment } from '../lib/assignment/assignment-validation'
 import {
@@ -91,6 +92,7 @@ import {
 } from '../lib/spec/spec-markdown'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../lib/brainstorm/brainstorm-validation'
+import { exportBrainstormMarkdown } from '../lib/brainstorm/brainstorm-markdown'
 import { atomicWrite } from '../lib/utils'
 import { normalizeWorkerNames } from '../lib/assignment/worker-names'
 import type {
@@ -1462,6 +1464,56 @@ export function registerIpcHandlers(
         note === undefined ? '' : requireString(note, 'Brainstorm finalization note', true)
       )
   )
+  ipcMain.handle(
+    'brainstorm:openInEditor',
+    async (_, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
+      const validVersion = requireVersion(version)
+      const document = brainstormEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      if (!document) throw new Error('Brainstorm version not found')
+      const targetPath = await brainstormEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportBrainstormMarkdown(document))
+      const config = await storage.getConfig()
+      await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
+      return targetPath
+    }
+  )
+  ipcMain.handle(
+    'brainstorm:revealInFiles',
+    async (_, projectId: unknown, threadId: unknown, brainstormId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
+      const validVersion = requireVersion(version)
+      const document = brainstormEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      if (!document) throw new Error('Brainstorm version not found')
+      const targetPath = await brainstormEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportBrainstormMarkdown(document))
+      return targetPath
+    }
+  )
   ipcMain.handle('spec:getActive', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
@@ -1696,6 +1748,56 @@ export function registerIpcHandlers(
     await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
     return assignment
   })
+  ipcMain.handle(
+    'audit:openInEditor',
+    async (_, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validReportId = validateEntityId(reportId, 'Audit report ID')
+      const validVersion = requireVersion(version)
+      const report = auditEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      if (!report) throw new Error('Audit report version not found')
+      const targetPath = await auditEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportAuditReportMarkdown(report))
+      const config = await storage.getConfig()
+      await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
+      return targetPath
+    }
+  )
+  ipcMain.handle(
+    'audit:revealInFiles',
+    async (_, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validReportId = validateEntityId(reportId, 'Audit report ID')
+      const validVersion = requireVersion(version)
+      const report = auditEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      if (!report) throw new Error('Audit report version not found')
+      const targetPath = await auditEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportAuditReportMarkdown(report))
+      return targetPath
+    }
+  )
   ipcMain.handle(
     'spec:addAnnotation',
     (_, projectId: unknown, threadId: unknown, specId: unknown, version: unknown, input: unknown) =>

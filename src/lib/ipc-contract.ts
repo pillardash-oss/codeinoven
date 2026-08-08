@@ -1088,6 +1088,22 @@ export interface IpcInvokeContract {
   'audit:complete': Contract<[projectId: string, threadId: string], Thread>
   'audit:beginRework': Contract<[projectId: string, threadId: string], Thread>
   'audit:returnToOffer': Contract<[projectId: string, threadId: string], AssignmentPlan>
+  'audit:openInEditor': Contract<
+    [projectId: string, threadId: string, reportId: string, version: number],
+    string
+  >
+  'audit:revealInFiles': Contract<
+    [projectId: string, threadId: string, reportId: string, version: number],
+    string
+  >
+  'brainstorm:openInEditor': Contract<
+    [projectId: string, threadId: string, brainstormId: string, version: number],
+    string
+  >
+  'brainstorm:revealInFiles': Contract<
+    [projectId: string, threadId: string, brainstormId: string, version: number],
+    string
+  >
   'thread:create': Contract<[input: CreateThreadInput], Thread>
   'thread:delete': Contract<[projectId: string, threadId: string], void>
   'thread:dismissSpecReview': Contract<

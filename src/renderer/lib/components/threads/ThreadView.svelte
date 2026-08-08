@@ -4200,6 +4200,71 @@
     }
   }
 
+  async function openAuditInEditor(report: AuditReport): Promise<void> {
+    auditError = ''
+    try {
+      await invoke(
+        'audit:openInEditor',
+        report.projectId,
+        report.threadId,
+        report.id,
+        report.version
+      )
+    } catch (error) {
+      auditError = error instanceof Error ? error.message : 'The audit report could not be opened.'
+    }
+  }
+
+  async function revealAuditInAppFile(report: AuditReport): Promise<void> {
+    auditError = ''
+    try {
+      const absPath = await invoke(
+        'audit:revealInFiles',
+        report.projectId,
+        report.threadId,
+        report.id,
+        report.version
+      )
+      await revealFileInAppTree(report.projectId, absPath)
+    } catch (error) {
+      auditError =
+        error instanceof Error ? error.message : 'The audit report could not be revealed.'
+    }
+  }
+
+  async function openBrainstormInEditor(document: BrainstormDocument): Promise<void> {
+    brainstormError = ''
+    try {
+      await invoke(
+        'brainstorm:openInEditor',
+        document.projectId,
+        document.threadId,
+        document.id,
+        document.version
+      )
+    } catch (error) {
+      brainstormError =
+        error instanceof Error ? error.message : 'The brainstorm could not be opened.'
+    }
+  }
+
+  async function revealBrainstormInAppFile(document: BrainstormDocument): Promise<void> {
+    brainstormError = ''
+    try {
+      const absPath = await invoke(
+        'brainstorm:revealInFiles',
+        document.projectId,
+        document.threadId,
+        document.id,
+        document.version
+      )
+      await revealFileInAppTree(document.projectId, absPath)
+    } catch (error) {
+      brainstormError =
+        error instanceof Error ? error.message : 'The brainstorm could not be revealed.'
+    }
+  }
+
   async function selectSpecVersion(version: number): Promise<void> {
     const selected = specVersions.find((candidate) => candidate.version === version)
     if (selected) await setActiveSpec(selected)
@@ -5027,6 +5092,8 @@
           onUpdateAnnotation={updateBrainstormAnnotation}
           onResolveAnnotation={resolveBrainstormAnnotation}
           onSubmit={submitBrainstormDecision}
+          onOpenInEditor={openBrainstormInEditor}
+          onRevealInAppFile={revealBrainstormInAppFile}
         />
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
@@ -5053,6 +5120,8 @@
           onResolveAnnotation={resolveAuditAnnotation}
           onReview={reviewAudit}
           onComplete={completeAudit}
+          onOpenInEditor={openAuditInEditor}
+          onRevealInAppFile={revealAuditInAppFile}
         />
       {/key}
     {:else if studioDocument === 'assignment' && assignment && studioAssignment}
