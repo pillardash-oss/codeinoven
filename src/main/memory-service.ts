@@ -29,6 +29,204 @@ export const MEMORY_LIMITS = {
   proposalExpiryMs: 7 * 24 * 60 * 60 * 1000
 } as const
 
+/**
+ * Bounds for auxiliary (deterministic + cheap-model) memory extraction so a
+ * turn can never resend the full user/assistant transcript to a second model
+ * session. These satisfy the A-06 acceptance: local caps, deduplication,
+ * debounce, and a separately configurable cheap-model token budget.
+ */
+export const MEMORY_EXTRACTION_LIMITS = {
+  maxUserCandidateCharacters: 2_000,
+  maxAssistantCandidateCharacters: 8_000,
+  maxCandidates: 3,
+  debounceMs: 60_000,
+  maxExtractionsPerWindow: 3,
+  extractionWindowMs: 10 * 60 * 1000,
+  cheapModelTokenBudget: 4_096
+} as const
+
+/** Approximate per-million-input-token cost of the auxiliary cheap model. */
+export const CHEAP_MODEL_COST_PER_MILLION_TOKENS = 0.15
+
+/** Standing-preference vocabulary that makes a user turn a durable candidate. */
+const STANDING_PREFERENCE_PATTERN =
+  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you))\b/iu
+
+const TRIVIAL_CONTINUATION_PATTERN =
+  /^(?:ok|okay|yes|no|yep|nope|sure|fine|got it|understood|thanks|thank you|thank you!|thx|cool|nice|great|perfect|lgtm|please continue|continue|go ahead|go on|proceed)\b/iu
+
+export interface MemoryCandidate {
+  label: string
+  content: string
+  category: MemoryCategory
+  priority: MemoryPriority
+  scope: MemoryScope
+}
+
+export type MemorySkipReason = 'none' | 'no-candidate' | 'debounced' | 'over-budget'
+
+export interface MemoryExtractionDecision {
+  /** Whether a model-assisted extraction should run for this turn. */
+  run: boolean
+  /** Deterministic candidates extracted without a model call. */
+  candidates: MemoryCandidate[]
+  /** Skip reason when `run` is false. */
+  reason: MemorySkipReason
+  /** User text capped to local limits, safe to send to the cheap model. */
+  userInput: string
+  /** Assistant text capped to local limits and the token budget. */
+  assistantInput: string
+  /** Estimated cheap-model input tokens for this extraction. */
+  inputTokens: number
+}
+
+/** Estimated token count (~4 characters per token) for auxiliary accounting. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4)
+}
+
+function capText(text: string, maxCharacters: number): string {
+  if (maxCharacters <= 0) return ''
+  return text.length > maxCharacters ? text.slice(0, maxCharacters) : text
+}
+
+function normalizeText(text: string): string {
+  return text.replace(/\s+/gu, ' ').trim().toLowerCase()
+}
+
+function isTrivialUserTurn(message: string): boolean {
+  const trimmed = message.trim()
+  if (trimmed.length === 0 || trimmed.length < 15) return true
+  if (trimmed.endsWith('?')) return true
+  return TRIVIAL_CONTINUATION_PATTERN.test(trimmed)
+}
+
+function categoryForCandidate(message: string, matched: string): MemoryCategory {
+  if (/i am\b|my name\b|i work as\b|i'?m a\b/i.test(matched)) return 'identity'
+  if (/\bnever\b|\bdon'?t\b|\bdo not\b|make sure\b/i.test(matched)) return 'behavioral'
+  if (/\bprefer\b|i like\b|i don'?t (?:like|want)\b/i.test(matched)) return 'preference'
+  if (/\bproject|repository|codebase|stack|tooling\b/i.test(message)) return 'project-rule'
+  return 'preference'
+}
+
+function priorityForCandidate(matched: string): MemoryPriority {
+  return /\b(?:always|never|from now on|in future|going forward)\b/iu.test(matched)
+    ? 'high'
+    : 'medium'
+}
+
+/** Extract the sentences of the user message that carry a standing marker. */
+function extractDurableContent(message: string): string {
+  const sentences = message.split(/(?<=[.!?])\s+/u)
+  const durable = sentences.filter((sentence) => STANDING_PREFERENCE_PATTERN.test(sentence))
+  if (durable.length === 0 && STANDING_PREFERENCE_PATTERN.test(message)) return message
+  return durable.join(' ')
+}
+
+/**
+ * Deterministic, model-free memory candidate detection. Returns at most
+ * `maxCandidates` candidates; a turn that is a question, acknowledgement,
+ * continuation, one-off task instruction, or contains no standing-preference
+ * vocabulary yields no candidate (and therefore no auxiliary model call).
+ */
+export function detectMemoryCandidates(input: {
+  userMessage: string
+  assistantResponse: string
+  existingEntries: MemoryEntry[]
+  projectId?: string
+  threadId?: string
+}): MemoryCandidate[] {
+  const user = input.userMessage.trim()
+  if (isTrivialUserTurn(user)) return []
+  if (!STANDING_PREFERENCE_PATTERN.test(user)) return []
+
+  const content = extractDurableContent(user)
+  if (!content) return []
+  const cappedContent = capText(content, MEMORY_EXTRACTION_LIMITS.maxUserCandidateCharacters)
+  const match = STANDING_PREFERENCE_PATTERN.exec(cappedContent)
+  const matched = match ? match[0] : ''
+  const existing = new Set(
+    input.existingEntries
+      .filter((entry) => entry.enabled)
+      .map((entry) => normalizeText(entry.content))
+  )
+  const scope: MemoryScope = input.projectId === 'inbox' ? 'thread' : 'project'
+  const candidate: MemoryCandidate = {
+    label: capText(cappedContent, MEMORY_LIMITS.maxLabelCharacters),
+    content: cappedContent,
+    category: categoryForCandidate(cappedContent, matched),
+    priority: priorityForCandidate(cappedContent),
+    scope
+  }
+  const normalized = normalizeText(candidate.content)
+  if (existing.has(normalized)) return []
+
+  const candidates: MemoryCandidate[] = [candidate]
+  // Deduplicate within this turn (identical normalized content).
+  return candidates.filter(
+    (item, index) =>
+      candidates.findIndex(
+        (other) => normalizeText(other.content) === normalizeText(item.content)
+      ) === index
+  )
+}
+
+export interface MemoryExtractionLimits {
+  maxUserCandidateCharacters: number
+  maxAssistantCandidateCharacters: number
+  maxCandidates: number
+  debounceMs: number
+  maxExtractionsPerWindow: number
+  extractionWindowMs: number
+  cheapModelTokenBudget: number
+}
+
+/** Read the cheap-model extraction budget, overridable per deployment. */
+export function readMemoryExtractionLimits(): MemoryExtractionLimits {
+  const tokenBudget = readPositiveIntEnv('CODEINOVEN_MEMORY_TOKEN_BUDGET')
+  const debounceMs = readPositiveIntEnv('CODEINOVEN_MEMORY_DEBOUNCE_MS')
+  const maxPerWindow = readPositiveIntEnv('CODEINOVEN_MEMORY_MAX_PER_WINDOW')
+  return {
+    ...MEMORY_EXTRACTION_LIMITS,
+    cheapModelTokenBudget: tokenBudget ?? MEMORY_EXTRACTION_LIMITS.cheapModelTokenBudget,
+    debounceMs: debounceMs ?? MEMORY_EXTRACTION_LIMITS.debounceMs,
+    maxExtractionsPerWindow: maxPerWindow ?? MEMORY_EXTRACTION_LIMITS.maxExtractionsPerWindow
+  }
+}
+
+function readPositiveIntEnv(name: string): number | null {
+  const value = process.env[name]
+  if (!value) return null
+  const parsed = Number.parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Whether model-generated thread titles are enabled. Heuristic titles are the
+ * default; model titles are opt-in via the deployment environment.
+ */
+export function modelTitlesEnabled(): boolean {
+  const value = process.env['CODEINOVEN_MODEL_TITLES'] ?? process.env['MODEL_TITLES']
+  return value === 'true' || value === '1'
+}
+
+export type AuxiliaryFeature = 'memory' | 'title'
+
+export interface AuxiliaryUsageEntry {
+  feature: AuxiliaryFeature
+  inputChars: number
+  inputTokens: number
+  estimatedCost: number
+  timestamp: number
+}
+
+export interface AuxiliaryUsageTotals {
+  calls: number
+  inputChars: number
+  inputTokens: number
+  estimatedCost: number
+}
+
 const VALID_CATEGORIES: MemoryCategory[] = ['behavioral', 'project-rule', 'identity', 'preference']
 const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
 const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
@@ -254,6 +452,9 @@ async function migrateLegacyGlobalScope(storage: StorageEngine): Promise<void> {
 /** Formats only explicit enabled preferences and snapshots them for approved specs. */
 export class MemoryService {
   private readonly migration: Promise<void>
+  private readonly lastExtractionAt = new Map<string, number>()
+  private readonly extractionWindows = new Map<string, { start: number; count: number }>()
+  private readonly auxiliaryUsage: AuxiliaryUsageEntry[] = []
 
   constructor(private readonly storage = new StorageEngine()) {
     this.migration = migrateMemoryEntries(storage)
@@ -694,6 +895,126 @@ export class MemoryService {
     return config.entries
       .filter((e) => e.enabled && (e.priority === 'critical' || e.priority === 'high'))
       .map((e) => `[${e.priority.toUpperCase()}] ${e.label}: ${e.content}`)
+  }
+
+  // ─── Deterministic extraction gate (A-06) ───────────────────────────────
+
+  /**
+   * Decide whether a completed turn warrants an auxiliary model call for
+   * persistent memory. Deterministic heuristics run first: turns with no
+   * durable candidate skip entirely; the remaining turns are debounced and
+   * capped by the separately configurable cheap-model token budget.
+   */
+  async evaluateMemoryExtraction(input: {
+    userMessage: string
+    assistantResponse: string
+    projectId?: string
+    threadId?: string
+    now?: number
+  }): Promise<MemoryExtractionDecision> {
+    const now = input.now ?? Date.now()
+    const current = await this.current(input.projectId, input.threadId)
+    if (!current.enabled) {
+      return {
+        run: false,
+        candidates: [],
+        reason: 'no-candidate',
+        userInput: '',
+        assistantInput: '',
+        inputTokens: 0
+      }
+    }
+    const candidates = detectMemoryCandidates({
+      userMessage: input.userMessage,
+      assistantResponse: input.assistantResponse,
+      existingEntries: current.entries,
+      projectId: input.projectId,
+      threadId: input.threadId
+    })
+    const userInput = capText(
+      input.userMessage,
+      MEMORY_EXTRACTION_LIMITS.maxUserCandidateCharacters
+    )
+    const assistantInput = capText(
+      input.assistantResponse,
+      MEMORY_EXTRACTION_LIMITS.maxAssistantCandidateCharacters
+    )
+    const skip = (reason: MemorySkipReason, runInputTokens: number): MemoryExtractionDecision => ({
+      run: false,
+      candidates,
+      reason,
+      userInput: runInputTokens === 0 ? '' : userInput,
+      assistantInput: runInputTokens === 0 ? '' : assistantInput,
+      inputTokens: runInputTokens
+    })
+    if (candidates.length === 0) return skip('no-candidate', 0)
+
+    const limits = readMemoryExtractionLimits()
+    const contextKey = `${input.projectId ?? ''}:${input.threadId ?? ''}`
+    const lastExtraction = this.lastExtractionAt.get(contextKey)
+    if (lastExtraction !== undefined && now - lastExtraction < limits.debounceMs) {
+      return skip('debounced', 0)
+    }
+    const window = this.extractionWindows.get(contextKey)
+    if (
+      window &&
+      now - window.start < limits.extractionWindowMs &&
+      window.count >= limits.maxExtractionsPerWindow
+    ) {
+      return skip('debounced', 0)
+    }
+    if (!window || now - window.start >= limits.extractionWindowMs) {
+      this.extractionWindows.set(contextKey, { start: now, count: 0 })
+    }
+
+    // Enforce the cheap-model token budget: the user message is always kept and
+    // the assistant material is truncated to whatever headroom remains.
+    const userTokens = estimateTokens(userInput)
+    if (userTokens > limits.cheapModelTokenBudget) return skip('over-budget', 0)
+    const assistantHeadroom = limits.cheapModelTokenBudget - userTokens
+    const assistantBudgeted = capText(assistantInput, assistantHeadroom * 4)
+    const inputTokens = userTokens + estimateTokens(assistantBudgeted)
+
+    this.lastExtractionAt.set(contextKey, now)
+    const activeWindow = this.extractionWindows.get(contextKey)
+    if (activeWindow) activeWindow.count += 1
+    return {
+      run: true,
+      candidates,
+      reason: 'none',
+      userInput,
+      assistantInput: assistantBudgeted,
+      inputTokens
+    }
+  }
+
+  /** Record auxiliary (memory/title) input accounting for separate reporting. */
+  recordAuxiliaryUsage(feature: AuxiliaryFeature, inputTokens: number, inputChars: number): void {
+    const entry: AuxiliaryUsageEntry = {
+      feature,
+      inputTokens,
+      inputChars,
+      estimatedCost: (inputTokens / 1_000_000) * CHEAP_MODEL_COST_PER_MILLION_TOKENS,
+      timestamp: Date.now()
+    }
+    this.auxiliaryUsage.push(entry)
+    while (this.auxiliaryUsage.length > 500) this.auxiliaryUsage.shift()
+  }
+
+  /** Aggregate auxiliary token input and estimated cost separately by feature. */
+  auxiliaryUsageByFeature(): Record<AuxiliaryFeature, AuxiliaryUsageTotals> {
+    const totals: Record<AuxiliaryFeature, AuxiliaryUsageTotals> = {
+      memory: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 },
+      title: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
+    }
+    for (const entry of this.auxiliaryUsage) {
+      const feature = totals[entry.feature]
+      feature.calls += 1
+      feature.inputChars += entry.inputChars
+      feature.inputTokens += entry.inputTokens
+      feature.estimatedCost += entry.estimatedCost
+    }
+    return totals
   }
 }
 

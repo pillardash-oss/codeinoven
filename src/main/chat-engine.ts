@@ -26,7 +26,7 @@ import {
   clearNotificationAborting,
   notifyTemporaryChat
 } from './thread-events'
-import { MemoryService } from './memory-service'
+import { MemoryService, estimateTokens, modelTitlesEnabled } from './memory-service'
 import { PromptAssembler } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from './permissions/permission-policy'
 import { validateBoundedString, validateEntityId, validateThreadSettings } from './ipc-validation'
@@ -4600,6 +4600,10 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual') return
+    // Heuristic titles are the default (the fallback is applied in
+    // `sendPrompt()`); model-generated titles run only when explicitly opted
+    // in so ordinary turns never spawn an auxiliary model session (A-06).
+    if (!modelTitlesEnabled()) return
 
     let generated: string | null
     try {
@@ -4630,7 +4634,11 @@ export class ChatEngine {
     text: string
   ): Promise<string | null> {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
-    return driver.generateTitle(projectPath, { settings, message: text })
+    const title = await driver.generateTitle(projectPath, { settings, message: text })
+    if (title) {
+      this.memoryService.recordAuxiliaryUsage('title', estimateTokens(text), text.length)
+    }
+    return title
   }
 
   /** Recap of the mirrored transcript when no reusable harness session exists. */
@@ -10734,11 +10742,28 @@ export class ChatEngine {
     const current = await this.memoryService.current(projectId, threadId)
     if (!current.enabled) return
 
+    // Deterministic extraction gate (A-06): skip the auxiliary model call when
+    // no durable candidate is detected, the conversation is debounced, or the
+    // material exceeds the separately configurable cheap-model budget. The
+    // capped inputs and estimated tokens are recorded for per-feature cost.
+    const extraction = await this.memoryService.evaluateMemoryExtraction({
+      userMessage,
+      assistantResponse,
+      projectId,
+      threadId
+    })
+    if (!extraction.run) return
+    this.memoryService.recordAuxiliaryUsage(
+      'memory',
+      extraction.inputTokens,
+      extraction.userInput.length + extraction.assistantInput.length
+    )
+
     let decision: StructuredMemoryProposal
     try {
       decision = await this.generateMemoryProposal(
-        userMessage,
-        assistantResponse,
+        extraction.userInput,
+        extraction.assistantInput,
         projectId,
         threadId,
         driver,

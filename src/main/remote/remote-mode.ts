@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
 import { Logger } from '../logger'
 import { SecretVault } from '../secret-vault'
-import { CloudRelayClient } from './cloud-relay-client'
+import { CloudRelayClient, fullJitterDelay } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
@@ -76,6 +76,34 @@ export function remoteEnvInt(name: string, fallback: number): number {
   if (!value) return fallback
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const CLOUD_REQUEST_TIMEOUT_MS = 15_000
+const CLOUD_RECONNECT_BASE_MS = 1_000
+const CLOUD_RECONNECT_MAX_MS = 30_000
+
+/**
+ * Fetch with an application-level deadline and external cancellation. The
+ * request aborts when the timeout elapses or the owning controller shuts the
+ * cloud access down (remote mode disabled / app dispose), so stale polls can
+ * never outlive a config change.
+ */
+async function fetchWithDeadline(
+  url: string | URL,
+  init: RequestInit,
+  timeoutMs: number,
+  externalSignal?: AbortSignal | null
+): Promise<Response> {
+  const controller = new AbortController()
+  const onExternalAbort = (): void => controller.abort()
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
+  const timer = setTimeout(() => controller.abort(), timeoutMs) as unknown as number
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', onExternalAbort)
+  }
 }
 
 /** Resolve the shared peer auth secret for the gateway, if configured. */
@@ -144,6 +172,7 @@ export class RemoteModeController {
   private cloudReconnectTimer: ReturnType<typeof setTimeout> | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
   private cloudReconnectAttempt = 0
+  private cloudAbortController: AbortController | null = null
   private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
@@ -422,6 +451,7 @@ export class RemoteModeController {
     const existingToken = previous?.tokenRef ? await this.vault.resolve(previous.tokenRef) : null
 
     this.stopCloudAccess()
+    this.cloudAbortController = new AbortController()
     this.cloudStatus = {
       ...this.cloudStatus,
       state: 'connecting',
@@ -431,18 +461,23 @@ export class RemoteModeController {
     }
     this.broadcast()
 
-    const response = await fetch(new URL('/v1/device-enrollments', this.cloudApiOrigin), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(existingToken ? { Authorization: `Bearer ${existingToken}` } : {})
+    const response = await fetchWithDeadline(
+      new URL('/v1/device-enrollments', this.cloudApiOrigin),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(existingToken ? { Authorization: `Bearer ${existingToken}` } : {})
+        },
+        body: JSON.stringify({
+          name: hostname(),
+          platform: platform(),
+          lanEndpoint: this.gateway?.info().url ?? null
+        })
       },
-      body: JSON.stringify({
-        name: hostname(),
-        platform: platform(),
-        lanEndpoint: this.gateway?.info().url ?? null
-      })
-    })
+      CLOUD_REQUEST_TIMEOUT_MS,
+      this.cloudAbortController?.signal
+    )
     if (!response.ok) {
       this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment failed' }
       this.broadcast()
@@ -482,9 +517,11 @@ export class RemoteModeController {
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
     if (config && this.vault) {
       const token = await this.vault.resolve(config.tokenRef)
-      const response = await fetch(
+      const response = await fetchWithDeadline(
         new URL(`/v1/device-enrollments/${encodeURIComponent(config.desktopId)}`, config.apiOrigin),
-        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }
+        { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
+        CLOUD_REQUEST_TIMEOUT_MS,
+        this.cloudAbortController?.signal
       )
       if (!response.ok && response.status !== 404) {
         throw new Error('Could not revoke desktop access from the remote service')
@@ -533,14 +570,17 @@ export class RemoteModeController {
   private async checkEnrollmentStatus(): Promise<void> {
     const config = this.cloudConfig
     if (!config || !this.vault || !this.remoteModeActive) return
+    if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
     try {
       const token = await this.vault.resolve(config.tokenRef)
-      const response = await fetch(
+      const response = await fetchWithDeadline(
         new URL(
           `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/status`,
           config.apiOrigin
         ),
-        { headers: { Authorization: `Bearer ${token}` } }
+        { headers: { Authorization: `Bearer ${token}` } },
+        CLOUD_REQUEST_TIMEOUT_MS,
+        this.cloudAbortController?.signal
       )
       if (!response.ok) throw new Error('Enrollment status rejected')
       const payload = (await response.json()) as Record<string, unknown>
@@ -617,10 +657,17 @@ export class RemoteModeController {
     const config = this.cloudConfig
     const controlSecret = this.resolvedPeerSecret
     if (!config || !controlSecret || !this.rpc || this.cloudRelay) return
+    if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
+    const signal = this.cloudAbortController.signal
     const relay = new CloudRelayClient({
       apiOrigin: config.apiOrigin,
       deviceToken,
       controlSecret,
+      signal,
+      connectTimeoutMs: remoteEnvInt('RELAY_CONNECT_TIMEOUT_MS', 15_000),
+      authTimeoutMs: remoteEnvInt('RELAY_AUTH_TIMEOUT_MS', 10_000),
+      requestTimeoutMs: remoteEnvInt('RELAY_REQUEST_TIMEOUT_MS', 30_000),
+      queueLimit: remoteEnvInt('RELAY_QUEUE_LIMIT', 1_000),
       onAuthenticated: () => {
         this.cloudReconnectAttempt = 0
         this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
@@ -646,7 +693,14 @@ export class RemoteModeController {
 
   private scheduleCloudReconnect(): void {
     if (!this.remoteModeActive || this.cloudReconnectTimer) return
-    const delay = Math.min(30_000, 1_000 * 2 ** this.cloudReconnectAttempt)
+    // Full-jitter backoff: jittered within [0, min(max, base * 2^attempt)) so
+    // reconnecting clients cannot synchronize into a reconnect storm after an
+    // outage.
+    const delay = fullJitterDelay(
+      this.cloudReconnectAttempt,
+      CLOUD_RECONNECT_BASE_MS,
+      CLOUD_RECONNECT_MAX_MS
+    )
     this.cloudReconnectAttempt += 1
     this.cloudReconnectTimer = setTimeout(() => {
       this.cloudReconnectTimer = null
@@ -669,6 +723,10 @@ export class RemoteModeController {
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudReconnectTimer = null
     this.cloudPollTimer = null
+    // Cancel any in-flight enrollment/status request and abort the relay
+    // connection so nothing survives a remote-mode toggle or app shutdown.
+    this.cloudAbortController?.abort()
+    this.cloudAbortController = null
     this.cloudRelay?.close()
     this.cloudRelay = null
     if (this.devices.length === 0) setRemoteEventForwarder(null)

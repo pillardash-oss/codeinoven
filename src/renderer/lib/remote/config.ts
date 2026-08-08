@@ -103,6 +103,22 @@ export function isProductionSource(source: RemoteConfigSource): boolean {
   return envString(source, 'NODE_ENV') === 'production'
 }
 
+/** Loopback hostnames that are development-only relay targets. */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+}
+
+/** A production relay URL must be an explicit `wss:` URL on a non-loopback host. */
+export function isSecureProductionRelayUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'wss:' && !isLoopbackHostname(parsed.hostname)
+  } catch {
+    return false
+  }
+}
+
 export interface BuildRemoteConfigOptions {
   production?: boolean
 }
@@ -123,19 +139,27 @@ export function buildRemoteConfig(
 
   const relayEnabled = envBool(source, 'RELAY_ENABLED', true)
   const lanEnabled = envBool(source, 'LAN_ENABLED', true)
-  const relayUrl = envString(source, 'RELAY_URL')
-  const relayToken = envString(source, 'RELAY_TOKEN')
 
   const mqttUrl = envString(source, 'MQTT_URL') ?? (production ? null : DEFAULT_MQTT_URL)
   const mqttUsername = envString(source, 'MQTT_USERNAME')
   const mqttPassword = envString(source, 'MQTT_PASSWORD')
 
-  // The old environment-token relay is development-only. Production uses the
-  // same-origin account relay, whose per-device credentials are issued at
-  // runtime and never compiled into the public renderer bundle.
-  const relayProvisioned = relayUrl !== null && relayToken !== null
+  // The old environment-token relay is development-only by default. Production
+  // only activates the relay when an explicit `wss:` RELAY_URL plus a non-empty
+  // RELAY_TOKEN is provisioned on a non-loopback host; an absent, insecure
+  // (`ws:`), or localhost relay configuration is rejected and the client stays
+  // LAN-only rather than silently falling back to a development endpoint.
+  const relayUrl = envString(source, 'RELAY_URL')
+  const relayToken = envString(source, 'RELAY_TOKEN')
+  const relayUrlValue = relayUrl ?? (production ? null : DEFAULT_RELAY_URL)
+  const relayProvisioned = relayUrlValue !== null && relayToken !== null
+  const relaySecure = !production || isSecureProductionRelayUrl(relayUrlValue ?? '')
   const mqttProvisioned = mqttUrl === null || (mqttUsername !== null && mqttPassword !== null)
-  const relayUsable = !production && (!relayProvisioned || mqttProvisioned)
+  const relayUsable =
+    relayEnabled &&
+    relaySecure &&
+    (!production || relayProvisioned) &&
+    (!relayProvisioned || mqttProvisioned)
 
   return {
     lan: {
@@ -146,8 +170,8 @@ export function buildRemoteConfig(
       hosts: envList(source, 'LAN_HOSTS', ['localhost'])
     },
     relay: {
-      enabled: relayEnabled && relayUsable,
-      url: relayUrl ?? DEFAULT_RELAY_URL,
+      enabled: relayUsable,
+      url: relayUrlValue ?? DEFAULT_RELAY_URL,
       token: relayToken,
       mqtt: {
         url: mqttUrl,

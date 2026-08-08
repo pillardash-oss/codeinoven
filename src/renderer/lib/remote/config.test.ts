@@ -6,6 +6,7 @@ import {
   DEFAULT_RELAY_URL,
   buildRemoteConfig,
   isProductionSource,
+  isSecureProductionRelayUrl,
   loadRemoteConfig
 } from './config'
 
@@ -87,15 +88,44 @@ describe('buildRemoteConfig', () => {
     expect(config.relay.enabled).toBe(false)
   })
 
-  it('does not expose the legacy environment-token relay in production', () => {
+  it('enables the relay in production only for an explicit secure wss URL plus token', () => {
     const config = buildRemoteConfig({
       ...PROD,
       RELAY_URL: 'wss://relay.example.test',
       RELAY_TOKEN: 'relay-token'
     })
-    expect(config.relay.enabled).toBe(false)
+    // The env relay is no longer blanket-disabled in production: an explicit
+    // `wss:` RELAY_URL plus a non-empty RELAY_TOKEN satisfies the contract.
+    expect(config.relay.enabled).toBe(true)
     expect(config.relay.url).toBe('wss://relay.example.test')
     expect(config.relay.token).toBe('relay-token')
+  })
+
+  it('rejects an insecure ws relay URL in production', () => {
+    const config = buildRemoteConfig({
+      ...PROD,
+      RELAY_URL: 'ws://relay.example.test',
+      RELAY_TOKEN: 'relay-token'
+    })
+    expect(config.relay.enabled).toBe(false)
+  })
+
+  it('rejects a localhost relay URL in production', () => {
+    const config = buildRemoteConfig({
+      ...PROD,
+      RELAY_URL: 'ws://localhost:8877',
+      RELAY_TOKEN: 'relay-token'
+    })
+    expect(config.relay.enabled).toBe(false)
+  })
+
+  it('rejects a production relay URL that is not parseable', () => {
+    const config = buildRemoteConfig({
+      ...PROD,
+      RELAY_URL: 'not-a-url',
+      RELAY_TOKEN: 'relay-token'
+    })
+    expect(config.relay.enabled).toBe(false)
   })
 
   it('keeps the relay disabled in production when the token is missing', () => {
@@ -176,6 +206,20 @@ describe('isProductionSource', () => {
   it('falls back to NODE_ENV', () => {
     expect(isProductionSource({ NODE_ENV: 'production' })).toBe(true)
     expect(isProductionSource({ NODE_ENV: 'development' })).toBe(false)
+  })
+})
+
+describe('isSecureProductionRelayUrl', () => {
+  it('accepts an explicit wss URL on a non-loopback host', () => {
+    expect(isSecureProductionRelayUrl('wss://relay.example.test')).toBe(true)
+  })
+
+  it('rejects plain ws URLs, loopback hosts, and malformed input', () => {
+    expect(isSecureProductionRelayUrl('ws://relay.example.test')).toBe(false)
+    expect(isSecureProductionRelayUrl('wss://localhost:8877')).toBe(false)
+    expect(isSecureProductionRelayUrl('wss://127.0.0.1:8877')).toBe(false)
+    expect(isSecureProductionRelayUrl('wss://[::1]:8877')).toBe(false)
+    expect(isSecureProductionRelayUrl('not-a-url')).toBe(false)
   })
 })
 

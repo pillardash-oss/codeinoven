@@ -11,6 +11,10 @@
  * The socket is created through an injectable factory so the module is
  * unit-testable without a production relay — tests use the localhost dev
  * fallback.
+ *
+ * Delivery guarantees: connect deadlines, a bounded outbound queue with
+ * monotonic message IDs and acknowledgement handling, inbound duplicate
+ * suppression, and opt-in full-jitter reconnection with bounded retries.
  */
 
 import type { RelayRef } from './routes'
@@ -30,6 +34,14 @@ export type RelayEvent =
   | { kind: 'disconnected'; relay: RelayRef; reason: string }
   | { kind: 'message'; data: string }
 
+export interface RelayReconnectOptions {
+  maxAttempts?: number
+  initialDelayMs?: number
+  maxDelayMs?: number
+  /** Deterministic random source for the full-jitter backoff (tests). */
+  random?: () => number
+}
+
 export interface RelayClientOptions {
   url: string
   token: string | null
@@ -42,6 +54,12 @@ export interface RelayClientOptions {
   socketFactory?: SocketFactory
   handshakeTimeoutMs?: number
   mqttSignalingTimeoutMs?: number
+  /** Deadline for the socket to open; when exceeded the attempt fails. */
+  connectTimeoutMs?: number
+  /** Bounded outbound queue; the oldest message is dropped when full. */
+  queueLimit?: number
+  /** When provided, the client reconnects with full-jitter backoff. */
+  reconnect?: RelayReconnectOptions
   onEvent: (event: RelayEvent) => void
 }
 
@@ -68,7 +86,37 @@ interface RelayReply {
 
 interface DataEnvelope {
   type: 'remote:data'
+  id?: number
   payload: string
+}
+
+interface AckEnvelope {
+  type: 'remote:ack' | 'relay:ack'
+  id: number
+}
+
+const DEFAULT_CONNECT_TIMEOUT_MS = 10_000
+const DEFAULT_QUEUE_LIMIT = 1_000
+const DEFAULT_RECONNECT_MAX_ATTEMPTS = 8
+const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 500
+const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
+
+/**
+ * Full-jitter backoff delay for the given reconnect attempt. Returns a value
+ * in `[0, min(maxMs, baseMs * 2^attempt))` using the injected random source so
+ * tests can drive it deterministically.
+ */
+export function fullJitterDelay(
+  attempt: number,
+  baseMs: number,
+  maxMs: number,
+  random: () => number = Math.random
+): number {
+  const safeAttempt = Math.max(0, Math.floor(attempt))
+  const cap = Math.min(maxMs, baseMs * 2 ** safeAttempt)
+  if (cap <= 0) return 0
+  const sample = Math.min(1, Math.max(0, random()))
+  return Math.floor(sample * cap)
 }
 
 function parseReply(data: string): RelayReply | null {
@@ -94,8 +142,21 @@ function parseDataEnvelope(data: string): DataEnvelope | null {
     if (record.type !== 'remote:data') return null
     return {
       type: 'remote:data',
+      id: typeof record.id === 'number' ? record.id : undefined,
       payload: typeof record.payload === 'string' ? record.payload : ''
     }
+  } catch {
+    return null
+  }
+}
+
+function parseAck(data: string): AckEnvelope | null {
+  try {
+    const parsed: unknown = JSON.parse(data)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const record = parsed as Record<string, unknown>
+    if (record.type !== 'remote:ack' && record.type !== 'relay:ack') return null
+    return { type: record.type, id: typeof record.id === 'number' ? record.id : NaN }
   } catch {
     return null
   }
@@ -162,6 +223,9 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   const relay: RelayRef = { url: options.url }
   const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000
   const mqttSignalingTimeoutMs = options.mqttSignalingTimeoutMs ?? 5_000
+  const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
+  const queueLimit = options.queueLimit ?? DEFAULT_QUEUE_LIMIT
+  const reconnect = options.reconnect
   const socketFactory =
     options.socketFactory ??
     ((target: string): TransportSocket => new WebSocket(target) as unknown as TransportSocket)
@@ -169,114 +233,267 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   let socket: TransportSocket
   let settled = false
   let open = false
+  let closing = false
+  let reconnecting = false
+  let connectTimer: number | null = null
   let handshakeTimer: number | null = null
+  let reconnectTimer: number | null = null
+  let reconnectAttempt = 0
+  let nextMessageId = 1
   let resolve: (result: RelayConnectResult) => void = () => undefined
+  const queue: Array<{ id: number; data: string; encrypted: string | null }> = []
+  const inFlight = new Map<number, { id: number; data: string; encrypted: string | null }>()
+  const seenIds = new Set<number>()
 
-  function finish(result: RelayConnectResult, event: RelayEvent): void {
-    if (settled) return
-    settled = true
+  function clearTimers(): void {
     if (handshakeTimer !== null) {
       clearTimeout(handshakeTimer)
       handshakeTimer = null
     }
+    if (connectTimer !== null) {
+      clearTimeout(connectTimer)
+      connectTimer = null
+    }
+  }
+
+  function finish(result: RelayConnectResult, event: RelayEvent): void {
+    if (settled) return
+    settled = true
+    clearTimers()
     options.onEvent(event)
     resolve(result)
   }
 
-  return {
-    connect(): Promise<RelayConnectResult> {
-      // MQTT signaling is optional and non-fatal when it fails.
-      void attemptMqttSignaling(options, socketFactory, mqttSignalingTimeoutMs)
+  function enqueue(record: { id: number; data: string; encrypted: string | null }): void {
+    if (queueLimit <= 0) return
+    if (queue.length >= queueLimit) queue.shift()
+    queue.push(record)
+  }
 
-      socket = socketFactory(options.url)
-      socket.onopen = () => {
-        if (settled) return
-        remoteLog.dev(`Relay handshaking with ${options.url}`)
-        const nonce = generateNonce()
-        void createHandshakeToken(options.authSecret ?? '', nonce).then((auth) => {
-          if (settled) return
-          const hello: RelayHello = {
-            type: 'relay:hello',
-            version: 1,
-            nonce,
-            token: options.token,
-            auth
-          }
-          socket.send(JSON.stringify(hello))
+  function requeueInFlight(): void {
+    for (const record of inFlight.values()) enqueue(record)
+    inFlight.clear()
+  }
+
+  async function transmit(record: {
+    id: number
+    data: string
+    encrypted: string | null
+  }): Promise<void> {
+    if (!socket || !open) return
+    let payload = record.encrypted
+    if (payload === null) {
+      payload = await encryptPayload(options.authSecret ?? '', record.data)
+      record.encrypted = payload
+    }
+    if (!socket || !open) return
+    inFlight.set(record.id, record)
+    const envelope: DataEnvelope = { type: 'remote:data', id: record.id, payload }
+    socket.send(JSON.stringify(envelope))
+  }
+
+  async function flushQueue(): Promise<void> {
+    while (queue.length > 0) {
+      const record = queue.shift()
+      if (!record) break
+      await transmit(record)
+    }
+  }
+
+  function scheduleReconnect(reason: string): void {
+    if (!reconnect || reconnectTimer !== null || closing) return
+    const maxAttempts = reconnect.maxAttempts ?? DEFAULT_RECONNECT_MAX_ATTEMPTS
+    if (reconnectAttempt >= maxAttempts) {
+      reconnectAttempt = 0
+      options.onEvent({ kind: 'disconnected', relay, reason })
+      return
+    }
+    const delay = fullJitterDelay(
+      reconnectAttempt,
+      reconnect.initialDelayMs ?? DEFAULT_RECONNECT_INITIAL_DELAY_MS,
+      reconnect.maxDelayMs ?? DEFAULT_RECONNECT_MAX_DELAY_MS,
+      reconnect.random
+    )
+    reconnectAttempt += 1
+    options.onEvent({
+      kind: 'disconnected',
+      relay,
+      reason: `${reason} (reconnect ${reconnectAttempt})`
+    })
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null
+      reconnecting = true
+      void establishConnection()
+    }, delay) as unknown as number
+  }
+
+  /** Terminal attempt outcome: reconnect loops retry, the initial connect settles. */
+  function failOrRetry(result: RelayConnectResult, reason: string, event: RelayEvent): void {
+    if (reconnecting) {
+      scheduleReconnect(reason)
+    } else {
+      finish(result, event)
+    }
+  }
+
+  function establishConnection(): Promise<RelayConnectResult> {
+    settled = false
+    open = false
+    // MQTT signaling is optional and non-fatal when it fails.
+    void attemptMqttSignaling(options, socketFactory, mqttSignalingTimeoutMs)
+
+    socket = socketFactory(options.url)
+    // Connect deadline: fail the attempt if the socket never opens.
+    connectTimer = setTimeout(() => {
+      if (!settled) {
+        remoteLog.error(`Relay connect timed out for ${options.url}`)
+        failOrRetry('failed', 'connect-timeout', {
+          kind: 'disconnected',
+          relay,
+          reason: 'connect-timeout'
         })
-        handshakeTimer = setTimeout(() => {
-          remoteLog.error(`Relay handshake timed out for ${options.url}`)
-          finish('failed', { kind: 'disconnected', relay, reason: 'handshake-timeout' })
-          socket.close()
-        }, handshakeTimeoutMs) as unknown as number
+        socket.close()
       }
-
-      socket.onmessage = (event) => {
-        const reply = parseReply(event.data)
-        if (reply) {
-          if (reply.type === 'relay:hello:ok') {
-            open = true
-            remoteLog.dev(`Relay handshake accepted for ${options.url}`)
-            finish('open', { kind: 'handshake:ok', relay })
-            return
-          }
-          remoteLog.error(
-            `Relay handshake rejected for ${options.url}: ${reply.reason ?? 'unknown'}`
-          )
-          finish('rejected', {
-            kind: 'handshake:rejected',
-            relay,
-            reason: reply.reason ?? 'auth-failed'
-          })
-          socket.close()
-          return
-        }
-
-        const envelope = parseDataEnvelope(event.data)
-        if (envelope) {
-          void decryptPayload(options.authSecret ?? '', envelope.payload)
-            .then((plaintext) => options.onEvent({ kind: 'message', data: plaintext }))
-            .catch(() => {
-              remoteLog.error(`Relay payload decryption failed for ${options.url}`)
-              finish('failed', { kind: 'disconnected', relay, reason: 'decrypt-failed' })
-              socket.close()
-            })
-          return
-        }
-
-        options.onEvent({ kind: 'message', data: event.data })
+    }, connectTimeoutMs) as unknown as number
+    socket.onopen = () => {
+      if (settled) return
+      if (connectTimer !== null) {
+        clearTimeout(connectTimer)
+        connectTimer = null
       }
-
-      socket.onclose = () => {
-        if (!settled) {
-          finish('failed', { kind: 'disconnected', relay, reason: 'socket-closed' })
-          return
+      remoteLog.dev(`Relay handshaking with ${options.url}`)
+      const nonce = generateNonce()
+      void createHandshakeToken(options.authSecret ?? '', nonce).then((auth) => {
+        if (settled) return
+        const hello: RelayHello = {
+          type: 'relay:hello',
+          version: 1,
+          nonce,
+          token: options.token,
+          auth
         }
-        if (open) {
-          open = false
-          options.onEvent({ kind: 'disconnected', relay, reason: 'socket-closed' })
-        }
-      }
-
-      socket.onerror = () => {
-        remoteLog.error(`Relay transport error for ${options.url}`)
-      }
-
-      return new Promise<RelayConnectResult>((innerResolve) => {
-        resolve = innerResolve
+        socket.send(JSON.stringify(hello))
       })
-    },
+      handshakeTimer = setTimeout(() => {
+        remoteLog.error(`Relay handshake timed out for ${options.url}`)
+        failOrRetry('failed', 'handshake-timeout', {
+          kind: 'disconnected',
+          relay,
+          reason: 'handshake-timeout'
+        })
+        socket.close()
+      }, handshakeTimeoutMs) as unknown as number
+    }
 
-    async send(data: string): Promise<void> {
-      if (!open || !socket) {
-        remoteLog.error('Relay send attempted before the channel was open')
+    socket.onmessage = (event) => {
+      const ack = parseAck(event.data)
+      if (ack) {
+        inFlight.delete(ack.id)
         return
       }
-      const payload = await encryptPayload(options.authSecret ?? '', data)
-      socket.send(JSON.stringify({ type: 'remote:data', payload } satisfies DataEnvelope))
+
+      const reply = parseReply(event.data)
+      if (reply) {
+        if (reply.type === 'relay:hello:ok') {
+          open = true
+          reconnecting = false
+          reconnectAttempt = 0
+          remoteLog.dev(`Relay handshake accepted for ${options.url}`)
+          finish('open', { kind: 'handshake:ok', relay })
+          void flushQueue()
+          return
+        }
+        remoteLog.error(`Relay handshake rejected for ${options.url}: ${reply.reason ?? 'unknown'}`)
+        failOrRetry('rejected', 'auth-failed', {
+          kind: 'handshake:rejected',
+          relay,
+          reason: reply.reason ?? 'auth-failed'
+        })
+        socket.close()
+        return
+      }
+
+      const envelope = parseDataEnvelope(event.data)
+      if (envelope) {
+        // Duplicate suppression: an already delivered frame id is ignored.
+        if (envelope.id !== undefined) {
+          if (seenIds.has(envelope.id)) return
+          seenIds.add(envelope.id)
+          while (seenIds.size > queueLimit) {
+            const oldest = seenIds.values().next().value
+            if (oldest === undefined) break
+            seenIds.delete(oldest)
+          }
+        }
+        void decryptPayload(options.authSecret ?? '', envelope.payload)
+          .then((plaintext) => options.onEvent({ kind: 'message', data: plaintext }))
+          .catch(() => {
+            remoteLog.error(`Relay payload decryption failed for ${options.url}`)
+            failOrRetry('failed', 'decrypt-failed', {
+              kind: 'disconnected',
+              relay,
+              reason: 'decrypt-failed'
+            })
+            socket.close()
+          })
+        return
+      }
+
+      options.onEvent({ kind: 'message', data: event.data })
+    }
+
+    socket.onclose = () => {
+      if (closing) {
+        open = false
+        return
+      }
+      if (open) {
+        open = false
+        requeueInFlight()
+        scheduleReconnect('socket-closed')
+        return
+      }
+      if (!settled) {
+        failOrRetry('failed', 'socket-closed', {
+          kind: 'disconnected',
+          relay,
+          reason: 'socket-closed'
+        })
+      }
+    }
+
+    socket.onerror = () => {
+      remoteLog.error(`Relay transport error for ${options.url}`)
+    }
+
+    return new Promise<RelayConnectResult>((innerResolve) => {
+      resolve = innerResolve
+    })
+  }
+
+  return {
+    connect(): Promise<RelayConnectResult> {
+      closing = false
+      return establishConnection()
+    },
+    async send(data: string): Promise<void> {
+      const record = { id: nextMessageId, data, encrypted: null }
+      nextMessageId += 1
+      if (!open || !socket) {
+        enqueue(record)
+        return
+      }
+      await transmit(record)
     },
 
     close(): void {
+      closing = true
+      reconnecting = false
+      reconnectAttempt = 0
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
       if (!socket) return
       socket.close()
     }
