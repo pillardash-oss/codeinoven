@@ -1,30 +1,24 @@
-import { mkdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
 import { serve, type Server, type ServerWebSocket } from 'bun'
-import { RemoteControlDatabase } from './database'
+import { isIP } from 'node:net'
 import {
-  createEnrollmentCode,
-  hashPassword,
-  normalizeEmail,
-  normalizeLabel,
-  randomToken,
-  tokenHash,
-  validatePassword,
-  verifyPassword
-} from './security'
+  auth,
+  authDatabasePath,
+  closeAuthDatabase,
+  migrateAuthSchema,
+  remoteAuthSession
+} from './auth'
+import { RemoteControlDatabase } from './database'
+import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
 
-const SESSION_COOKIE = 'cio_remote_session'
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
+const trustProxy = process.env['REMOTE_TRUST_PROXY'] === 'true'
 
 const port = positiveInteger(process.env['PORT'], 8877)
-const production = process.env['NODE_ENV'] === 'production'
-const databasePath = resolve(process.env['REMOTE_DATABASE_PATH'] ?? 'data/remote-control.sqlite')
 const allowedOrigins = new Set(
   (process.env['REMOTE_ALLOWED_ORIGINS'] ?? 'http://localhost:5173')
     .split(',')
@@ -32,8 +26,8 @@ const allowedOrigins = new Set(
     .filter(Boolean)
 )
 
-mkdirSync(dirname(databasePath), { recursive: true })
-const database = new RemoteControlDatabase(databasePath)
+await migrateAuthSchema()
+const database = new RemoteControlDatabase(authDatabasePath)
 const desktopSockets = new Map<string, ServerWebSocket<RelaySocketData>>()
 const mobileSockets = new Map<string, ServerWebSocket<RelaySocketData>>()
 const sessionSockets = new Map<string, Set<ServerWebSocket<RelaySocketData>>>()
@@ -63,6 +57,10 @@ function requestOriginAllowed(request: Request): boolean {
 }
 
 function requestKey(request: Request): string {
+  if (trustProxy) {
+    const forwarded = request.headers.get('x-client-ip')?.trim()
+    if (forwarded && isIP(forwarded) !== 0) return forwarded
+  }
   return server.requestIP(request)?.address ?? 'unknown'
 }
 
@@ -93,36 +91,21 @@ async function readJsonObject(request: Request): Promise<Record<string, unknown>
   }
 }
 
-function cookieValue(request: Request, name: string): string | null {
-  const cookie = request.headers.get('cookie')
-  if (!cookie) return null
-  for (const item of cookie.split(';')) {
-    const separator = item.indexOf('=')
-    if (separator !== -1 && item.slice(0, separator).trim() === name) {
-      return decodeURIComponent(item.slice(separator + 1).trim())
-    }
+async function sessionFromRequest(request: Request): Promise<AuthenticatedSession | null> {
+  const remoteSession = await remoteAuthSession(request)
+  if (!remoteSession) return null
+  const session: AuthenticatedSession = {
+    id: remoteSession.id,
+    userId: remoteSession.userId,
+    expiresAt: remoteSession.expiresAt
   }
-  return null
-}
-
-function sessionFromRequest(request: Request): AuthenticatedSession | null {
-  const token = cookieValue(request, SESSION_COOKIE)
-  if (!token) return null
-  const session = database.sessionByTokenHash(tokenHash(token))
-  if (session) database.touchSession(session.id)
+  database.upsertOAuthUser({
+    id: remoteSession.userId,
+    email: remoteSession.email,
+    displayName: remoteSession.displayName
+  })
+  database.rememberOAuthSession(session)
   return session
-}
-
-function sessionCookie(token: string, maxAgeSeconds: number): string {
-  const attributes = [
-    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
-    'HttpOnly',
-    'Path=/',
-    'SameSite=Strict',
-    `Max-Age=${maxAgeSeconds}`
-  ]
-  if (production) attributes.push('Secure')
-  return attributes.join('; ')
 }
 
 function bearerToken(request: Request): string | null {
@@ -181,59 +164,6 @@ function closeSessionSockets(sessionId: string, code: number, reason: string): v
   const sockets = sessionSockets.get(sessionId)
   sessionSockets.delete(sessionId)
   for (const socket of sockets ?? []) socket.close(code, reason)
-}
-
-async function handleRegister(request: Request): Promise<Response> {
-  const body = await readJsonObject(request)
-  const email = normalizeEmail(body?.['email'])
-  const displayName = normalizeLabel(body?.['displayName'])
-  const password = validatePassword(body?.['password'])
-  if (!email || !displayName || !password) return json({ error: 'invalid-registration' }, 400)
-  if (!withinRateLimit(request, `register:${email}`, 10))
-    return json({ error: 'rate-limited' }, 429)
-  if (database.findUserByEmail(email)) return json({ error: 'email-unavailable' }, 409)
-  const userId = crypto.randomUUID()
-  database.createUser({
-    id: userId,
-    email,
-    display_name: displayName,
-    password_hash: await hashPassword(password),
-    created_at: Date.now()
-  })
-  database.audit('account.registered', userId, null)
-  return createAuthenticatedResponse(userId, displayName, email, 201)
-}
-
-async function handleLogin(request: Request): Promise<Response> {
-  const body = await readJsonObject(request)
-  const email = normalizeEmail(body?.['email'])
-  const password = validatePassword(body?.['password'])
-  if (!email || !password) return json({ error: 'invalid-credentials' }, 401)
-  if (!withinRateLimit(request, `login:${email}`, 20)) return json({ error: 'rate-limited' }, 429)
-  const user = database.findUserByEmail(email)
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
-    return json({ error: 'invalid-credentials' }, 401)
-  }
-  database.audit('account.login', user.id, null)
-  return createAuthenticatedResponse(user.id, user.display_name, user.email)
-}
-
-function createAuthenticatedResponse(
-  userId: string,
-  displayName: string,
-  email: string,
-  status = 200
-): Response {
-  const token = randomToken()
-  const session: AuthenticatedSession = {
-    id: crypto.randomUUID(),
-    userId,
-    expiresAt: Date.now() + SESSION_TTL_MS
-  }
-  database.createSession(session, tokenHash(token))
-  return json({ user: { id: userId, displayName, email } }, status, {
-    'Set-Cookie': sessionCookie(token, Math.floor(SESSION_TTL_MS / 1_000))
-  })
 }
 
 async function handleEnrollmentRequest(request: Request): Promise<Response> {
@@ -449,12 +379,12 @@ function revokeFromDesktop(request: Request, desktopId: string): Response {
   return new Response(null, { status: 204 })
 }
 
-function websocketUpgrade(request: Request, url: URL): Response | undefined {
+async function websocketUpgrade(request: Request, url: URL): Promise<Response | undefined> {
   const role = url.searchParams.get('role')
   if (role === 'mobile') {
     const desktopId = url.searchParams.get('desktopId')
     const mobileDeviceId = url.searchParams.get('mobileDeviceId')
-    const session = sessionFromRequest(request)
+    const session = await sessionFromRequest(request)
     const grant =
       session && desktopId && mobileDeviceId
         ? database.enrollmentGrant(desktopId, session.userId, mobileDeviceId)
@@ -503,18 +433,14 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   ) {
     return websocketUpgrade(request, url)
   }
-  if (url.pathname === '/v1/auth/register' && request.method === 'POST')
-    return handleRegister(request)
-  if (url.pathname === '/v1/auth/login' && request.method === 'POST') return handleLogin(request)
-  if (url.pathname === '/v1/auth/logout' && request.method === 'POST') {
-    const token = cookieValue(request, SESSION_COOKIE)
-    if (token) {
-      const hash = tokenHash(token)
-      const session = database.sessionByTokenHash(hash)
-      if (session) closeSessionSockets(session.id, 4003, 'session-ended')
-      database.deleteSession(hash)
+  if (url.pathname.startsWith('/api/auth/')) {
+    const endingSession =
+      url.pathname === '/api/auth/sign-out' ? await sessionFromRequest(request) : null
+    const response = await auth.handler(request)
+    if (endingSession && response.ok) {
+      closeSessionSockets(endingSession.id, 4003, 'session-ended')
     }
-    return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie('', 0) })
+    return response
   }
   if (url.pathname === '/v1/device-enrollments' && request.method === 'POST') {
     return handleEnrollmentRequest(request)
@@ -532,12 +458,15 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
     return revokeFromDesktop(request, deviceEnrollment[1] ?? '')
   }
 
-  const session = sessionFromRequest(request)
+  const session = await sessionFromRequest(request)
   if (!session) return json({ error: 'unauthorized' }, 401)
   if (url.pathname === '/v1/me' && request.method === 'GET') {
     const user = database.findUserById(session.userId)
     return user
-      ? json({ user: { id: user.id, email: user.email, displayName: user.display_name } })
+      ? json({
+          user: { id: user.id, email: user.email, displayName: user.display_name },
+          entitlement: database.entitlementForUser(user.id)
+        })
       : json({ error: 'unauthorized' }, 401)
   }
   if (url.pathname === '/v1/device-enrollments/claim' && request.method === 'POST') {
@@ -673,6 +602,7 @@ function shutdown(): void {
   clearInterval(cleanupTimer)
   server.stop(true)
   database.close()
+  closeAuthDatabase()
 }
 
 process.once('SIGINT', shutdown)

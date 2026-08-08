@@ -4,6 +4,7 @@ export interface CloudUser {
   id: string
   email: string
   displayName: string
+  image: string | null
 }
 
 export interface CloudDesktop {
@@ -69,35 +70,6 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
-}
-
-export async function registerCloudAccount(input: {
-  email: string
-  displayName: string
-  password: string
-}): Promise<CloudUser> {
-  const response = await apiRequest<{ user: CloudUser }>('/v1/auth/register', {
-    method: 'POST',
-    body: JSON.stringify(input)
-  })
-  return response.user
-}
-
-export async function loginCloudAccount(email: string, password: string): Promise<CloudUser> {
-  const response = await apiRequest<{ user: CloudUser }>('/v1/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password })
-  })
-  return response.user
-}
-
-export async function currentCloudUser(): Promise<CloudUser> {
-  const response = await apiRequest<{ user: CloudUser }>('/v1/me')
-  return response.user
-}
-
-export async function logoutCloudAccount(): Promise<void> {
-  await apiRequest<{ ok: true }>('/v1/auth/logout', { method: 'POST' })
 }
 
 export async function listCloudDesktops(): Promise<CloudDesktop[]> {

@@ -1,8 +1,8 @@
 # CodeInOven remote control service
 
-This is the account, desktop registry, enrollment, and opaque WebSocket relay for the hosted
-mobile PWA. Both the desktop and phone create outbound connections, so the desktop does not need
-an inbound public port and continues to work behind NAT and normal firewalls.
+This is the GitHub account, entitlement, desktop registry, enrollment, and opaque WebSocket relay
+for the hosted mobile PWA. Both the desktop and phone create outbound connections, so the desktop
+does not need an inbound public port and continues to work behind NAT and normal firewalls.
 
 ## Run locally
 
@@ -16,31 +16,61 @@ Back up the SQLite database using a WAL-aware snapshot. The service deliberately
 the desktop control secret: the desktop encrypts a device-bound grant directly to the PWA's
 non-extractable Web Crypto key.
 
-## Production topology
+## GitHub identity
 
-- Serve the built PWA at the final `https://mobile.…` origin with a public CA certificate.
-- Reverse-proxy `/v1/*` and `/healthz` from that same origin to this service. Same-origin hosting
-  keeps the HttpOnly `SameSite=Strict` session cookie compatible across iOS and Android PWAs.
-- Enable WebSocket upgrades for `/v1/relay`; cap request bodies and connection counts at the edge.
-- Keep the service listener private (`127.0.0.1` by default). Terminate TLS at the reverse proxy.
+Better Auth is the sole hosted-account authority. GitHub OAuth creates one canonical user ID that
+owns remote desktops and is also the key for the server-owned `account_entitlements` record used
+by current or future Pro access. There is no separate remote password.
+
+Configure a GitHub App or OAuth App with:
+
+- Callback URL: `https://mobile.codeinoven.com/api/auth/callback/github`
+- GitHub App account permission: **Email addresses — Read-only**
+- Device Flow enabled if the same GitHub App client ID is used by packaged desktops
+
+The server needs the client ID and client secret. The desktop build receives only the public
+client ID; the client secret must remain in Coolify.
+
+## Coolify deployment
+
+- Deploy `compose.example.yml` as a Docker Compose resource.
+- Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
+  the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
+  `/healthz` over the private Compose network. Coolify terminates public TLS.
+- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `GITHUB_OAUTH_CLIENT_ID`, and
+  `GITHUB_OAUTH_CLIENT_SECRET` in Coolify. Generate `BETTER_AUTH_SECRET` with
+  `openssl rand -base64 32`.
+- Keep one replica of the SQLite service. The named `remote-data` volume persists the database;
+  configure WAL-aware backups for that volume before launch.
 - SQLite is supported for a single service instance. Use a durable volume, WAL-aware backups, and
   one active instance. Move the repository methods to Postgres before horizontal scaling.
 
-Build the renderer with `bun run build:production`, set `REMOTE_PUBLIC_HOST` to the confirmed
-mobile hostname, and use `compose.example.yml` plus `Caddyfile.example` as the single-host
-deployment. Caddy obtains and renews the public certificate and proxies the account API and relay
-beneath the PWA origin. Set the desktop application's `REMOTE_API_ORIGIN` to that same HTTPS URL.
+`Dockerfile.pwa` builds the renderer inside the image, so deployment never depends on the ignored
+local `out/renderer` directory. The internal Caddy server handles SPA fallback, security headers,
+and WebSocket proxying; it does not bind host ports 80/443.
+
+## Desktop release variables
+
+Create these GitHub Actions repository variables:
+
+- `REMOTE_API_ORIGIN=https://mobile.codeinoven.com`
+- `GITHUB_CLIENT_ID=<public GitHub App or OAuth App client ID>`
+
+The release and production-build workflows map them to `MAIN_VITE_REMOTE_API_ORIGIN` and
+`MAIN_VITE_GITHUB_CLIENT_ID`. The remote origin has a checked-in production default, while the
+desktop still accepts `REMOTE_API_ORIGIN` as a runtime override for development or self-hosting.
 
 ## Enrollment and relay protocol
 
-1. A desktop requests an enrollment and receives a one-time claim code plus a device token.
-2. The signed-in user enters/scans the claim code in the PWA. Codes expire after ten minutes, and
+1. The user signs into the PWA with GitHub. Better Auth stores the session in an HttpOnly cookie.
+2. A desktop requests an enrollment and receives a one-time claim code plus a device token.
+3. The signed-in user enters/scans the claim code in the PWA. Codes expire after ten minutes, and
    the PWA binds the claim to a non-extractable P-256 key stored in IndexedDB.
-3. The desktop polls enrollment status, creates an ephemeral ECDH grant for that PWA key, stores
+4. The desktop polls enrollment status, creates an ephemeral ECDH grant for that PWA key, stores
    its device token in the OS-backed `SecretVault`, and opens the desktop relay connection.
-4. A signed-in PWA selects an account-owned desktop and opens
+5. A signed-in PWA selects an account-owned desktop and opens
    `/v1/relay?role=mobile&desktopId=<id>&mobileDeviceId=<id>` using its HttpOnly session cookie.
-5. The service authorizes the ownership relationship and forwards only opaque `relay:data`
+6. The service authorizes the ownership relationship and forwards only opaque `relay:data`
    envelopes. Desktop RPC remains encrypted by the desktop control secret.
 
 The public relay is the guaranteed cross-platform route. When a desktop reports a LAN endpoint,
@@ -50,5 +80,5 @@ private-network or certificate policy blocks it, relay use is automatic. A relay
 periodically promoted to LAN when the trusted local route becomes available.
 
 Revocation closes every live desktop/mobile socket. Relay payloads are capped at 1 MiB and the
-service applies origin checks, request-size limits, Argon2id password hashing, expiring random
-session tokens stored only as hashes, generic login errors, and basic per-source rate limiting.
+service applies origin checks, request-size limits, Better Auth's OAuth state/session protections,
+database-backed auth rate limiting, and per-source relay/enrollment rate limiting.
