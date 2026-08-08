@@ -4,14 +4,20 @@ import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode)
+  const env = loadEnv(mode, process.cwd(), [
+    'VITE_',
+    'MAIN_VITE_',
+    'PRELOAD_VITE_',
+    'RENDERER_VITE_',
+    'CODEINOVEN_'
+  ])
   return {
     main: {
       define: {
         // Bake the GitHub App client ID into the main bundle at build time.
-        // The identifier is replaced by Vite's `define` from the `.env` value
-        // MAIN_VITE_GITHUB_CLIENT_ID. Public by design — never a secret.
-        __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.MAIN_VITE_GITHUB_CLIENT_ID ?? ''),
+        // The identifier is replaced by Vite's `define` from the shared
+        // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
+        __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''),
         // Public endpoint baked into packaged desktops. Release CI maps the
         // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(

@@ -6,7 +6,7 @@ import type { SecretVault } from './secret-vault'
 declare global {
   /**
    * GitHub App public client ID, replaced at build time by Vite's `define` from
-   * the `.env` value `MAIN_VITE_GITHUB_CLIENT_ID`. Public by design.
+   * the shared `.env` value `CODEINOVEN_GITHUB_CLIENT_ID`. Public by design.
    */
   const __CODEINOVEN_GITHUB_CLIENT_ID__: string | undefined
 }
@@ -57,15 +57,7 @@ export class GitHubAuthService {
    *
    * Resolution order:
    * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__` — replaced at build time by Vite's
-   *    `define` from `.env` (`MAIN_VITE_GITHUB_CLIENT_ID`). The compile-time constant.
-   * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
-   */
-  /**
-   * GitHub App public client ID — never a secret, safe to embed or configure via env.
-   *
-   * Resolution order:
-   * 1. `__CODEINOVEN_GITHUB_CLIENT_ID__` — replaced at build time by Vite's
-   *    `define` from `.env` (`MAIN_VITE_GITHUB_CLIENT_ID`). The compile-time constant.
+   *    `define` from `.env` (`CODEINOVEN_GITHUB_CLIENT_ID`). The compile-time constant.
    * 2. `CODEINOVEN_GITHUB_CLIENT_ID` — runtime override (CI shells, tests).
    */
   private get clientId(): string {
