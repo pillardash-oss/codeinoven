@@ -38,7 +38,6 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
-  import ResizableSplit from '../ui/ResizableSplit.svelte'
   import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
   import CommitActionsMenu from './CommitActionsMenu.svelte'
@@ -1382,215 +1381,205 @@
                 {/if}
               </div>
 
-              <!-- Resizable staged / working panes -->
-              <div class="min-h-0 flex-1 px-2 pb-2">
-                <ResizableSplit class="h-full">
-                  {#snippet top()}
-                    {#if changesView === 'tree' && stagedSections.length > 0}
-                      <GitChangesTree
-                        sections={stagedSections}
-                        {diffs}
-                        {expanded}
-                        {loadingDiff}
-                        {diffErrors}
-                        bind:selectedPaths
-                        onToggleDiff={(change) => void toggleDiff(change)}
-                        onToggleStage={(change) => void toggleStage(change)}
-                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                        onStashPaths={(paths) => requestStashFor(paths)}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                        onDiscardPaths={(paths) => requestDiscard(paths)}
-                      />
-                    {:else if stagedSections.length > 0}
-                      <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                        {#each stagedSections as section, si (section.title)}
-                          {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          {@const sectionAllSelected =
-                            section.files.length > 0 &&
-                            section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                            <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
-                              onclick={(event: MouseEvent) => {
+              <!-- Staged / working panes — each grows with content, capped at 50% -->
+              <div class="flex h-full min-h-0 flex-col gap-2 px-2 pb-2">
+                <div class="min-h-0 max-h-[50%] overflow-y-auto">
+                  {#if changesView === 'tree' && stagedSections.length > 0}
+                    <GitChangesTree
+                      sections={stagedSections}
+                      {diffs}
+                      {expanded}
+                      {loadingDiff}
+                      {diffErrors}
+                      bind:selectedPaths
+                      onToggleDiff={(change) => void toggleDiff(change)}
+                      onToggleStage={(change) => void toggleStage(change)}
+                      onToggleSelect={(change, additive) => toggleSelection(change, additive)}
+                      onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
+                      onStashPaths={(paths) => requestStashFor(paths)}
+                      onOpenInEditor={(path) => void openInEditor(path)}
+                      onIgnorePaths={(paths) => void ignorePathsAction(paths)}
+                      onDiscardPaths={(paths) => requestDiscard(paths)}
+                    />
+                  {:else if stagedSections.length > 0}
+                    <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                      {#each stagedSections as section, si (section.title)}
+                        {#if si > 0}<div class="border-t border-border"></div>{/if}
+                        {@const sectionAllSelected =
+                          section.files.length > 0 &&
+                          section.files.every((f) => selectedPaths[f.path])}
+                        {@const sectionSomeSelected = section.files.some(
+                          (f) => selectedPaths[f.path]
+                        )}
+                        <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                          <span
+                            role="checkbox"
+                            tabindex="0"
+                            aria-checked={sectionAllSelected
+                              ? 'true'
+                              : sectionSomeSelected
+                                ? 'mixed'
+                                : 'false'}
+                            aria-label={sectionAllSelected
+                              ? `Deselect all ${section.files.length} files in ${section.title}`
+                              : `Select all ${section.files.length} files in ${section.title}`}
+                            class={[
+                              'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
+                              sectionAllSelected
+                                ? 'border-primary bg-primary'
+                                : 'border-border bg-elevated'
+                            ]}
+                            onclick={(event: MouseEvent) => {
+                              event.stopPropagation()
+                              event.preventDefault()
+                              toggleSectionSelection(section.files)
+                            }}
+                            onkeydown={(event: KeyboardEvent) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
                                 event.stopPropagation()
                                 event.preventDefault()
                                 toggleSectionSelection(section.files)
-                              }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
-                            >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
-                            </span>
-                            <span
-                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
-                            >
-                              {section.title}
-                            </span>
-                            <span class="text-[8px] tabular-nums text-dimmed">
-                              {section.files.length}
-                            </span>
-                          </div>
-                          {#each section.files as change (change.path)}
-                            <GitFileRow
-                              {change}
-                              diff={diffs[fileDiffKey(change)] ?? null}
-                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                              error={diffErrors[fileDiffKey(change)] ?? null}
-                              expanded={expanded[fileDiffKey(change)] ?? false}
-                              selected={Boolean(selectedPaths[change.path])}
-                              selectable
-                              onToggleDiff={() => void toggleDiff(change)}
-                              onToggleStage={() => void toggleStage(change)}
-                              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                              onStash={(path) => requestStashFor([path])}
-                              onOpenInEditor={(path) => void openInEditor(path)}
-                              onIgnore={(path) => void ignorePathsAction([path])}
-                              onDiscard={(path) => requestDiscard([path])}
-                            />
-                          {/each}
+                              }
+                            }}
+                          >
+                            {#if sectionAllSelected}
+                              <Check size={9} class="text-on-primary" />
+                            {:else if sectionSomeSelected}
+                              <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
+                            {/if}
+                          </span>
+                          <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                            {section.title}
+                          </span>
+                          <span class="text-[8px] tabular-nums text-dimmed">
+                            {section.files.length}
+                          </span>
+                        </div>
+                        {#each section.files as change (change.path)}
+                          <GitFileRow
+                            {change}
+                            diff={diffs[fileDiffKey(change)] ?? null}
+                            loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                            error={diffErrors[fileDiffKey(change)] ?? null}
+                            expanded={expanded[fileDiffKey(change)] ?? false}
+                            selected={Boolean(selectedPaths[change.path])}
+                            selectable
+                            onToggleDiff={() => void toggleDiff(change)}
+                            onToggleStage={() => void toggleStage(change)}
+                            onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+                            onStash={(path) => requestStashFor([path])}
+                            onOpenInEditor={(path) => void openInEditor(path)}
+                            onIgnore={(path) => void ignorePathsAction([path])}
+                            onDiscard={(path) => requestDiscard([path])}
+                          />
                         {/each}
-                      </div>
-                    {:else}
-                      <div
-                        class="flex h-full items-center justify-center px-3 text-[10px] text-dimmed"
-                      >
-                        Nothing staged yet.
-                      </div>
-                    {/if}
-                  {/snippet}
+                      {/each}
+                    </div>
+                  {:else}
+                    <div class="flex items-center justify-center px-3 py-6 text-[10px] text-dimmed">
+                      Nothing staged yet.
+                    </div>
+                  {/if}
+                </div>
 
-                  {#snippet bottom()}
-                    {#if changesView === 'tree' && workingSections.length > 0}
-                      <GitChangesTree
-                        sections={workingSections}
-                        {diffs}
-                        {expanded}
-                        {loadingDiff}
-                        {diffErrors}
-                        bind:selectedPaths
-                        onToggleDiff={(change) => void toggleDiff(change)}
-                        onToggleStage={(change) => void toggleStage(change)}
-                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
-                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
-                        onStashPaths={(paths) => requestStashFor(paths)}
-                        onOpenInEditor={(path) => void openInEditor(path)}
-                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
-                        onDiscardPaths={(paths) => requestDiscard(paths)}
-                      />
-                    {:else if workingSections.length > 0}
-                      <div class="overflow-hidden rounded-lg border border-border bg-surface">
-                        {#each workingSections as section, si (section.title)}
-                          {#if si > 0}<div class="border-t border-border"></div>{/if}
-                          {@const sectionAllSelected =
-                            section.files.length > 0 &&
-                            section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
-                          <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-                            <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
-                              onclick={(event: MouseEvent) => {
+                <div class="min-h-0 max-h-[50%] overflow-y-auto">
+                  {#if changesView === 'tree' && workingSections.length > 0}
+                    <GitChangesTree
+                      sections={workingSections}
+                      {diffs}
+                      {expanded}
+                      {loadingDiff}
+                      {diffErrors}
+                      bind:selectedPaths
+                      onToggleDiff={(change) => void toggleDiff(change)}
+                      onToggleStage={(change) => void toggleStage(change)}
+                      onToggleSelect={(change, additive) => toggleSelection(change, additive)}
+                      onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
+                      onStashPaths={(paths) => requestStashFor(paths)}
+                      onOpenInEditor={(path) => void openInEditor(path)}
+                      onIgnorePaths={(paths) => void ignorePathsAction(paths)}
+                      onDiscardPaths={(paths) => requestDiscard(paths)}
+                    />
+                  {:else if workingSections.length > 0}
+                    <div class="overflow-hidden rounded-lg border border-border bg-surface">
+                      {#each workingSections as section, si (section.title)}
+                        {#if si > 0}<div class="border-t border-border"></div>{/if}
+                        {@const sectionAllSelected =
+                          section.files.length > 0 &&
+                          section.files.every((f) => selectedPaths[f.path])}
+                        {@const sectionSomeSelected = section.files.some(
+                          (f) => selectedPaths[f.path]
+                        )}
+                        <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
+                          <span
+                            role="checkbox"
+                            tabindex="0"
+                            aria-checked={sectionAllSelected
+                              ? 'true'
+                              : sectionSomeSelected
+                                ? 'mixed'
+                                : 'false'}
+                            aria-label={sectionAllSelected
+                              ? `Deselect all ${section.files.length} files in ${section.title}`
+                              : `Select all ${section.files.length} files in ${section.title}`}
+                            class={[
+                              'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
+                              sectionAllSelected
+                                ? 'border-primary bg-primary'
+                                : 'border-border bg-elevated'
+                            ]}
+                            onclick={(event: MouseEvent) => {
+                              event.stopPropagation()
+                              event.preventDefault()
+                              toggleSectionSelection(section.files)
+                            }}
+                            onkeydown={(event: KeyboardEvent) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
                                 event.stopPropagation()
                                 event.preventDefault()
                                 toggleSectionSelection(section.files)
-                              }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
-                            >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
-                            </span>
-                            <span
-                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
-                            >
-                              {section.title}
-                            </span>
-                            <span class="text-[8px] tabular-nums text-dimmed">
-                              {section.files.length}
-                            </span>
-                          </div>
-                          {#each section.files as change (change.path)}
-                            <GitFileRow
-                              {change}
-                              diff={diffs[fileDiffKey(change)] ?? null}
-                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
-                              error={diffErrors[fileDiffKey(change)] ?? null}
-                              expanded={expanded[fileDiffKey(change)] ?? false}
-                              selected={Boolean(selectedPaths[change.path])}
-                              selectable
-                              onToggleDiff={() => void toggleDiff(change)}
-                              onToggleStage={() => void toggleStage(change)}
-                              onToggleSelect={(item, additive) => toggleSelection(item, additive)}
-                              onStash={(path) => requestStashFor([path])}
-                              onOpenInEditor={(path) => void openInEditor(path)}
-                              onIgnore={(path) => void ignorePathsAction([path])}
-                              onDiscard={(path) => requestDiscard([path])}
-                            />
-                          {/each}
+                              }
+                            }}
+                          >
+                            {#if sectionAllSelected}
+                              <Check size={9} class="text-on-primary" />
+                            {:else if sectionSomeSelected}
+                              <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
+                            {/if}
+                          </span>
+                          <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
+                            {section.title}
+                          </span>
+                          <span class="text-[8px] tabular-nums text-dimmed">
+                            {section.files.length}
+                          </span>
+                        </div>
+                        {#each section.files as change (change.path)}
+                          <GitFileRow
+                            {change}
+                            diff={diffs[fileDiffKey(change)] ?? null}
+                            loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                            error={diffErrors[fileDiffKey(change)] ?? null}
+                            expanded={expanded[fileDiffKey(change)] ?? false}
+                            selected={Boolean(selectedPaths[change.path])}
+                            selectable
+                            onToggleDiff={() => void toggleDiff(change)}
+                            onToggleStage={() => void toggleStage(change)}
+                            onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+                            onStash={(path) => requestStashFor([path])}
+                            onOpenInEditor={(path) => void openInEditor(path)}
+                            onIgnore={(path) => void ignorePathsAction([path])}
+                            onDiscard={(path) => requestDiscard([path])}
+                          />
                         {/each}
-                      </div>
-                    {:else}
-                      <div
-                        class="flex h-full items-center justify-center px-3 text-[10px] text-dimmed"
-                      >
-                        No working changes.
-                      </div>
-                    {/if}
-                  {/snippet}
-                </ResizableSplit>
+                      {/each}
+                    </div>
+                  {:else}
+                    <div class="flex items-center justify-center px-3 py-6 text-[10px] text-dimmed">
+                      No working changes.
+                    </div>
+                  {/if}
+                </div>
               </div>
             {/if}
           </div>
