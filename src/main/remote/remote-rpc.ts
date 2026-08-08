@@ -791,6 +791,8 @@ export class RemoteRpcDispatcher {
         return this.brainstormEngine.getActive(this.string(args[0]), this.string(args[1]))
       case 'brainstorm:getWorkflow':
         return this.brainstormEngine.getWorkflowState(this.string(args[0]), this.string(args[1]))
+      case 'brainstorm:resetWorkflow':
+        return this.brainstormEngine.resetWorkflow(this.string(args[0]), this.string(args[1]))
       case 'brainstorm:listVersions':
         return this.brainstormEngine.listVersions(
           this.string(args[0]),

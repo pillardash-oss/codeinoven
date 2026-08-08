@@ -3337,6 +3337,23 @@
     }
   }
 
+  /** Abandon a failed planning attempt: clear the workflow choice so reconcile
+   *  stops showing the retry prompt, and reset the thread out of the failed
+   *  state so the conversation/composer is usable again. */
+  async function cancelBrainstormEntryRetry(): Promise<void> {
+    brainstormGenerationFailed = false
+    brainstormError = ''
+    errorMessage = ''
+    brainstormWorkflow = null
+    try {
+      await invoke('brainstorm:resetWorkflow', thread.projectId, thread.id)
+      await invoke('thread:setStatus', thread.projectId, thread.id, 'interrupted')
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The planning retry could not be cancelled.'
+    }
+  }
+
   function openBrainstormStudio(): void {
     if (!brainstorm) return
     selectedBrainstormVersion = brainstorm.version
@@ -5886,8 +5903,19 @@
           <BrainstormEntryChoiceCard
             busy={brainstormBusy}
             retryChoice={brainstormWorkflow.entryChoice}
+            {providers}
+            projectId={thread.projectId}
+            {settings}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
             onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
             onJumpToSpec={() => chooseBrainstormEntry('spec')}
+            onModelChange={changeSpecModel}
+            onCancel={cancelBrainstormEntryRetry}
+            onToggleFavorite={(providerId, modelId) =>
+              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy}
           <BrainstormEntryChoiceCard

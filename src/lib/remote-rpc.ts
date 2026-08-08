@@ -143,6 +143,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'audit:returnToOffer',
   'brainstorm:getActive',
   'brainstorm:getWorkflow',
+  'brainstorm:resetWorkflow',
   'brainstorm:listVersions',
   'brainstorm:saveDraft',
   'brainstorm:addAnnotation',

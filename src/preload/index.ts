@@ -21,6 +21,7 @@ const INVOKE_CHANNELS = [
   'brainstorm:ensureWorkflow',
   'brainstorm:getWorkflow',
   'brainstorm:chooseEntry',
+  'brainstorm:resetWorkflow',
   'brainstorm:getActive',
   'brainstorm:listVersions',
   'brainstorm:createDraft',
