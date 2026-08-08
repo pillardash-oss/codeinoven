@@ -41,17 +41,17 @@ const MAX_SEQUENCE = 2 ** SEQUENCE_BITS
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const WIRE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[1-9]\d*$/i
 
-/** A random 128-bit sender-instance ID (UUIDv4). */
+/**
+ * A random 128-bit sender-instance ID (UUIDv4). Fails closed: without a
+ * cryptographic random source the client refuses to fabricate a weak instance
+ * ID rather than risk wire-id collisions.
+ */
 export function randomInstanceId(): string {
-  const cryptoApi = globalThis.crypto as
-    { randomUUID?: () => string; getRandomValues?: (bytes: Uint8Array) => Uint8Array } | undefined
+  const cryptoApi = globalThis.crypto as { randomUUID?: () => string } | undefined
   if (cryptoApi?.randomUUID) return cryptoApi.randomUUID()
-  const bytes = new Uint8Array(16)
-  cryptoApi?.getRandomValues?.(bytes)
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  throw new Error(
+    'A cryptographic random source is required to generate a relay sender-instance ID'
+  )
 }
 
 /** Validate a sender-instance UUID string. */

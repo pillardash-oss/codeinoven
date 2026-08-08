@@ -470,17 +470,18 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     })
     harness.client.connect()
     const first = openAuthenticated(harness)
-    // Two concurrent frames with the same id both fail to decrypt: coalesced,
-    // zero ACKs, pending removed so a replay remains possible.
-    first.receive(JSON.stringify({ type: 'relay:data', id: 'abc-1', payload: 'bad-1' }))
-    first.receive(JSON.stringify({ type: 'relay:data', id: 'abc-1', payload: 'bad-2' }))
+    const wireId = '12345678-1234-1234-1234-123456789abc:1'
+    // Two concurrent frames with the SAME valid UUID wire id both fail to
+    // decrypt: coalesced, zero ACKs, pending removed so a replay remains.
+    first.receive(JSON.stringify({ type: 'relay:data', id: wireId, payload: 'bad-1' }))
+    first.receive(JSON.stringify({ type: 'relay:data', id: wireId, payload: 'bad-2' }))
     await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
     expect(first.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(0)
-    // Reconnect and replay the same id with a VALID payload: one decrypt, one
-    // dispatch, one ACK.
+    // Reconnect and replay the SAME wire id with a VALID payload: one decrypt,
+    // one dispatch, one ACK.
     await new Promise((resolve) => setTimeout(resolve, 12))
     const second = openAuthenticated(harness, 1)
-    await receivedDataWithId(second, '12345678-1234-1234-1234-123456789abc:1', {
+    await receivedDataWithId(second, wireId, {
       rpc: 'invoke',
       id: 9,
       channel: 'chat',

@@ -146,11 +146,15 @@ export class RelayHub {
         // A retransmission is accepted ONLY when it is the same direction AND
         // the exact retained frame identity (byte-identical). Any other id
         // collision is rejected without delivery or sender replacement so a
-        // different message can never alias an outstanding frame.
+        // different message can never alias an outstanding frame. On an
+        // accepted retransmission the retained sender is REBOUND to the current
+        // authenticated sender socket, so a receiver ACK/NACK reaches the live
+        // client (e.g. after a sender reconnect) instead of the stale socket.
         if (existing.from === from && existing.frame === frame) {
           if (target) target.send(frame)
           existing.delivered = Boolean(target)
           existing.expiresAt = this.now() + this.bufferTtlMs
+          existing.sender = sender
           return { accepted: true, delivered: Boolean(target) }
         }
         return { accepted: false, delivered: false, reason: 'id-collision' }
