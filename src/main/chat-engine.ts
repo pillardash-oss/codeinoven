@@ -1404,6 +1404,16 @@ export class ChatEngine {
     this.idleReaperTimer.unref?.()
     void this.recoverInterruptedBrainstormEntries()
     void this.resumePendingLoops()
+    void this.materializeAuditReportArtifacts()
+  }
+
+  /** Backfill markdown files for audit reports persisted before the file-write path existed. */
+  private async materializeAuditReportArtifacts(): Promise<void> {
+    try {
+      await this.auditEngine.materializeAllReports()
+    } catch (error) {
+      Logger.error('Audit report artifact backfill failed:', error)
+    }
   }
 
   /** Answer a pending question from the agent. */
