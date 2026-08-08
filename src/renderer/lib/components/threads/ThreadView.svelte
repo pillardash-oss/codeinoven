@@ -744,7 +744,7 @@
   let refreshingAccountUsage = $state(false)
   let accountUsageRefreshTimer: ReturnType<typeof setTimeout> | undefined
 
-  async function refreshAccountUsageOnDemand(): Promise<void> {
+  async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
     if (refreshingAccountUsage) return
     refreshingAccountUsage = true
     try {
@@ -753,6 +753,9 @@
       // non-array; an undefined `liveAccountUsage` crashes the battery derived
       // on every render flush and freezes the thread view.
       if (!Array.isArray(usageList)) return
+      // Drop a response for a harness selection the user already moved away
+      // from — an out-of-order resolve must not clobber the current selection.
+      if (refreshKey && refreshKey !== `${settings.harnessId}:${settings.providerId}`) return
       liveAccountUsage = usageList
       const currentUsage = usageList.find(
         (usage) =>
@@ -794,13 +797,18 @@
   }
 
   $effect(() => {
-    // Refresh quota once per thread mount so an old thread's battery is
-    // populated without waiting for the user to hover. Debounce a little to let
-    // the thread/messages settle first.
-    if (accountUsageRefreshTimer !== undefined) return
+    // Refresh quota when the thread mounts AND whenever the user switches the
+    // selected harness/provider — so a fresh thread's battery shows the chosen
+    // harness's quota before any message is sent. The refresh key read here
+    // re-runs the effect when the selection changes. Debounce briefly to let the
+    // thread/messages settle first.
+    const refreshKey = `${settings.harnessId}:${settings.providerId}`
+    if (accountUsageRefreshTimer !== undefined) {
+      clearTimeout(accountUsageRefreshTimer)
+    }
     accountUsageRefreshTimer = setTimeout(() => {
       accountUsageRefreshTimer = undefined
-      void refreshAccountUsageOnDemand()
+      void refreshAccountUsageOnDemand(refreshKey)
     }, 400)
     return () => {
       if (accountUsageRefreshTimer !== undefined) {
@@ -4442,7 +4450,14 @@
       ...(loopJustEnabled && loopAuditor ? { loopAuditor } : {})
     }
     const harnessChanged = settings.harnessId !== normalized.harnessId
+    const providerChanged = settings.providerId !== normalized.providerId
     settings = normalized
+    if (harnessChanged || providerChanged) {
+      // Clear any usage shown for the previous harness/provider so the battery
+      // reflects only the newly selected configuration until its quota arrives.
+      contextUsageDisplay = undefined
+      liveAccountUsage = []
+    }
     if (seniorModelChanged && normalized.engineeringMode) {
       syncAgentRole('seniorEngineer', {
         harnessId: normalized.harnessId,

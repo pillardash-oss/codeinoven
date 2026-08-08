@@ -2016,16 +2016,14 @@
 
     <span class="flex-1"></span>
 
-    {#if contextUsage || canCompact}
-      <ContextUsageIndicator
-        usage={contextUsage}
-        {harnessUsage}
-        {canCompact}
-        {compacting}
-        {onCompact}
-        onReveal={onRevealUsage}
-      />
-    {/if}
+    <ContextUsageIndicator
+      usage={contextUsage}
+      {harnessUsage}
+      {canCompact}
+      {compacting}
+      {onCompact}
+      onReveal={onRevealUsage}
+    />
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty
