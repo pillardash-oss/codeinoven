@@ -61,6 +61,7 @@
   import AuditReadyCard from './AuditReadyCard.svelte'
   import AuditGeneratedCard from './AuditGeneratedCard.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -3036,6 +3037,12 @@
     }
   }
 
+  function citationForFilePart(
+    part: Extract<AgentPart, { type: 'file' }>
+  ): { path: string } | undefined {
+    return part.url.startsWith('file://') ? { path: fileUrlToPath(part.url) } : undefined
+  }
+
   function reviewCheckpoint(checkpointId: string): void {
     contextSidebarState.openDiff(thread.projectId, thread.id, checkpointId)
   }
@@ -5478,49 +5485,59 @@
                             {#if part.type === 'file'}
                               {@const imageFile = isImageMime(part.mime)}
                               {#if imageFile}
-                                <button
-                                  type="button"
-                                  class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
-                                  title="Preview {part.filename ?? 'image'}"
-                                  onclick={() =>
-                                    (previewFile = {
-                                      url: imageUrls.getUrl(part.url),
-                                      filename: part.filename ?? 'image'
-                                    })}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
                                 >
-                                  <img
-                                    src={imageUrls.getUrl(part.url)}
-                                    alt={part.filename ?? 'image'}
-                                    class="h-16 w-24 object-cover"
-                                    onerror={(e: Event) =>
-                                      void imageUrls.bindImage(
-                                        part.url,
-                                        part.mime,
-                                        e.currentTarget as HTMLImageElement
-                                      )}
-                                  />
-                                  <div
-                                    class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
+                                  <button
+                                    type="button"
+                                    class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
+                                    title="Preview {part.filename ?? 'image'}"
+                                    onclick={() =>
+                                      (previewFile = {
+                                        url: imageUrls.getUrl(part.url),
+                                        filename: part.filename ?? 'image'
+                                      })}
                                   >
-                                    <span
-                                      class="text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                                    <img
+                                      src={imageUrls.getUrl(part.url)}
+                                      alt={part.filename ?? 'image'}
+                                      class="h-16 w-24 object-cover"
+                                      onerror={(e: Event) =>
+                                        void imageUrls.bindImage(
+                                          part.url,
+                                          part.mime,
+                                          e.currentTarget as HTMLImageElement
+                                        )}
+                                    />
+                                    <div
+                                      class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/30"
                                     >
-                                      Preview
-                                    </span>
-                                  </div>
-                                </button>
+                                      <span
+                                        class="text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100"
+                                      >
+                                        Preview
+                                      </span>
+                                    </div>
+                                  </button>
+                                </FileCitationContextMenu>
                               {:else}
-                                <button
-                                  type="button"
-                                  class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
-                                  title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
-                                  onclick={() => openFilePart(part.url)}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
                                 >
-                                  <FileText size={11} class="shrink-0" />
-                                  <span class="max-w-32 truncate"
-                                    >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
+                                  <button
+                                    type="button"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    title={`Open ${part.filename ?? part.url.split('/').pop() ?? 'file'}`}
+                                    onclick={() => openFilePart(part.url)}
                                   >
-                                </button>
+                                    <FileText size={11} class="shrink-0" />
+                                    <span class="max-w-32 truncate"
+                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
+                                    >
+                                  </button>
+                                </FileCitationContextMenu>
                               {/if}
                             {/if}
                           {/each}

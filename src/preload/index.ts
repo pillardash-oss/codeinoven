@@ -223,6 +223,8 @@ const INVOKE_CHANNELS = [
   'projectFiles:delete',
   'projectFiles:info',
   'projectFiles:openInEditor',
+  'projectFiles:openInEditorWith',
+  'projectFiles:saveAs',
   'projectFiles:paste',
   'projectFiles:importPaths',
   'projectFiles:read',
