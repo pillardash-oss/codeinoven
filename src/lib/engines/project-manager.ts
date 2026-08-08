@@ -5,6 +5,7 @@ import { generateId, getConfigRoot } from '../utils'
 import type { Project, CreateProjectInput } from '../types'
 import { INBOX_PROJECT_ID } from '../types'
 import { pickColorForSeed } from '../project-colors'
+import { ensureProjectScratchSpace } from '../project-artifacts'
 import type { Database } from '../../main/database/database'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
@@ -182,6 +183,7 @@ export class ProjectManager {
     }
 
     if (project.source === 'local' && project.path) {
+      await this.scaffoldProjectScratchSpace(project.path)
       const detected = await this.detectIcon(project.path)
       if (detected) {
         const iconFile = `icon${extname(detected) || '.png'}`
@@ -292,7 +294,25 @@ export class ProjectManager {
     }
 
     this.projectRepo.upsert(updated)
+
+    if (updated.source === 'local' && updated.path) {
+      await this.scaffoldProjectScratchSpace(updated.path)
+    }
+
     return updated
+  }
+
+  /**
+   * Best-effort creation of the `.cio/` scratch pad and its `.gitignore`
+   * entry. A project must still register when this fails; the scratch space
+   * is re-ensured on later path updates.
+   */
+  private async scaffoldProjectScratchSpace(projectPath: string): Promise<void> {
+    try {
+      await ensureProjectScratchSpace(projectPath)
+    } catch {
+      // Best-effort — never fail project registration over scratch space.
+    }
   }
 
   async deleteProject(projectId: string): Promise<void> {
