@@ -343,6 +343,33 @@ export interface ProviderConnectionInfo {
   detail?: string
 }
 
+/** Where a confirmed harness-manifest behavior override came from. */
+export type HarnessConfirmationSource = 'user' | 'runtime'
+
+/** A confirmed behavior override layered on top of a harness's declared manifest. */
+export interface ConfirmedHarnessBehavior {
+  value: boolean
+  source: HarnessConfirmationSource
+  confirmedAt: number
+}
+
+/**
+ * Per-harness view of the effective behavior for the Settings surface.
+ * `declared` is the code manifest; `effective` is what the app actually uses
+ * after a confirmed override (or runtime in-use validation) is applied.
+ */
+export interface HarnessManifestEntry {
+  harnessId: string
+  /** The declared (code manifest) value. */
+  declared: boolean
+  /** A user/runtime confirmed override when present. */
+  confirmed?: ConfirmedHarnessBehavior
+  /** What the app actually uses: confirmed override ?? declared. */
+  effective: boolean
+  /** Epoch ms the harness was last actually used, when known. */
+  lastUsedAt?: number
+}
+
 export interface ProviderCapabilities {
   fileEditing: boolean
   computerUse: boolean

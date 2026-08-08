@@ -21,10 +21,12 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { ProviderAccountAuthStatus, ProviderConnectionInfo } from '$shared/types'
+  import type { HarnessManifestEntry } from '$shared/types'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import AddProviderModal from './AddProviderModal.svelte'
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
   import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
 
   /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
   let baseUrlHarnesses = $derived(
@@ -42,6 +44,61 @@
   let uninstallLoading = $state(false)
   let uninstallError = $state('')
   let uninstallBusy = $state(false)
+  /** Confirmed/effective harness behavior manifests, keyed by harness id. */
+  let manifestEntries = $state<Record<string, HarnessManifestEntry>>({})
+  let manifestSaving = $state<Record<string, boolean>>({})
+
+  function manifestFor(harnessId: string): HarnessManifestEntry | undefined {
+    return manifestEntries[harnessId]
+  }
+
+  async function loadManifests(): Promise<void> {
+    try {
+      const entries = await invoke('harnessManifest:list')
+      manifestEntries = Object.fromEntries(entries.map((entry) => [entry.harnessId, entry]))
+    } catch (manifestError) {
+      toast.error(
+        manifestError instanceof Error
+          ? manifestError.message
+          : 'Harness behavior manifests could not be loaded.'
+      )
+    }
+  }
+
+  async function confirmManifestBehavior(
+    harnessId: string,
+    behavior: string,
+    value: boolean
+  ): Promise<void> {
+    manifestSaving[harnessId] = true
+    try {
+      await invoke('harnessManifest:confirm', { harnessId, behavior, value })
+      await loadManifests()
+    } catch (manifestError) {
+      toast.error(
+        manifestError instanceof Error ? manifestError.message : 'Behavior confirmation failed.'
+      )
+    } finally {
+      manifestSaving[harnessId] = false
+    }
+  }
+
+  async function resetManifestBehavior(harnessId: string, behavior: string): Promise<void> {
+    manifestSaving[harnessId] = true
+    try {
+      await invoke('harnessManifest:reset', { harnessId, behavior })
+      await loadManifests()
+    } catch (manifestError) {
+      toast.error(manifestError instanceof Error ? manifestError.message : 'Manifest reset failed.')
+    } finally {
+      manifestSaving[harnessId] = false
+    }
+  }
+
+  function manifestSourceLabel(entry: HarnessManifestEntry): string {
+    if (!entry.confirmed) return 'declared in manifest'
+    return entry.confirmed.source === 'user' ? 'confirmed by you' : 'confirmed in use'
+  }
 
   async function openInstallPage(provider: ProviderConnectionInfo): Promise<void> {
     try {
@@ -151,6 +208,7 @@
       await baseUrlProviderStore.load()
       await checkAllAuth()
       await harnessLifecycleStore.checkAll()
+      await loadManifests()
     })()
   })
 </script>
@@ -296,6 +354,40 @@
             </span>
           {/if}
         </div>
+
+        {#if manifestFor(provider.id)}
+          {@const entry = manifestFor(provider.id)!}
+          <div class="mt-3 flex items-center justify-between gap-3 border-t border-border pt-2.5">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-foreground">Loads AGENTS.md natively</p>
+              <p class="mt-0.5 text-[10px] text-dimmed">
+                When on, {provider.name} reads the project's AGENTS.md itself, so {APP_NAME} does not
+                re-send it (saves tokens). {manifestSourceLabel(entry)}.
+              </p>
+            </div>
+            <div class="flex shrink-0 items-center gap-2">
+              {#if entry.confirmed}
+                <button
+                  type="button"
+                  class="rounded-md px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                  title="Clear the confirmed value and fall back to the declared manifest"
+                  disabled={manifestSaving[provider.id]}
+                  onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
+                >
+                  Reset
+                </button>
+              {/if}
+              <Switch
+                checked={entry.effective}
+                disabled={manifestSaving[provider.id]}
+                onchange={(value) =>
+                  void confirmManifestBehavior(provider.id, 'loadsAgentsMd', value)}
+                aria-label={`${provider.name} loads AGENTS.md natively`}
+                title={`Set whether ${provider.name} loads AGENTS.md natively (confirmed override)`}
+              />
+            </div>
+          </div>
+        {/if}
       </div>
     {/each}
   </div>

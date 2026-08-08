@@ -90,6 +90,7 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   HarnessInstallInfo,
+  HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
   RepositoryPreflightResult,
@@ -709,6 +710,8 @@ export interface IpcInvokeContract {
   'git:merge': Contract<[projectId: string, target: string], MergeSummary>
   'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
   'git:stash': Contract<[projectId: string, message?: string, paths?: string[]], GitStatus>
+  'git:ignore': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:discard': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:stashList': Contract<[projectId: string], GitStashEntry[]>
   'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
   'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
@@ -844,6 +847,12 @@ export interface IpcInvokeContract {
   'harnessUpdates:handoff': Contract<[harnessId: string], HarnessUpdateHandoff>
   'harnessInstall:getInfo': Contract<[harnessId: string], HarnessInstallInfo>
   'harnessUninstall:handoff': Contract<[harnessId: string], HarnessUninstallHandoff>
+  'harnessManifest:list': Contract<[], HarnessManifestEntry[]>
+  'harnessManifest:confirm': Contract<
+    [input: { harnessId: string; behavior: string; value: boolean }],
+    void
+  >
+  'harnessManifest:reset': Contract<[input: { harnessId: string; behavior: string }], void>
   'providerAccounts:getAuthStatus': Contract<
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
