@@ -29,6 +29,11 @@ import {
   writeRemoteModeState
 } from './remote-state'
 
+declare global {
+  /** Public remote-service origin injected by the Electron production build. */
+  const __CODEINOVEN_REMOTE_API_ORIGIN__: string | undefined
+}
+
 export interface RemoteModeOptions {
   lanPort: number
   localPort: number
@@ -79,7 +84,11 @@ export function remotePeerSecret(): string | null {
 }
 
 function resolveCloudApiOrigin(): string | null {
-  const value = process.env['REMOTE_API_ORIGIN']?.trim()
+  const baked =
+    typeof __CODEINOVEN_REMOTE_API_ORIGIN__ === 'string'
+      ? __CODEINOVEN_REMOTE_API_ORIGIN__
+      : undefined
+  const value = (process.env['REMOTE_API_ORIGIN'] ?? baked ?? '').trim()
   if (!value) return null
   try {
     const url = new URL(value)

@@ -6,28 +6,43 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      BETTER_AUTH_URL: https://${REMOTE_PUBLIC_HOST:?set REMOTE_PUBLIC_HOST}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:?set GITHUB_OAUTH_CLIENT_ID}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:?set GITHUB_OAUTH_CLIENT_SECRET}
       REMOTE_ALLOWED_ORIGINS: https://${REMOTE_PUBLIC_HOST:?set REMOTE_PUBLIC_HOST}
+      REMOTE_TRUST_PROXY: 'true'
+    expose:
+      - '8877'
     volumes:
       - remote-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const response = await fetch('http://127.0.0.1:8877/healthz'); if (!response.ok) process.exit(1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
-  caddy:
-    image: caddy:2.10-alpine
+  mobile-pwa:
+    build:
+      context: ../..
+      dockerfile: services/remote-control/Dockerfile.pwa
     restart: unless-stopped
     depends_on:
-      - remote-control
-    environment:
-      REMOTE_PUBLIC_HOST: ${REMOTE_PUBLIC_HOST:?set REMOTE_PUBLIC_HOST}
-    ports:
-      - '80:80'
-      - '443:443'
-      - '443:443/udp'
-    volumes:
-      - ./Caddyfile.example:/etc/caddy/Caddyfile:ro
-      - ../../out/renderer:/srv/codeinoven/renderer:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      remote-control:
+        condition: service_healthy
+    expose:
+      - '80'
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--spider', 'http://127.0.0.1/remote.html']
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
 volumes:
   remote-data:
-  caddy-data:
-  caddy-config:

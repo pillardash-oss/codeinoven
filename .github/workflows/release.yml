@@ -24,6 +24,9 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      MAIN_VITE_GITHUB_CLIENT_ID: ${{ vars.GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false
       matrix:

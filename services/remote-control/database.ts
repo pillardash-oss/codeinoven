@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
 );
 CREATE INDEX IF NOT EXISTS mobile_devices_user_idx ON mobile_devices(user_id, revoked_at);
 
+CREATE TABLE IF NOT EXISTS account_entitlements (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  plan TEXT NOT NULL DEFAULT 'free' CHECK(plan IN ('free', 'pro')),
+  valid_until INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -95,13 +102,6 @@ export class RemoteControlDatabase {
     this.db.close()
   }
 
-  findUserByEmail(email: string): UserRecord | null {
-    return (
-      (this.db.prepare('SELECT * FROM users WHERE email = ?').get(email) as
-        UserRecord | undefined) ?? null
-    )
-  }
-
   findUserById(id: string): UserRecord | null {
     return (
       (this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRecord | undefined) ??
@@ -109,30 +109,44 @@ export class RemoteControlDatabase {
     )
   }
 
-  createUser(user: UserRecord): void {
-    this.db
-      .prepare(
-        'INSERT INTO users(id, email, display_name, password_hash, created_at) VALUES(?, ?, ?, ?, ?)'
-      )
-      .run(user.id, user.email, user.display_name, user.password_hash, user.created_at)
-  }
-
-  createSession(session: AuthenticatedSession, tokenHash: string): void {
+  upsertOAuthUser(input: { id: string; email: string; displayName: string }): void {
     const now = Date.now()
     this.db
       .prepare(
-        'INSERT INTO sessions(id, user_id, token_hash, created_at, expires_at, last_seen_at) VALUES(?, ?, ?, ?, ?, ?)'
+        `INSERT INTO users(id, email, display_name, password_hash, created_at)
+         VALUES(?, ?, ?, 'oauth:github', ?)
+         ON CONFLICT(id) DO UPDATE SET
+           email = excluded.email,
+           display_name = excluded.display_name`
       )
-      .run(session.id, session.userId, tokenHash, now, session.expiresAt, now)
+      .run(input.id, input.email, input.displayName, now)
+    this.db
+      .prepare(
+        `INSERT INTO account_entitlements(user_id, plan, valid_until, updated_at)
+         VALUES(?, 'free', NULL, ?)
+         ON CONFLICT(user_id) DO NOTHING`
+      )
+      .run(input.id, now)
   }
 
-  sessionByTokenHash(hash: string): AuthenticatedSession | null {
+  entitlementForUser(userId: string): { plan: 'free' | 'pro'; validUntil: number | null } {
     const row = this.db
+      .prepare('SELECT plan, valid_until FROM account_entitlements WHERE user_id = ?')
+      .get(userId) as { plan: 'free' | 'pro'; valid_until: number | null } | undefined
+    return { plan: row?.plan ?? 'free', validUntil: row?.valid_until ?? null }
+  }
+
+  rememberOAuthSession(session: AuthenticatedSession): void {
+    const now = Date.now()
+    this.db
       .prepare(
-        'SELECT id, user_id AS userId, expires_at AS expiresAt FROM sessions WHERE token_hash = ? AND expires_at > ?'
+        `INSERT INTO sessions(id, user_id, token_hash, created_at, expires_at, last_seen_at)
+         VALUES(?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           expires_at = excluded.expires_at,
+           last_seen_at = excluded.last_seen_at`
       )
-      .get(hash, Date.now()) as AuthenticatedSession | undefined
-    return row ?? null
+      .run(session.id, session.userId, `better-auth:${session.id}`, now, session.expiresAt, now)
   }
 
   activeSessionById(id: string): AuthenticatedSession | null {
@@ -142,14 +156,6 @@ export class RemoteControlDatabase {
       )
       .get(id, Date.now()) as AuthenticatedSession | undefined
     return row ?? null
-  }
-
-  touchSession(id: string): void {
-    this.db.prepare('UPDATE sessions SET last_seen_at = ? WHERE id = ?').run(Date.now(), id)
-  }
-
-  deleteSession(hash: string): void {
-    this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hash)
   }
 
   deleteExpiredSessions(): void {

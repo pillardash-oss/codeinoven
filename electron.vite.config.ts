@@ -11,7 +11,12 @@ export default defineConfig(({ mode }) => {
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the `.env` value
         // MAIN_VITE_GITHUB_CLIENT_ID. Public by design — never a secret.
-        __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.MAIN_VITE_GITHUB_CLIENT_ID ?? '')
+        __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.MAIN_VITE_GITHUB_CLIENT_ID ?? ''),
+        // Public endpoint baked into packaged desktops. Release CI maps the
+        // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
+        __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
+          env.MAIN_VITE_REMOTE_API_ORIGIN ?? 'https://mobile.codeinoven.com'
+        )
       },
       build: {
         outDir: 'out/main',

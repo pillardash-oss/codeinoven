@@ -1,13 +1,11 @@
 <script lang="ts">
   import { Laptop, LogOut, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { currentCloudUser, logoutCloudAccount, signInWithGitHub } from '$lib/remote/cloud-auth'
   import {
     claimCloudDesktop,
     cloudDesktopConnection,
-    currentCloudUser,
     listCloudDesktops,
-    loginCloudAccount,
-    logoutCloudAccount,
-    registerCloudAccount,
     revokeCloudDesktop,
     type CloudDesktop,
     type CloudUser
@@ -18,20 +16,14 @@
   let desktops = $state<CloudDesktop[]>([])
   let loading = $state(true)
   let busy = $state(false)
-  let creatingAccount = $state(false)
   let errorMessage = $state('')
-  let email = $state('')
-  let displayName = $state('')
-  let password = $state('')
   let claimCode = $state('')
   let revokeCandidate = $state<CloudDesktop | null>(null)
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
     const messages: Record<string, string> = {
-      'invalid-credentials': 'The email or password is incorrect.',
-      'email-unavailable': 'An account already uses that email.',
-      'invalid-registration': 'Use a valid email, name, and a password of at least 12 characters.',
+      'github-sign-in-failed': 'GitHub sign-in could not be started.',
       'invalid-enrollment-code': 'That desktop code is invalid or has expired.',
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
@@ -55,20 +47,14 @@
     }
   }
 
-  async function submitAccount(event: SubmitEvent): Promise<void> {
-    event.preventDefault()
+  async function beginGitHubSignIn(): Promise<void> {
     if (busy) return
     busy = true
     errorMessage = ''
     try {
-      user = creatingAccount
-        ? await registerCloudAccount({ email, displayName, password })
-        : await loginCloudAccount(email, password)
-      password = ''
-      desktops = await listCloudDesktops()
+      await signInWithGitHub()
     } catch (error) {
       errorMessage = readableError(error)
-    } finally {
       busy = false
     }
   }
@@ -190,51 +176,13 @@
       Restoring your session…
     </section>
   {:else if !user}
-    <form class="space-y-4 rounded-xl border bg-surface p-5" onsubmit={submitAccount}>
+    <section class="space-y-4 rounded-xl border bg-surface p-5">
       <div>
-        <h2 class="text-sm font-semibold">{creatingAccount ? 'Create account' : 'Sign in'}</h2>
+        <h2 class="text-sm font-semibold">Sign in with GitHub</h2>
         <p class="mt-1 text-xs leading-relaxed text-muted">
-          Your account keeps desktop access and revocation available across installed devices.
+          Use one identity for Pro access, remote desktops, and device revocation.
         </p>
       </div>
-
-      {#if creatingAccount}
-        <label class="block space-y-1.5 text-xs font-medium">
-          <span>Display name</span>
-          <input
-            class="h-10 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-            autocomplete="name"
-            bind:value={displayName}
-            maxlength="100"
-            required
-          />
-        </label>
-      {/if}
-
-      <label class="block space-y-1.5 text-xs font-medium">
-        <span>Email</span>
-        <input
-          class="h-10 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          type="email"
-          autocomplete="email"
-          bind:value={email}
-          maxlength="254"
-          required
-        />
-      </label>
-
-      <label class="block space-y-1.5 text-xs font-medium">
-        <span>Password</span>
-        <input
-          class="h-10 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
-          type="password"
-          autocomplete={creatingAccount ? 'new-password' : 'current-password'}
-          bind:value={password}
-          minlength="12"
-          maxlength="256"
-          required
-        />
-      </label>
 
       {#if errorMessage}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" aria-live="polite">
@@ -243,24 +191,18 @@
       {/if}
 
       <button
-        class="h-10 w-full rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-        type="submit"
-        disabled={busy}
-      >
-        {busy ? 'Please wait…' : creatingAccount ? 'Create account' : 'Sign in'}
-      </button>
-      <button
-        class="h-9 w-full rounded-lg text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
+        class="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="button"
         disabled={busy}
-        onclick={() => {
-          creatingAccount = !creatingAccount
-          errorMessage = ''
-        }}
+        onclick={() => void beginGitHubSignIn()}
       >
-        {creatingAccount ? 'Use an existing account' : 'Create a new account'}
+        <VendorIcon name="GitHub" size={16} />
+        {busy ? 'Opening GitHub…' : 'Continue with GitHub'}
       </button>
-    </form>
+      <p class="text-center text-[11px] leading-relaxed text-dimmed">
+        GitHub confirms your identity. Repository access remains controlled by your desktop app.
+      </p>
+    </section>
   {:else}
     <div class="space-y-5">
       <section class="rounded-xl border bg-surface p-4">
@@ -359,7 +301,7 @@
             >
             <button
               type="button"
-              class="h-9 rounded-lg bg-danger px-3 text-xs font-semibold text-white disabled:opacity-50"
+              class="h-9 rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
               disabled={busy}
               onclick={() => void removeDesktop()}>Remove access</button
             >

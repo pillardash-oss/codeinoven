@@ -1,0 +1,16 @@
+FROM oven/bun:1.3.10-alpine AS build
+
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --ignore-scripts
+COPY . .
+RUN bun run build:production
+
+FROM caddy:2.10-alpine
+
+COPY services/remote-control/Caddyfile.example /etc/caddy/Caddyfile
+COPY --from=build /app/out/renderer /srv/codeinoven/renderer
+
+EXPOSE 80
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --spider http://127.0.0.1/remote.html || exit 1
