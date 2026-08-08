@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   MAX_ENCRYPTED_PAYLOAD_BYTES,
   MAX_PLAINTEXT_BYTES,
+  MAX_RAW_PAYLOAD_CHARS,
   MAX_REPLAY_CACHE,
   authenticateHandshake,
   createHandshakeToken,
@@ -109,6 +110,15 @@ describe('payload size limits', () => {
     const hugeSegment = 'A'.repeat(Math.ceil((MAX_ENCRYPTED_PAYLOAD_BYTES * 4) / 3) + 1)
     const envelope = `v2:${timestamp}:MTIzNDU2Nzg5MDEy:${hugeSegment}`
     await expect(decryptPayload('shared-secret', envelope)).rejects.toThrow(
+      'oversized-encrypted-payload'
+    )
+  })
+
+  it('lets the raw oversized check win over the malformed check', async () => {
+    // No colons at all, so this payload is malformed — but the raw string
+    // length check runs first and must reject it as oversized.
+    const oversized = 'x'.repeat(MAX_RAW_PAYLOAD_CHARS + 1)
+    await expect(decryptPayload('shared-secret', oversized)).rejects.toThrow(
       'oversized-encrypted-payload'
     )
   })
