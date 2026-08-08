@@ -377,6 +377,17 @@ export class GitService {
     })
   }
 
+  /** Revert a commit by creating a new commit that undoes it. */
+  async revert(projectPath: string, target: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).raw(['revert', '--no-edit', target])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async getIdentity(projectPath: string): Promise<GitIdentity> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)

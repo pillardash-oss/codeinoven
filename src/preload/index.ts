@@ -142,6 +142,7 @@ const INVOKE_CHANNELS = [
   'git:commitFileDiff',
   'git:amend',
   'git:reset',
+  'git:revert',
   'git:getIdentity',
   'git:setIdentity',
   'git:remotes',
