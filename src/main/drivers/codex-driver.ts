@@ -415,6 +415,7 @@ export class CodexDriver extends PersistentCliDriver {
         stdio: ['pipe', 'pipe', 'pipe']
       }
     )
+    this.observeHarnessProcess(session.id, child, 'codex app-server', projectPath)
     const active: CodexAppServerTurn = {
       child,
       session,

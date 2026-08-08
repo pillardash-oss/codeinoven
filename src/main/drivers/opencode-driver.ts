@@ -21,6 +21,7 @@ import type {
 } from '../../lib/types'
 import type {
   AgentEventCallback,
+  AgentProcessObserver,
   GenerateTitleOptions,
   HarnessCapabilities,
   HarnessDriver,
@@ -864,6 +865,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
+  private processObserver: AgentProcessObserver | null = null
 
   /**
    * Optional collaborators for custom base-URL providers. When supplied, the
@@ -880,6 +882,10 @@ export class OpenCodeDriver implements HarnessDriver {
 
   onEvent(callback: AgentEventCallback): void {
     this.eventCallback = callback
+  }
+
+  setProcessObserver(observer: AgentProcessObserver): void {
+    this.processObserver = observer
   }
 
   async ensureReady(projectPath: string): Promise<void> {
@@ -1323,14 +1329,19 @@ export class OpenCodeDriver implements HarnessDriver {
    * deleted.
    */
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
-    const handle = this.turnServers.get(sessionId) ?? this.servers.get(projectPath)
+    const turnHandle = this.turnServers.get(sessionId)
+    const handle = turnHandle ?? this.servers.get(projectPath)
     if (!handle) return
-    const res = await fetch(`${handle.baseUrl}/session/${sessionId}`, {
-      method: 'DELETE',
-      signal: AbortSignal.timeout(10_000)
-    })
-    if (!res.ok && res.status !== 404) {
-      throw await errorFromResponse(res, 'Failed to delete session')
+    try {
+      const res = await fetch(`${handle.baseUrl}/session/${sessionId}`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(10_000)
+      })
+      if (!res.ok && res.status !== 404) {
+        throw await errorFromResponse(res, 'Failed to delete session')
+      }
+    } finally {
+      if (turnHandle) await this.stopTurnServer(sessionId)
     }
   }
 
@@ -1601,10 +1612,11 @@ export class OpenCodeDriver implements HarnessDriver {
     providerId: string
   ): Promise<ServerHandle> {
     const sourceRuntime = this.utilityRuntimes.get(sessionId)
-    if (!sourceRuntime) return this.ensureServer(projectPath)
-    const runtime = await this.runtimeForProvider(sourceRuntime, providerId)
+    const runtime = sourceRuntime
+      ? await this.runtimeForProvider(sourceRuntime, providerId)
+      : undefined
     const existing = this.turnServers.get(sessionId)
-    if (existing?.runtimeId === runtime.id) return existing
+    if (existing?.runtimeId === (runtime?.id ?? null)) return existing
     if (existing) await this.stopTurnServer(sessionId)
     const pending = this.turnStarting.get(sessionId)
     if (pending) return pending
@@ -1613,12 +1625,18 @@ export class OpenCodeDriver implements HarnessDriver {
     this.turnStarting.set(sessionId, promise)
     try {
       const handle = await promise
-      if (this.utilityRuntimes.get(sessionId)?.id !== sourceRuntime.id) {
+      if (sourceRuntime && this.utilityRuntimes.get(sessionId)?.id !== sourceRuntime.id) {
         handle.abortController.abort()
         handle.process.kill()
         throw new Error('Utility runtime was released before the turn server became ready')
       }
       this.turnServers.set(sessionId, handle)
+      this.processObserver?.watchProcess(
+        sessionId,
+        handle.process.pid,
+        'opencode serve',
+        projectPath
+      )
       handle.process.once('exit', () => {
         if (this.turnServers.get(sessionId) === handle) this.turnServers.delete(sessionId)
       })

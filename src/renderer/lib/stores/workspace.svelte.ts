@@ -9,6 +9,7 @@ import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
 import { APP_SLUG } from '$shared/brand'
+import { invoke } from '$lib/ipc.svelte'
 
 const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
 const RECENT_THREAD_VISITS_LIMIT = 50
@@ -265,6 +266,12 @@ class WorkspaceState {
   pendingAddedProject: Project | null = $state(null)
 
   clearThread(): void {
+    const closingThread = this.selectedThread
+    if (closingThread) {
+      void invoke('agent:killThreadProcesses', closingThread.projectId, closingThread.id).catch(
+        () => undefined
+      )
+    }
     this.selectedThread = null
     this.activeProject = null
     this.activeProjectIconUrl = null

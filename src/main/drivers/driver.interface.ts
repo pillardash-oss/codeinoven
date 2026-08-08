@@ -204,6 +204,9 @@ export interface HarnessDriver {
   readonly capabilities?: HarnessCapabilities
   readonly authCapabilities?: HarnessAuthCapabilities
 
+  /** Attach task-level process tracking after driver construction. */
+  setProcessObserver?(observer: AgentProcessObserver): void
+
   /** Ensure the driver's backend is ready (e.g. spawn server). Called lazily. */
   ensureReady(projectPath: string): Promise<void>
 
@@ -335,4 +338,9 @@ export interface HarnessDriver {
 
   /** Tear down all pooled resources (called on app quit). */
   dispose(): void
+}
+
+/** Main-process observer used by drivers to attribute process trees to sessions. */
+export interface AgentProcessObserver {
+  watchProcess(sessionId: string, pid: number | undefined, command: string, cwd: string): void
 }

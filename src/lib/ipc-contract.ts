@@ -3,6 +3,7 @@ import type {
   AgentModelSelection,
   AgentRole,
   AgentSessionStatus,
+  AgentRunningProcess,
   AssignmentModelSelection,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -518,6 +519,9 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentContextCapabilities
   >
+  'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
+  'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
+  'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
   'capabilities:readSkill': Contract<[source: AgentCapabilitySource], NativeSkillContent | null>
   'capabilities:updateSkill': Contract<
     [source: AgentCapabilitySource, instructions: string],
@@ -1285,6 +1289,7 @@ export interface RemoteModeStatus {
 }
 
 export interface IpcEventContract {
+  'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]

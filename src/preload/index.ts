@@ -77,6 +77,9 @@ const INVOKE_CHANNELS = [
   'agent:refreshAccountUsage',
   'agent:listTools',
   'agent:listContextCapabilities',
+  'agent:listProcesses',
+  'agent:killProcess',
+  'agent:killThreadProcesses',
   'capabilities:readSkill',
   'capabilities:updateSkill',
   'capabilities:deleteSkill',
@@ -347,6 +350,7 @@ void allInvokeChannelsRegistered
 const SEND_CHANNELS = ['pty:resize', 'pty:write'] as const
 const EVENT_CHANNELS = [
   'agent:event',
+  'agent:processesChanged',
   'agent:temporaryChatExpired',
   'app:toast',
   'notification:playSound',
