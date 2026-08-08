@@ -3,7 +3,7 @@ import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
 import type { AgentMessage, ThreadSettings } from '../types'
-import { ThreadManager } from './thread-manager'
+import { AllThreadsPinnedError, ThreadManager } from './thread-manager'
 import { ensureFeatureSlug } from '../project-artifacts'
 
 const temporaryDatabases: Database[] = []
@@ -132,7 +132,7 @@ describe('ThreadManager', () => {
     expect(await restartedManager.loadMessages('project1', thread.id)).toEqual(messages)
   })
 
-  it('evicts the oldest unpinned thread at the limit while preserving pinned threads', async () => {
+  it('archives the oldest unpinned thread at the limit while preserving pinned threads', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T11:00:00.000Z'))
     const { manager } = await createManager(2)
@@ -158,9 +158,42 @@ describe('ThreadManager', () => {
     })
     const listed = await manager.listThreads('project1')
 
+    // The evicted thread is archived, never silently deleted.
+    expect(await manager.getThread('project1', oldestUnpinned.id)).toMatchObject({
+      id: oldestUnpinned.id,
+      archived: true
+    })
     expect(await manager.getThread('project1', pinned.id)).not.toBeNull()
-    expect(await manager.getThread('project1', oldestUnpinned.id)).toBeNull()
-    expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id])
+    expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id, oldestUnpinned.id])
+  })
+
+  it('refuses to exceed the limit when every active thread is pinned', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
+    const { manager } = await createManager(2)
+    const first = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'First'
+    })
+    const second = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Second'
+    })
+    await manager.setPinned('project1', first.id, true)
+    await manager.setPinned('project1', second.id, true)
+
+    await expect(
+      manager.createThread({
+        projectId: 'project1',
+        providerId: 'openai',
+        title: 'Cannot fit'
+      })
+    ).rejects.toThrow(AllThreadsPinnedError)
+
+    const capacity = await manager.getThreadCapacity('project1')
+    expect(capacity).toMatchObject({ limit: 2, activeCount: 2, pinnedCount: 2, archivableCount: 0 })
   })
 
   it('keeps a stable feature slug across renames and forks', async () => {

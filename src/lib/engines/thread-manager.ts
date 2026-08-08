@@ -5,7 +5,10 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
-import { AgentMessageRepo } from '../../main/database/repositories/agent-message-repo'
+import {
+  AgentMessageRepo,
+  type ProviderDeltaSyncResult
+} from '../../main/database/repositories/agent-message-repo'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import type { Database } from '../../main/database/database'
 import {
@@ -23,6 +26,41 @@ import {
   type ThreadMessagePage,
   type UserMessageSummary
 } from '../types'
+
+/**
+ * Raised when `createThread` is asked to exceed a project's thread limit while
+ * every active thread is pinned. Deliberately explicit: no thread is silently
+ * deleted and no thread is silently created past the bound.
+ */
+export class AllThreadsPinnedError extends Error {
+  constructor(
+    readonly projectId: string,
+    readonly limit: number,
+    readonly activeCount: number
+  ) {
+    super(
+      `Cannot create a thread: every active thread is pinned (${activeCount}/${limit}). ` +
+        'Unpin or archive an existing thread first.'
+    )
+    this.name = 'AllThreadsPinnedError'
+  }
+}
+
+/** Deterministic view of a project's thread capacity for the UI. */
+export interface ThreadCapacity {
+  limit: number
+  activeCount: number
+  pinnedCount: number
+  archivedCount: number
+  archivableCount: number
+}
+
+/** Paging/visibility controls for thread listings. */
+export interface ThreadListOptions {
+  limit?: number
+  offset?: number
+  includeArchived?: boolean
+}
 
 /**
  * Re-key copied messages and their parts so they can live in a new thread
@@ -117,13 +155,20 @@ export class ThreadManager {
     const threadLimit = project.threadLimit
 
     const existing = this.threadRepo.listByProject(input.projectId)
-    if (existing.length >= threadLimit) {
-      const unpinned = existing
+    const active = existing.filter((t) => !t.archived)
+    if (active.length >= threadLimit) {
+      const unpinned = active
         .filter((t) => !t.pinned)
         .sort((a, b) => a.lastActivity - b.lastActivity)
       const toEvict = unpinned[0]
       if (toEvict) {
-        await this.deleteThread(input.projectId, toEvict.id)
+        // Archive (never silently delete) the oldest unpinned thread so the
+        // transcript stays recoverable behind the thread cap.
+        await this.setArchived(input.projectId, toEvict.id, true)
+      } else {
+        // Every active thread is pinned — refuse deterministically instead of
+        // silently exceeding the limit.
+        throw new AllThreadsPinnedError(input.projectId, threadLimit, active.length)
       }
     }
 
@@ -169,8 +214,8 @@ export class ThreadManager {
     return thread
   }
 
-  async listThreads(projectId: string): Promise<Thread[]> {
-    return this.threadRepo.listByProject(projectId)
+  async listThreads(projectId: string, options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listByProject(projectId, options)
   }
 
   async reorderThreads(projectId: string, orderedIds: string[]): Promise<Thread[]> {
@@ -507,6 +552,7 @@ export class ThreadManager {
     if (!this.getOwnedThread(projectId, threadId)) return
     this.db.transaction(() => {
       this.agentMessageRepo.deleteConversationByThread(threadId)
+      this.agentMessageRepo.clearProviderCursorsByThread(threadId)
       for (const msg of messages) {
         this.agentMessageRepo.upsert(msg, threadId)
       }
@@ -519,18 +565,30 @@ export class ThreadManager {
    * Provider retries can finish out of order. Their snapshots must not delete
    * user messages persisted by a newer turn while the older request was in
    * flight.
+   *
+   * The provider transcript is synchronized incrementally: only new or changed
+   * messages are written inside one transaction, keyed by a persisted provider
+   * cursor for the thread's current harness session. Returns the delta outcome.
    */
   async upsertMessages(
     projectId: string,
     threadId: string,
-    messages: AgentMessage[]
-  ): Promise<void> {
-    if (!this.getOwnedThread(projectId, threadId)) return
-    this.db.transaction(() => {
-      for (const msg of messages) {
-        this.agentMessageRepo.upsert(msg, threadId)
+    messages: AgentMessage[],
+    sessionId?: string
+  ): Promise<ProviderDeltaSyncResult> {
+    const thread = this.getOwnedThread(projectId, threadId)
+    if (!thread) {
+      return {
+        applied: 0,
+        skipped: 0,
+        collisions: 0,
+        total: 0,
+        cursor: { sessionId: sessionId ?? '', messageCount: 0, lastMessageId: '', syncedAt: 0 },
+        noop: false
       }
-    })
+    }
+    const resolvedSessionId = sessionId ?? thread.sessionId ?? ''
+    return this.agentMessageRepo.syncProviderDeltas(threadId, resolvedSessionId, messages)
   }
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
@@ -611,8 +669,27 @@ export class ThreadManager {
   }
 
   /** List threads across all projects, sorted pinned-first then by last activity. */
-  async listAllThreads(): Promise<Thread[]> {
-    return this.threadRepo.listAll()
+  async listAllThreads(options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listAll(options)
+  }
+
+  /**
+   * Deterministic thread-capacity view for the current project. Exposes the
+   * limit, active/pinned/archived counts, and how many threads could be
+   * archived to make room — so the UI can explain an all-pinned refusal.
+   */
+  async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
+    const project = this.projectRepo.get(projectId)
+    if (!project) throw new Error(`Project not found: ${projectId}`)
+    const threads = this.threadRepo.listByProject(projectId)
+    const active = threads.filter((t) => !t.archived)
+    return {
+      limit: project.threadLimit,
+      activeCount: active.length,
+      pinnedCount: active.filter((t) => t.pinned).length,
+      archivedCount: threads.filter((t) => t.archived).length,
+      archivableCount: active.filter((t) => !t.pinned).length
+    }
   }
 
   /**

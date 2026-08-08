@@ -1,3 +1,4 @@
+import { createHash } from 'crypto'
 import type { Database } from '../database'
 import type {
   AgentMessage,
@@ -51,10 +52,8 @@ export function partsToSearchText(parts: AgentPart[]): string {
   return chunks.join('\n')
 }
 
-interface AgentMessageRow {
-  id: string
-  thread_id: string
-  session_id: string | null
+/** Persisted column values that participate in a message's content identity. */
+export interface PersistedMessageRow {
   role: string
   origin: string
   visibility: string
@@ -77,6 +76,92 @@ interface AgentMessageRow {
   context_used: number | null
   error: string | null
   structured_output: string | null
+}
+
+/**
+ * Stable content fingerprint of a persisted agent message row. The delta sync
+ * compares this hash against the stored `content_hash` so unchanged messages —
+ * identical JSON, search text, and metadata — are never re-stringified or
+ * rewritten on a transcript sync.
+ */
+export function hashPersistedRow(row: PersistedMessageRow): string {
+  const parts = [
+    row.role,
+    row.origin,
+    row.visibility,
+    row.parts,
+    row.search_text,
+    row.transport_parts ?? '',
+    row.transport_origin ?? '',
+    row.model_id ?? '',
+    row.provider_id ?? '',
+    row.harness_id ?? '',
+    row.references_json ?? '',
+    row.project_references_json ?? '',
+    String(row.created_at),
+    String(row.completed_at ?? ''),
+    String(row.cost ?? ''),
+    row.tokens_json ?? '',
+    row.rate_limits_json ?? '',
+    row.usage_credits_json ?? '',
+    String(row.context_window ?? ''),
+    String(row.context_used ?? ''),
+    row.error ?? '',
+    row.structured_output ?? ''
+  ]
+  return createHash('sha256').update(parts.join('\u0000')).digest('hex')
+}
+
+interface AgentMessageRow {
+  id: string
+  thread_id: string
+  session_id: string | null
+  role: string
+  origin: string
+  visibility: string
+  parts: string
+  search_text: string
+  content_hash: string | null
+  transport_parts: string | null
+  transport_origin: string | null
+  model_id: string | null
+  provider_id: string | null
+  harness_id: string | null
+  references_json: string | null
+  project_references_json: string | null
+  created_at: number
+  completed_at: number | null
+  cost: number | null
+  tokens_json: string | null
+  rate_limits_json: string | null
+  usage_credits_json: string | null
+  context_window: number | null
+  context_used: number | null
+  error: string | null
+  structured_output: string | null
+}
+
+/** Per-thread watermark of the last provider transcript sync. */
+export interface ProviderSyncCursor {
+  sessionId: string
+  messageCount: number
+  lastMessageId: string
+  syncedAt: number
+}
+
+/** Explicit outcome of a delta-only transcript sync. */
+export interface ProviderDeltaSyncResult {
+  /** Messages appended or updated by this sync. */
+  applied: number
+  /** Messages already persisted with identical content (no write performed). */
+  skipped: number
+  /** Messages skipped because the id already belongs to another thread/session. */
+  collisions: number
+  /** Total mirrored conversation messages after this sync. */
+  total: number
+  cursor: ProviderSyncCursor
+  /** True when the transcript already matched the cursor and no DB write ran. */
+  noop: boolean
 }
 
 function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMessage {
@@ -117,86 +202,143 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
 export class AgentMessageRepo {
   constructor(private db: Database) {}
 
-  upsert(message: AgentMessage, threadId: string, sessionId?: string): void {
-    const existing = this.db.get<AgentMessageRow>(
-      `SELECT id, thread_id, session_id, role, origin, visibility, parts, search_text,
-        transport_parts, transport_origin,
-        model_id, provider_id, harness_id,
-        references_json, project_references_json,
-        created_at, completed_at, cost,
-        tokens_json, rate_limits_json, usage_credits_json,
-        context_window, context_used, error, structured_output
-       FROM agent_messages WHERE id = ?`,
-      message.id
-    )
+  /**
+   * Encode a message into its persisted column values plus the content hash.
+   * Shared by the single-message upsert and the batched delta sync so both
+   * paths hash and serialize identically.
+   */
+  private encodeMessage(
+    message: AgentMessage,
+    threadId: string,
+    sessionId?: string
+  ): {
+    id: string
+    threadId: string
+    sessionId: string | null
+    role: string
+    origin: string
+    visibility: string
+    partsJson: string
+    searchText: string
+    contentHash: string
+    transportPartsJson: string | null
+    transportOrigin: string | null
+    modelId: string | null
+    providerId: string | null
+    harnessId: string | null
+    referencesJson: string | null
+    projectReferencesJson: string | null
+    createdAt: number
+    completedAt: number | null
+    cost: number | null
+    tokensJson: string | null
+    rateLimitsJson: string | null
+    creditsJson: string | null
+    contextWindow: number | null
+    contextUsed: number | null
+    error: string | null
+    structuredOutputJson: string | null
+  } {
     const targetSessionId = sessionId ?? null
     const origin = message.origin ?? (sessionId ? 'subagent' : 'legacy')
     const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
-    if (existing && (existing.thread_id !== threadId || existing.session_id !== targetSessionId)) {
-      throw new Error(`Message ${message.id} already belongs to another thread or session`)
-    }
-
     const partsJson = JSON.stringify(message.parts)
     const searchText = partsToSearchText(message.parts)
     const transportPartsJson = message.transportParts
       ? JSON.stringify(message.transportParts)
       : null
+    const transportOrigin = message.transportOrigin ?? null
+    const modelId = message.modelId ?? null
+    const providerId = message.providerId ?? null
+    const harnessId = message.harnessId ?? null
     const referencesJson = message.references ? JSON.stringify(message.references) : null
     const projectReferencesJson = message.projectReferences
       ? JSON.stringify(message.projectReferences)
       : null
+    const createdAt = message.createdAt
+    const completedAt = message.completedAt ?? null
+    const cost = message.cost ?? null
     const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
     const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
     const creditsJson = message.credits ? JSON.stringify(message.credits) : null
     const contextWindow = message.contextWindow ?? null
     const contextUsed = message.contextUsed ?? null
+    const error = message.error ?? null
     const structuredOutputJson =
       message.structuredOutput !== undefined ? JSON.stringify(message.structuredOutput) : null
-
-    if (
-      existing &&
-      existing.role === message.role &&
-      existing.origin === origin &&
-      existing.visibility === visibility &&
-      existing.parts === partsJson &&
-      existing.search_text === searchText &&
-      (existing.transport_parts ?? null) === transportPartsJson &&
-      (existing.transport_origin ?? null) === (message.transportOrigin ?? null) &&
-      (existing.model_id ?? null) === (message.modelId ?? null) &&
-      (existing.provider_id ?? null) === (message.providerId ?? null) &&
-      (existing.harness_id ?? null) === (message.harnessId ?? null) &&
-      (existing.references_json ?? null) === referencesJson &&
-      (existing.project_references_json ?? null) === projectReferencesJson &&
-      existing.created_at === message.createdAt &&
-      (existing.completed_at ?? null) === (message.completedAt ?? null) &&
-      (existing.cost ?? null) === (message.cost ?? null) &&
-      (existing.tokens_json ?? null) === tokensJson &&
-      (existing.rate_limits_json ?? null) === rateLimitsJson &&
-      (existing.usage_credits_json ?? null) === creditsJson &&
-      (existing.context_window ?? null) === contextWindow &&
-      (existing.context_used ?? null) === contextUsed &&
-      (existing.error ?? null) === (message.error ?? null) &&
-      (existing.structured_output ?? null) === structuredOutputJson
-    ) {
-      return
+    const contentHash = hashPersistedRow({
+      role: message.role,
+      origin,
+      visibility,
+      parts: partsJson,
+      search_text: searchText,
+      transport_parts: transportPartsJson,
+      transport_origin: transportOrigin,
+      model_id: modelId,
+      provider_id: providerId,
+      harness_id: harnessId,
+      references_json: referencesJson,
+      project_references_json: projectReferencesJson,
+      created_at: createdAt,
+      completed_at: completedAt,
+      cost,
+      tokens_json: tokensJson,
+      rate_limits_json: rateLimitsJson,
+      usage_credits_json: creditsJson,
+      context_window: contextWindow,
+      context_used: contextUsed,
+      error,
+      structured_output: structuredOutputJson
+    })
+    return {
+      id: message.id,
+      threadId,
+      sessionId: targetSessionId,
+      role: message.role,
+      origin,
+      visibility,
+      partsJson,
+      searchText,
+      contentHash,
+      transportPartsJson,
+      transportOrigin,
+      modelId,
+      providerId,
+      harnessId,
+      referencesJson,
+      projectReferencesJson,
+      createdAt,
+      completedAt,
+      cost,
+      tokensJson,
+      rateLimitsJson,
+      creditsJson,
+      contextWindow,
+      contextUsed,
+      error,
+      structuredOutputJson
     }
+  }
 
+  /** Persist one fully-encoded message (INSERT or UPDATE by id). */
+  private writeMessage(encoded: ReturnType<AgentMessageRepo['encodeMessage']>): void {
     this.db.run(
       `INSERT INTO agent_messages(
-        id, thread_id, session_id, role, origin, visibility, parts, search_text,
+        id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
         transport_parts, transport_origin,
         model_id, provider_id, harness_id,
         references_json, project_references_json,
         created_at, completed_at, cost,
         tokens_json, rate_limits_json, usage_credits_json,
         context_window, context_used, error, structured_output
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         role = excluded.role,
         origin = excluded.origin,
         visibility = excluded.visibility,
         parts = excluded.parts,
         search_text = excluded.search_text,
+        content_hash = excluded.content_hash,
         transport_parts = excluded.transport_parts,
         transport_origin = excluded.transport_origin,
         model_id = excluded.model_id,
@@ -214,32 +356,237 @@ export class AgentMessageRepo {
         context_used = excluded.context_used,
         error = excluded.error,
         structured_output = excluded.structured_output`,
-      message.id,
-      threadId,
-      targetSessionId,
-      message.role,
-      origin,
-      visibility,
-      partsJson,
-      searchText,
-      transportPartsJson,
-      message.transportOrigin ?? null,
-      message.modelId ?? null,
-      message.providerId ?? null,
-      message.harnessId ?? null,
-      referencesJson,
-      projectReferencesJson,
-      message.createdAt,
-      message.completedAt ?? null,
-      message.cost ?? null,
-      tokensJson,
-      rateLimitsJson,
-      creditsJson,
-      contextWindow,
-      contextUsed,
-      message.error ?? null,
-      structuredOutputJson
+      encoded.id,
+      encoded.threadId,
+      encoded.sessionId,
+      encoded.role,
+      encoded.origin,
+      encoded.visibility,
+      encoded.partsJson,
+      encoded.searchText,
+      encoded.contentHash,
+      encoded.transportPartsJson,
+      encoded.transportOrigin,
+      encoded.modelId,
+      encoded.providerId,
+      encoded.harnessId,
+      encoded.referencesJson,
+      encoded.projectReferencesJson,
+      encoded.createdAt,
+      encoded.completedAt,
+      encoded.cost,
+      encoded.tokensJson,
+      encoded.rateLimitsJson,
+      encoded.creditsJson,
+      encoded.contextWindow,
+      encoded.contextUsed,
+      encoded.error,
+      encoded.structuredOutputJson
     )
+  }
+
+  /** Whether two encoded rows are identical (no rewrite needed). */
+  private static isUnchanged(
+    existing: AgentMessageRow,
+    encoded: ReturnType<AgentMessageRepo['encodeMessage']>
+  ): boolean {
+    return (
+      existing.content_hash === encoded.contentHash &&
+      existing.role === encoded.role &&
+      existing.origin === encoded.origin &&
+      existing.visibility === encoded.visibility &&
+      existing.parts === encoded.partsJson &&
+      existing.search_text === encoded.searchText &&
+      (existing.transport_parts ?? null) === encoded.transportPartsJson &&
+      (existing.transport_origin ?? null) === encoded.transportOrigin &&
+      (existing.model_id ?? null) === encoded.modelId &&
+      (existing.provider_id ?? null) === encoded.providerId &&
+      (existing.harness_id ?? null) === encoded.harnessId &&
+      (existing.references_json ?? null) === encoded.referencesJson &&
+      (existing.project_references_json ?? null) === encoded.projectReferencesJson &&
+      existing.created_at === encoded.createdAt &&
+      (existing.completed_at ?? null) === encoded.completedAt &&
+      (existing.cost ?? null) === encoded.cost &&
+      (existing.tokens_json ?? null) === encoded.tokensJson &&
+      (existing.rate_limits_json ?? null) === encoded.rateLimitsJson &&
+      (existing.usage_credits_json ?? null) === encoded.creditsJson &&
+      (existing.context_window ?? null) === encoded.contextWindow &&
+      (existing.context_used ?? null) === encoded.contextUsed &&
+      (existing.error ?? null) === encoded.error &&
+      (existing.structured_output ?? null) === encoded.structuredOutputJson
+    )
+  }
+
+  upsert(message: AgentMessage, threadId: string, sessionId?: string): void {
+    const existing = this.db.get<AgentMessageRow>(
+      `SELECT id, thread_id, session_id, role, origin, visibility, parts, search_text,
+        content_hash,
+        transport_parts, transport_origin,
+        model_id, provider_id, harness_id,
+        references_json, project_references_json,
+        created_at, completed_at, cost,
+        tokens_json, rate_limits_json, usage_credits_json,
+        context_window, context_used, error, structured_output
+       FROM agent_messages WHERE id = ?`,
+      message.id
+    )
+    const encoded = this.encodeMessage(message, threadId, sessionId)
+    if (
+      existing &&
+      (existing.thread_id !== encoded.threadId || existing.session_id !== encoded.sessionId)
+    ) {
+      throw new Error(`Message ${message.id} already belongs to another thread or session`)
+    }
+
+    if (existing && AgentMessageRepo.isUnchanged(existing, encoded)) {
+      return
+    }
+
+    this.writeMessage(encoded)
+  }
+
+  // ── Provider cursors and delta-only transcript sync ────────────────────
+
+  /** Per-thread watermark of the last provider transcript sync. */
+  getProviderCursor(threadId: string, sessionId: string): ProviderSyncCursor | null {
+    const row = this.db.get<{
+      session_id: string
+      message_count: number
+      last_message_id: string
+      synced_at: number
+    }>(
+      `SELECT session_id, message_count, last_message_id, synced_at
+       FROM provider_sync_cursors WHERE thread_id = ? AND session_id = ?`,
+      threadId,
+      sessionId
+    )
+    if (!row) return null
+    return {
+      sessionId: row.session_id,
+      messageCount: row.message_count,
+      lastMessageId: row.last_message_id,
+      syncedAt: row.synced_at
+    }
+  }
+
+  saveProviderCursor(threadId: string, sessionId: string, messageCount: number, lastMessageId: string): void {
+    this.db.run(
+      `INSERT INTO provider_sync_cursors(thread_id, session_id, message_count, last_message_id, synced_at)
+       VALUES(?,?,?,?,?)
+       ON CONFLICT(thread_id, session_id) DO UPDATE SET
+         message_count = excluded.message_count,
+         last_message_id = excluded.last_message_id,
+         synced_at = excluded.synced_at`,
+      threadId,
+      sessionId,
+      messageCount,
+      lastMessageId,
+      Date.now()
+    )
+  }
+
+  /** Forget the transcript watermark after a replace/truncate of the mirror. */
+  clearProviderCursor(threadId: string, sessionId: string): void {
+    this.db.run('DELETE FROM provider_sync_cursors WHERE thread_id = ? AND session_id = ?', threadId, sessionId)
+  }
+
+  /** Forget every transcript watermark for a thread. */
+  clearProviderCursorsByThread(threadId: string): void {
+    this.db.run('DELETE FROM provider_sync_cursors WHERE thread_id = ?', threadId)
+  }
+
+  /** Count of mirrored parent-session (conversation) messages for a thread. */
+  countConversationByThread(threadId: string): number {
+    const row = this.db.get<{ cnt: number }>(
+      'SELECT count(*) as cnt FROM agent_messages WHERE thread_id = ? AND session_id IS NULL',
+      threadId
+    )
+    return row?.cnt ?? 0
+  }
+
+  /**
+   * Append-only transcript synchronization. Persists only the deltas of the
+   * provider transcript inside a single transaction:
+   *
+   * - When the transcript matches the persisted cursor (same length and last
+   *   message id) it short-circuits with `noop: true` and performs no DB work.
+   * - Otherwise existing message ids and content hashes are loaded in one bulk
+   *   query, and only new or changed messages are written. Unchanged JSON,
+   *   search text, and metadata are never re-serialized or rewritten.
+   *
+   * `sessionId` is the thread's current harness session and keys the cursor.
+   */
+  syncProviderDeltas(
+    threadId: string,
+    sessionId: string,
+    messages: AgentMessage[]
+  ): ProviderDeltaSyncResult {
+    const sorted = [...messages].sort(
+      (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+    )
+    const last = sorted[sorted.length - 1]
+    const lastId = last?.id ?? ''
+
+    const cursor = this.getProviderCursor(threadId, sessionId)
+    if (cursor && cursor.messageCount === sorted.length && cursor.lastMessageId === lastId) {
+      this.saveProviderCursor(threadId, sessionId, sorted.length, lastId)
+      return {
+        applied: 0,
+        skipped: sorted.length,
+        collisions: 0,
+        total: this.countConversationByThread(threadId),
+        cursor: { ...cursor, syncedAt: Date.now() },
+        noop: true
+      }
+    }
+
+    // Bulk-load existing identities so unchanged rows are never rewritten and a
+    // foreign id (belonging to another thread/session) is never clobbered.
+    const existing = new Map<
+      string,
+      { contentHash: string | null; threadId: string; sessionId: string | null }
+    >(
+      this.db
+        .all<{ id: string; content_hash: string | null; thread_id: string; session_id: string | null }>(
+          'SELECT id, content_hash, thread_id, session_id FROM agent_messages WHERE thread_id = ?',
+          threadId
+        )
+        .map((row) => [
+          row.id,
+          { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
+        ] as const)
+    )
+
+    let applied = 0
+    let skipped = 0
+    let collisions = 0
+    this.db.transaction(() => {
+      for (const message of sorted) {
+        const existingRow = existing.get(message.id)
+        if (existingRow && (existingRow.threadId !== threadId || existingRow.sessionId !== null)) {
+          collisions++
+          continue
+        }
+        const encoded = this.encodeMessage(message, threadId)
+        if (existingRow?.contentHash !== null && existingRow?.contentHash === encoded.contentHash) {
+          skipped++
+          continue
+        }
+        this.writeMessage(encoded)
+        applied++
+      }
+    })
+
+    const total = this.countConversationByThread(threadId)
+    this.saveProviderCursor(threadId, sessionId, sorted.length, lastId)
+    return {
+      applied,
+      skipped,
+      collisions,
+      total,
+      cursor: { sessionId, messageCount: total, lastMessageId: lastId, syncedAt: Date.now() },
+      noop: false
+    }
   }
 
   loadByThread(threadId: string): AgentMessage[] {

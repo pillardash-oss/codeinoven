@@ -1,5 +1,5 @@
 import { mkdirSync } from 'fs'
-import { dirname } from 'path'
+import { dirname, join } from 'path'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
@@ -14,12 +14,27 @@ import {
   AGENT_MESSAGES_FTS_SQL,
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
   MISC_TABLES_SQL,
+  PERSISTENCE_SQL,
   HARNESS_USAGE_SQL
 } from './schema'
-import { partsToSearchText } from './repositories/agent-message-repo'
+import {
+  DatabaseWorker,
+  DATABASE_WORKER_DEFAULTS,
+  type WorkerBackupResult,
+  type WorkerCheckpointResult,
+  type WorkerFtsResult,
+  type WorkerHealthResult,
+  type WorkerIntegrityResult,
+  type WorkerRecoverResult,
+  type WorkerRestoreResult,
+  type WorkerRetentionResult,
+  type WorkerSizeTelemetry,
+  type WorkerVacuumResult
+} from './database-worker'
+import { partsToSearchText, hashPersistedRow } from './repositories/agent-message-repo'
 
 const SCHEMA_VERSION_KEY = 'schema_version'
-const CURRENT_SCHEMA_VERSION = 5
+const CURRENT_SCHEMA_VERSION = 6
 
 /**
  * Database — synchronous SQLite wrapper for the Electron main process.
@@ -32,6 +47,7 @@ const CURRENT_SCHEMA_VERSION = 5
 export class Database {
   private db: DatabaseType | null = null
   private readonly path: string
+  private maintenanceWorker: DatabaseWorker | null = null
 
   constructor(path?: string) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
@@ -62,7 +78,27 @@ export class Database {
     this.ensureHarnessUsageSchema()
     this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
 
+    this.startMaintenanceWorker()
+
     Logger.info('SQLite database initialised', { path: this.path })
+  }
+
+  /**
+   * The maintenance worker opens a second WAL connection and owns every
+   * O(database-size) operation (checkpoint, integrity, telemetry, backup,
+   * retention, FTS). In-memory test databases cannot share a file with a
+   * second connection, so they run without a worker.
+   */
+  private startMaintenanceWorker(): void {
+    if (this.path === ':memory:' || this.maintenanceWorker) return
+    const worker = new DatabaseWorker({
+      dbPath: this.path,
+      backupDir: join(dirname(this.path), 'backups'),
+      maintenanceEnabled: true,
+      ...DATABASE_WORKER_DEFAULTS
+    })
+    this.maintenanceWorker = worker
+    worker.start()
   }
 
   /** Whether the database connection is currently open. */
@@ -70,8 +106,13 @@ export class Database {
     return this.db !== null
   }
 
-  /** Close the database connection. */
+  /** Close the database connection and stop the maintenance worker. */
   close(): void {
+    if (this.maintenanceWorker) {
+      const worker = this.maintenanceWorker
+      this.maintenanceWorker = null
+      void worker.shutdown()
+    }
     if (!this.db) return
     this.db.close()
     this.db = null
@@ -148,6 +189,148 @@ export class Database {
     return (row?.cnt ?? 0) > 0
   }
 
+  // ── Maintenance boundary (off-main worker) ─────────────────────────────
+
+  /** Whether a maintenance worker is running for this connection. */
+  hasMaintenanceWorker(): boolean {
+    return this.maintenanceWorker?.isRunning() ?? false
+  }
+
+  /** Directory the worker uses for atomic backup artifacts. */
+  backupDirectory(): string {
+    return join(dirname(this.path), 'backups')
+  }
+
+  /** Passive WAL checkpoint — returns an explicit result. */
+  async passiveCheckpoint(): Promise<WorkerCheckpointResult> {
+    return this.maintenanceWorker?.passiveCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
+  }
+
+  /** Full integrity strategy: quick_check by default, full `integrity_check` when asked. */
+  async integrityCheck(quick = true): Promise<WorkerIntegrityResult> {
+    return this.maintenanceWorker?.integrityCheck(quick) ?? { ok: false, text: '', error: 'no maintenance worker' }
+  }
+
+  /** Current on-disk size telemetry (db/wal/shm bytes, pages, journal mode). */
+  async sizeTelemetry(): Promise<WorkerSizeTelemetry> {
+    return (
+      this.maintenanceWorker?.sizeTelemetry() ?? {
+        ok: false,
+        dbBytes: 0,
+        walBytes: 0,
+        shmBytes: 0,
+        pageSize: 0,
+        pageCount: 0,
+        freelistPages: 0,
+        journalMode: '',
+        schemaVersion: '',
+        error: 'no maintenance worker'
+      }
+    )
+  }
+
+  /** Atomic online backup of the database to `targetPath` (tmp + rename). */
+  async backupDatabase(targetPath: string): Promise<WorkerBackupResult> {
+    return this.maintenanceWorker?.backup(targetPath) ?? { ok: false, error: 'no maintenance worker' }
+  }
+
+  /** Atomic backup to the worker's default backups directory. */
+  async backupDatabaseToDefaultDir(stamp = Date.now()): Promise<WorkerBackupResult> {
+    return this.backupDatabase(join(this.backupDirectory(), `codeinoven-${stamp}.db`))
+  }
+
+  /**
+   * Restore an atomic backup over the live database. The primary connection is
+   * closed first and reopened afterwards so the restored file is the one every
+   * subsequent operation reads.
+   */
+  async restoreFromBackup(sourcePath: string): Promise<WorkerRestoreResult> {
+    this.close()
+    const result = await (this.maintenanceWorker?.restore(sourcePath) ?? {
+      ok: false,
+      reason: 'io' as const,
+      error: 'no maintenance worker'
+    })
+    if (result.ok) {
+      await this.init()
+    }
+    return result
+  }
+
+  /** Incremental vacuum to reclaim free pages (bounded, off-main). */
+  async incrementalVacuum(pages = 128): Promise<WorkerVacuumResult> {
+    return this.maintenanceWorker?.incrementalVacuum(pages) ?? { ok: false, error: 'no maintenance worker' }
+  }
+
+  /** Full VACUUM (heavy; off-main). */
+  async fullVacuum(): Promise<WorkerVacuumResult> {
+    return this.maintenanceWorker?.fullVacuum() ?? { ok: false, error: 'no maintenance worker' }
+  }
+
+  /** FTS ownership: merge index segments. */
+  async optimizeFts(): Promise<WorkerFtsResult> {
+    return this.maintenanceWorker?.optimizeFts() ?? { ok: false, action: 'optimize', details: '', error: 'no maintenance worker' }
+  }
+
+  /** FTS ownership: rebuild all indexes from their source tables. */
+  async rebuildFts(): Promise<WorkerFtsResult> {
+    return this.maintenanceWorker?.rebuildFts() ?? { ok: false, action: 'rebuild', details: '', error: 'no maintenance worker' }
+  }
+
+  /** FTS ownership: integrity-check all indexes. */
+  async ftsIntegrityCheck(): Promise<WorkerFtsResult> {
+    return (
+      this.maintenanceWorker?.ftsIntegrityCheck() ?? {
+        ok: false,
+        action: 'integrity-check',
+        details: '',
+        error: 'no maintenance worker'
+      }
+    )
+  }
+
+  /** Bounded retention: archive + prune high-volume log rows. */
+  async runRetention(): Promise<WorkerRetentionResult> {
+    return (
+      this.maintenanceWorker?.runRetention() ?? {
+        ok: false,
+        archived: 0,
+        pruned: 0,
+        archiveRows: 0,
+        error: 'no maintenance worker'
+      }
+    )
+  }
+
+  /** Rebuild a clean, verified copy of a corrupt database at `targetPath`. */
+  async recoverTo(targetPath: string): Promise<WorkerRecoverResult> {
+    return this.maintenanceWorker?.recoverTo(targetPath) ?? { ok: false, reason: 'unrecoverable', error: 'no maintenance worker' }
+  }
+
+  /** Explicit corruption / full-disk health check. */
+  async healthCheck(): Promise<WorkerHealthResult> {
+    return (
+      this.maintenanceWorker?.healthCheck() ?? {
+        ok: false,
+        status: 'error',
+        quickCheck: '',
+        details: {
+          ok: false,
+          dbBytes: 0,
+          walBytes: 0,
+          shmBytes: 0,
+          pageSize: 0,
+          pageCount: 0,
+          freelistPages: 0,
+          journalMode: '',
+          schemaVersion: '',
+          error: 'no maintenance worker'
+        },
+        message: 'no maintenance worker'
+      }
+    )
+  }
+
   // ── Private helpers ────────────────────────────────────────────────────
 
   private requireDb(): DatabaseType {
@@ -165,6 +348,7 @@ export class Database {
     this.db?.exec(HISTORY_FTS_SQL)
     this.db?.exec(AGENT_MESSAGES_SQL)
     this.db?.exec(MISC_TABLES_SQL)
+    this.db?.exec(PERSISTENCE_SQL)
     this.db?.exec(HARNESS_USAGE_SQL)
   }
 
@@ -186,6 +370,10 @@ export class Database {
 
   private ensureAgentMessageCreditsSchema(): void {
     const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
+    const hasContentHash = columns.some((column) => column.name === 'content_hash')
+    if (!hasContentHash) {
+      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN content_hash TEXT')
+    }
     if (!columns.some((column) => column.name === 'usage_credits_json')) {
       this.db?.exec('ALTER TABLE agent_messages ADD COLUMN usage_credits_json TEXT')
     }
@@ -194,6 +382,54 @@ export class Database {
     }
     if (!columns.some((column) => column.name === 'context_used')) {
       this.db?.exec('ALTER TABLE agent_messages ADD COLUMN context_used INTEGER')
+    }
+
+    // Backfill content_hash once so the delta-sync equality check never treats
+    // every pre-upgrade row as changed on the first sync. Rows added later are
+    // hashed by the upsert/delta paths directly.
+    if (hasContentHash) {
+      const backfilled =
+        this.get<{ value: string }>(
+          "SELECT value FROM db_meta WHERE key = 'content_hash_backfilled'"
+        )?.value === '1'
+      if (!backfilled) {
+        const rows = this.all<{
+          rowid: number
+          role: string
+          origin: string
+          visibility: string
+          parts: string
+          search_text: string
+          transport_parts: string | null
+          transport_origin: string | null
+          model_id: string | null
+          provider_id: string | null
+          harness_id: string | null
+          references_json: string | null
+          project_references_json: string | null
+          created_at: number
+          completed_at: number | null
+          cost: number | null
+          tokens_json: string | null
+          rate_limits_json: string | null
+          usage_credits_json: string | null
+          context_window: number | null
+          context_used: number | null
+          error: string | null
+          structured_output: string | null
+        }>(
+          'SELECT rowid, role, origin, visibility, parts, search_text, transport_parts, transport_origin, model_id, provider_id, harness_id, references_json, project_references_json, created_at, completed_at, cost, tokens_json, rate_limits_json, usage_credits_json, context_window, context_used, error, structured_output FROM agent_messages WHERE content_hash IS NULL'
+        )
+        if (rows.length > 0) {
+          const update = this.prepare('UPDATE agent_messages SET content_hash = ? WHERE rowid = ?')
+          this.transaction(() => {
+            for (const row of rows) {
+              update.run(hashPersistedRow(row), row.rowid)
+            }
+          })
+        }
+        this.run("INSERT OR REPLACE INTO db_meta(key, value) VALUES('content_hash_backfilled', '1')")
+      }
     }
   }
 
