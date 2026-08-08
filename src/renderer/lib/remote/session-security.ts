@@ -19,6 +19,13 @@ const MAX_PAYLOAD_AGE_MS = 5 * 60 * 1_000
 const MAX_CLOCK_SKEW_MS = 60 * 1_000
 /** Maximum ciphertext bytes accepted before decryption (1 MiB). */
 export const MAX_ENCRYPTED_PAYLOAD_BYTES = 1024 * 1024
+/**
+ * Maximum raw encrypted envelope length (the complete payload string) accepted
+ * before any splitting or hashing. Accounts for base64 expansion and the
+ * version/timestamp/IV prefix so no payload under the ciphertext cap is
+ * rejected; anything longer is oversized by construction.
+ */
+export const MAX_RAW_PAYLOAD_CHARS = Math.ceil((MAX_ENCRYPTED_PAYLOAD_BYTES * 4) / 3) + 128
 /** Maximum decrypted plaintext bytes accepted before decoding (768 KiB). */
 export const MAX_PLAINTEXT_BYTES = 768 * 1024
 /** Maximum number of replay identifiers retained (bounded, fixed-size entries). */
@@ -148,6 +155,10 @@ export async function encryptPayload(secret: string, plaintext: string): Promise
 
 /** Decrypt a payload produced by `encryptPayload`. */
 export async function decryptPayload(secret: string, payload: string): Promise<string> {
+  // Reject an oversized raw envelope before any split, hash, or base64 work.
+  if (payload.length > MAX_RAW_PAYLOAD_CHARS) {
+    throw new Error('oversized-encrypted-payload')
+  }
   const parts = payload.split(':')
   const versioned = parts[0] === PAYLOAD_VERSION
   if ((!versioned && parts.length !== 2) || (versioned && parts.length !== 4)) {
@@ -162,8 +173,9 @@ export async function decryptPayload(secret: string, payload: string): Promise<s
     }
   }
   const ciphertextBase64 = parts[versioned ? 3 : 1] ?? ''
-  // Bound the raw encrypted envelope before any payload-proportional work
-  // (hashing for replay detection, base64 decoding, or AES-GCM decryption).
+  // Keep the decoded segment cap: bound the base64 ciphertext before decoding
+  // it so a decoded payload that slips under the raw string bound still fails
+  // before a large allocation.
   const estimatedCiphertextBytes = Math.ceil((ciphertextBase64.length * 3) / 4)
   if (estimatedCiphertextBytes > MAX_ENCRYPTED_PAYLOAD_BYTES) {
     throw new Error('oversized-encrypted-payload')
