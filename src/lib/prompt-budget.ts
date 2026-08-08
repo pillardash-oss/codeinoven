@@ -110,3 +110,80 @@ export function budgetTurnLayers(
     totalTokens: fixed + hiddenTokens + recapTokens
   }
 }
+
+/** Production input for a single turn's final composition. */
+export interface ProductionSendCompositionInput {
+  /** One aggregate selected-model input budget (headroom already reserved). */
+  availableInputTokens: number
+  /** The user message text. */
+  userText: string
+  /** Final system/behavior/tool prompt WITHOUT the history recap. */
+  systemPrompt: string
+  /** Hidden orchestration context (raw, before capping). */
+  hiddenText: string
+  /** History recap (raw; capped to the remaining headroom). */
+  recapText: string
+  /** Extra conservative reserve for the final system layer. */
+  systemReserveTokens?: number
+}
+
+export interface ProductionSendComposition {
+  /** The exact text sent to the harness: capped hidden + user message. */
+  driverText: string
+  /** Hidden context after the aggregate capping. */
+  hiddenText: string
+  /** History recap after the aggregate capping. */
+  recapText: string
+  /** Total estimated input across all layers after capping. */
+  totalTokens: number
+}
+
+/**
+ * The single production budget/composition function ChatEngine uses for a turn:
+ * it enforces ONE aggregate selected-model input budget over user text + the
+ * final system/behavior/tool prompt + hidden orchestration context + history
+ * recap (output/tool headroom reserved once by the caller), recomposes the sent
+ * driverText from the precise hidden allowance, and DETERMINISTICALLY REJECTS
+ * when the fixed user + system layers alone exceed the budget — it never
+ * silently relies on harness truncation.
+ */
+export function composeBudgetedSend(
+  input: ProductionSendCompositionInput
+): ProductionSendComposition {
+  // The driver text joins the hidden context and the user message with a small
+  // "User message:" wrapper, so reserve a few tokens for it in the aggregate.
+  const wrapperTokens = input.hiddenText ? 4 : 0
+  const fixedTokens =
+    estimateTextTokens(input.userText) + wrapperTokens + estimateTextTokens(input.systemPrompt)
+  if (fixedTokens > input.availableInputTokens) {
+    throw new Error(
+      `The selected model input budget (${input.availableInputTokens} tokens) is too small ` +
+        'for this user message plus the system/behavior/tool prompt'
+    )
+  }
+  const layers = budgetTurnLayers(
+    {
+      userTokens: estimateTextTokens(input.userText) + wrapperTokens,
+      systemTokens: estimateTextTokens(input.systemPrompt) + (input.systemReserveTokens ?? 0),
+      hiddenTokens: estimateTextTokens(input.hiddenText),
+      recapTokens: estimateTextTokens(input.recapText)
+    },
+    input.availableInputTokens
+  )
+  const hiddenText = truncateToTokenBudget(input.hiddenText, layers.hiddenTokens)
+  const recapText = truncateToTokenBudget(input.recapText, layers.recapTokens)
+  const driverText = hiddenText
+    ? `${hiddenText}\n\nUser message:\n${input.userText}`
+    : input.userText
+  return {
+    driverText,
+    hiddenText,
+    recapText,
+    totalTokens:
+      estimateTextTokens(input.systemPrompt) +
+      estimateTextTokens(input.userText) +
+      estimateTextTokens(hiddenText) +
+      estimateTextTokens(recapText) +
+      wrapperTokens
+  }
+}

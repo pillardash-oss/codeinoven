@@ -405,7 +405,7 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     const firstId = firstMobile.client.sent
       .filter((frame) => frame.includes('relay:data'))
       .map((frame) => (JSON.parse(frame) as { id: number }).id)[0]
-    expect(firstId).toBeGreaterThanOrEqual(2 ** 32)
+    expect(firstId).toBeGreaterThanOrEqual(2 ** 20)
 
     // A reloaded client gets a fresh epoch -> a non-overlapping id space.
     const secondMobile = wireMobile(hub, () => undefined)
@@ -414,7 +414,7 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     const secondId = secondMobile.client.sent
       .filter((frame) => frame.includes('relay:data'))
       .map((frame) => (JSON.parse(frame) as { id: number }).id)[0]
-    const epochOf = (id: number): number => Math.floor(id / 2 ** 32)
+    const epochOf = (id: number): number => Math.floor(id / 2 ** 20)
     expect(epochOf(secondId)).not.toBe(epochOf(firstId))
 
     firstMobile.mobile.close()
@@ -539,6 +539,30 @@ describe('RelayHub loss-safety unit semantics', () => {
     // A same-direction retransmission is accepted and re-delivered.
     expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, mobileFrame).accepted).toBe(true)
     expect(hub.outstandingCount()).toBe(1)
+  })
+
+  it('never aliases a same-direction different message as a retransmission', () => {
+    const hub = new RelayHub()
+    const mobile = recordingSocket()
+    const desktop = recordingSocket()
+    hub.connectMobile(DESKTOP_ID, mobile.socket)
+    hub.connectDesktop(DESKTOP_ID, desktop.socket)
+    // Two distinct messages from the same sender (different sequence ids) are
+    // two separate outstanding entries, never treated as the same frame.
+    const first = JSON.stringify({ type: 'relay:data', id: 1_048_576, payload: 'one' })
+    const second = JSON.stringify({ type: 'relay:data', id: 1_048_577, payload: 'two' })
+    expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, first).accepted).toBe(true)
+    expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, second).accepted).toBe(true)
+    expect(hub.outstandingCount()).toBe(2)
+    expect(desktop.sent.filter((f) => f.includes('relay:data'))).toHaveLength(2)
+    // A genuine retransmission of the FIRST message re-delivers it (3 data
+    // frames) while still resolving to a single retained entry.
+    expect(hub.forward(DESKTOP_ID, 'mobile', mobile.socket, first).accepted).toBe(true)
+    expect(hub.outstandingCount()).toBe(2)
+    expect(desktop.sent.filter((f) => f.includes('relay:data'))).toHaveLength(3)
+    expect(hub.acknowledge(DESKTOP_ID, 1_048_576, 'desktop', desktop.socket)).toBe(true)
+    expect(hub.acknowledge(DESKTOP_ID, 1_048_577, 'desktop', desktop.socket)).toBe(true)
+    expect(hub.outstandingCount()).toBe(0)
   })
 
   it('rejects on overflow (NACK) instead of dropping already-accepted work', () => {

@@ -115,6 +115,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   const queue: OutboundRecord[] = []
   const inFlight = new BoundedMap<OutboundRecord>(queueLimit)
   const seenInboundIds = new BoundedSet(queueLimit)
+  const inboundProcessing = new BoundedSet(queueLimit)
 
   function finish(result: 'open' | 'offline' | 'failed'): void {
     if (settled) return
@@ -226,23 +227,34 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       if (frame.type === 'relay:data' && frame.payload) {
         const dataFrame = parseRelayDataFrame(event.data)
         const wireId = dataFrame && !Number.isNaN(dataFrame.id) ? dataFrame.id : undefined
-        if (wireId !== undefined && seenInboundIds.has(wireId)) {
-          // Duplicate delivery of a successfully-decrypted frame: the receiver
-          // already accepted it, so acknowledge without re-decrypting.
-          sendAck(wireId)
-          return
+        if (wireId !== undefined) {
+          if (seenInboundIds.has(wireId)) {
+            // Duplicate delivery of a successfully-decrypted frame: the receiver
+            // already accepted it, so acknowledge without re-decrypting.
+            sendAck(wireId)
+            return
+          }
+          if (inboundProcessing.has(wireId)) {
+            // A concurrent duplicate of a frame being decrypted: ack without
+            // re-decrypting so exactly one dispatch happens.
+            sendAck(wireId)
+            return
+          }
+          inboundProcessing.add(wireId)
         }
         void decryptPayload(options.controlSecret, frame.payload)
           .then((data) => {
-            // Mark seen and acknowledge only after decryption succeeds, so a
-            // failed-decrypt frame is never suppressed and can be replayed.
+            // Mark seen and acknowledge only after decryption succeeds; remove
+            // the pending marker so a failed-decrypt frame can be replayed.
             if (wireId !== undefined) {
               seenInboundIds.add(wireId)
               sendAck(wireId)
+              inboundProcessing.delete(wireId)
             }
             options.onEvent({ kind: 'message', data })
           })
           .catch(() => {
+            if (wireId !== undefined) inboundProcessing.delete(wireId)
             remoteLog.error('Cloud relay payload authentication failed')
             socket?.close()
           })

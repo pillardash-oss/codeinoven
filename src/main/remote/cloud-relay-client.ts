@@ -95,6 +95,7 @@ export class CloudRelayClient {
   private readonly replay: BoundedMap<RpcOutcome>
   private readonly processing = new Set<number>()
   private readonly seenInboundIds: BoundedSet
+  private readonly inboundProcessing: BoundedSet
   private readonly onAbort: () => void
   private readonly connectTimeoutMs: number
   private readonly authTimeoutMs: number
@@ -114,6 +115,7 @@ export class CloudRelayClient {
     this.inFlight = new BoundedMap<OutboundRecord>(this.queueLimit)
     this.replay = new BoundedMap<RpcOutcome>(this.replayLimit)
     this.seenInboundIds = new BoundedSet(this.replayLimit)
+    this.inboundProcessing = new BoundedSet(this.replayLimit)
     this.nextMessageId = createEpochMessageIdAllocator()
     this.socketFactory =
       options.socketFactory ?? ((target: string): WebSocket => new WebSocket(target))
@@ -319,23 +321,34 @@ export class CloudRelayClient {
     if (record['type'] === 'relay:data' && typeof record['payload'] === 'string') {
       const frame = parseRelayDataFrame(text)
       const wireId = frame && !Number.isNaN(frame.id) ? frame.id : undefined
-      if (wireId !== undefined && this.seenInboundIds.has(wireId)) {
-        // Duplicate delivery of a successfully-decrypted frame: the receiver
-        // already accepted it, so acknowledge without re-decrypting.
-        this.sendAck(wireId)
-        return
+      if (wireId !== undefined) {
+        if (this.seenInboundIds.has(wireId)) {
+          // Duplicate delivery of a successfully-decrypted frame: the receiver
+          // already accepted it, so acknowledge without re-decrypting.
+          this.sendAck(wireId)
+          return
+        }
+        if (this.inboundProcessing.has(wireId)) {
+          // A concurrent duplicate of a frame being decrypted/dispatched: ack
+          // without re-decrypting so exactly one decrypt/dispatch happens.
+          this.sendAck(wireId)
+          return
+        }
+        this.inboundProcessing.add(wireId)
       }
       void decryptPayload(this.options.controlSecret, record['payload'])
         .then((plaintext) => {
-          // Mark seen and acknowledge only after decryption succeeds, so a
-          // failed-decrypt frame is never suppressed and can be replayed.
+          // Mark seen and acknowledge only after decryption succeeds; remove the
+          // pending marker so a failed-decrypt frame can be replayed.
           if (wireId !== undefined) {
             this.seenInboundIds.add(wireId)
             this.sendAck(wireId)
+            this.inboundProcessing.delete(wireId)
           }
           this.handleEncryptedMessage(plaintext, wireId)
         })
         .catch(() => {
+          if (wireId !== undefined) this.inboundProcessing.delete(wireId)
           Logger.error('Remote cloud relay payload authentication failed')
           this.dropAndRetry('decrypt-failed')
         })

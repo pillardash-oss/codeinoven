@@ -115,6 +115,7 @@ import { INBOX_PROJECT_ID } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
 import {
   budgetTurnLayers,
+  composeBudgetedSend,
   computePromptBudget,
   estimateTextTokens,
   truncateToTokenBudget
@@ -3302,8 +3303,7 @@ export class ChatEngine {
       inputBudget
     )
     const budgetedHidden = truncateToTokenBudget(hiddenContext, earlyLayers.hiddenTokens)
-    const hiddenConsumedTokens = estimateTextTokens(budgetedHidden)
-    const driverText = budgetedHidden ? `${budgetedHidden}\n\nUser message:\n${text}` : text
+    let driverText = budgetedHidden ? `${budgetedHidden}\n\nUser message:\n${text}` : text
     if (
       specAction !== undefined &&
       specAction !== 'request' &&
@@ -3530,21 +3530,30 @@ export class ChatEngine {
           behaviorMode,
           historyRecap: ''
         })
-    const budgetedLayers = budgetTurnLayers(
-      {
-        userTokens: estimateTextTokens(text),
-        systemTokens: estimateTextTokens(systemBasePrompt) + SYSTEM_LAYER_RESERVE_TOKENS,
-        hiddenTokens: hiddenConsumedTokens,
-        recapTokens: MAX_RECAP_TOKENS
-      },
-      inputBudget
-    )
-    const historyRecap = await this.buildHistoryRecap(
-      projectId,
-      threadId,
-      driverId,
-      budgetedLayers.recapTokens
-    )
+    // The single production budget/composition decision: build the raw recap,
+    // then let composeBudgetedSend cap the hidden + recap layers against the one
+    // aggregate selected-model input budget and DETERMINISTICALLY REJECT when
+    // the fixed user + system layers exceed the budget (never harness
+    // truncation). Recompose the ACTUAL sent driverText from the precise hidden
+    // allowance and sync the persisted mirror so the transport text matches.
+    const rawRecap = await this.buildHistoryRecap(projectId, threadId, driverId)
+    const composition = composeBudgetedSend({
+      availableInputTokens: inputBudget,
+      userText: text,
+      systemPrompt: systemBasePrompt,
+      hiddenText: hiddenContext,
+      recapText: rawRecap,
+      systemReserveTokens: SYSTEM_LAYER_RESERVE_TOKENS
+    })
+    if (composition.driverText !== driverText) {
+      driverText = composition.driverText
+      const transportPart = userMessage.transportParts?.[0]
+      if (transportPart && transportPart.type === 'text') {
+        transportPart.text = driverText
+        await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+      }
+    }
+    const historyRecap = composition.recapText
     if (origin === 'user') {
       this.pendingMemoryDecisions.set(sessionId, { userMessage: text, settings })
     }
