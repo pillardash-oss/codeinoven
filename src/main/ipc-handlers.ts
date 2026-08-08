@@ -2581,6 +2581,21 @@ export function registerIpcHandlers(
     }
     return status
   })
+  ipcMain.handle('git:revert', async (_, projectId: unknown, target: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.revert(
+      await resolveProjectPath(safeProjectId),
+      validateEntityId(target, 'Revert target')
+    )
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
   ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
     gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )

@@ -14,6 +14,8 @@
     Archive,
     ArrowLeft,
     Check,
+    ChevronLeft,
+    ChevronRight,
     FileDiff,
     GitBranch,
     GitCommit,
@@ -29,7 +31,7 @@
     Trash2,
     Unplug
   } from '@lucide/svelte'
-  import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import { AlertDialog, ContextMenu, DropdownMenu } from 'bits-ui'
   import { onMount } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -37,6 +39,7 @@
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import BranchPicker from './BranchPicker.svelte'
+  import CommitActionsMenu from './CommitActionsMenu.svelte'
   import GitHubAccountMenu from './GitHubAccountMenu.svelte'
   import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
@@ -90,6 +93,7 @@
   let commitMessage = $state('')
   let selectedCommit = $state<GitCommitInfo | null>(null)
   let commitDiffChanges = $state<GitFileChange[]>([])
+  let revertTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
   let selectedPullRequest = $state<PullRequestSummary | null>(null)
   let githubConnected = $state(false)
@@ -330,6 +334,23 @@
     loadingCommitDiff = false
   }
 
+  const selectedCommitIndex = $derived.by(() => {
+    const current = selectedCommit
+    if (!current) return -1
+    return commitHistory.findIndex((commit) => commit.hash === current.hash)
+  })
+  const canGoNewer = $derived(selectedCommitIndex > 0)
+  const canGoOlder = $derived(
+    selectedCommitIndex >= 0 && selectedCommitIndex < commitHistory.length - 1
+  )
+
+  function navigateCommit(direction: -1 | 1): void {
+    const index = selectedCommitIndex
+    const next = index + direction
+    const commit = commitHistory[next]
+    if (commit) void selectCommit(commit)
+  }
+
   function clearSelectedCommit(): void {
     selectedCommit = null
     commitDiffChanges = []
@@ -415,6 +436,39 @@
   function requestReset(mode: GitResetMode, target: string): void {
     resetConfirm = { mode, target }
     acknowledgeActiveTurn = false
+  }
+
+  function requestRevert(commit: GitCommitInfo): void {
+    revertTarget = commit
+  }
+
+  async function confirmRevert(): Promise<void> {
+    const target = revertTarget
+    if (!target) return
+    revertTarget = null
+    await gitState.revert(projectId, target.hash)
+    if (!gitState.error) {
+      clearSelectedCommit()
+      commitHistory = []
+      void loadHistory()
+      void refreshStatus()
+    }
+  }
+
+  async function copyCommitHash(commit: GitCommitInfo): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(commit.hash)
+    } catch {
+      // Clipboard may be unavailable; nothing else to do.
+    }
+  }
+
+  async function copyCommitMessage(commit: GitCommitInfo): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(commit.message)
+    } catch {
+      // Clipboard may be unavailable; nothing else to do.
+    }
   }
 
   async function confirmReset(): Promise<void> {
@@ -1013,16 +1067,41 @@
           {@const commit = selectedCommit}
           <!-- Commit diff view -->
           <div class="sticky top-0 z-10 border-b border-border bg-app px-3 py-2">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-1.5">
               <button
                 type="button"
                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Back to working changes"
-                aria-label="Back to working changes"
-                onclick={clearSelectedCommit}
+                title="Back to history"
+                aria-label="Back to history"
+                onclick={() => {
+                  clearSelectedCommit()
+                  activeTab = 'history'
+                }}
               >
                 <ArrowLeft size={12} />
               </button>
+              <div class="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                  title="Newer commit"
+                  aria-label="Newer commit"
+                  disabled={!canGoNewer}
+                  onclick={() => navigateCommit(-1)}
+                >
+                  <ChevronLeft size={12} />
+                </button>
+                <button
+                  type="button"
+                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+                  title="Older commit"
+                  aria-label="Older commit"
+                  disabled={!canGoOlder}
+                  onclick={() => navigateCommit(1)}
+                >
+                  <ChevronRight size={12} />
+                </button>
+              </div>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-[11px] font-medium text-foreground">
                   {commit.message.split('\n')[0]}
@@ -1044,15 +1123,36 @@
                 >
                   Amend
                 </button>
-                <button
-                  type="button"
-                  class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:opacity-40"
-                  disabled={gitState.isBusy('reset') || gitState.isBusy('amend')}
-                  onclick={() => requestReset('soft', commit.hash)}
-                >
-                  Reset
-                </button>
               {/if}
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger
+                  class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  aria-label={`More actions for commit ${commit.shortHash}`}
+                  title={`More actions for commit ${commit.shortHash}`}
+                >
+                  <MoreHorizontal size={13} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                    side="bottom"
+                    align="end"
+                    sideOffset={4}
+                    collisionPadding={8}
+                  >
+                    <CommitActionsMenu
+                      isHead={isHeadCommit}
+                      resetBusy={gitState.isBusy('reset')}
+                      revertBusy={gitState.isBusy('revert')}
+                      onReset={(mode) => requestReset(mode, commit.hash)}
+                      onRevert={() => requestRevert(commit)}
+                      onAmend={startAmend}
+                      onCopyHash={() => void copyCommitHash(commit)}
+                      onCopyMessage={() => void copyCommitMessage(commit)}
+                    />
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           </div>
           <div class="p-2">
@@ -1331,28 +1431,61 @@
             </div>
           {:else}
             <div class="space-y-0.5">
-              {#each commitHistory as commit (commit.hash)}
-                <button
-                  type="button"
-                  class="group w-full rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
-                  onclick={() => void selectCommit(commit)}
-                >
-                  <div class="flex items-start gap-2">
-                    <div class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/40"></div>
-                    <div class="min-w-0 flex-1">
-                      <p class="truncate text-[11px] leading-snug text-foreground">
-                        {commit.message.split('\n')[0]}
-                      </p>
-                      <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
-                        <span class="font-mono">{commit.shortHash}</span>
-                        <span>·</span>
-                        <span>{commit.author}</span>
-                        <span>·</span>
-                        <span>{relativeTime(commit.date)}</span>
+              {#each commitHistory as commit, index (commit.hash)}
+                {@const isCurrentHead = index === 0}
+                <ContextMenu.Root>
+                  <ContextMenu.Trigger
+                    class="block w-full"
+                    aria-label={`Actions for commit ${commit.shortHash}`}
+                  >
+                    <button
+                      type="button"
+                      class={[
+                        'group w-full rounded-lg px-2 py-1.5 text-left transition-colors',
+                        selectedCommit?.hash === commit.hash
+                          ? 'bg-primary/10'
+                          : 'hover:bg-elevated/50'
+                      ]}
+                      onclick={() => void selectCommit(commit)}
+                    >
+                      <div class="flex items-start gap-2">
+                        <div class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/40"></div>
+                        <div class="min-w-0 flex-1">
+                          <p class="truncate text-[11px] leading-snug text-foreground">
+                            {commit.message.split('\n')[0]}
+                          </p>
+                          <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                            <span class="font-mono">{commit.shortHash}</span>
+                            <span>·</span>
+                            <span>{commit.author}</span>
+                            <span>·</span>
+                            <span>{relativeTime(commit.date)}</span>
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                </button>
+                    </button>
+                  </ContextMenu.Trigger>
+                  <ContextMenu.Portal>
+                    <ContextMenu.Content
+                      class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                      side="bottom"
+                      align="start"
+                      sideOffset={4}
+                      collisionPadding={8}
+                    >
+                      <CommitActionsMenu
+                        isHead={isCurrentHead}
+                        resetBusy={gitState.isBusy('reset')}
+                        revertBusy={gitState.isBusy('revert')}
+                        onReset={(mode) => requestReset(mode, commit.hash)}
+                        onRevert={() => requestRevert(commit)}
+                        onAmend={isCurrentHead ? startAmend : undefined}
+                        onCopyHash={() => void copyCommitHash(commit)}
+                        onCopyMessage={() => void copyCommitMessage(commit)}
+                      />
+                    </ContextMenu.Content>
+                  </ContextMenu.Portal>
+                </ContextMenu.Root>
               {/each}
             </div>
           {/if}
@@ -2002,6 +2135,45 @@
         </div>
       {/snippet}
     </Modal>
+  {/if}
+
+  {#if revertTarget}
+    {@const revertCommit = revertTarget}
+    <AlertDialog.Root open onOpenChange={() => (revertTarget = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Revert commit?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Create a new commit that undoes
+            <strong class="font-medium text-foreground">
+              “{revertCommit.message.split('\n')[0]}”
+            </strong>
+            ({revertCommit.shortHash}). The original commit stays in history.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('revert')}
+              onclick={() => void confirmRevert()}
+            >
+              {#if gitState.isBusy('revert')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Revert commit
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   {/if}
 </div>
 

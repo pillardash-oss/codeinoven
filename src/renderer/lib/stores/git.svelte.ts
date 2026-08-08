@@ -34,6 +34,7 @@ export type GitOperation =
   | 'commit'
   | 'amend'
   | 'reset'
+  | 'revert'
   | 'init'
   | 'checkout'
   | 'fetch'
@@ -734,6 +735,18 @@ export class GitState {
       this.error = errorMessage(reason, 'Reset failed')
     } finally {
       this.markBusy('reset', false)
+    }
+  }
+
+  async revert(projectId: string, target: string): Promise<void> {
+    this.markBusy('revert', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:revert', projectId, target)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Revert failed')
+    } finally {
+      this.markBusy('revert', false)
     }
   }
 
