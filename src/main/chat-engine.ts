@@ -18,7 +18,7 @@ import { ClineDriver } from './drivers/cline-driver'
 import { AntigravityDriver } from './drivers/antigravity-driver'
 import { PiDriver } from './drivers/pi-driver'
 import { CheckpointManager } from './checkpoint-manager'
-import { listHarnesses } from './harness-registry'
+import { harnessLoadsAgentsMd, listHarnesses } from './harness-registry'
 import { CheckpointLimitError, type ProjectFingerprint } from './change-tracking-service'
 import {
   broadcastThreadUpdate,
@@ -2241,6 +2241,13 @@ export class ChatEngine {
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
 
+    // A harness switch orphans the old harness's session. Capture it before the
+    // binding below is reset so it can be released (best-effort) once the
+    // replacement session is created successfully.
+    const previousHarnessId = thread.settings?.harnessId
+    const switchedHarness = Boolean(previousHarnessId && previousHarnessId !== driverId)
+    const previousSessionId = switchedHarness ? thread.sessionId : undefined
+
     let sessionId =
       thread.settings?.harnessId && thread.settings.harnessId !== driverId
         ? undefined
@@ -2291,6 +2298,19 @@ export class ChatEngine {
           sessionId
         })
       }
+    }
+
+    // The switch succeeded (a replacement session is bound). Best-effort release
+    // the old harness's session so its native context, prompt cache, and storage
+    // are reclaimed instead of orphaned on disk.
+    if (switchedHarness && previousHarnessId && previousSessionId) {
+      await this.releaseOrphanedHarnessSession(
+        projectId,
+        threadId,
+        projectPath,
+        previousHarnessId,
+        previousSessionId
+      )
     }
 
     this.registerSession(
@@ -2368,6 +2388,50 @@ export class ChatEngine {
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
     this.clearPendingImageDescriptorDecisionsForSession(sessionId)
+  }
+
+  /**
+   * Best-effort delete a harness session that a thread abandoned when its
+   * harness was switched. Retires in-memory state first so the orphaned
+   * session never broadcasts again, then asks the previous driver to remove its
+   * native session so its context, prompt cache, and storage are reclaimed.
+   * Never throws: a failed cleanup must not block the already-successful switch.
+   */
+  private async releaseOrphanedHarnessSession(
+    projectId: string,
+    threadId: string,
+    projectPath: string,
+    previousHarnessId: string,
+    previousSessionId: string
+  ): Promise<void> {
+    this.retireSessionState(previousSessionId)
+    const previousDriver = this.drivers.get(previousHarnessId)
+    if (!previousDriver?.deleteSession) {
+      Logger.info('Orphaned harness session has no deletable native session', {
+        projectId,
+        threadId,
+        previousHarnessId,
+        previousSessionId
+      })
+      return
+    }
+    try {
+      await previousDriver.deleteSession(projectPath, previousSessionId)
+      Logger.info('Released orphaned harness session after harness switch', {
+        projectId,
+        threadId,
+        previousHarnessId,
+        previousSessionId
+      })
+    } catch (error) {
+      Logger.info('Failed to release orphaned harness session after harness switch', {
+        projectId,
+        threadId,
+        previousHarnessId,
+        previousSessionId,
+        detail: rawErrorMessage(error)
+      })
+    }
   }
 
   /** Load the conversation, preferring the live driver and falling back to the mirror. */
@@ -2653,14 +2717,16 @@ export class ChatEngine {
     mode: 'brainstorm' | 'implement' | 'chat'
   ): Promise<string> {
     try {
-      const driver = this.drivers.get(
+      const harnessId =
         (await this.threadManager.getThread(projectId, threadId))?.settings?.harnessId ?? 'opencode'
-      )
+      const driver = this.drivers.get(harnessId)
       return await this.promptAssembler.getAssembledPrompt(
         projectId,
         threadId,
         projectPath,
-        driver ?? null,
+        driver
+          ? { id: driver.id, name: driver.name, loadsAgentsMd: harnessLoadsAgentsMd(harnessId) }
+          : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT,

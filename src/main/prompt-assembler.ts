@@ -10,12 +10,25 @@ export interface BehaviorLayer {
   content: string
   editable: boolean
   defaultOpen: boolean
+  /**
+   * True for layers that exist only for transparency in the behavior-layer UI
+   * and must never be serialized into the assembled system prompt (e.g. the
+   * AGENTS.md placeholder when the harness already loads it natively).
+   */
+  skipInPrompt?: boolean
 }
 
 /** Minimal driver info needed for the behavior layer display. */
 export interface DriverInfo {
   id: string
   name: string
+  /**
+   * True when the harness CLI natively loads the project's AGENTS.md into the
+   * model context on its own. When true, the AGENTS.md layers are still listed
+   * for transparency but excluded from the assembled prompt so the stack-
+   * agnostic instruction file is not sent twice.
+   */
+  loadsAgentsMd: boolean
 }
 
 /**
@@ -72,12 +85,23 @@ export class PromptAssembler {
     })
 
     const projectBehavior = await readAgentsMd(projectPath)
-    layers.push({
-      title: 'AGENTS.md (Project)',
-      content: projectBehavior || 'No project AGENTS.md found.',
-      editable: true,
-      defaultOpen: true
-    })
+    const skipAgentsMd = driver?.loadsAgentsMd === true
+    if (skipAgentsMd) {
+      layers.push({
+        title: 'AGENTS.md (Project)',
+        content: `Loaded natively by ${driver.name}; not re-sent to avoid duplicate tokens.`,
+        editable: false,
+        defaultOpen: false,
+        skipInPrompt: true
+      })
+    } else {
+      layers.push({
+        title: 'AGENTS.md (Project)',
+        content: projectBehavior || 'No project AGENTS.md found.',
+        editable: true,
+        defaultOpen: true
+      })
+    }
 
     const nestedAgents = await scanNestedAgentsMd(projectPath)
     for (const nested of nestedAgents) {
@@ -85,8 +109,9 @@ export class PromptAssembler {
       layers.push({
         title: `AGENTS.md (${dirName})`,
         content: nested.content,
-        editable: true,
-        defaultOpen: true
+        editable: !skipAgentsMd,
+        defaultOpen: !skipAgentsMd,
+        ...(skipAgentsMd ? { skipInPrompt: true } : {})
       })
     }
 
@@ -138,6 +163,7 @@ export class PromptAssembler {
       mode
     )
     const parts = layers
+      .filter((layer) => layer.skipInPrompt !== true)
       .map((layer) => {
         const content = layer.content.trim()
         if (!content || (content.startsWith('No ') && content.endsWith(' configured.'))) return ''
