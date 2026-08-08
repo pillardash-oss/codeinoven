@@ -40,7 +40,12 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { hasProjectNameCollision } from '$lib/project-location'
-  import { INBOX_PROJECT_ID, type Project, type Thread } from '$shared/types'
+  import {
+    INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    type Project,
+    type Thread
+  } from '$shared/types'
 
   interface Props {
     onDisconnect?: () => void
@@ -134,14 +139,14 @@
         invoke('thread:listAll')
       ])
       projects = projectList as Project[]
-      allThreads = threadList as Thread[]
+      allThreads = (threadList as Thread[]).filter((t) => !isOrchestrationChildThread(t))
       notificationPanelState.hydrateFromThreads(allThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projects)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projects, projectIcons)
-      scopeState.setThreads(allThreads)
+      scopeState.setThreads(threadList as Thread[])
       // Seed every project's catalog so the composer's model picker is
       // populated before the first message.
       void providerCatalog.init([...projects.map((project) => project.id), INBOX_PROJECT_ID])

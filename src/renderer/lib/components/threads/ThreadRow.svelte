@@ -19,7 +19,11 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
+  import {
+    DEFAULT_SCOPE_BUCKET_ID,
+    isOrchestrationChildThread,
+    type ScopeBucket
+  } from '$shared/types'
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -276,6 +280,9 @@
   /** Threads with any unsent composer content read as "todo" (filled gray dot). */
   let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
 
+  /** Orchestration worker/auditor threads stay silent: never presented as unread. */
+  let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+
   /** Whether the harness is processing a turn for this thread right now. */
   let isBusy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
@@ -314,7 +321,7 @@
     if (thread.status === 'planning' || thread.status === 'executing') return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
-    if (!thread.read) return 'unread'
+    if (!effectiveRead) return 'unread'
     if (thread.status === 'completed') return 'completed'
     if (isBusy) return 'working'
     if (thread.status === 'created') return 'todo'

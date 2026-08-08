@@ -59,7 +59,12 @@
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
-  import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID, type ScopeBucket } from '$shared/types'
+  import {
+    DEFAULT_SCOPE_BUCKET_ID,
+    INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    type ScopeBucket
+  } from '$shared/types'
   import type { Component } from 'svelte'
 
   type View = MainView
@@ -171,6 +176,7 @@
     const allThreads: Thread[] = await invoke('thread:listAll')
     const projectThreads = allThreads
       .filter((t) => t.projectId === projectId && !t.archived)
+      .filter((t) => !isOrchestrationChildThread(t))
       .sort((a, b) => b.lastActivity - a.lastActivity)
 
     const activeThread = projectThreads[0] ?? null

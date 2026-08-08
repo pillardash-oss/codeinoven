@@ -4,7 +4,7 @@
   import type { Snippet } from 'svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
-  import type { Thread } from '$shared/types'
+  import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
   interface Props {
     threads: readonly Thread[]
@@ -46,7 +46,7 @@
   let filteredThreads = $derived.by(() => {
     const normalized = query.trim().toLowerCase()
     return threads
-      .filter((thread) => !thread.archived)
+      .filter((thread) => !thread.archived && !isOrchestrationChildThread(thread))
       .filter(
         (thread) =>
           !normalized ||

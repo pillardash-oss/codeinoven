@@ -85,7 +85,12 @@
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { timelinePins } from '$lib/stores/timeline-pins.svelte'
-  import { INBOX_PROJECT_ID, DEFAULT_THREAD_TITLE, DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
+  import {
+    INBOX_PROJECT_ID,
+    DEFAULT_THREAD_TITLE,
+    DEFAULT_SCOPE_BUCKET_ID,
+    isOrchestrationChildThread
+  } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
   import type {
     AgentPart,
@@ -440,7 +445,10 @@
         void invoke('threads:search', safeQuery, { projectId, limit: 50 })
           .then((results) => {
             if (projectSearchRequestIds.get(projectId) !== requestId) return
-            projectSearchResults.set(projectId, results)
+            projectSearchResults.set(
+              projectId,
+              results.filter((r) => !isOrchestrationChildThread(r.thread))
+            )
             projectSearching.delete(projectId)
           })
           .catch(() => {
@@ -890,7 +898,7 @@
         invoke('thread:listAll')
       ])
       projects = projectList
-      allThreads = threadList
+      allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
       notificationPanelState.hydrateFromThreads(threadList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -947,7 +955,7 @@
         invoke('thread:listAll')
       ])
       projects = projectList
-      allThreads = threadList
+      allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
       notificationPanelState.hydrateFromThreads(threadList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
