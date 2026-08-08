@@ -125,7 +125,7 @@ export class UpdaterService {
   }
 
   start(): void {
-    if (this.timer) return
+    if (this.timer || !this._status.canAutoUpdate) return
     void this.resumePendingInstall()
     void this.checkForUpdates()
     this.timer = setInterval(() => {
@@ -146,6 +146,7 @@ export class UpdaterService {
   }
 
   async checkForUpdates(): Promise<UpdaterStatus> {
+    if (!this._status.canAutoUpdate) return this.status
     try {
       await this.applyConfiguredChannel()
       autoUpdater.checkForUpdates().catch((error: unknown) => {

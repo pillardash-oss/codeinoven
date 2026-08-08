@@ -162,10 +162,15 @@ export class RemoteGateway {
     httpServer.on('upgrade', (request, socket) => this.handleUpgrade(request, socket, 'local'))
     this.httpServer = httpServer
 
-    await Promise.all([
-      this.listen(httpsServer, this.options.port, '0.0.0.0'),
-      this.listen(httpServer, this.options.localPort, '127.0.0.1')
-    ])
+    try {
+      // Bind sequentially so a LAN-port failure never leaves the loopback
+      // listener alive, and clean up HTTPS if the loopback bind fails.
+      await this.listen(httpsServer, this.options.port, '0.0.0.0')
+      await this.listen(httpServer, this.options.localPort, '127.0.0.1')
+    } catch (error) {
+      await this.closeServers()
+      throw error
+    }
 
     const address = httpsServer.address()
     if (address && typeof address === 'object') this.port = address.port
@@ -190,12 +195,17 @@ export class RemoteGateway {
     this.peers.clear()
     this.livePeers.clear()
 
+    await this.closeServers()
+    Logger.info('Remote gateway stopped')
+  }
+
+  private async closeServers(): Promise<void> {
     const servers: Array<Server | HttpsServer | null> = [this.httpsServer, this.httpServer]
     this.httpsServer = null
     this.httpServer = null
     await Promise.all(
       servers
-        .filter((server): server is Server | HttpsServer => server !== null)
+        .filter((server): server is Server | HttpsServer => server !== null && server.listening)
         .map(
           (server) =>
             new Promise<void>((resolveStop) => {
@@ -204,7 +214,6 @@ export class RemoteGateway {
             })
         )
     )
-    Logger.info('Remote gateway stopped')
   }
 
   private listen(server: Server | HttpsServer, port: number, host: string): Promise<void> {
@@ -249,7 +258,7 @@ export class RemoteGateway {
     if (stamp === this.closureStamp) return
     this.allowedAssets = await computePwaAssetClosure(this.options.staticRoot)
     this.closureStamp = stamp
-    Logger.info(`PWA asset closure (${this.allowedAssets.size}):`, [...this.allowedAssets])
+    Logger.dev('PWA asset closure refreshed', { assetCount: this.allowedAssets.size })
   }
 
   private handleHttp(request: IncomingMessage, response: ServerResponse): void {
