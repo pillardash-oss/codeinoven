@@ -210,7 +210,10 @@ describe('createRelayClient', () => {
     const envelopes = relaySocket.sent
       .filter((frame) => frame.includes('remote:data'))
       .map((frame) => JSON.parse(frame) as { id: number; payload: string })
-    expect(envelopes.map((envelope) => envelope.id)).toEqual([1, 2])
+    const ids = envelopes.map((envelope) => envelope.id)
+    // Epoch-scoped ids: strictly increasing and unique across client restarts.
+    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 32)
+    expect(ids[1]).toBeGreaterThan(ids[0])
     await expect(decryptPayload('peer-secret', envelopes[0].payload)).resolves.toBe('one')
     await expect(decryptPayload('peer-secret', envelopes[1].payload)).resolves.toBe('two')
   })

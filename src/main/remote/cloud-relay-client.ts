@@ -3,7 +3,7 @@ import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/sessio
 import {
   BoundedMap,
   BoundedSet,
-  createMessageIdAllocator,
+  createEpochMessageIdAllocator,
   fullJitterDelay,
   parseRelayAckFrame,
   parseRelayDataFrame,
@@ -112,7 +112,7 @@ export class CloudRelayClient {
     this.inFlight = new BoundedMap<OutboundRecord>(this.queueLimit)
     this.replay = new BoundedMap<RpcOutcome>(this.replayLimit)
     this.seenInboundIds = new BoundedSet(this.replayLimit)
-    this.nextMessageId = createMessageIdAllocator(1)
+    this.nextMessageId = createEpochMessageIdAllocator()
     this.socketFactory =
       options.socketFactory ?? ((target: string): WebSocket => new WebSocket(target))
     this.onAbort = () => this.cancelConnection('cancelled')
@@ -312,7 +312,7 @@ export class CloudRelayClient {
         this.seenInboundIds.add(frame.id)
       }
       void decryptPayload(this.options.controlSecret, record['payload'])
-        .then((plaintext) => this.handleEncryptedMessage(plaintext))
+        .then((plaintext) => this.handleEncryptedMessage(plaintext, frame?.id))
         .catch(() => {
           Logger.error('Remote cloud relay payload authentication failed')
           this.dropAndRetry('decrypt-failed')
@@ -328,7 +328,7 @@ export class CloudRelayClient {
     }
   }
 
-  private handleEncryptedMessage(plaintext: string): void {
+  private handleEncryptedMessage(plaintext: string, wireId?: number): void {
     let record: Record<string, unknown>
     try {
       const parsed: unknown = JSON.parse(plaintext)
@@ -339,10 +339,13 @@ export class CloudRelayClient {
     }
     if (record['rpc'] !== 'invoke' || typeof record['id'] !== 'number') return
     const id = record['id']
+    // Deduplicate and replay by the sender's wire id (epoch-scoped), so a
+    // reloaded peer's fresh invokes are never mistaken for a retry.
+    const dedupKey = typeof wireId === 'number' && !Number.isNaN(wireId) ? wireId : id
     // Duplicate suppression: an invoke already being processed is ignored.
-    if (this.processing.has(id)) return
+    if (this.processing.has(dedupKey)) return
     // Idempotent result replay: an already answered invoke is replayed verbatim.
-    const replayed = this.replay.get(id)
+    const replayed = this.replay.get(dedupKey)
     if (replayed) {
       void this.send(
         replayed.ok
@@ -353,7 +356,7 @@ export class CloudRelayClient {
     }
     const channel = typeof record['channel'] === 'string' ? record['channel'] : ''
     const args = Array.isArray(record['args']) ? record['args'] : []
-    this.processing.add(id)
+    this.processing.add(dedupKey)
     void withTimeout(
       this.options
         .onRpc(channel, args)
@@ -362,7 +365,7 @@ export class CloudRelayClient {
       { ok: false, message: 'Relay RPC request timed out' }
     )
       .then((settled) => {
-        this.replay.set(id, settled)
+        this.replay.set(dedupKey, settled)
         return this.send(
           settled.ok
             ? { rpc: 'result', id, result: settled.result }
@@ -370,7 +373,7 @@ export class CloudRelayClient {
         )
       })
       .finally(() => {
-        this.processing.delete(id)
+        this.processing.delete(dedupKey)
       })
   }
 }

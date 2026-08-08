@@ -211,10 +211,15 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
     const socket = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 2 })
+    let ids: number[] = []
     await vi.waitFor(() => {
-      expect(dataFrameIds(socket)).toEqual([1, 2])
+      ids = dataFrameIds(socket)
+      expect(ids).toHaveLength(2)
     })
-    socket.receive(JSON.stringify({ type: 'relay:ack', id: 1 }))
+    // Epoch-scoped ids: strictly increasing and unique across client restarts.
+    expect(ids[0]).toBeGreaterThanOrEqual(2 ** 32)
+    expect(ids[1]).toBeGreaterThan(ids[0])
+    socket.receive(JSON.stringify({ type: 'relay:ack', id: ids[0] }))
     socket.fail()
     expect(socket.sent.filter((frame) => frame.includes('relay:data'))).toHaveLength(2)
   })
@@ -240,14 +245,17 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
     harness.client.connect()
     const first = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
+    let firstIds: number[] = []
     await vi.waitFor(() => {
-      expect(dataFrameIds(first)).toEqual([1])
+      firstIds = dataFrameIds(first)
+      expect(firstIds).toHaveLength(1)
     })
     first.fail()
     harness.client.connect()
     const second = openAuthenticated(harness, 1)
     await vi.waitFor(() => {
-      expect(dataFrameIds(second)).toEqual([1])
+      // The unacknowledged frame keeps its original epoch-scoped id.
+      expect(dataFrameIds(second)).toEqual(firstIds)
     })
   })
 })
@@ -280,8 +288,10 @@ describe('CloudRelayClient self-reconnect preserving the queue', () => {
     harness.client.connect()
     const first = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
+    let originalIds: number[] = []
     await vi.waitFor(() => {
-      expect(dataFrameIds(first)).toEqual([1])
+      originalIds = dataFrameIds(first)
+      expect(originalIds).toHaveLength(1)
     })
 
     first.fail()
@@ -291,7 +301,7 @@ describe('CloudRelayClient self-reconnect preserving the queue', () => {
     const second = openAuthenticated(harness, 1)
     // The unacknowledged frame is retransmitted on the same client with its id.
     await vi.waitFor(() => {
-      expect(dataFrameIds(second)).toEqual([1])
+      expect(dataFrameIds(second)).toEqual(originalIds)
     })
   })
 

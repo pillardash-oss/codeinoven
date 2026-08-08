@@ -36,6 +36,39 @@ export function createMessageIdAllocator(initial = 1): () => number {
   }
 }
 
+const EPOCH_BITS = 21
+const SEQUENCE_BITS = 32
+const EPOCH_MASK = 2 ** EPOCH_BITS - 1
+
+function randomEpoch(): number {
+  if (typeof crypto !== 'undefined' && 'getRandomValues' in crypto) {
+    const value = crypto.getRandomValues(new Uint32Array(1))[0]
+    return value % EPOCH_MASK
+  }
+  return Math.floor(Math.random() * EPOCH_MASK)
+}
+
+/**
+ * Message-id allocator whose ids stay unique across client restarts: each id is
+ * `epoch * 2^32 + seq`, with a fresh random epoch per client instance. A peer
+ * that reloads therefore never reuses wire ids the recipient has already seen,
+ * so the recipient's duplicate-suppression set cannot drop a reloaded peer's
+ * fresh frames.
+ */
+export function createEpochMessageIdAllocator(epoch: number = randomEpoch()): () => number {
+  const base = epoch * 2 ** SEQUENCE_BITS
+  let seq = 0
+  return () => {
+    seq += 1
+    return base + seq
+  }
+}
+
+/** Derive the sender epoch from an epoch-scoped wire id. */
+export function epochOfWireId(id: number): number {
+  return Math.floor(id / 2 ** SEQUENCE_BITS)
+}
+
 export function serializeRelayDataFrame(id: number, payload: string): string {
   return JSON.stringify({ type: 'relay:data', id, payload } satisfies RelayDataFrame)
 }

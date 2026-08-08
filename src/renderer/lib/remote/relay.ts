@@ -26,7 +26,7 @@ import {
   encryptPayload,
   generateNonce
 } from './session-security'
-import { BoundedSet, fullJitterDelay } from './relay-protocol'
+import { BoundedSet, createEpochMessageIdAllocator, fullJitterDelay } from './relay-protocol'
 
 export { fullJitterDelay } from './relay-protocol'
 
@@ -224,7 +224,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
   let handshakeTimer: number | null = null
   let reconnectTimer: number | null = null
   let reconnectAttempt = 0
-  let nextMessageId = 1
+  const nextMessageId = createEpochMessageIdAllocator()
   let resolve: (result: RelayConnectResult) => void = () => undefined
   const queue: Array<{ id: number; data: string; encrypted: string | null }> = []
   const inFlight = new Map<number, { id: number; data: string; encrypted: string | null }>()
@@ -457,8 +457,7 @@ export function createRelayClient(options: RelayClientOptions): RelayClient {
       return establishConnection()
     },
     async send(data: string): Promise<void> {
-      const record = { id: nextMessageId, data, encrypted: null }
-      nextMessageId += 1
+      const record = { id: nextMessageId(), data, encrypted: null }
       if (!open || !socket) {
         enqueue(record)
         return

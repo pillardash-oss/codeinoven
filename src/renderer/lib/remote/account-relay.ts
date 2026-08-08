@@ -15,7 +15,7 @@ import { remoteLog } from './logger'
 import {
   BoundedMap,
   BoundedSet,
-  createMessageIdAllocator,
+  createEpochMessageIdAllocator,
   fullJitterDelay,
   parseRelayAckFrame,
   parseRelayDataFrame,
@@ -100,7 +100,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   const handshakeTimeoutMs = options.handshakeTimeoutMs ?? 10_000
   const queueLimit = options.queueLimit ?? DEFAULT_QUEUE_LIMIT
   const reconnect = options.reconnect
-  const nextMessageId = createMessageIdAllocator(1)
+  const nextMessageId = createEpochMessageIdAllocator()
 
   let socket: WebSocket | null = null
   let open = false
