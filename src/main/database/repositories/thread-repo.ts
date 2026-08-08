@@ -196,6 +196,33 @@ export interface ThreadSearchOptions {
   limit?: number
 }
 
+/** Paging/visibility controls for thread listings. */
+export interface ThreadListOptions {
+  /** Maximum number of threads to return. */
+  limit?: number
+  /** Rows to skip before returning (offset paging). */
+  offset?: number
+  /** Exclude archived threads when false. Defaults to including them. */
+  includeArchived?: boolean
+}
+
+function buildListClauses(
+  filters: string[],
+  params: unknown[],
+  options: ThreadListOptions
+): { where: string; params: unknown[]; limit: string } {
+  const clauses = [...filters]
+  if (options.includeArchived === false) {
+    clauses.push('archived = 0')
+  }
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+  const limitClause =
+    options.limit !== undefined
+      ? ` LIMIT ${Math.max(0, Math.floor(options.limit))} OFFSET ${Math.max(0, Math.floor(options.offset ?? 0))}`
+      : ''
+  return { where, params, limit: limitClause }
+}
+
 interface MessageMatchRow {
   match_role: string
   snippet_text: string
@@ -324,11 +351,12 @@ export class ThreadRepo {
     return result
   }
 
-  listByProject(projectId: string): Thread[] {
+  listByProject(projectId: string, options: ThreadListOptions = {}): Thread[] {
+    const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
     const rows = this.db.all<ThreadRow>(
-      `SELECT * FROM threads WHERE project_id = ?
-       ORDER BY pinned DESC, sort_order ASC, last_activity DESC`,
-      projectId
+      `SELECT * FROM threads ${where}
+       ORDER BY pinned DESC, sort_order ASC, last_activity DESC${limit}`,
+      ...params
     )
     const threads = rows.map(rowToThread)
     const used = this.usedHarnessesFor(threads.map((t) => t.id))
@@ -338,9 +366,12 @@ export class ThreadRepo {
     return threads
   }
 
-  listAll(): Thread[] {
+  listAll(options: ThreadListOptions = {}): Thread[] {
+    const { where, params, limit } = buildListClauses([], [], options)
     const rows = this.db.all<ThreadRow>(
-      'SELECT * FROM threads ORDER BY pinned DESC, sort_order ASC, last_activity DESC'
+      `SELECT * FROM threads ${where}
+       ORDER BY pinned DESC, sort_order ASC, last_activity DESC${limit}`,
+      ...params
     )
     const threads = rows.map(rowToThread)
     const used = this.usedHarnessesFor(threads.map((t) => t.id))
