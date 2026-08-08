@@ -938,7 +938,14 @@
     const rect = range.getBoundingClientRect()
     const estimatedWidth = 430
     const x = Math.max(12, Math.min(rect.left, window.innerWidth - estimatedWidth - 12))
-    const y = rect.bottom + 52 < window.innerHeight ? rect.bottom + 8 : Math.max(12, rect.top - 48)
+    // Anchor the actions bubble above the selection so the native right-click
+    // menu (which appears at the cursor, usually below the selection) opens
+    // beneath it without colliding. Fall back below when there is no room above.
+    const estimatedHeight = 48
+    const y =
+      rect.top - estimatedHeight >= 12
+        ? rect.top - estimatedHeight
+        : Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - estimatedHeight - 8))
     responseSelection = { text, messageId, range, startOffset, endOffset, x, y }
   }
 
