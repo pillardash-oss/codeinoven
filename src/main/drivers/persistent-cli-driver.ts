@@ -18,6 +18,7 @@ import type { StorageEngine } from '../storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
   AgentEventCallback,
+  AgentProcessObserver,
   GenerateTitleOptions,
   HarnessCapabilities,
   HarnessDriver,
@@ -100,8 +101,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private turnProvenance = new Map<string, { providerId?: string; modelId?: string }>()
   private titleSessions = new Set<string>()
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
+  private processObserver: AgentProcessObserver | null = null
 
   constructor(protected readonly storage: StorageEngine) {}
+
+  setProcessObserver(observer: AgentProcessObserver): void {
+    this.processObserver = observer
+  }
 
   async ensureReady(projectPath: string): Promise<void> {
     await this.ensureCliReady(projectPath)
@@ -271,6 +277,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       env: invocationEnv,
       stdio: ['pipe', 'pipe', 'pipe']
     })
+    this.observeHarnessProcess(session.id, child, invocation.command, projectPath)
     this.structuredProcessIssues.delete(session.id)
     this.activeProcesses.set(session.id, child)
 
@@ -461,6 +468,15 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   /** Close a streaming-input turn after its final provider result arrives. */
   protected closeActiveInput(sessionId: string): void {
     this.activeProcesses.get(sessionId)?.stdin?.end()
+  }
+
+  protected observeHarnessProcess(
+    sessionId: string,
+    child: ChildProcess,
+    command: string,
+    cwd: string
+  ): void {
+    this.processObserver?.watchProcess(sessionId, child.pid, command, cwd)
   }
 
   protected setTurnProvenance(sessionId: string, providerId?: string, modelId?: string): void {

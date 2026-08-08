@@ -5,9 +5,11 @@
     FileText,
     Globe2,
     Image as ImageIcon,
+    Loader2,
     Pencil,
     Search,
     Server,
+    SquareTerminal,
     Trash2
   } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
@@ -18,17 +20,17 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { faviconState } from '$lib/stores/favicons.svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import type {
     AgentCapabilityEntry,
     AgentCapabilityOrigin,
-    AgentContextCapabilities
+    AgentContextCapabilities,
+    AgentRunningProcess
   } from '$shared/types'
   import UtilityEditorModal, {
     type UtilityEditorTarget
   } from '../settings/UtilityEditorModal.svelte'
   import Modal from '../ui/Modal.svelte'
-  import { Loader2 } from '@lucide/svelte'
 
   interface Props {
     sources: AgentSource[]
@@ -36,7 +38,7 @@
     threadId?: string
   }
 
-  type SourcesSection = 'sources' | 'mcps' | 'skills'
+  type SourcesSection = 'sources' | 'mcps' | 'skills' | 'processes'
   type OriginFilter = 'all' | AgentCapabilityOrigin
 
   let { sources, projectId, threadId }: Props = $props()
@@ -53,6 +55,11 @@
   let deleteTarget = $state<AgentCapabilityEntry | null>(null)
   let deleting = $state(false)
   let deleteError = $state('')
+  let processes = $state<AgentRunningProcess[]>([])
+  let processesLoading = $state(false)
+  let processesError = $state('')
+  let stoppingPids = $state(new Set<number>())
+  let stoppingAll = $state(false)
 
   $effect(() => {
     for (const source of sources) {
@@ -72,6 +79,10 @@
 
   onMount(() => {
     void loadCapabilities()
+    void loadProcesses()
+    return subscribe('agent:processesChanged', (changedProjectId, changedThreadId) => {
+      if (changedProjectId === projectId && changedThreadId === threadId) void loadProcesses()
+    })
   })
 
   onDestroy(() => imageUrls.destroy())
@@ -112,6 +123,62 @@
     } finally {
       capabilitiesLoading = false
     }
+  }
+
+  async function loadProcesses(): Promise<void> {
+    if (!projectId || !threadId) {
+      processes = []
+      return
+    }
+    processesLoading = true
+    processesError = ''
+    try {
+      processes = await invoke('agent:listProcesses', projectId, threadId)
+    } catch (loadError) {
+      processesError =
+        loadError instanceof Error ? loadError.message : 'Running processes could not be loaded.'
+    } finally {
+      processesLoading = false
+    }
+  }
+
+  async function stopProcess(pid: number): Promise<void> {
+    if (!projectId || !threadId || stoppingPids.has(pid)) return
+    stoppingPids.add(pid)
+    processesError = ''
+    try {
+      await invoke('agent:killProcess', projectId, threadId, pid)
+      await loadProcesses()
+    } catch (stopError) {
+      processesError =
+        stopError instanceof Error ? stopError.message : `Process ${pid} could not be stopped.`
+    } finally {
+      stoppingPids.delete(pid)
+    }
+  }
+
+  async function stopAllProcesses(): Promise<void> {
+    if (!projectId || !threadId || stoppingAll) return
+    stoppingAll = true
+    processesError = ''
+    try {
+      await invoke('agent:killThreadProcesses', projectId, threadId)
+      processes = []
+    } catch (stopError) {
+      processesError =
+        stopError instanceof Error ? stopError.message : 'Running processes could not be stopped.'
+    } finally {
+      stoppingAll = false
+    }
+  }
+
+  function processName(command: string): string {
+    const executable = command.trim().split(/\s+/u)[0] ?? command
+    return executable.split(/[\\/]/u).at(-1) || 'Process'
+  }
+
+  function processStartedAt(startedAt: number): string {
+    return new Date(startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   }
 
   function originLabel(entry: AgentCapabilityEntry): string {
@@ -195,8 +262,10 @@
             Attachments, researched websites, and generated images.
           {:else if section === 'mcps'}
             MCP servers available to this conversation.
-          {:else}
+          {:else if section === 'skills'}
             Reusable skills available to this conversation.
+          {:else}
+            Commands still running for this task.
           {/if}
         </p>
       </div>
@@ -205,8 +274,10 @@
           {sources.length}
         {:else if section === 'mcps'}
           {filteredMcps.length}
-        {:else}
+        {:else if section === 'skills'}
           {filteredSkills.length}
+        {:else}
+          {processes.length}
         {/if}
       </span>
     </div>
@@ -254,6 +325,19 @@
         onclick={() => (section = 'skills')}
       >
         Skills
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        'processes'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={section === 'processes'}
+        title="View commands still running for this task"
+        onclick={() => (section = 'processes')}
+      >
+        Processes
       </button>
     </div>
 
@@ -342,6 +426,23 @@
           </span>
         {/if}
       </div>
+    {/if}
+
+    {#if section === 'processes' && processes.length > 0}
+      <button
+        type="button"
+        class="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+        disabled={stoppingAll}
+        title="Stop all processes running for this task"
+        onclick={stopAllProcesses}
+      >
+        {#if stoppingAll}
+          <Loader2 size={13} class="animate-spin" />
+        {:else}
+          <SquareTerminal size={13} />
+        {/if}
+        Stop all
+      </button>
     {/if}
   </header>
 
@@ -562,7 +663,7 @@
           </div>
         {/each}
       {/if}
-    {:else}
+    {:else if section === 'skills'}
       {#if capabilitiesLoading}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <p class="text-xs text-dimmed">Loading skills…</p>
@@ -654,6 +755,81 @@
                   <Trash2 size={13} />
                 </button>
               </div>
+            </div>
+          </div>
+        {/each}
+      {/if}
+    {:else}
+      {#if processesLoading && processes.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="text-xs text-dimmed">Checking running processes…</p>
+        </div>
+      {:else if processesError && processes.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="max-w-64 text-xs leading-relaxed text-danger" role="alert">
+            {processesError}
+          </p>
+        </div>
+      {:else if processes.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <span
+              class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-raised text-dimmed"
+            >
+              <SquareTerminal size={18} />
+            </span>
+            <h2 class="mt-3 text-sm font-semibold text-foreground">No running processes</h2>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              Commands started by the agent will appear here while they are still running.
+            </p>
+          </div>
+        </div>
+      {:else}
+        {#if processesError}
+          <p class="border-b border-border px-4 py-2 text-xs text-danger" role="alert">
+            {processesError}
+          </p>
+        {/if}
+        {#each processes as runningProcess (runningProcess.pid)}
+          <div class="border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
+            <div class="flex items-start gap-3">
+              <span
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              >
+                <SquareTerminal size={15} />
+              </span>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <p class="truncate text-xs font-semibold text-foreground">
+                    {processName(runningProcess.command)}
+                  </p>
+                  <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                    Running
+                  </span>
+                </div>
+                <p
+                  class="mt-1 line-clamp-2 font-mono text-[10px] leading-relaxed text-dimmed"
+                  title={runningProcess.command}
+                >
+                  {runningProcess.command}
+                </p>
+                <p class="mt-1 text-[10px] text-dimmed tabular-nums">
+                  PID {runningProcess.pid} · Started {processStartedAt(runningProcess.startedAt)}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[11px] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                disabled={stoppingPids.has(runningProcess.pid)}
+                aria-label={`Stop ${processName(runningProcess.command)} process ${runningProcess.pid}`}
+                title={`Stop process ${runningProcess.pid}`}
+                onclick={() => stopProcess(runningProcess.pid)}
+              >
+                {#if stoppingPids.has(runningProcess.pid)}
+                  <Loader2 size={12} class="animate-spin" />
+                {/if}
+                Stop
+              </button>
             </div>
           </div>
         {/each}

@@ -1189,6 +1189,14 @@ export interface AgentToolState {
   time?: { start: number; end?: number }
 }
 
+/** A live operating-system process started beneath one task's agent harness. */
+export interface AgentRunningProcess {
+  pid: number
+  parentPid: number
+  command: string
+  startedAt: number
+}
+
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
 export interface AgentSubagentActivity {
   status: AgentToolStatus

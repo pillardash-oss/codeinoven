@@ -938,9 +938,9 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
-  const threadManager = new ThreadManager(database, broadcastThreadUpdate, (thread) => {
+  const threadManager = new ThreadManager(database, broadcastThreadUpdate, async (thread) => {
     if (chatEngine?.deleteThreadSession) {
-      void chatEngine.deleteThreadSession(thread.projectId, thread.id)
+      await chatEngine.deleteThreadSession(thread.projectId, thread.id)
     }
     dismissThreadNotifications(thread.projectId, thread.id)
   })

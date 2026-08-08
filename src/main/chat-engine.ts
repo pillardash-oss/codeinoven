@@ -41,6 +41,7 @@ import { UtilityRuntimeService } from './utility-runtime-service'
 import { UtilityRegistryService } from './utility-registry-service'
 import { CapabilityDiscoveryService } from './capability-discovery-service'
 import { BaseUrlProviderService } from './base-url-provider-service'
+import { AgentProcessService } from './agent-process-service'
 import {
   UtilityOrchestrationService,
   type UtilityTurnGateway
@@ -892,6 +893,7 @@ export class ChatEngine {
   private retryScheduler: RetrySchedulerService | null = null
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
+  private readonly agentProcesses = new AgentProcessService()
 
   /**
    * Tracks reasoning start timestamps per session per part id.
@@ -1030,6 +1032,7 @@ export class ChatEngine {
 
     // Wire each driver's event output to the broadcast + permission policy.
     for (const driver of this.drivers.values()) {
+      driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
     }
   }
@@ -1055,6 +1058,31 @@ export class ChatEngine {
     )
     ipcMain.handle('agent:listContextCapabilities', (_, projectId: string, threadId: string) =>
       this.listContextCapabilities(projectId, threadId)
+    )
+    ipcMain.handle('agent:listProcesses', (_, projectId: unknown, threadId: unknown) =>
+      this.agentProcesses.list(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID')
+      )
+    )
+    ipcMain.handle(
+      'agent:killProcess',
+      (_, projectId: unknown, threadId: unknown, pid: unknown) => {
+        if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0) {
+          throw new TypeError('Process ID must be a positive integer')
+        }
+        return this.agentProcesses.killProcess(
+          validateEntityId(projectId, 'Project ID'),
+          validateEntityId(threadId, 'Thread ID'),
+          pid
+        )
+      }
+    )
+    ipcMain.handle('agent:killThreadProcesses', (_, projectId: unknown, threadId: unknown) =>
+      this.agentProcesses.killThread(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID')
+      )
     )
     ipcMain.handle('capabilities:readSkill', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.readSkill(source)
@@ -1621,6 +1649,9 @@ export class ChatEngine {
       this.assignmentApiServer = null
       this.assignmentApiBaseUrl = ''
     }
+    // Kill agent-owned descendants before any slower session/runtime cleanup so
+    // the shutdown failsafe cannot leave a development server behind.
+    await this.agentProcesses.killAll()
     await Promise.allSettled(
       [...this.temporaryChats.keys()].map((temporaryChatId) =>
         this.closeTemporaryChat(temporaryChatId)
@@ -4626,6 +4657,7 @@ export class ChatEngine {
   async deleteThreadSession(projectId: string, threadId: string): Promise<void> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.agentProcesses.releaseThread(projectId, threadId)
 
     const tearDownSession = async (
       sessionId: string,
@@ -10382,6 +10414,7 @@ export class ChatEngine {
       pendingWindowScans: activeTurnId ? new Set() : existing?.pendingWindowScans,
       ephemeral: ephemeral ?? existing?.ephemeral
     })
+    this.agentProcesses.claimSession(sessionId, projectId, threadId)
     // A session re-registering means the project is in use again — make it
     // eligible for a future idle release.
     this.releasedProjects.delete(projectId)

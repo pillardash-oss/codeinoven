@@ -45,6 +45,13 @@ export function broadcastThreadUpdate(thread: Thread): void {
   void _notificationService?.notify(thread)
 }
 
+/** Notify renderers that one task's live process list changed. */
+export function broadcastAgentProcessesChanged(projectId: string, threadId: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('agent:processesChanged', projectId, threadId)
+  }
+}
+
 /**
  * Pipe a temporary chat (side chat) completion through the parent thread's
  * notification channel so the user learns their side chat is done even when
