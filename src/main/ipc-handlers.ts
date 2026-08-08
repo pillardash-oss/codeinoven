@@ -3125,7 +3125,10 @@ export function registerIpcHandlers(
   ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
     githubAuthService.pollAccessToken(validateBoundedString(deviceCode, 'Device code', 1, 256))
   )
-  ipcMain.handle('github:logout', () => githubAuthService.logout())
+  ipcMain.handle('github:logout', async () => {
+    await githubAuthService.logout()
+    return githubAuthService.status()
+  })
 
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)

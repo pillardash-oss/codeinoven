@@ -778,7 +778,10 @@ export class GitState {
 
   async logoutGitHub(): Promise<GitHubAuthStatus> {
     try {
-      return await invoke('github:logout')
+      const status = await invoke('github:logout')
+      // During a renderer hot reload, an older main process may still implement
+      // the historical void response. Refresh status instead of dereferencing it.
+      return status ?? (await this.githubAuthStatus())
     } catch (reason) {
       this.error = errorMessage(reason, 'GitHub sign-out failed')
       return { connected: false, configured: false }
