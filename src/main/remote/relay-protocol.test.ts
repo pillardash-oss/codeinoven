@@ -149,6 +149,11 @@ function wireDesktop(hub: RelayHub): {
   return { client, onRpc, bridge }
 }
 
+/** Structural cast so the test socket satisfies the client's WebSocket type. */
+function asWebSocket(client: DuplexSocket): WebSocket {
+  return client as unknown as WebSocket
+}
+
 function wireMobile(
   hub: RelayHub,
   onMessage: (data: string) => void
@@ -158,7 +163,7 @@ function wireMobile(
     desktopId: DESKTOP_ID,
     mobileDeviceId: 'mobile-1',
     controlSecret: SECRET,
-    socketFactory: () => client,
+    socketFactory: () => asWebSocket(client),
     onEvent: (event) => {
       if (event.kind === 'message') onMessage(event.data)
     }
@@ -184,10 +189,13 @@ function createDesktopClient(
     apiOrigin: 'https://relay.example.test',
     deviceToken: 'desktop-token',
     controlSecret: SECRET,
-    socketFactory: () => bridge.client,
+    socketFactory: () => asWebSocket(bridge.client),
     onAuthenticated: () => undefined,
     onDisconnected: () => undefined,
-    onRpc,
+    onRpc: onRpc as unknown as (
+      channel: string,
+      args: unknown[]
+    ) => Promise<{ ok: boolean; result?: unknown; message?: string }>,
     reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
   })
 }
@@ -420,6 +428,72 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
 
     firstMobile.mobile.close()
     secondMobile.mobile.close()
+  })
+
+  it('rebinds the retained sender on identical retransmission after a sender reconnect', async () => {
+    const hub = new RelayHub()
+
+    // Mobile with a socket factory that hands out a NEW socket + hub bridge per
+    // connection so the self-reconnect observes a different sender socket.
+    const mobileWires: Array<{ client: DuplexSocket; bridge: HubBridge }> = []
+    const mobile = createAccountRelayClient({
+      desktopId: DESKTOP_ID,
+      mobileDeviceId: 'mobile-1',
+      controlSecret: SECRET,
+      reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 },
+      socketFactory: () => {
+        const client = new DuplexSocket()
+        const bridge = new HubBridge(hub, DESKTOP_ID, 'mobile', client)
+        mobileWires.push({ client, bridge })
+        return asWebSocket(client)
+      },
+      onEvent: () => undefined
+    })
+    void mobile.connect()
+    authenticateMobile(mobileWires[0].client)
+
+    // Desktop (receiver) is OFFLINE. Mobile sends an invoke; the hub retains it
+    // with the FIRST sender socket (no receiver ACK yet).
+    await sendMobileData(mobile, { rpc: 'invoke', id: 7, channel: 'chat', args: [] })
+    await vi.waitFor(() => expect(hub.outstandingCount()).toBe(1))
+    expect(mobileWires[0].client.received.filter((f) => f.includes('relay:ack'))).toHaveLength(0)
+
+    // The sender disconnects (socket + hub-visible), then reconnects with a new
+    // socket; the client's queue flush retransmits the identical retained frame,
+    // which the hub accepts and REBINDS to the new authenticated sender.
+    mobileWires[0].bridge.disconnect()
+    mobileWires[0].client.drop('offline')
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    authenticateMobile(mobileWires[1].client)
+    await vi.waitFor(() => {
+      expect(mobileWires[1].client.sent.some((f) => f.includes('relay:data'))).toBe(true)
+      expect(hub.outstandingCount()).toBe(1)
+    })
+
+    // The receiver now connects; the hub replays the buffered frame, the
+    // desktop processes it and ACKs, and the ACK reaches the NEW sender socket.
+    const desktopWire = wireDesktop(hub)
+    const desktop = createDesktopClient(hub, desktopWire.bridge, desktopWire.onRpc)
+    desktop.connect()
+    desktopWire.client.open()
+    await vi.waitFor(() => expect(desktopWire.client.sent.length).toBe(1))
+    desktopWire.client.deliver(
+      JSON.stringify({ type: 'relay:authenticated', desktopId: DESKTOP_ID })
+    )
+    desktopWire.bridge.deliverReplay()
+    await vi.waitFor(() => {
+      expect(desktopWire.onRpc).toHaveBeenCalledTimes(1)
+      expect(hub.outstandingCount()).toBe(0)
+    })
+    // The new sender received exactly one receiver-generated ACK; the stale
+    // socket received none.
+    const newAcks = mobileWires[1].client.received.filter((f) => f.includes('relay:ack'))
+    expect(newAcks).toHaveLength(1)
+    const staleAcks = mobileWires[0].client.received.filter((f) => f.includes('relay:ack'))
+    expect(staleAcks).toHaveLength(0)
+
+    mobile.close()
+    desktop.close()
   })
 })
 
