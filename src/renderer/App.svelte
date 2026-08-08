@@ -1,13 +1,6 @@
 <script lang="ts">
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
-  import ScopeView from '$lib/components/scope/ScopeView.svelte'
-  import SettingsView from '$lib/components/settings/SettingsView.svelte'
-  import NotificationPanel from '$lib/components/notifications/NotificationPanel.svelte'
-  import PipOverlay from '$lib/components/pip/PipOverlay.svelte'
-  import HarnessRunModal from '$lib/components/providers/HarnessRunModal.svelte'
-  import CloseConfirmationModal from '$lib/components/layout/CloseConfirmationModal.svelte'
-  import { CommandPalette } from '$lib/components/actions'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import { toast } from 'svelte-sonner'
@@ -75,7 +68,8 @@
     autoInstallUpdates: true,
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
-    imageDescriptorAskAgain: false
+    imageDescriptorAskAgain: false,
+    autoRetryAfterReset: true
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -690,32 +684,43 @@
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
     try {
-      const [projectList, threadList] = await Promise.all([
-        invoke('project:list'),
-        invoke('thread:listAll')
-      ])
+      // 1. Projects first — the header and project list render immediately
+      //    without waiting for the (larger) thread payload.
+      const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
-      scopeState.setThreads(threadList)
-      notificationPanelState.hydrateFromThreads(threadList)
-      const projectIds = projectList.map((project) => project.id)
-      const hasScopeProject = scopeState.activeProjectId
-        ? [scopeState.activeProjectId]
-        : []
+
+      // 2. Threads — recent active (non-archived) only. Archived threads are
+      //    never eagerly loaded into renderer state; they page in on demand
+      //    through the workspace/scope views that request them.
+      const threadList = await invoke('thread:listAll')
+      const activeThreads = threadList.filter((thread) => !thread.archived)
+      scopeState.setThreads(activeThreads)
+      notificationPanelState.hydrateFromThreads(activeThreads)
+
+      // 3. The selected project's scope board is the visible surface — load it
+      //    before warming any provider data.
       if (scopeState.activeProjectId) {
         scopeState.ensureBoardLoaded(scopeState.activeProjectId)
       }
+
+      // 4. Warm only the selected project's provider catalog (plus inbox for
+      //    chats). Other projects hydrate lazily when their model picker opens,
+      //    so startup never probes every harness across every project.
       window.requestAnimationFrame(() => {
+        const targets = scopeState.activeProjectId
+          ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+          : [INBOX_PROJECT_ID]
         // Seed model pickers from local snapshots without triggering harness probes.
         // Live discovery is deferred until the model picker opens or the user
         // explicitly refreshes, so startup can focus on first paint.
-        void providerCatalog.init([...projectIds, INBOX_PROJECT_ID], { refresh: false })
+        void providerCatalog.init(targets, { refresh: false })
         // Canonical-ordered harness list (registry order) — the model picker's
         // harness filter sorts against this so its chip order never depends on
         // catalog insertion order.
         void providerStore.init()
-        if (hasScopeProject.length > 0) {
-          void providerCatalog.refresh(hasScopeProject[0], true)
+        if (scopeState.activeProjectId) {
+          void providerCatalog.refresh(scopeState.activeProjectId, true)
         }
       })
     } catch {
@@ -1005,7 +1010,11 @@
 
   void loadConfig()
   window.setTimeout(() => {
-    void loadScopeData()
+    void loadScopeData().finally(() => {
+      // Signal the main process that the renderer finished its initial
+      // hydration so it can timestamp the final startup phases.
+      void invoke('app:rendererReady').catch(() => undefined)
+    })
   }, 0)
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
@@ -1045,20 +1054,24 @@
       />
     </div>
     {#if activeView === 'scope'}
-      <ScopeView {navigateToProjects} />
+      {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
+        <ScopeView {navigateToProjects} />
+      {/await}
     {:else if isSettingsView(activeView)}
       <!-- Each settings section is its own dedicated page. -->
       {#key activeView}
-        <SettingsView
-          {config}
-          {settingsReady}
-          error={settingsError}
-          {setPreference}
-          {updateConfig}
-          section={settingsSectionForView(activeView) ?? 'general'}
-          onNavigateSection={(section) => navigate(settingsViewForSection(section))}
-          onBack={() => navigate(lastViewBeforeSettings)}
-        />
+        {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
+          <SettingsView
+            {config}
+            {settingsReady}
+            error={settingsError}
+            {setPreference}
+            {updateConfig}
+            section={settingsSectionForView(activeView) ?? 'general'}
+            onNavigateSection={(section) => navigate(settingsViewForSection(section))}
+            onBack={() => navigate(lastViewBeforeSettings)}
+          />
+        {/await}
       {/key}
     {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
       <div class="flex h-full items-center justify-center">
@@ -1066,50 +1079,62 @@
       </div>
     {/if}
   </main>
-  <CommandPalette
-    open={commandPaletteOpen}
-    actions={paletteActions}
-    title="Search actions"
-    placeholder="Search models, modes, skills, MCP, and commands…"
-    emptyLabel="No matching actions"
-    onSelect={handlePaletteSelection}
-    onClose={() => (commandPaletteOpen = false)}
-    onRestoreFocus={restorePaletteFocus}
-    shortcutLabel="Ctrl K"
-  />
-  <CommandPalette
-    open={fileSearchPaletteOpen}
-    actions={fileSearchActions}
-    title="Search files across projects"
-    placeholder="Type at least two characters…"
-    emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
-    onQueryChange={handleFileSearchQuery}
-    onSelect={handleFileSearchSelection}
-    onClose={() => {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
-    }}
-  />
+  {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
+    <CommandPalette
+      open={commandPaletteOpen}
+      actions={paletteActions}
+      title="Search actions"
+      placeholder="Search models, modes, skills, MCP, and commands…"
+      emptyLabel="No matching actions"
+      onSelect={handlePaletteSelection}
+      onClose={() => (commandPaletteOpen = false)}
+      onRestoreFocus={restorePaletteFocus}
+      shortcutLabel="Ctrl K"
+    />
+  {/await}
+  {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
+    <FileSearchPalette
+      open={fileSearchPaletteOpen}
+      actions={fileSearchActions}
+      title="Search files across projects"
+      placeholder="Type at least two characters…"
+      emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+      onQueryChange={handleFileSearchQuery}
+      onSelect={handleFileSearchSelection}
+      onClose={() => {
+        fileSearchPaletteOpen = false
+        resetFileSearch()
+      }}
+    />
+  {/await}
   <Toaster />
   <TooltipHost />
-  <PipOverlay />
+  {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
+    <PipOverlay />
+  {/await}
 
-  <CloseConfirmationModal
-    payload={closeConfirmation}
-    onDismiss={() => (closeConfirmation = null)}
-    onConfirm={confirmForceClose}
-  />
+  {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
+    <CloseConfirmationModal
+      payload={closeConfirmation}
+      onDismiss={() => (closeConfirmation = null)}
+      onConfirm={confirmForceClose}
+    />
+  {/await}
 
   {#if harnessLifecycleStore.runs.length}
     <!-- Floats above every view — survives navigation while tasks keep running. -->
-    <HarnessRunModal />
+    {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
+      <HarnessRunModal />
+    {/await}
   {/if}
 
   {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
     >
-      <NotificationPanel />
+      {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+        <NotificationPanel />
+      {/await}
     </div>
   {/if}
 </div>
