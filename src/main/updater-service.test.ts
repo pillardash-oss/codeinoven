@@ -151,6 +151,7 @@ describe('UpdaterService session-safe install', () => {
       active.value = 0
       await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
       expect(autoUpdater.quitAndInstall, `state=${state}`).toHaveBeenCalledTimes(1)
+      expect(service.status.state, `state=${state}`).toBe('idle')
     }
   })
 
@@ -158,7 +159,8 @@ describe('UpdaterService session-safe install', () => {
     const storage = makeStorage()
     const service = new UpdaterService(storage)
     service.setChatEngine(makeChatEngine(() => 0))
-    service.addActivitySource(makeChatEngine(() => 1))
+    const terminals = { value: 1 }
+    service.addActivitySource({ activeSessionCount: () => terminals.value })
 
     await emitDownloaded()
 
@@ -167,13 +169,20 @@ describe('UpdaterService session-safe install', () => {
 
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+
+    // Closing the terminal lets the deferred install proceed exactly once.
+    terminals.value = 0
+    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
   })
 
   it('treats a live remote session as active work', async () => {
     const storage = makeStorage()
     const service = new UpdaterService(storage)
     service.setChatEngine(makeChatEngine(() => 0))
-    service.addActivitySource(makeChatEngine(() => 1))
+    const remote = { blockedQuit: true }
+    service.addActivitySource({ activeSessionCount: () => (remote.blockedQuit ? 1 : 0) })
 
     await emitDownloaded()
 
@@ -182,6 +191,12 @@ describe('UpdaterService session-safe install', () => {
 
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000)
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+
+    // Unblocking the remote session lets the deferred install proceed.
+    remote.blockedQuit = false
+    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
   })
 
   it('idle-deferred installation executes exactly once', async () => {
@@ -199,6 +214,28 @@ describe('UpdaterService session-safe install', () => {
 
     await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS * 5)
     expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('defers again when a new session becomes active while waiting', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    const active = { value: 1 }
+    service.setChatEngine(makeChatEngine(() => active.value))
+
+    await emitDownloaded()
+    expect(service.status.state).toBe('waiting')
+
+    // A session reports idle, but another one starts before the poll fires.
+    active.value = 0
+    active.value = 1
+    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+    expect(service.status.state).toBe('waiting')
+
+    active.value = 0
+    await vi.advanceTimersByTimeAsync(DEFERRED_POLL_MS)
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
   })
 
   it('explicit approval installs immediately when idle', async () => {
