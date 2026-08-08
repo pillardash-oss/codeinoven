@@ -301,37 +301,20 @@
       </section>
     {/if}
 
-    <section class="border-b border-border py-3" aria-label="Worker threads">
-      <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-        Worker threads
-      </h3>
-      <div class="max-h-[clamp(10rem,22dvh,24rem)] overflow-y-auto px-2">
-        {#each threads as worker (worker.id)}
-          <ThreadRow
-            thread={worker}
-            compact
-            selected={worker.id === selectedThreadId}
-            showChangeScope={false}
-            onOpen={onOpenThread}
-          />
-        {:else}
-          <p class="px-2 py-3 text-xs leading-relaxed text-muted">
-            Workers appear here as the Sr. Engineer assigns approved tasks.
-          </p>
-        {/each}
-      </div>
-    </section>
-
     <section class="p-4" aria-label="Assignment tasks">
       <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
       <div class="space-y-1">
         {#each assignment.content.tasks as task (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
+          {@const active = task.threadId === selectedThreadId}
           <button
             type="button"
-            class="flex w-full items-start justify-between gap-2 rounded-md border-b border-border/70 px-1 py-1.5 text-left transition-colors hover:bg-elevated last:border-0"
+            class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
+              ? 'border-primary bg-elevated'
+              : 'border-transparent'}"
             title={taskTooltip(task, linkedWorker)}
             aria-label={taskTooltip(task, linkedWorker)}
+            aria-current={active ? 'true' : undefined}
             onclick={() => onOpenTask(task)}
           >
             <span class="min-w-0">
