@@ -147,6 +147,7 @@ export function renderRichMarkdown(
     while (index < lines.length) {
       const candidate = lines[index] ?? ''
       if (
+        /^```(\S*)/.test(candidate) ||
         /^(#{1,6})\s+/.test(candidate) ||
         /^\s*[-+*]\s+/.test(candidate) ||
         /^\s*\d+[.)]\s+/.test(candidate)
