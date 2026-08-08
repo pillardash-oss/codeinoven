@@ -23,6 +23,7 @@
     GitFork,
     GitMerge,
     GitPullRequest,
+    Rocket,
     History,
     Loader2,
     MoreHorizontal,
@@ -48,6 +49,7 @@
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
+  import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -61,7 +63,7 @@
   let { projectId, threadId }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
-  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'stashes'
+  type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
@@ -789,7 +791,8 @@
         },
         { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
         { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
+        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null },
+        { id: 'deployments', label: 'Deployments', icon: Rocket, count: null }
       ]
       // Stash is just shelved work — it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
@@ -1720,6 +1723,13 @@
             />
           {/if}
         </div>
+      {:else if activeTab === 'deployments'}
+        <GitDeploymentsMonitor
+          {projectId}
+          identity={githubIdentity}
+          {githubConnected}
+          onSignIn={() => (showGitHubSignIn = true)}
+        />
       {:else if activeTab === 'stashes'}
         <div class="p-2">
           {#if selectedStash}

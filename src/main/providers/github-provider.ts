@@ -1,5 +1,9 @@
 import type {
+  GitHubDeployment,
+  GitHubDeploymentOverview,
+  GitHubDeploymentStatus,
   GitRepositoryIdentity,
+  GitHubWorkflowRun,
   PrDraft,
   PullRequestComment,
   PullRequestCommit,
@@ -325,6 +329,40 @@ export class GitHubProvider implements GitProvider {
     return this.toFiles(record['files'])
   }
 
+  async getDeploymentOverview(input: {
+    owner: string
+    repo: string
+  }): Promise<GitHubDeploymentOverview> {
+    const [runsResponse, deploymentsResponse] = await Promise.all([
+      this.request(`${this.repoPath(input)}/actions/runs?per_page=20`, { method: 'GET' }),
+      this.request(`${this.repoPath(input)}/deployments?per_page=12`, { method: 'GET' })
+    ])
+    const runsRecord = Array.isArray(runsResponse) ? {} : runsResponse
+    const rawRuns = Array.isArray(runsRecord['workflow_runs']) ? runsRecord['workflow_runs'] : []
+    const workflowRuns = rawRuns.flatMap((run): GitHubWorkflowRun[] => {
+      const mapped = this.toWorkflowRun(run)
+      return mapped ? [mapped] : []
+    })
+    const rawDeployments = Array.isArray(deploymentsResponse) ? deploymentsResponse : []
+    const deployments = await Promise.all(
+      rawDeployments.flatMap((deployment): Array<Promise<GitHubDeployment>> => {
+        const mapped = this.toDeployment(deployment)
+        if (!mapped) return []
+        return [
+          this.request(`${this.repoPath(input)}/deployments/${mapped.id}/statuses?per_page=1`, {
+            method: 'GET'
+          })
+            .then((statuses) => ({
+              ...mapped,
+              latestStatus: this.toDeploymentStatus(Array.isArray(statuses) ? statuses[0] : null)
+            }))
+            .catch(() => mapped)
+        ]
+      })
+    )
+    return { workflowRuns, deployments, fetchedAt: Date.now() }
+  }
+
   resolveRepositoryIdentity(remoteUrl: string): GitRepositoryIdentity | null {
     const url = remoteUrl.trim()
     if (!url) return null
@@ -432,6 +470,65 @@ export class GitHubProvider implements GitProvider {
         }
       ]
     })
+  }
+
+  private toWorkflowRun(payload: unknown): GitHubWorkflowRun | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const actor = this.readRecord(record, 'actor')
+    const rawStatus = this.readString(record, 'status')
+    const status =
+      rawStatus === 'queued' || rawStatus === 'in_progress' || rawStatus === 'completed'
+        ? rawStatus
+        : 'unknown'
+    return {
+      id,
+      name: this.readString(record, 'name') ?? 'Workflow',
+      displayTitle: this.readString(record, 'display_title') ?? 'Workflow run',
+      runNumber: this.readNumber(record, 'run_number'),
+      event: this.readString(record, 'event') ?? '',
+      status,
+      conclusion: this.readString(record, 'conclusion'),
+      branch: this.readString(record, 'head_branch') ?? '',
+      headSha: this.readString(record, 'head_sha') ?? '',
+      url: this.readString(record, 'html_url') ?? '',
+      actorLogin: actor ? (this.readString(actor, 'login') ?? '') : '',
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at') ?? ''
+    }
+  }
+
+  private toDeployment(payload: unknown): GitHubDeployment | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    return {
+      id,
+      environment: this.readString(record, 'environment') ?? 'Deployment',
+      description: this.readString(record, 'description') ?? '',
+      ref: this.readString(record, 'ref') ?? '',
+      sha: this.readString(record, 'sha') ?? '',
+      createdAt: this.readString(record, 'created_at') ?? '',
+      updatedAt: this.readString(record, 'updated_at') ?? '',
+      latestStatus: null
+    }
+  }
+
+  private toDeploymentStatus(payload: unknown): GitHubDeploymentStatus | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const state = this.readString(record, 'state')
+    if (!state) return null
+    return {
+      state,
+      description: this.readString(record, 'description') ?? '',
+      environmentUrl: this.readString(record, 'environment_url'),
+      logUrl: this.readString(record, 'log_url'),
+      createdAt: this.readString(record, 'created_at') ?? ''
+    }
   }
 
   private toCheckStatus(value: string | null): PullRequestCheck['status'] {

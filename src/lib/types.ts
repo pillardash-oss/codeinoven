@@ -2856,6 +2856,51 @@ export interface GitHubUser {
   avatarUrl: string | null
 }
 
+/** One recent GitHub Actions workflow run shown in deployment monitoring. */
+export interface GitHubWorkflowRun {
+  id: number
+  name: string
+  displayTitle: string
+  runNumber: number
+  event: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+  branch: string
+  headSha: string
+  url: string
+  actorLogin: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Latest status recorded for one GitHub deployment. */
+export interface GitHubDeploymentStatus {
+  state: string
+  description: string
+  environmentUrl: string | null
+  logUrl: string | null
+  createdAt: string
+}
+
+/** One recent GitHub deployment and its latest status. */
+export interface GitHubDeployment {
+  id: number
+  environment: string
+  description: string
+  ref: string
+  sha: string
+  createdAt: string
+  updatedAt: string
+  latestStatus: GitHubDeploymentStatus | null
+}
+
+/** Read-only GitHub Actions and Deployments snapshot for a repository. */
+export interface GitHubDeploymentOverview {
+  workflowRuns: GitHubWorkflowRun[]
+  deployments: GitHubDeployment[]
+  fetchedAt: number
+}
+
 /** One entry from `git stash list`, e.g. `stash@{0}`. */
 export interface GitStashEntry {
   /** Reflog selector, e.g. `stash@{0}`. */
