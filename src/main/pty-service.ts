@@ -301,4 +301,9 @@ export class PtyService {
       this.destroy(id)
     }
   }
+
+  /** Number of live terminal sessions — any of which a forced restart would kill. */
+  activeSessionCount(): number {
+    return this.sessions.size
+  }
 }

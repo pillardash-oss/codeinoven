@@ -839,6 +839,8 @@ export class ChatEngine {
     string,
     { brainstormId: string; version: number; note: string }
   >()
+  /** Sessions currently running an explicit context compaction. */
+  private activeCompactions = new Set<string>()
   private specRevisionTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Fresh sessions prepared for the approved-spec implementation handoff.
    * The renderer and send path both call ensureSession; retain the new id so
@@ -1655,6 +1657,7 @@ export class ChatEngine {
     this.activeBrainstormEntryOperations.clear()
     this.pendingSpecRevisions.clear()
     this.pendingBrainstormTurns.clear()
+    this.activeCompactions.clear()
     this.specRevisionTasks.clear()
     this.preparedImplementationSessions.clear()
     this.planningSessions.clear()
@@ -2405,6 +2408,7 @@ export class ChatEngine {
     this.clearPendingQuestionsForSession(sessionId)
     this.clearPendingPermissionsForSession(sessionId)
     this.clearPendingImageDescriptorDecisionsForSession(sessionId)
+    this.activeCompactions.delete(sessionId)
   }
 
   /**
@@ -2784,13 +2788,42 @@ export class ChatEngine {
     return this.sessionStatuses.get(thread.sessionId) ?? null
   }
 
-  /** Count sessions that are currently actively working (not idle/error/waiting). */
+  /**
+   * Count sessions and processes that are actively working or awaiting input —
+   * anything that would be interrupted by a forced restart: streaming turns,
+   * permission/question decisions, in-flight shell tools, child sessions,
+   * pending spec/brainstorm drafts, and in-progress compaction.
+   */
   activeSessionCount(): number {
-    let count = 0
-    for (const status of this.sessionStatuses.values()) {
-      if (status.state === 'working') count++
+    const active = new Set<string>()
+    const add = (id: string) => active.add(id)
+
+    for (const [sessionId, status] of this.sessionStatuses) {
+      if (status.state === 'working' || status.state === 'waiting') add(sessionId)
     }
-    return count
+    for (const pending of this.pendingPermissions.values()) {
+      add(pending.request.sessionId)
+    }
+    for (const pending of this.pendingQuestions.values()) {
+      add(pending.request.sessionId)
+    }
+    for (const pending of this.pendingImageDescriptorDecisions.values()) {
+      add(pending.sessionId)
+    }
+    for (const [sessionId, info] of this.sessionRegistry) {
+      if (info.activeTurnId || (info.openUnboundedTools && info.openUnboundedTools.size > 0)) {
+        add(sessionId)
+      }
+    }
+    for (const sessionId of this.childSessionOwners.keys()) add(sessionId)
+    for (const sessionId of this.completionWaiters.keys()) add(sessionId)
+    for (const sessionId of this.activeCompactions) add(sessionId)
+    for (const sessionId of this.activeBrainstormOperations) add(sessionId)
+    for (const sessionId of this.activeBrainstormSessions.keys()) add(sessionId)
+    for (const sessionId of this.pendingSpecRevisions.keys()) add(sessionId)
+    for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
+    for (const sessionId of this.activeLoopRuns) add(sessionId)
+    return active.size
   }
 
   /** Publish one canonical working state to session and task consumers. */
@@ -8511,7 +8544,12 @@ export class ChatEngine {
     if (!driver.capabilities?.compaction || !driver.compactSession) {
       throw new Error(`${driver.name} does not support manual compaction`)
     }
-    await driver.compactSession(projectPath, thread.sessionId, thread.settings)
+    this.activeCompactions.add(thread.sessionId)
+    try {
+      await driver.compactSession(projectPath, thread.sessionId, thread.settings)
+    } finally {
+      this.activeCompactions.delete(thread.sessionId)
+    }
   }
 
   // ─── Driver resolution ────────────────────────────────────────────────────
