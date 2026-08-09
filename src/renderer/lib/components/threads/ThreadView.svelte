@@ -17,6 +17,7 @@
   const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
+    AudioLines,
     Check,
     ChevronDown,
     Copy,
@@ -29,6 +30,7 @@
     MessageSquare,
     Pencil,
     Trash2,
+    Video,
     X,
     Zap
   } from '@lucide/svelte'
@@ -36,7 +38,7 @@
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
-  import ImagePreview from '../chats/ImagePreview.svelte'
+  import MediaPreview from '../chats/MediaPreview.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
@@ -63,7 +65,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { isImageMime, fileUrlToPath } from '$lib/mime'
+  import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
   import { fastVariantForModelId } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
@@ -856,7 +858,7 @@
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
   let showSpecStudio = $state(false)
-  let previewFile = $state<{ url: string; filename: string } | null>(null)
+  let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
 
   interface ResponseSelectionCandidate {
@@ -1594,12 +1596,16 @@
     if (sessionId) threadMessages.setSessionId(thread.projectId, thread.id, sessionId)
   })
 
-  // Convert file:// image URLs to blob: Object URLs for reliable display in
-  // the Electron renderer (file:// URLs are blocked on http:// origins).
+  // Convert file:// image/media URLs to blob: Object URLs for reliable display
+  // in the Electron renderer (file:// URLs are blocked on http:// origins).
   $effect(() => {
     for (const msg of messages) {
       for (const part of msg.parts) {
-        if (part.type === 'file' && isImageMime(part.mime) && part.url.startsWith('file://')) {
+        if (
+          part.type === 'file' &&
+          (isImageMime(part.mime) || isVideoMime(part.mime) || isAudioMime(part.mime)) &&
+          part.url.startsWith('file://')
+        ) {
           void imageUrls.load(part.url, part.mime)
         }
       }
@@ -5316,10 +5322,15 @@
 </script>
 
 {#if previewFile}
-  <ImagePreview
-    src={previewFile.url}
+  <MediaPreview
+    src={imageUrls.getUrl(previewFile.url)}
     filename={previewFile.filename}
+    mime={previewFile.mime}
     onClose={() => (previewFile = null)}
+    onLoadError={(el) => {
+      const target = previewFile
+      if (target) void imageUrls.bindMedia(target.url, target.mime, el)
+    }}
   />
 {/if}
 
@@ -5662,6 +5673,11 @@
                           {#each msg.parts as part (part.id)}
                             {#if part.type === 'file'}
                               {@const imageFile = isImageMime(part.mime)}
+                              {@const mediaKind = isVideoMime(part.mime)
+                                ? 'video'
+                                : isAudioMime(part.mime)
+                                  ? 'audio'
+                                  : null}
                               {#if imageFile}
                                 <FileCitationContextMenu
                                   projectId={thread.projectId}
@@ -5671,10 +5687,12 @@
                                     type="button"
                                     class="group relative overflow-hidden rounded-lg border border-border transition-shadow hover:shadow-md"
                                     title="Preview {part.filename ?? 'image'}"
+                                    aria-label="Preview {part.filename ?? 'image'}"
                                     onclick={() =>
                                       (previewFile = {
-                                        url: imageUrls.getUrl(part.url),
-                                        filename: part.filename ?? 'image'
+                                        url: part.url,
+                                        filename: part.filename ?? 'image',
+                                        mime: part.mime
                                       })}
                                   >
                                     <img
@@ -5697,6 +5715,33 @@
                                         Preview
                                       </span>
                                     </div>
+                                  </button>
+                                </FileCitationContextMenu>
+                              {:else if mediaKind}
+                                <FileCitationContextMenu
+                                  projectId={thread.projectId}
+                                  citation={citationForFilePart(part)}
+                                >
+                                  <button
+                                    type="button"
+                                    class="flex cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                                    title="Preview {part.filename ?? mediaKind}"
+                                    aria-label="Preview {part.filename ?? mediaKind}"
+                                    onclick={() =>
+                                      (previewFile = {
+                                        url: part.url,
+                                        filename: part.filename ?? mediaKind,
+                                        mime: part.mime
+                                      })}
+                                  >
+                                    {#if mediaKind === 'video'}
+                                      <Video size={11} class="shrink-0" />
+                                    {:else}
+                                      <AudioLines size={11} class="shrink-0" />
+                                    {/if}
+                                    <span class="max-w-32 truncate"
+                                      >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
+                                    >
                                   </button>
                                 </FileCitationContextMenu>
                               {:else}

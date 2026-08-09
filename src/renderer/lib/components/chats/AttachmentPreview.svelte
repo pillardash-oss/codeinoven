@@ -65,6 +65,17 @@
         alt={filename}
         class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
       />
+    {:else if kind === 'video' && src}
+      <video
+        {src}
+        controls
+        preload="metadata"
+        class="max-h-[75vh] max-w-[85vw] rounded-lg shadow-2xl"
+      >
+        <track kind="captions" />
+      </video>
+    {:else if kind === 'audio' && src}
+      <audio {src} controls preload="metadata" class="w-full max-w-xl"></audio>
     {:else if kind === 'pdf' && src}
       <iframe
         {src}

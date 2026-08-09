@@ -69,6 +69,23 @@ export class FileBlobUrlManager {
     }
   }
 
+  /**
+   * Same repair as {@link bindImage} but for `<video>`/`<audio>` elements
+   * mounted inside a preview modal that opened before the blob load finished.
+   */
+  async bindMedia(url: string, mime: string, el: HTMLMediaElement): Promise<void> {
+    if (!el) return
+    const resolved = this.urls[url]
+    if (el.currentSrc === resolved) return
+    try {
+      const objectUrl = resolved ?? (await this.#toObjectUrl(url, mime))
+      this.urls = { ...this.urls, [url]: objectUrl }
+      el.src = objectUrl
+    } catch {
+      // The original src stays in place; nothing else we can do.
+    }
+  }
+
   async #toObjectUrl(url: string, mime: string): Promise<string> {
     const path = fileUrlToPath(url)
     const data = await window.api.readFile(path)

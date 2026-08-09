@@ -2,6 +2,7 @@
   import { tick, onDestroy, onMount } from 'svelte'
   import {
     ArrowUp,
+    AudioLines,
     Clock,
     Plus,
     Paperclip,
@@ -24,6 +25,7 @@
     Zap,
     ShieldAlert,
     Eye,
+    Video,
     Check
   } from '@lucide/svelte'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
@@ -1603,6 +1605,10 @@
                       alt={file.filename ?? 'file'}
                       class="h-5 w-5 shrink-0 rounded object-cover"
                     />
+                  {:else if previewKind === 'video'}
+                    <Video size={11} class="shrink-0" />
+                  {:else if previewKind === 'audio'}
+                    <AudioLines size={11} class="shrink-0" />
                   {:else}
                     <FileText size={11} class="shrink-0" />
                   {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
   import {
+    AudioLines,
     Check,
     Clock3,
     Copy,
@@ -9,11 +10,12 @@
     Loader2,
     MessageSquare,
     RotateCcw,
+    Video,
     X,
     Zap
   } from '@lucide/svelte'
   import ChatComposer from './ChatComposer.svelte'
-  import ImagePreview from './ImagePreview.svelte'
+  import MediaPreview from './MediaPreview.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -23,7 +25,7 @@
   import { copyText } from '$lib/copy-text'
   import { messageId } from '$shared/id'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
-  import { isImageMime } from '$lib/mime'
+  import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
@@ -451,12 +453,16 @@
       })
   })
 
-  // Convert file:// attachment URLs to blob: Object URLs so attached images
-  // render reliably in the Electron renderer.
+  // Convert file:// attachment URLs to blob: Object URLs so attached images and
+  // media render reliably in the Electron renderer.
   $effect(() => {
     for (const message of tab.messages) {
       for (const part of message.parts) {
-        if (part.type === 'file' && isImageMime(part.mime) && part.url.startsWith('file://')) {
+        if (
+          part.type === 'file' &&
+          (isImageMime(part.mime) || isVideoMime(part.mime) || isAudioMime(part.mime)) &&
+          part.url.startsWith('file://')
+        ) {
           void imageUrls.load(part.url, part.mime)
         }
       }
@@ -468,10 +474,15 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   {#if previewFile}
-    <ImagePreview
+    <MediaPreview
       src={imageUrls.getUrl(previewFile.url)}
-      filename={previewFile.filename ?? 'image'}
+      filename={previewFile.filename ?? 'file'}
+      mime={previewFile.mime}
       onClose={() => (previewFile = null)}
+      onLoadError={(el) => {
+        const target = previewFile
+        if (target) void imageUrls.bindMedia(target.url, target.mime, el)
+      }}
     />
   {/if}
   {#if tab.expired}
@@ -575,6 +586,23 @@
                         >
                           Preview
                         </span>
+                      </button>
+                    {:else if isVideoMime(part.mime) || isAudioMime(part.mime)}
+                      <button
+                        type="button"
+                        class="flex max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                        title="Preview {part.filename ?? 'media'}"
+                        aria-label="Preview {part.filename ?? 'media'}"
+                        onclick={() => (previewFile = part)}
+                      >
+                        {#if isVideoMime(part.mime)}
+                          <Video size={11} class="shrink-0" />
+                        {:else}
+                          <AudioLines size={11} class="shrink-0" />
+                        {/if}
+                        <span class="max-w-32 truncate"
+                          >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
+                        >
                       </button>
                     {:else}
                       <span

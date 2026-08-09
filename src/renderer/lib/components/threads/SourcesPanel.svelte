@@ -15,7 +15,7 @@
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { AgentSource, FileAgentSource, FileCitationAgentSource } from '$lib/agent-sources'
-  import ImagePreview from '../chats/ImagePreview.svelte'
+  import MediaPreview from '../chats/MediaPreview.svelte'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -880,9 +880,10 @@
 {/if}
 
 {#if previewSource}
-  <ImagePreview
+  <MediaPreview
     src={imageUrls.getUrl(previewSource.url)}
     filename={previewSource.title}
+    mime={previewSource.mime}
     onClose={() => (previewSource = null)}
   />
 {/if}
