@@ -110,18 +110,24 @@ export function isPlainTextMime(mime: string): boolean {
   return mime === 'text/plain'
 }
 
+const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|m4v|webm|mov|avi|mkv|mpeg|mpg|ogv)$/iu
+const AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|flac|aac|opus)$/iu
+
 /** The kind of inline preview a chat attachment supports, or `null` when the
  *  file type has no renderer (images render as `<img>`, pdf as an iframe via
- *  the Chromium PDF viewer, markdown via `MarkdownView`, plain text raw).
- *  Filename extensions provide a fallback for files whose reported mime is
- *  `application/octet-stream` or empty. */
-export type AttachmentPreviewKind = 'image' | 'pdf' | 'markdown' | 'text'
+ *  the Chromium PDF viewer, video/audio via the native media elements,
+ *  markdown via `MarkdownView`, plain text raw). Filename extensions provide a
+ *  fallback for files whose reported mime is `application/octet-stream` or
+ *  empty. */
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'markdown' | 'text'
 
 export function attachmentPreviewKind(
   mime: string,
   filename: string
 ): AttachmentPreviewKind | null {
   if (isImageMime(mime)) return 'image'
+  if (isVideoMime(mime) || VIDEO_EXTENSION_PATTERN.test(filename)) return 'video'
+  if (isAudioMime(mime) || AUDIO_EXTENSION_PATTERN.test(filename)) return 'audio'
   if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
   if (isMarkdownMime(mime) || /\.(?:md|mdown|markdown)$/iu.test(filename)) return 'markdown'
   if (isPlainTextMime(mime) || /\.(?:txt|text)$/iu.test(filename)) return 'text'
