@@ -7,7 +7,11 @@ describe('StartupTelemetry phase timestamps', () => {
     const telemetry = new StartupTelemetry({ now: () => now })
 
     telemetry.mark('process:entry')
-    expect(telemetry.recordedPhases[0]).toMatchObject({ phase: 'process:entry', atMs: 0, deltaMs: 0 })
+    expect(telemetry.recordedPhases[0]).toMatchObject({
+      phase: 'process:entry',
+      atMs: 0,
+      deltaMs: 0
+    })
 
     now += 500
     telemetry.mark('electron:ready')
@@ -53,8 +57,10 @@ describe('StartupTelemetry phase timestamps', () => {
       'storage:ready',
       'database:ready',
       'window:created',
-      'window:firstPaint',
+      'renderer:documentLoaded',
+      'window:visualReady',
       'renderer:hydrated',
+      'features:ready',
       'workspace:ready',
       'provider:warmup'
     ] as const) {
@@ -63,14 +69,14 @@ describe('StartupTelemetry phase timestamps', () => {
     }
 
     const phases = telemetry.recordedPhases
-    expect(phases).toHaveLength(10)
+    expect(phases).toHaveLength(12)
     for (let index = 1; index < phases.length; index++) {
       expect(phases[index]!.atMs).toBeGreaterThan(phases[index - 1]!.atMs)
       expect(phases[index]!.deltaMs).toBeGreaterThan(0)
     }
     // atMs is relative to origin, never an absolute clock value.
     expect(phases[0]!.atMs).toBe(0)
-    expect(phases[phases.length - 1]!.atMs).toBe(900)
+    expect(phases[phases.length - 1]!.atMs).toBe(1100)
   })
 
   it('reset() clears recorded phases and the marked set', () => {

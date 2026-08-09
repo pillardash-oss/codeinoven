@@ -7,7 +7,7 @@ import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { PACKAGED_SMOKE_OUTPUT_ENV } from '../src/main/packaged-smoke'
-import type { StartupTelemetrySnapshot } from '../src/main/startup-telemetry'
+import type { StartupPhase, StartupTelemetrySnapshot } from '../src/main/startup-telemetry'
 
 interface SmokeOptions {
   appDir: string
@@ -23,7 +23,11 @@ interface SmokeProof {
 }
 
 interface IterationResult {
+  documentLoadedMs: number
+  featuresReadyMs: number
   iteration: number
+  proofReadyMs: number
+  visualReadyMs: number
   workspaceReadyMs: number
   startup: StartupTelemetrySnapshot
 }
@@ -90,6 +94,14 @@ async function executableFor(options: SmokeOptions): Promise<string> {
 function boundedAppend(current: string, chunk: Buffer): string {
   const next = current + chunk.toString('utf8')
   return next.length > 64_000 ? next.slice(-64_000) : next
+}
+
+function phaseTime(proof: SmokeProof, phase: StartupPhase, iteration: number): number {
+  const record = proof.startup.phases.find((candidate) => candidate.phase === phase)
+  if (!record || !Number.isFinite(record.atMs)) {
+    fail(`iteration ${iteration} never reached ${phase}`)
+  }
+  return record.atMs
 }
 
 async function runIteration(
@@ -165,11 +177,32 @@ async function runIteration(
     if (proof.schemaVersion !== 1 || !Array.isArray(proof.startup?.phases)) {
       fail(`iteration ${iteration} produced an invalid startup proof`)
     }
-    const ready = proof.startup.phases.find((phase) => phase.phase === 'workspace:ready')
-    if (!ready || !Number.isFinite(ready.atMs)) {
-      fail(`iteration ${iteration} never reached workspace:ready`)
+    const requiredPhases = new Set([
+      'renderer:documentLoaded',
+      'window:visualReady',
+      'renderer:hydrated',
+      'features:ready',
+      'workspace:ready'
+    ])
+    for (const phase of proof.startup.phases) requiredPhases.delete(phase.phase)
+    if (requiredPhases.size > 0) {
+      fail(
+        `iteration ${iteration} did not prove required startup phases: ${[...requiredPhases].join(', ')}`
+      )
     }
-    return { iteration, workspaceReadyMs: ready.atMs, startup: proof.startup }
+    const documentLoadedMs = phaseTime(proof, 'renderer:documentLoaded', iteration)
+    const featuresReadyMs = phaseTime(proof, 'features:ready', iteration)
+    const visualReadyMs = phaseTime(proof, 'window:visualReady', iteration)
+    const workspaceReadyMs = phaseTime(proof, 'workspace:ready', iteration)
+    return {
+      iteration,
+      documentLoadedMs,
+      featuresReadyMs,
+      proofReadyMs: Math.max(documentLoadedMs, visualReadyMs, workspaceReadyMs),
+      visualReadyMs,
+      workspaceReadyMs,
+      startup: proof.startup
+    }
   } finally {
     await rm(runRoot, { recursive: true, force: true })
   }
@@ -178,6 +211,16 @@ async function runIteration(
 function percentile(sorted: number[], ratio: number): number {
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1))
   return sorted[index]
+}
+
+function summarize(values: number[]): { min: number; median: number; p95: number; max: number } {
+  const sorted = [...values].sort((a, b) => a - b)
+  return {
+    min: sorted[0]!,
+    median: percentile(sorted, 0.5),
+    p95: percentile(sorted, 0.95),
+    max: sorted[sorted.length - 1]!
+  }
 }
 
 async function writeOutput(output: string, value: unknown): Promise<void> {
@@ -194,23 +237,21 @@ async function main(): Promise<void> {
   for (let iteration = 1; iteration <= options.iterations; iteration += 1) {
     results.push(await runIteration(executable, options, iteration))
   }
-  const values = results.map((result) => result.workspaceReadyMs).sort((a, b) => a - b)
   const report = {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     target: options.target,
     executable: basename(executable),
     iterations: results.length,
-    workspaceReadyMs: {
-      min: values[0],
-      median: percentile(values, 0.5),
-      p95: percentile(values, 0.95),
-      max: values[values.length - 1]
-    },
+    visualReadyMs: summarize(results.map((result) => result.visualReadyMs)),
+    documentLoadedMs: summarize(results.map((result) => result.documentLoadedMs)),
+    featuresReadyMs: summarize(results.map((result) => result.featuresReadyMs)),
+    workspaceReadyMs: summarize(results.map((result) => result.workspaceReadyMs)),
+    proofReadyMs: summarize(results.map((result) => result.proofReadyMs)),
     results
   }
   if (options.output) await writeOutput(options.output, report)
-  process.stdout.write(`[smoke-packaged-app] PASS ${JSON.stringify(report.workspaceReadyMs)}\n`)
+  process.stdout.write(`[smoke-packaged-app] PASS ${JSON.stringify(report.proofReadyMs)}\n`)
 }
 
 void main().catch((error: unknown) => {
