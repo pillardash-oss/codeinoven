@@ -123,6 +123,7 @@ import type {
   SpecSectionId,
   SpecValidationCode,
   SpecValidationIssue,
+  Thread,
   ThreadMessageCursor
 } from '../lib/types'
 
@@ -3212,6 +3213,26 @@ export function registerIpcHandlers(
   )
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
+  // Bounded active-only hydration query: archived threads never cross IPC and
+  // the payload is capped, with the selected project ordered first so the
+  // visible workspace renders before the rest of the workspace data.
+  ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
+    const options = isRecord(rawOptions) ? rawOptions : {}
+    const projectId =
+      options.projectId === undefined
+        ? undefined
+        : validateEntityId(options.projectId, 'Project ID')
+    const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
+    const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
+    const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
+    if (!projectId) return threads
+    const preferred: Thread[] = []
+    const rest: Thread[] = []
+    for (const thread of threads) {
+      ;(thread.projectId === projectId ? preferred : rest).push(thread)
+    }
+    return [...preferred, ...rest]
+  })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
     const safeQuery = requireString(query, 'Search query')
     const safeOptions: { projectId?: string; limit?: number } = {}
