@@ -1523,6 +1523,9 @@ export class ChatEngine {
     ipcMain.handle('agent:startAssignment', (_, projectId: string, coordinatorThreadId: string) =>
       this.startAssignment(projectId, coordinatorThreadId)
     )
+    ipcMain.handle('agent:stopAssignment', (_, projectId: string, coordinatorThreadId: string) =>
+      this.stopAssignment(projectId, coordinatorThreadId)
+    )
     ipcMain.handle('agent:ensureInitialSpec', (_, projectId: string, threadId: string) =>
       this.ensureInitialSpec(projectId, threadId)
     )
@@ -5208,6 +5211,9 @@ export class ChatEngine {
       coordinatorThreadId,
       this.specEngine
     )
+    if (assignment.status === 'stopped') {
+      throw new AssignmentEngineError('invalid_transition', 'The Assignment has been stopped')
+    }
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
     const achievementMode = coordinator.settings.loopMode === true
@@ -5225,6 +5231,96 @@ export class ChatEngine {
       origin === 'user' ? { action: 'Sign off & assign' } : undefined
     )
     return assignment
+  }
+
+  /** Stop every runtime owned by an Assignment and persist a non-recoverable terminal state. */
+  async stopAssignment(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const current = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!current) throw new AssignmentEngineError('not_found', 'Assignment not found')
+
+    const assignment = await this.withAssignmentApiLock(current.id, () =>
+      this.assignmentEngine.stop(projectId, coordinatorThreadId)
+    )
+    this.revokeAssignmentCapabilities(assignment.id)
+    this.activeAssignmentAuditRuns.delete(`${projectId}:${assignment.id}`)
+
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (coordinator?.settings) {
+      await this.threadManager.updateSettings(projectId, coordinatorThreadId, {
+        ...coordinator.settings,
+        engineeringMode: false,
+        assignmentMode: false,
+        loopMode: false,
+        loopAuditor: undefined
+      })
+    }
+    if (coordinator?.auditState) {
+      await this.threadManager.setAuditState(projectId, coordinatorThreadId, undefined)
+    }
+
+    const threadIds = new Set<string>([
+      coordinatorThreadId,
+      ...assignment.content.tasks.flatMap((task) => (task.threadId ? [task.threadId] : [])),
+      ...(assignment.auditorThreadId ? [assignment.auditorThreadId] : [])
+    ])
+    const results = await Promise.allSettled(
+      [...threadIds].map((threadId) => this.stopAssignmentThread(projectId, threadId))
+    )
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        Logger.error('Assignment thread stop was incomplete', {
+          assignmentId: assignment.id,
+          threadId: [...threadIds][index],
+          error: rawErrorMessage(result.reason)
+        })
+      }
+    })
+    return assignment
+  }
+
+  private async stopAssignmentThread(projectId: string, threadId: string): Promise<void> {
+    const childSessions = [...this.childSessionOwners.entries()].filter(
+      ([, owner]) => owner.projectId === projectId && owner.threadId === threadId
+    )
+    const childResults = await Promise.allSettled(
+      childSessions.map(async ([sessionId, owner]) => {
+        this.userAbortedSessions.add(sessionId)
+        const driver = this.drivers.get(owner.driverId)
+        try {
+          if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
+            await driver.abort(owner.projectPath, sessionId)
+          }
+        } finally {
+          await this.cleanupTurnUtilities(sessionId)
+          this.retryScheduler?.clear(sessionId)
+          this.clearSessionWatchdog(sessionId)
+          this.clearPendingQuestionsForSession(sessionId)
+          this.clearPendingPermissionsForSession(sessionId)
+          this.sessionStatuses.set(sessionId, { state: 'idle' })
+          this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
+        }
+      })
+    )
+    const childFailure = childResults.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected'
+    )
+
+    try {
+      await this.abort(projectId, threadId)
+    } finally {
+      await this.agentProcesses.releaseThread(projectId, threadId)
+      this.activeLoopRuns.delete(`${projectId}:${threadId}`)
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (
+        thread &&
+        ['created', 'planning', 'awaiting_approval', 'executing'].includes(thread.status)
+      ) {
+        await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      }
+    }
+    if (childFailure) throw childFailure.reason
   }
 
   private async sendAssignmentCoordinatorPrompt(
@@ -6139,6 +6235,7 @@ export class ChatEngine {
     if (capability.role !== 'worker' || !capability.taskId) return false
     const assignment = this.assignmentEngine.listVersions(capability.assignmentId).at(-1)
     return (
+      assignment?.status !== 'stopped' &&
       assignment?.content.tasks.some(
         (task) => task.id === capability.taskId && task.threadId === capability.threadId
       ) === true
@@ -8487,7 +8584,7 @@ export class ChatEngine {
         if (assignment?.status === 'draft') {
           continue
         }
-        if (assignment && assignment.status !== 'completed') {
+        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
           assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
           if (!(await this.assignmentNeedsCoordinatorTurn(assignment))) continue
           if (!thread.settings) continue
@@ -10470,7 +10567,7 @@ export class ChatEngine {
       if (!failure) {
         let assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
         const coordinatorSettings = finishedThread?.settings
-        if (assignment && assignment.status !== 'completed') {
+        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
           assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
           if (
             !awaitingUser &&

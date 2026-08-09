@@ -82,6 +82,7 @@ export class Database {
     // The app has never shipped, so there is no legacy data to migrate. The full
     // DDL is applied idempotently on a fresh database.
     this.applySchema()
+    this.ensureAssignmentStoppedSchema()
     this.ensureThreadWorkflowSchema()
     this.backfillAssignmentThreadLineage()
     this.ensureThreadSearchSchema()
@@ -612,6 +613,51 @@ export class Database {
     if (!names.has('context_usage')) {
       this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
     }
+  }
+
+  /** Expand pre-existing Assignment status constraints with the terminal stopped state. */
+  private ensureAssignmentStoppedSchema(): void {
+    const workflowSql = this.get<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='assignment_workflow'"
+    )?.sql
+    if (!workflowSql || workflowSql.includes("'stopped'")) return
+
+    this.db?.exec(`
+      DROP INDEX IF EXISTS idx_assignment_versions_coordinator;
+
+      ALTER TABLE assignment_versions RENAME TO assignment_versions_before_stopped;
+      CREATE TABLE assignment_versions (
+        assignment_id         TEXT NOT NULL,
+        version               INTEGER NOT NULL,
+        project_id            TEXT NOT NULL,
+        coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        spec_id               TEXT NOT NULL,
+        spec_version          INTEGER NOT NULL,
+        status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
+        data                  TEXT NOT NULL,
+        created_at            INTEGER NOT NULL,
+        updated_at            INTEGER NOT NULL,
+        PRIMARY KEY (assignment_id, version)
+      );
+      INSERT INTO assignment_versions SELECT * FROM assignment_versions_before_stopped;
+      DROP TABLE assignment_versions_before_stopped;
+      CREATE INDEX idx_assignment_versions_coordinator
+        ON assignment_versions(project_id, coordinator_thread_id);
+
+      ALTER TABLE assignment_workflow RENAME TO assignment_workflow_before_stopped;
+      CREATE TABLE assignment_workflow (
+        project_id            TEXT NOT NULL,
+        coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        assignment_id         TEXT NOT NULL,
+        active_version        INTEGER NOT NULL,
+        approved_version      INTEGER,
+        status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
+        updated_at            INTEGER NOT NULL,
+        PRIMARY KEY (project_id, coordinator_thread_id)
+      );
+      INSERT INTO assignment_workflow SELECT * FROM assignment_workflow_before_stopped;
+      DROP TABLE assignment_workflow_before_stopped;
+    `)
   }
 
   /**

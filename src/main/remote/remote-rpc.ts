@@ -111,6 +111,7 @@ export interface RemoteRpcServices {
     | 'finalizeBrainstorm'
     | 'ensureAuditSession'
     | 'startAssignment'
+    | 'stopAssignment'
     | 'generateAudit'
     | 'ensureAssignmentAuditorThread'
     | 'generateAssignmentAudit'
@@ -808,6 +809,8 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           (args[2] as 'user' | 'internal') ?? 'user'
         )
+      case 'agent:stopAssignment':
+        return chatEngine.stopAssignment(this.string(args[0]), this.string(args[1]))
       case 'agent:generateAudit':
         return chatEngine.generateAudit(
           this.string(args[0]),

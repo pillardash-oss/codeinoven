@@ -223,6 +223,7 @@ export class AssignmentEngine {
   /** Atomically claim the current durable coordinator state for one automatic prompt. */
   async claimCoordinatorSnapshot(assignmentId: string): Promise<string | null> {
     const plan = this.requireById(assignmentId)
+    if (plan.status === 'stopped') return null
     const snapshotJson = await this.coordinatorSnapshotJson(plan)
     const snapshotHash = createHash('sha256').update(snapshotJson).digest('hex')
     return this.repo.claimCoordinatorSnapshot(plan.id, snapshotHash, snapshotJson)
@@ -428,6 +429,43 @@ export class AssignmentEngine {
       })
     })
     return approved
+  }
+
+  /** Permanently stop orchestration without deleting its reviewable history. */
+  async stop(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status === 'stopped') return active
+    if (active.status === 'draft') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'A draft Assignment has not started and cannot be stopped'
+      )
+    }
+    if (active.status === 'completed' && active.auditCycle?.status === 'completed') {
+      throw new AssignmentEngineError('invalid_transition', 'The Assignment is already complete')
+    }
+
+    const now = this.now()
+    const stopped: AssignmentPlan = {
+      ...active,
+      status: 'stopped',
+      content: {
+        ...active.content,
+        tasks: active.content.tasks.map((task) =>
+          task.status === 'completed' ? task : { ...task, status: 'stopped' as const }
+        )
+      },
+      ...(active.auditCycle && active.auditCycle.status !== 'completed'
+        ? { auditCycle: { ...active.auditCycle, status: 'stopped' as const } }
+        : {}),
+      completedAt: undefined,
+      stoppedAt: now,
+      updatedAt: now
+    }
+    this.repo.save(stopped, active.version)
+    this.removeApiCapabilitiesForAssignment(stopped.id)
+    await this.writeMarkdown(stopped)
+    return stopped
   }
 
   async approveWithSpec(

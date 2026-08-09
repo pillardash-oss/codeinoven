@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { ArrowUpRight, Network, Play, Rows3 } from '@lucide/svelte'
+  import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { AssignmentPlan, AssignmentTask, AssignmentTaskStatus, Thread } from '$shared/types'
 
@@ -19,6 +20,7 @@
     onOpenThread: (thread: Thread) => void
     onOpenTask: (task: AssignmentTask) => void
     onResume: () => void
+    onStop: () => Promise<void>
     onWidthChange: (width: number) => void
   }
 
@@ -38,6 +40,7 @@
     onOpenThread,
     onOpenTask,
     onResume,
+    onStop,
     onWidthChange
   }: Props = $props()
 
@@ -50,6 +53,9 @@
   let resizeStartX = 0
   let resizeStartWidth = 0
   let resizeCurrentWidth = 0
+  let showStopConfirmation = $state(false)
+  let stopBusy = $state(false)
+  let stopError = $state('')
 
   const completed = $derived(
     assignment.content.tasks.filter((task) => task.status === 'completed').length
@@ -66,7 +72,9 @@
     assignment.content.tasks.filter((task) => ['planned', 'ready'].includes(task.status)).length
   )
   const attention = $derived(
-    assignment.content.tasks.filter((task) => ['attention', 'failed'].includes(task.status)).length
+    assignment.content.tasks.filter((task) =>
+      ['attention', 'failed', 'stopped'].includes(task.status)
+    ).length
   )
   const progress = $derived(
     assignment.content.tasks.length === 0
@@ -77,7 +85,10 @@
     threads.some((worker) => worker.status === 'planning' || worker.status === 'executing')
   )
   const stalled = $derived(
-    completed < assignment.content.tasks.length && !coordinatorWorking && !workersWorking
+    assignment.status !== 'stopped' &&
+      completed < assignment.content.tasks.length &&
+      !coordinatorWorking &&
+      !workersWorking
   )
   const auditWorkAvailable = $derived(auditState === 'offered' && !finalComplete)
 
@@ -133,7 +144,9 @@
 
   function statusClass(status: AssignmentTaskStatus): string {
     if (status === 'completed') return 'bg-success/10 text-success'
-    if (status === 'failed' || status === 'attention') return 'bg-danger/10 text-danger'
+    if (status === 'failed' || status === 'attention' || status === 'stopped') {
+      return 'bg-danger/10 text-danger'
+    }
     if (status === 'blocked') return 'bg-warning/10 text-warning'
     if (['running', 'reported', 'auditing', 'rework'].includes(status)) {
       return 'bg-info/10 text-info'
@@ -151,6 +164,20 @@
       ? `Open ${linkedWorker?.title ?? worker}`
       : 'Open this task in Assignment Studio'
     return `${task.title} · ${worker} · ${statusLabel(task.status)}. ${destination}`
+  }
+
+  async function confirmStop(): Promise<void> {
+    if (stopBusy) return
+    stopBusy = true
+    stopError = ''
+    try {
+      await onStop()
+      showStopConfirmation = false
+    } catch (error) {
+      stopError = error instanceof Error ? error.message : 'The Assignment could not be stopped.'
+    } finally {
+      stopBusy = false
+    }
   }
 </script>
 
@@ -196,6 +223,18 @@
         {/if}
         <ArrowUpRight size={13} />
       </button>
+      {#if assignment.status !== 'stopped' && !finalComplete}
+        <button
+          type="button"
+          class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
+          title="Stop the Sr. Engineer, workers, and auditor"
+          aria-label="Stop the Sr. Engineer, workers, and auditor"
+          onclick={() => (showStopConfirmation = true)}
+        >
+          <Square size={12} fill="currentColor" />
+          Stop
+        </button>
+      {/if}
       {#if auditWorkAvailable && onOpenAuditWork}
         <button
           type="button"
@@ -259,6 +298,21 @@
         </div>
       </div>
     </section>
+
+    {#if assignment.status === 'stopped'}
+      <section class="border-b border-danger/30 bg-danger/5 p-4" aria-label="Assignment stopped">
+        <div class="flex items-start gap-2">
+          <Square size={13} class="mt-0.5 shrink-0 text-danger" fill="currentColor" />
+          <div>
+            <h3 class="text-xs font-semibold text-foreground">Assignment stopped</h3>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              The Sr. Engineer, workers, and auditor have been stopped. This Assignment will not
+              resume when the app restarts.
+            </p>
+          </div>
+        </div>
+      </section>
+    {/if}
 
     {#if stalled}
       <section class="border-b border-border p-4" aria-label="Assignment needs direction">
@@ -336,6 +390,43 @@
     </section>
   </div>
 </aside>
+
+<Modal
+  open={showStopConfirmation}
+  title="Stop Assignment?"
+  onClose={() => {
+    if (!stopBusy) showStopConfirmation = false
+  }}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    This will stop the Sr. Engineer, every worker, and the auditor, including any process they are
+    currently running. The Assignment will remain stopped after the app restarts.
+  </p>
+  <p class="mt-3 text-sm font-medium text-foreground">This action cannot be resumed.</p>
+  {#if stopError}
+    <p class="mt-3 text-sm text-danger" role="alert">{stopError}</p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      disabled={stopBusy}
+      onclick={() => (showStopConfirmation = false)}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={stopBusy}
+      onclick={() => void confirmStop()}
+    >
+      {#if stopBusy}<Loader2 size={14} class="animate-spin" />{/if}
+      {stopBusy ? 'Stopping…' : 'Stop Assignment'}
+    </button>
+  {/snippet}
+</Modal>
 
 <style>
   .assignment-coordinator-panel {
