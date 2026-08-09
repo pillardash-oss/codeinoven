@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitHubAuthService } from './github-auth-service'
 import type { SecretVault } from './secret-vault'
 
@@ -29,6 +29,10 @@ function mockVault(): SecretVault {
 }
 
 describe('GitHubAuthService', () => {
+  beforeEach(() => {
+    delete process.env['CODEINOVEN_GITHUB_CLIENT_ID']
+  })
+
   afterEach(() => {
     fetchMock.mockReset()
     delete process.env['CODEINOVEN_GITHUB_CLIENT_ID']
