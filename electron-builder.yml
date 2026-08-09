@@ -16,7 +16,8 @@ files:
   - '!node_modules/better-sqlite3/binding.gyp'
 # Signing is driven by CI environment variables (CSC_LINK, CSC_KEY_PASSWORD,
 # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
-# produce unsigned artifacts so contributors can package locally.
+# produce unsigned artifacts. Local macOS package scripts opt into ad-hoc
+# signing after fuses are applied so integrity-protected builds remain runnable.
 forceCodeSigning: false
 electronFuses:
   # CodeInOven intentionally keeps RunAsNode enabled because the packaged
@@ -28,7 +29,9 @@ electronFuses:
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
-  loadBrowserProcessSpecificV8Snapshot: true
+  # Electron 43 packages do not ship browser_v8_context_snapshot.bin; enabling
+  # this fuse makes the signed app abort before main-process startup.
+  loadBrowserProcessSpecificV8Snapshot: false
   # The desktop renderer still loads from file://; remove this compatibility
   # fuse only after migrating the main document to a custom app protocol.
   grantFileProtocolExtraPrivileges: true

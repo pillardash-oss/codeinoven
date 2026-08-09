@@ -48,6 +48,13 @@ export default defineConfig(({ mode }) => {
           external: ['electron'],
           input: {
             index: resolve(__dirname, 'src/preload/index.ts')
+          },
+          // Sandboxed Electron preloads execute in a CommonJS-like isolated
+          // context. Emitting ESM here makes production fail before the bridge
+          // can be exposed (`Cannot use import statement outside a module`).
+          output: {
+            format: 'cjs',
+            entryFileNames: '[name].cjs'
           }
         }
       }

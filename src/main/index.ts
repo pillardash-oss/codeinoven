@@ -37,6 +37,7 @@ import type { NotificationService } from './notification-service'
 import type { RemoteModeController } from './remote/remote-mode'
 import type { DeviceCredentialService } from './remote/device-credential-service'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -90,7 +91,11 @@ let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 // The database, IPC handlers, and remote gateway are process-wide resources.
 // Running two app instances against them causes duplicate startup work and port
 // collisions, so subsequent launches focus the existing window and exit.
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+// Packaged startup smoke runs use isolated Chromium and application data roots,
+// so they must not be redirected to a developer instance that happens to be
+// running on the same machine. Normal launches retain single-instance behavior.
+const isPackagedSmoke = app.isPackaged && Boolean(process.env[PACKAGED_SMOKE_OUTPUT_ENV])
+const hasSingleInstanceLock = isPackagedSmoke || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 app.on('second-instance', () => {
@@ -219,13 +224,18 @@ ipcMain.handle('app:waitForFeatures', () => (featuresReady ? undefined : feature
  * interactive workspace. Idempotent: repeated signals (e.g. renderer reload)
  * never re-record phases or re-emit the report.
  */
-ipcMain.handle('app:rendererReady', () => {
+ipcMain.handle('app:rendererReady', async () => {
   if (rendererReadyReported) return
   rendererReadyReported = true
   startupTelemetry.mark('renderer:hydrated')
   startupTelemetry.mark('workspace:ready')
   startupTelemetry.stopEventLoopMonitor()
   startupTelemetry.report()
+  const smokeOutput = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
+  if (smokeOutput) {
+    await writePackagedSmokeProof(smokeOutput, startupTelemetry.snapshot())
+    setImmediate(() => app.quit())
+  }
 })
 
 /** Cmd/Ctrl+W is "close the active surface" — the renderer decides what that is. */

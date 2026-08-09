@@ -145,11 +145,56 @@ jobs:
       - name: Bundle budgets
         run: bun run check:bundle
 
+  windows-runtime:
+    name: Windows quality and packaged startup
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+      - name: Tests
+        run: bun run test
+
+      - name: Production build and bundle budgets
+        shell: bash
+        run: |
+          bun run build:production
+          bun run check:bundle
+
+      - name: Package unpacked Windows application
+        run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
+
+      - name: Launch packaged application through workspace readiness
+        run: >-
+          bun run smoke:packaged --target win --app-dir dist/win-unpacked
+          --output agent-out/windows-startup-smoke.json
+
+      - name: Upload Windows startup evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-startup-smoke
+          path: agent-out/windows-startup-smoke.json
+          if-no-files-found: warn
+
   verify-release:
     name: Release verification
     runs-on: macos-latest
     timeout-minutes: 30
-    needs: [check, lint, test, audit, build]
+    needs: [check, lint, test, audit, build, windows-runtime]
     env:
       MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
