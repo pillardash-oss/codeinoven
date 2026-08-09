@@ -1523,7 +1523,7 @@ export class ChatEngine {
     )
     this.idleReaperTimer.unref?.()
     void this.recoverInterruptedBrainstormEntries()
-    void this.resumePendingLoops()
+    void this.resumePendingWork()
     void this.materializeAuditReportArtifacts()
   }
 
@@ -8464,7 +8464,7 @@ export class ChatEngine {
     }
   }
 
-  private async resumePendingLoops(): Promise<void> {
+  async resumePendingWork(): Promise<void> {
     try {
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {

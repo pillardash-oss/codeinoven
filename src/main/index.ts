@@ -524,6 +524,7 @@ async function bootPostPaintServices(): Promise<void> {
       if (recovery.failures.length > 0) {
         Logger.error('Restart recovery completed with failures', recovery.failures)
       }
+      await chatEngine?.resumePendingWork()
     } catch (error) {
       Logger.error('Restart recovery failed (non-fatal):', error)
     }
