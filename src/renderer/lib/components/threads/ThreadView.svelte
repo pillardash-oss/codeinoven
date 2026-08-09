@@ -1708,6 +1708,16 @@
   let userScrolledAway = $state(false)
   /** True once the saved position (or initial bottom) has been applied. */
   let scrollRestored = $state(false)
+  /** Whether the thread was working when the view mounted. A busy thread always
+   *  re-opens at the live bottom so the last message and the streaming trace are
+   *  immediately visible on return — a saved mid-conversation offset from before
+   *  the turn grew is stale and hides the action. Captured non-reactively so the
+   *  restore decision is made once at mount. */
+  // svelte-ignore state_referenced_locally
+  const mountBusy = busy
+  /** Changes whenever any message's parts change, so the live view follows a
+   *  streaming turn even when the message count is stable. */
+  const streamVersion = $derived(messages.reduce((sum, message) => sum + message.parts.length, 0))
 
   const SCROLL_AT_BOTTOM_THRESHOLD = 60
 
@@ -1772,9 +1782,15 @@
   }
 
   // Restore the saved scroll position (or snap to bottom) once data is loaded.
+  // A thread the agent is working on re-opens at the live bottom instead of a
+  // saved offset: the conversation grew while the user was away, so the old
+  // pixel offset now lands mid-trace and hides the latest message + stream.
   $effect(() => {
     if (!loaded || !scrollEl) return
-    if (savedScrollState) {
+    if (mountBusy) {
+      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
+      userScrolledAway = false
+    } else if (savedScrollState) {
       scrollEl.scrollTop = savedScrollState.top
       userScrolledAway = savedScrollState.awayFromBottom
     } else {
@@ -1789,11 +1805,16 @@
   // cards both arrive asynchronously after mount — cards mount only once the
   // checkpoint list resolves, which can be after the initial scroll, so without
   // this the latest changes card would sit just above the fold until the user
-  // scrolled.
+  // scrolled. Reading `streamVersion` (total part count) makes the view follow
+  // a streaming turn even when parts accumulate inside a single message, and
+  // reading `busy` snaps back to the live bottom as soon as a run becomes
+  // active on an otherwise idle thread.
   $effect(() => {
     if (!scrollRestored) return
     void messages.length
     void checkpoints.length
+    void busy
+    void streamVersion
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
       scrollEl.scrollTop = scrollEl.scrollHeight
@@ -2009,19 +2030,23 @@
    *  thread switch; an awaiting-approval thread has finished its turn and is
    *  waiting on the user, so it must read as idle (Needs attention), never as
    *  still working. Live session activity for pending permission/question gates
-   *  is re-established by connectSession's live status instead. */
+   *  is re-established by connectSession's live status instead.
+   *
+   *  An in-session busy run is the live truth: on remount (switching back to a
+   *  thread the agent is still working on) the persisted status or a status
+   *  snapshot can lag behind the in-memory agentRuns store, so a stale status
+   *  must never downgrade a run that is genuinely still busy. */
   function restoreWorkingState(status: Thread['status']): void {
+    if (agentRuns.isBusy(thread.projectId, thread.id)) {
+      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
+      return
+    }
     if (status === 'planning' || status === 'executing') {
-      // A persisted in-flight status is only trustworthy when the run is still
-      // tracked live by the agentRuns store (i.e. we switched back to a thread
-      // that is genuinely working this session). On a fresh app restart the
-      // store is empty and the harness session is gone, so a stale status must
-      // never re-mark the thread busy — doing so left the thread (and its
-      // file-changes card) permanently in a "working" state until some later
-      // event forced a re-render.
-      if (agentRuns.isBusy(thread.projectId, thread.id)) {
-        agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-      }
+      // On a fresh app restart the store is empty and the harness session is
+      // gone, so a stale persisted in-flight status must not re-mark the thread
+      // busy — doing so left the thread (and its file-changes card)
+      // permanently in a "working" state until some later event forced a
+      // re-render.
       return
     }
     setIdleFromRestore()
@@ -2107,11 +2132,17 @@
       providerStatus = await invoke('agent:getSessionStatus', projectId, id)
       if (!alive) return
       // The live session status is the single source of truth on mount. Once
-      // established, loadLocal's DB-status fallback must not override it.
+      // established, loadLocal's DB-status fallback must not override it. A
+      // stale idle/error snapshot must never downgrade a run the in-memory
+      // store still tracks as busy (e.g. returning to a thread the agent is
+      // actively working on while the status map lags).
       liveStatusKnown = providerStatus !== null
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
         agentRuns.setBusy(projectId, id, true, latestUserMessageId())
-      } else if (providerStatus?.state === 'error' || providerStatus?.state === 'idle') {
+      } else if (
+        (providerStatus?.state === 'error' || providerStatus?.state === 'idle') &&
+        !agentRuns.isBusy(projectId, id)
+      ) {
         setIdleFromRestore()
       }
       await refreshPendingPermissions()
