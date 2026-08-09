@@ -5511,22 +5511,34 @@ export class ChatEngine {
     return decisions.join('\n\n')
   }
 
-  private assignmentApiInstructions(token: string): string {
-    return [
+  private assignmentApiInstructions(
+    token: string,
+    role: 'coordinator' | 'worker' = 'coordinator'
+  ): string {
+    const shared = [
       `API base URL: ${this.assignmentApiBaseUrl}`,
       `Authorization header: Bearer ${token}`,
-      'POST JSON endpoints:',
+      'Allowed POST JSON endpoints:'
+    ]
+    const workerEndpoints = [
+      '- /v1/assignments/submit-test-evidence — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }. Worker capabilities submit for their own task; the coordinator submits for a running senior-owned task using the coordinator thread ID.',
+      '- /v1/assignments/report-task — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }'
+    ]
+    const coordinatorEndpoints = [
       '- /v1/assignments/get — { "assignmentId": "..." }',
       '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
-      '- /v1/assignments/submit-test-evidence — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "kind": "baseline|check", "content": "complete focused test output" }. Worker capabilities submit for their own task; the coordinator submits for a running senior-owned task using the coordinator thread ID.',
-      '- /v1/assignments/report-task — { "assignmentId": "...", "taskId": "...", "workerThreadId": "...", "operationId": "unique-id", "report": { "status": "ready_for_audit|blocked|failed", "summary": "...", "evidence": ["..."], "commitHash": "..." } }',
+      ...workerEndpoints,
       '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }',
       '- /v1/assignments/reopen-task — { "assignmentId": "...", "taskId": "..." }',
       '- /v1/assignments/add-followup-task — { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
       '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }',
       '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked) — { "assignmentId": "..." }',
       '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
-      '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.',
+      '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.'
+    ]
+    return [
+      ...shared,
+      ...(role === 'worker' ? workerEndpoints : coordinatorEndpoints),
       'Use Content-Type: application/json. Reusing an operationId safely returns the original result.'
     ].join('\n')
   }
@@ -5879,7 +5891,7 @@ export class ChatEngine {
       taskId: result.task.id
     })
     const reportInstruction = [
-      this.assignmentApiInstructions(workerToken),
+      this.assignmentApiInstructions(workerToken, 'worker'),
       `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When the work is complete, POST report-task with assignmentId ${result.assignment.id}, taskId ${result.task.id}, and workerThreadId ${result.thread.id}.`
     ].join('\n\n')
     await this.sendPrompt(
@@ -5930,7 +5942,7 @@ export class ChatEngine {
       taskId: task.id
     })
     const reportInstruction = [
-      this.assignmentApiInstructions(workerToken),
+      this.assignmentApiInstructions(workerToken, 'worker'),
       `Submit baseline evidence before changing files and check evidence after verification, using a unique operationId for each submission. When this update is complete, POST report-task with assignmentId ${assignment.id}, taskId ${task.id}, and workerThreadId ${worker.id}.`
     ].join('\n\n')
     await this.sendPrompt(
