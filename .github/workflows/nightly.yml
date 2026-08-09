@@ -82,7 +82,7 @@ jobs:
       - name: Verify packaged artifacts
         run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codeinoven-${{ matrix.artifact }}
           path: |
