@@ -21,6 +21,7 @@
     onOpenTask: (task: AssignmentTask) => void
     onResume: () => void
     onStop: () => Promise<void>
+    onResumeAssignment: () => Promise<void>
     onWidthChange: (width: number) => void
   }
 
@@ -41,6 +42,7 @@
     onOpenTask,
     onResume,
     onStop,
+    onResumeAssignment,
     onWidthChange
   }: Props = $props()
 
@@ -56,6 +58,8 @@
   let showStopConfirmation = $state(false)
   let stopBusy = $state(false)
   let stopError = $state('')
+  let resumeBusy = $state(false)
+  let resumeError = $state('')
 
   const completed = $derived(
     assignment.content.tasks.filter((task) => task.status === 'completed').length
@@ -179,6 +183,19 @@
       stopBusy = false
     }
   }
+
+  async function resumeStoppedAssignment(): Promise<void> {
+    if (resumeBusy) return
+    resumeBusy = true
+    resumeError = ''
+    try {
+      await onResumeAssignment()
+    } catch (error) {
+      resumeError = error instanceof Error ? error.message : 'The Assignment could not be resumed.'
+    } finally {
+      resumeBusy = false
+    }
+  }
 </script>
 
 <aside
@@ -223,7 +240,22 @@
         {/if}
         <ArrowUpRight size={13} />
       </button>
-      {#if assignment.status !== 'stopped' && !finalComplete}
+      {#if assignment.status === 'stopped'}
+        <button
+          type="button"
+          class="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+          title="Resume this Assignment"
+          disabled={resumeBusy}
+          onclick={() => void resumeStoppedAssignment()}
+        >
+          {#if resumeBusy}
+            <Loader2 size={13} class="animate-spin" />
+          {:else}
+            <Play size={12} fill="currentColor" />
+          {/if}
+          {resumeBusy ? 'Resuming…' : 'Resume'}
+        </button>
+      {:else if !finalComplete}
         <button
           type="button"
           class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
@@ -256,6 +288,9 @@
         </button>
       {/if}
     </div>
+    {#if resumeError}
+      <p class="mt-2 text-xs text-danger" role="alert">{resumeError}</p>
+    {/if}
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
@@ -298,21 +333,6 @@
         </div>
       </div>
     </section>
-
-    {#if assignment.status === 'stopped'}
-      <section class="border-b border-danger/30 bg-danger/5 p-4" aria-label="Assignment stopped">
-        <div class="flex items-start gap-2">
-          <Square size={13} class="mt-0.5 shrink-0 text-danger" fill="currentColor" />
-          <div>
-            <h3 class="text-xs font-semibold text-foreground">Assignment stopped</h3>
-            <p class="mt-1 text-xs leading-relaxed text-muted">
-              The Sr. Engineer, workers, and auditor have been stopped. This Assignment will not
-              resume when the app restarts.
-            </p>
-          </div>
-        </div>
-      </section>
-    {/if}
 
     {#if stalled}
       <section class="border-b border-border p-4" aria-label="Assignment needs direction">
@@ -399,10 +419,9 @@
   }}
 >
   <p class="text-sm leading-relaxed text-muted">
-    This will stop the Sr. Engineer, every worker, and the auditor, including any process they are
-    currently running. The Assignment will remain stopped after the app restarts.
+    Stop all work on this Assignment? Current agent runs and processes will be stopped. You can
+    resume it later.
   </p>
-  <p class="mt-3 text-sm font-medium text-foreground">This action cannot be resumed.</p>
   {#if stopError}
     <p class="mt-3 text-sm text-danger" role="alert">{stopError}</p>
   {/if}

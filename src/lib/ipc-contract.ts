@@ -492,6 +492,10 @@ export interface IpcInvokeContract {
     AssignmentPlan
   >
   'agent:stopAssignment': Contract<[projectId: string, coordinatorThreadId: string], AssignmentPlan>
+  'agent:resumeAssignment': Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentPlan
+  >
   'agent:listCommands': Contract<[projectId: string, threadId: string], ScopedHarnessCommand[]>
   'agent:listQuestions': Contract<
     [projectId: string, threadId: string],

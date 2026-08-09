@@ -70,6 +70,7 @@ const INVOKE_CHANNELS = [
   'agent:submitAssignmentAuditFeedback',
   'agent:startAssignment',
   'agent:stopAssignment',
+  'agent:resumeAssignment',
   'agent:listCommands',
   'agent:listPermissions',
   'agent:listProviders',
