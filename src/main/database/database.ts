@@ -20,6 +20,7 @@ import {
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
+  type DatabaseWorkerFactory,
   type WorkerBackupResult,
   type WorkerCheckpointResult,
   type WorkerFtsResult,
@@ -31,7 +32,13 @@ import {
   type WorkerSizeTelemetry,
   type WorkerVacuumResult
 } from './database-worker'
-import { partsToSearchText, hashPersistedRow } from './repositories/agent-message-repo'
+import {
+  runProviderDeltaSync,
+  partsToSearchText,
+  hashPersistedRow,
+  type ProviderDeltaSyncResult
+} from './repositories/agent-message-repo'
+import type { AgentMessage } from '../../lib/types'
 
 const SCHEMA_VERSION_KEY = 'schema_version'
 const CURRENT_SCHEMA_VERSION = 6
@@ -48,9 +55,11 @@ export class Database {
   private db: DatabaseType | null = null
   private readonly path: string
   private maintenanceWorker: DatabaseWorker | null = null
+  private readonly workerFactory: DatabaseWorkerFactory | undefined
 
-  constructor(path?: string) {
+  constructor(path?: string, workerFactory?: DatabaseWorkerFactory) {
     this.path = path ?? getConfigRoot() + '/codeinoven.db'
+    this.workerFactory = workerFactory
   }
 
   /** Initialise the database: open connection, apply schema, set WAL mode. */
@@ -91,12 +100,16 @@ export class Database {
    */
   private startMaintenanceWorker(): void {
     if (this.path === ':memory:' || this.maintenanceWorker) return
-    const worker = new DatabaseWorker({
-      dbPath: this.path,
-      backupDir: join(dirname(this.path), 'backups'),
-      maintenanceEnabled: true,
-      ...DATABASE_WORKER_DEFAULTS
-    })
+    const worker = new DatabaseWorker(
+      {
+        dbPath: this.path,
+        backupDir: join(dirname(this.path), 'backups'),
+        maintenanceEnabled: true,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      this.workerFactory
+    )
     this.maintenanceWorker = worker
     worker.start()
   }
@@ -106,6 +119,13 @@ export class Database {
     return this.db !== null
   }
 
+  /** Close the primary connection only; the maintenance worker is retained. */
+  private closeConnection(): void {
+    if (!this.db) return
+    this.db.close()
+    this.db = null
+  }
+
   /** Close the database connection and stop the maintenance worker. */
   close(): void {
     if (this.maintenanceWorker) {
@@ -113,9 +133,7 @@ export class Database {
       this.maintenanceWorker = null
       void worker.shutdown()
     }
-    if (!this.db) return
-    this.db.close()
-    this.db = null
+    this.closeConnection()
     Logger.info('SQLite database closed')
   }
 
@@ -240,21 +258,71 @@ export class Database {
   }
 
   /**
-   * Restore an atomic backup over the live database. The primary connection is
-   * closed first and reopened afterwards so the restored file is the one every
-   * subsequent operation reads.
+   * Restore an atomic backup over the live database, coordinating every
+   * connection on the restored inode:
+   *
+   * - The primary connection is closed before the swap and reopened afterwards.
+   * - The maintenance worker is retained for the whole restore (its handle is
+   *   never cleared early); the worker's `restore` op closes its own connection
+   *   before the atomic swap, so no handle survives onto the pre-restore file.
+   * - Typed `shutdown` (when used) is sent and awaited before the handle is
+   *   cleared — see `DatabaseWorker.shutdown`.
+   * - Failure kinds (`source_invalid` / `verify_failed` / `io`) are preserved
+   *   on the returned result.
    */
   async restoreFromBackup(sourcePath: string): Promise<WorkerRestoreResult> {
-    this.close()
-    const result = await (this.maintenanceWorker?.restore(sourcePath) ?? {
-      ok: false,
-      reason: 'io' as const,
-      error: 'no maintenance worker'
-    })
-    if (result.ok) {
-      await this.init()
+    const worker = this.maintenanceWorker
+    if (!worker || !worker.isRunning()) {
+      return { ok: false, reason: 'io', error: 'no maintenance worker' }
     }
+    // Close the primary connection so it cannot hold the pre-restore inode.
+    this.closeConnection()
+    let result: WorkerRestoreResult
+    try {
+      const raw = await worker.restore(sourcePath)
+      // Preserve the expected result kinds even when the worker failed: only
+      // inject the io reason when the worker did not return a proper restore
+      // result (or returned one without a reason).
+      if (raw.kind !== 'restore') {
+        result = { ok: false, reason: 'io', error: raw.error ?? 'restore failed' }
+      } else if (!raw.ok && !raw.reason) {
+        result = { ...raw, reason: 'io' }
+      } else {
+        result = raw
+      }
+    } catch (error) {
+      result = { ok: false, reason: 'io', error: String(error) }
+    }
+    // Reopen the primary connection on the restored (or, on failure, the
+    // unchanged) inode so the app stays usable regardless of the outcome.
+    await this.init().catch((error) => {
+      Logger.error('Failed to reopen the database after restore', error)
+    })
     return result
+  }
+
+  /**
+   * Delta-only transcript sync executed on the maintenance worker's connection
+   * so the reconciliation never blocks the main process. Falls back to the
+   * primary connection when no worker is available (e.g. in-memory test
+   * databases) or when the worker fails.
+   */
+  async syncProviderDeltasViaWorker(
+    threadId: string,
+    sessionId: string,
+    messages: AgentMessage[]
+  ): Promise<ProviderDeltaSyncResult> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.syncProviderDeltas(threadId, sessionId, messages)
+      if (response.ok && response.result) {
+        return response.result
+      }
+      if (response.error) {
+        Logger.error('Database worker delta sync failed; falling back to primary connection', response.error)
+      }
+    }
+    return runProviderDeltaSync(this, threadId, sessionId, messages)
   }
 
   /** Incremental vacuum to reclaim free pages (bounded, off-main). */

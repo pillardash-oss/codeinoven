@@ -5,6 +5,7 @@ import type { Database } from '../../main/database/database'
 import type { AgentMessage, ThreadSettings } from '../types'
 import { AllThreadsPinnedError, ThreadManager } from './thread-manager'
 import { ensureFeatureSlug } from '../project-artifacts'
+import { AgentMessageRepo } from '../../main/database/repositories/agent-message-repo'
 
 const temporaryDatabases: Database[] = []
 
@@ -228,5 +229,58 @@ describe('ThreadManager', () => {
 
     expect(await ensureFeatureSlug(db, 'project1', first.id)).toBe('shared-title')
     expect(await ensureFeatureSlug(db, 'project1', second.id)).toBe('shared-title-2')
+  })
+
+  it('detects same-count/same-final-id transcript edits and appends only deltas', async () => {
+    const { manager, db } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Delta'
+    })
+    const repo = new AgentMessageRepo(db)
+
+    const a1: AgentMessage = {
+      id: 'delta-1',
+      role: 'assistant',
+      parts: [{ type: 'text', id: 'p1', messageID: 'delta-1', text: 'original' }],
+      createdAt: 100
+    }
+    const b: AgentMessage = {
+      id: 'delta-2',
+      role: 'assistant',
+      parts: [{ type: 'text', id: 'p2', messageID: 'delta-2', text: 'final' }],
+      createdAt: 200
+    }
+    const first = await manager.upsertMessages('project1', thread.id, [a1, b], 'sess')
+    expect(first.applied).toBe(2)
+    expect(first.noop).toBe(false)
+    const cursorAfterFirst = repo.getProviderCursor(thread.id, 'sess')
+    expect(cursorAfterFirst?.lastMessageId).toBe('delta-2')
+
+    // True noop: identical transcript → zero writes (cursor row untouched).
+    const beforeNoop = repo.getProviderCursor(thread.id, 'sess')
+    const noop = await manager.upsertMessages('project1', thread.id, [a1, b], 'sess')
+    expect(noop.applied).toBe(0)
+    expect(noop.skipped).toBe(2)
+    expect(noop.noop).toBe(true)
+    expect(noop.cursor).toBeNull()
+    expect(repo.getProviderCursor(thread.id, 'sess')?.syncedAt).toBe(beforeNoop?.syncedAt)
+
+    // Same count and same final id, but the first message was edited in place.
+    const a1Edited: AgentMessage = {
+      ...a1,
+      parts: [{ type: 'text', id: 'p1', messageID: 'delta-1', text: 'edited' }]
+    }
+    const edited = await manager.upsertMessages('project1', thread.id, [a1Edited, b], 'sess')
+    expect(edited.applied).toBe(1)
+    expect(edited.skipped).toBe(1)
+    expect(edited.noop).toBe(false)
+
+    const persisted = await manager.loadMessages('project1', thread.id)
+    expect(persisted.find((m) => m.id === 'delta-1')?.parts).toEqual([
+      { type: 'text', id: 'p1', messageID: 'delta-1', text: 'edited' }
+    ])
+    expect(persisted.find((m) => m.id === 'delta-2')?.parts).toEqual(b.parts)
   })
 })

@@ -568,7 +568,10 @@ export class ThreadManager {
    *
    * The provider transcript is synchronized incrementally: only new or changed
    * messages are written inside one transaction, keyed by a persisted provider
-   * cursor for the thread's current harness session. Returns the delta outcome.
+   * cursor for the thread's current harness session. In production this runs on
+   * the database maintenance worker so the reconciliation never blocks the
+   * main process; the primary connection is the fallback. Returns the delta
+   * outcome.
    */
   async upsertMessages(
     projectId: string,
@@ -583,12 +586,12 @@ export class ThreadManager {
         skipped: 0,
         collisions: 0,
         total: 0,
-        cursor: { sessionId: sessionId ?? '', messageCount: 0, lastMessageId: '', syncedAt: 0 },
+        cursor: null,
         noop: false
       }
     }
     const resolvedSessionId = sessionId ?? thread.sessionId ?? ''
-    return this.agentMessageRepo.syncProviderDeltas(threadId, resolvedSessionId, messages)
+    return this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
   }
 
   /** Load the mirrored agent conversation, or an empty list when absent. */

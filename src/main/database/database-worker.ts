@@ -17,9 +17,14 @@
 
 /// <reference types="electron-vite/node" />
 import createDatabaseWorkerThread from './database-worker-thread.ts?nodeWorker'
-import type { Worker } from 'worker_threads'
+import type { Worker, WorkerOptions } from 'worker_threads'
 import { dirname, join } from 'path'
 import { Logger } from '../logger'
+import type { AgentMessage } from '../../lib/types'
+import type { ProviderDeltaSyncResult } from './repositories/agent-message-repo'
+
+/** Spawns the worker thread. Production uses the electron-vite `?nodeWorker` factory. */
+export type DatabaseWorkerFactory = (options: WorkerOptions) => Worker
 
 export interface DatabaseWorkerConfig {
   /** Path to the SQLite database file the worker connects to. */
@@ -55,6 +60,7 @@ export type DatabaseWorkerRequest =
   | { kind: 'retention' }
   | { kind: 'recover-to'; targetPath: string }
   | { kind: 'health' }
+  | { kind: 'sync-provider-deltas'; threadId: string; sessionId: string; messages: AgentMessage[] }
   | { kind: 'shutdown' }
   | { kind: 'ping' }
 
@@ -150,6 +156,7 @@ export type DatabaseWorkerResult =
   | ({ kind: 'retention' } & WorkerRetentionResult)
   | ({ kind: 'recover-to' } & WorkerRecoverResult)
   | ({ kind: 'health' } & WorkerHealthResult)
+  | ({ kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string })
   | ({ kind: 'shutdown' } & { ok: boolean })
   | ({ kind: 'ping' } & { ok: boolean })
 
@@ -170,11 +177,15 @@ const UNAVAILABLE =
 export class DatabaseWorker {
   private worker: Worker | null = null
   private nextId = 1
-  private readonly pending = new Map<number, (result: DatabaseWorkerResult) => void>()
+  private readonly pending = new Map<
+    number,
+    { kind: DatabaseWorkerRequest['kind']; resolve: (result: DatabaseWorkerResult) => void }
+  >()
 
   constructor(
     private readonly config: DatabaseWorkerConfig,
-    private readonly logger: typeof Logger = Logger
+    private readonly logger: typeof Logger = Logger,
+    private readonly factory: DatabaseWorkerFactory = createDatabaseWorkerThread
   ) {}
 
   isRunning(): boolean {
@@ -185,7 +196,7 @@ export class DatabaseWorker {
   start(): void {
     if (this.worker) return
     try {
-      const worker = createDatabaseWorkerThread({ workerData: this.config })
+      const worker = this.factory({ workerData: this.config })
       worker.on('message', (message: DatabaseWorkerMessage) => this.handleMessage(message))
       worker.on('error', (error) => {
         this.logger.error('Database maintenance worker failed', error)
@@ -206,15 +217,21 @@ export class DatabaseWorker {
     }
   }
 
+  /**
+   * Graceful shutdown: sends the typed `shutdown` request and awaits it BEFORE
+   * clearing the handle, so the worker's connection is closed cleanly and any
+   * in-flight request still routes to the live worker. Returns when the worker
+   * thread has terminated. A subsequent `start()` spawns a fresh worker.
+   */
   async shutdown(): Promise<void> {
     const worker = this.worker
     if (!worker) return
-    this.worker = null
     const response = this.request({ kind: 'shutdown' })
     const timeout = new Promise<never>((resolve) => {
       setTimeout(resolve, 1000)
     })
     await Promise.race([response, timeout])
+    this.worker = null
     await worker.terminate().catch(() => undefined)
     this.rejectAll()
   }
@@ -280,6 +297,19 @@ export class DatabaseWorker {
     return this.request({ kind: 'health' })
   }
 
+  /**
+   * Delta-only transcript sync executed on the worker's connection, so the
+   * reconciliation work never blocks the main process. See
+   * `runProviderDeltaSync` for the edit-detection / true-noop semantics.
+   */
+  async syncProviderDeltas(
+    threadId: string,
+    sessionId: string,
+    messages: AgentMessage[]
+  ): Promise<ResultForRequest<'sync-provider-deltas'>> {
+    return this.request({ kind: 'sync-provider-deltas', threadId, sessionId, messages })
+  }
+
   async ping(): Promise<ResultForRequest<'ping'>> {
     return this.request({ kind: 'ping' })
   }
@@ -293,10 +323,10 @@ export class DatabaseWorker {
 
   private handleMessage(message: DatabaseWorkerMessage): void {
     if (message.type === 'response') {
-      const resolve = this.pending.get(message.id)
-      if (resolve) {
+      const pending = this.pending.get(message.id)
+      if (pending) {
         this.pending.delete(message.id)
-        resolve(message.result)
+        pending.resolve(message.result)
       }
       return
     }
@@ -330,14 +360,23 @@ export class DatabaseWorker {
     }
     const id = this.nextId++
     return new Promise((resolve) => {
-      this.pending.set(id, (result) => resolve(result as ResultForRequest<K>))
+      this.pending.set(id, {
+        kind: request.kind,
+        resolve: (result) => resolve(result as ResultForRequest<K>)
+      })
       worker.postMessage({ type: 'request', id, request } satisfies DatabaseWorkerOutbound)
     })
   }
 
   private rejectAll(): void {
-    for (const resolve of this.pending.values()) {
-      resolve({ kind: 'ping', ok: false, error: 'Database maintenance worker unavailable' } as DatabaseWorkerResult)
+    for (const pending of this.pending.values()) {
+      // Preserve the expected result kind so callers see a well-typed failure
+      // (e.g. a pending restore resolves as a restore result, not a ping).
+      pending.resolve({
+        kind: pending.kind,
+        ok: false,
+        error: 'Database maintenance worker unavailable'
+      } as DatabaseWorkerResult)
     }
     this.pending.clear()
   }
