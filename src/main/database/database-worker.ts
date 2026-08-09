@@ -60,6 +60,10 @@ export type DatabaseWorkerRequest =
   | { kind: 'retention' }
   | { kind: 'recover-to'; targetPath: string }
   | { kind: 'health' }
+  | { kind: 'query'; sql: string; params: unknown[]; maxRows: number }
+  | { kind: 'execute'; sql: string; params: unknown[] }
+  | { kind: 'transaction'; statements: Array<{ sql: string; params: unknown[] }> }
+  | { kind: 'stats' }
   | { kind: 'sync-provider-deltas'; threadId: string; sessionId: string; messages: AgentMessage[] }
   | { kind: 'shutdown' }
   | { kind: 'ping' }
@@ -156,6 +160,18 @@ export type DatabaseWorkerResult =
   | ({ kind: 'retention' } & WorkerRetentionResult)
   | ({ kind: 'recover-to' } & WorkerRecoverResult)
   | ({ kind: 'health' } & WorkerHealthResult)
+  | ({ kind: 'query'; ok: boolean; rows?: Record<string, unknown>[]; truncated?: boolean; error?: string })
+  | ({ kind: 'execute'; ok: boolean; error?: string })
+  | ({ kind: 'transaction'; ok: boolean; error?: string })
+  | ({
+      kind: 'stats'
+      ok: boolean
+      activeOps: number
+      totalOps: number
+      maxObservedConcurrency: number
+      maintenanceEnabled: boolean
+      error?: string
+    })
   | ({ kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string })
   | ({ kind: 'shutdown' } & { ok: boolean })
   | ({ kind: 'ping' } & { ok: boolean })
@@ -174,9 +190,13 @@ type ResultForRequest<K extends DatabaseWorkerRequest['kind']> = Extract<Databas
 const UNAVAILABLE =
   'Database maintenance worker is not available on this connection (in-memory test database)'
 
+/** Bounded forced-termination window for a shutdown that does not exit cleanly. */
+export const WORKER_SHUTDOWN_TIMEOUT_MS = 2000
+
 export class DatabaseWorker {
   private worker: Worker | null = null
   private nextId = 1
+  private requestTail: Promise<void> = Promise.resolve()
   private readonly pending = new Map<
     number,
     { kind: DatabaseWorkerRequest['kind']; resolve: (result: DatabaseWorkerResult) => void }
@@ -218,21 +238,43 @@ export class DatabaseWorker {
   }
 
   /**
-   * Graceful shutdown: sends the typed `shutdown` request and awaits it BEFORE
-   * clearing the handle, so the worker's connection is closed cleanly and any
-   * in-flight request still routes to the live worker. Returns when the worker
-   * thread has terminated. A subsequent `start()` spawns a fresh worker.
+   * Graceful shutdown. Requests are single-flight, so the typed `shutdown`
+   * request is sent and awaited AFTER any in-flight request completes; the
+   * worker clears its maintenance timer, closes the connection, acknowledges,
+   * and closes its port for a clean exit. This side awaits the clean exit and
+   * only force-terminates (bounded) if the worker fails to exit on its own.
+   * A subsequent `start()` spawns a fresh worker.
    */
   async shutdown(): Promise<void> {
     const worker = this.worker
     if (!worker) return
     const response = this.request({ kind: 'shutdown' })
     const timeout = new Promise<never>((resolve) => {
-      setTimeout(resolve, 1000)
+      setTimeout(resolve, WORKER_SHUTDOWN_TIMEOUT_MS)
     })
     await Promise.race([response, timeout])
+
+    let exitedCleanly = false
+    const cleanExit = new Promise<void>((resolve) => {
+      const onExit = () => {
+        exitedCleanly = true
+        resolve()
+      }
+      worker.once('exit', onExit)
+      const timer = setTimeout(() => {
+        worker.removeListener('exit', onExit)
+        resolve()
+      }, WORKER_SHUTDOWN_TIMEOUT_MS)
+      timer.unref?.()
+    })
+    await cleanExit
+
+    if (!exitedCleanly) {
+      // Bounded forced termination — only when the worker did not exit cleanly.
+      this.logger.dev('Database maintenance worker did not exit cleanly; force-terminating')
+      await worker.terminate().catch(() => undefined)
+    }
     this.worker = null
-    await worker.terminate().catch(() => undefined)
     this.rejectAll()
   }
 
@@ -298,6 +340,30 @@ export class DatabaseWorker {
   }
 
   /**
+   * Bounded read on the worker's connection. `sql` must not contain LIMIT;
+   * `maxRows` (>0) bounds the response and reports truncation. Serialized with
+   * every other request and the maintenance loop.
+   */
+  async query(sql: string, params: unknown[], maxRows: number): Promise<ResultForRequest<'query'>> {
+    return this.request({ kind: 'query', sql, params, maxRows })
+  }
+
+  /** Single write statement on the worker's connection (serialized). */
+  async execute(sql: string, params: unknown[]): Promise<ResultForRequest<'execute'>> {
+    return this.request({ kind: 'execute', sql, params })
+  }
+
+  /** Atomic batch: all statements run in one transaction (serialized). */
+  async transaction(statements: Array<{ sql: string; params: unknown[] }>): Promise<ResultForRequest<'transaction'>> {
+    return this.request({ kind: 'transaction', statements })
+  }
+
+  /** Worker-side serialization counters (for the concurrency proof). */
+  async stats(): Promise<ResultForRequest<'stats'>> {
+    return this.request({ kind: 'stats' })
+  }
+
+  /**
    * Delta-only transcript sync executed on the worker's connection, so the
    * reconciliation work never blocks the main process. See
    * `runProviderDeltaSync` for the edit-detection / true-noop semantics.
@@ -351,21 +417,44 @@ export class DatabaseWorker {
     }
   }
 
+  /**
+   * Single-flight request: each request is sent only after the previous one
+   * resolved, so no two requests are ever in flight and responses arrive in
+   * order. A failed send or a dead worker resolves with a typed unavailable
+   * result of the request's own kind.
+   */
   private request<K extends DatabaseWorkerRequest['kind']>(
     request: Extract<DatabaseWorkerRequest, { kind: K }>
   ): Promise<ResultForRequest<K>> {
-    const worker = this.worker
-    if (!worker) {
+    if (!this.worker) {
       return Promise.resolve({ kind: request.kind, ok: false, error: UNAVAILABLE } as ResultForRequest<K>)
     }
     const id = this.nextId++
-    return new Promise((resolve) => {
-      this.pending.set(id, {
-        kind: request.kind,
-        resolve: (result) => resolve(result as ResultForRequest<K>)
-      })
-      worker.postMessage({ type: 'request', id, request } satisfies DatabaseWorkerOutbound)
-    })
+    const result = this.requestTail.then(
+      () =>
+        new Promise<DatabaseWorkerResult>((resolve) => {
+          const worker = this.worker
+          if (!worker) {
+            resolve({ kind: request.kind, ok: false, error: UNAVAILABLE } as DatabaseWorkerResult)
+            return
+          }
+          this.pending.set(id, {
+            kind: request.kind,
+            resolve
+          })
+          try {
+            worker.postMessage({ type: 'request', id, request } satisfies DatabaseWorkerOutbound)
+          } catch (error) {
+            this.pending.delete(id)
+            resolve({ kind: request.kind, ok: false, error: String(error) } as DatabaseWorkerResult)
+          }
+        })
+    )
+    this.requestTail = result.then(
+      () => undefined,
+      () => undefined
+    )
+    return result as Promise<ResultForRequest<K>>
   }
 
   private rejectAll(): void {
@@ -379,5 +468,6 @@ export class DatabaseWorker {
       } as DatabaseWorkerResult)
     }
     this.pending.clear()
+    this.requestTail = Promise.resolve()
   }
 }

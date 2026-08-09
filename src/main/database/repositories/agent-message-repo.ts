@@ -112,7 +112,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
   return createHash('sha256').update(parts.join('\u0000')).digest('hex')
 }
 
-interface AgentMessageRow {
+export interface AgentMessageRow {
   id: string
   thread_id: string
   session_id: string | null
@@ -332,13 +332,10 @@ export function encodeAgentMessage(
   }
 }
 
-/** Persist one fully-encoded message (INSERT or UPDATE by id). */
-export function writeEncodedMessage(
-  executor: ProviderDeltaSyncExecutor,
-  encoded: EncodedAgentMessage
-): void {
-  executor.run(
-    `INSERT INTO agent_messages(
+/** The INSERT ... ON CONFLICT statement for one encoded message. */
+export function encodeWriteStatement(encoded: EncodedAgentMessage): { sql: string; params: unknown[] } {
+  return {
+    sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
       transport_parts, transport_origin,
       model_id, provider_id, harness_id,
@@ -371,33 +368,63 @@ export function writeEncodedMessage(
       context_used = excluded.context_used,
       error = excluded.error,
       structured_output = excluded.structured_output`,
-    encoded.id,
-    encoded.threadId,
-    encoded.sessionId,
-    encoded.role,
-    encoded.origin,
-    encoded.visibility,
-    encoded.partsJson,
-    encoded.searchText,
-    encoded.contentHash,
-    encoded.transportPartsJson,
-    encoded.transportOrigin,
-    encoded.modelId,
-    encoded.providerId,
-    encoded.harnessId,
-    encoded.referencesJson,
-    encoded.projectReferencesJson,
-    encoded.createdAt,
-    encoded.completedAt,
-    encoded.cost,
-    encoded.tokensJson,
-    encoded.rateLimitsJson,
-    encoded.creditsJson,
-    encoded.contextWindow,
-    encoded.contextUsed,
-    encoded.error,
-    encoded.structuredOutputJson
-  )
+    params: [
+      encoded.id,
+      encoded.threadId,
+      encoded.sessionId,
+      encoded.role,
+      encoded.origin,
+      encoded.visibility,
+      encoded.partsJson,
+      encoded.searchText,
+      encoded.contentHash,
+      encoded.transportPartsJson,
+      encoded.transportOrigin,
+      encoded.modelId,
+      encoded.providerId,
+      encoded.harnessId,
+      encoded.referencesJson,
+      encoded.projectReferencesJson,
+      encoded.createdAt,
+      encoded.completedAt,
+      encoded.cost,
+      encoded.tokensJson,
+      encoded.rateLimitsJson,
+      encoded.creditsJson,
+      encoded.contextWindow,
+      encoded.contextUsed,
+      encoded.error,
+      encoded.structuredOutputJson
+    ]
+  }
+}
+
+/** Persist one fully-encoded message (INSERT or UPDATE by id). */
+export function writeEncodedMessage(
+  executor: ProviderDeltaSyncExecutor,
+  encoded: EncodedAgentMessage
+): void {
+  const statement = encodeWriteStatement(encoded)
+  executor.run(statement.sql, ...statement.params)
+}
+
+/**
+ * Atomic replace of a thread's conversation mirror: delete conversation rows
+ * and any provider cursors, then upsert every message — as a statement batch
+ * runnable on the worker's `transaction` command or on the primary connection.
+ */
+export function buildSaveMessagesStatements(
+  threadId: string,
+  messages: AgentMessage[]
+): Array<{ sql: string; params: unknown[] }> {
+  const statements: Array<{ sql: string; params: unknown[] }> = [
+    { sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id IS NULL', params: [threadId] },
+    { sql: 'DELETE FROM provider_sync_cursors WHERE thread_id = ?', params: [threadId] }
+  ]
+  for (const message of messages) {
+    statements.push(encodeWriteStatement(encodeAgentMessage(message, threadId)))
+  }
+  return statements
 }
 
 /**
@@ -768,5 +795,52 @@ export class AgentMessageRepo {
       threadId
     )
     return row?.cnt ?? 0
+  }
+}
+
+// ── Shared SQL builders and row mapping (main + worker) ───────────────────
+
+/** Map raw `agent_messages` rows to display-facing messages. */
+export function mapMessageRows(rows: unknown[], includeTransport = false): AgentMessage[] {
+  return rows.map((row) => rowToMessage(row as AgentMessageRow, includeTransport))
+}
+
+/** SQL for the mirrored conversation (parent-session rows only), no LIMIT. */
+export function buildLoadByThreadSql(threadId: string): { sql: string; params: unknown[] } {
+  return {
+    sql: `SELECT * FROM agent_messages
+      WHERE thread_id = ? AND session_id IS NULL
+        AND visibility IN ('conversation', 'working_trace')
+      ORDER BY created_at ASC`,
+    params: [threadId]
+  }
+}
+
+/** SQL for one bounded page (newest first, cursor-based), no LIMIT. */
+export function buildLoadPageSql(
+  threadId: string,
+  before: ThreadMessageCursor | undefined
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId]
+  const cursor = before
+    ? ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+    : ''
+  if (before) {
+    params.push(before.createdAt, before.createdAt, before.id)
+  }
+  return {
+    sql: `SELECT * FROM agent_messages
+      WHERE thread_id = ? AND session_id IS NULL
+        AND visibility IN ('conversation', 'working_trace')${cursor}
+      ORDER BY created_at DESC, id DESC`,
+    params
+  }
+}
+
+/** SQL for every parent-session record, including transport-only prompts. */
+export function buildLoadAllSql(threadId: string): { sql: string; params: unknown[] } {
+  return {
+    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id IS NULL ORDER BY created_at ASC`,
+    params: [threadId]
   }
 }

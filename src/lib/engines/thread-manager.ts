@@ -3,13 +3,22 @@ import { join } from 'path'
 import { generateId, getConfigRoot } from '../utils'
 import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
-import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
+import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
 import {
   AgentMessageRepo,
-  type ProviderDeltaSyncResult
+  type ProviderDeltaSyncResult,
+  buildLoadAllSql,
+  buildLoadByThreadSql,
+  buildLoadPageSql,
+  buildSaveMessagesStatements,
+  mapMessageRows
 } from '../../main/database/repositories/agent-message-repo'
-import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
+import {
+  buildThreadSearchSql,
+  mergeThreadSearchResults,
+  ThreadRepo
+} from '../../main/database/repositories/thread-repo'
 import type { Database } from '../../main/database/database'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -547,16 +556,22 @@ export class ThreadManager {
     return updated
   }
 
-  /** Persist the mirrored agent conversation (rich messages) for offline access. */
+  /**
+   * Persist the mirrored agent conversation (rich messages) for offline access.
+   * Runs as one atomic transaction on the worker's connection when available
+   * (falls back to the primary connection).
+   */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    this.db.transaction(() => {
-      this.agentMessageRepo.deleteConversationByThread(threadId)
-      this.agentMessageRepo.clearProviderCursorsByThread(threadId)
-      for (const msg of messages) {
-        this.agentMessageRepo.upsert(msg, threadId)
-      }
-    })
+    const outcome = await this.db.transactionViaWorker(buildSaveMessagesStatements(threadId, messages))
+    if (!outcome.ok) {
+      // Fallback: identical batching semantics on the primary connection.
+      this.db.transaction(() => {
+        for (const statement of buildSaveMessagesStatements(threadId, messages)) {
+          this.db.run(statement.sql, ...statement.params)
+        }
+      })
+    }
   }
 
   /**
@@ -597,6 +612,9 @@ export class ThreadManager {
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
+    const built = buildLoadByThreadSql(threadId)
+    const result = await this.db.queryViaWorker(built.sql, built.params, 0)
+    if (result.ok) return mapMessageRows(result.rows)
     return this.agentMessageRepo.loadByThread(threadId)
   }
 
@@ -608,6 +626,13 @@ export class ThreadManager {
     limit: number
   ): Promise<ThreadMessagePage> {
     if (!this.getOwnedThread(projectId, threadId)) return { messages: [], hasOlder: false }
+    const built = buildLoadPageSql(threadId, before)
+    const result = await this.db.queryViaWorker(built.sql, built.params, limit + 1)
+    if (result.ok) {
+      const hasOlder = result.rows.length > limit
+      const pageRows = hasOlder ? result.rows.slice(0, limit) : result.rows
+      return { messages: mapMessageRows(pageRows).reverse(), hasOlder }
+    }
     return this.agentMessageRepo.loadPageByThread(threadId, before, limit)
   }
 
@@ -633,6 +658,9 @@ export class ThreadManager {
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
+    const built = buildLoadAllSql(threadId)
+    const result = await this.db.queryViaWorker(built.sql, built.params, 0)
+    if (result.ok) return mapMessageRows(result.rows, true)
     return this.agentMessageRepo.loadAllByThread(threadId)
   }
 
@@ -698,12 +726,24 @@ export class ThreadManager {
   /**
    * Full-text search across thread titles and conversation content
    * (user messages + agent final output). Project-scoped when projectId is set.
+   * Runs the FTS queries on the worker's connection (serialized) with a
+   * primary-connection fallback.
    */
-  searchThreads(
+  async searchThreads(
     query: string,
     options: { projectId?: string; limit?: number } = {}
-  ): import('../types').ThreadSearchResult[] {
-    return this.threadRepo.search(query, options)
+  ): Promise<import('../types').ThreadSearchResult[]> {
+    const raw = query.trim()
+    if (!raw) return []
+    const built = buildThreadSearchSql(raw, options)
+    const title = await this.db.queryViaWorker(built.title.sql, built.title.params, built.limit)
+    if (!title.ok) return this.threadRepo.search(query, options)
+    if (!built.fts) {
+      return mergeThreadSearchResults(title.rows, [], raw, built.limit)
+    }
+    const message = await this.db.queryViaWorker(built.fts.sql, built.fts.params, Math.min(built.limit * 4, 200))
+    if (!message.ok) return this.threadRepo.search(query, options)
+    return mergeThreadSearchResults(title.rows, message.rows, raw, built.limit)
   }
 
   /**

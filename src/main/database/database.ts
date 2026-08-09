@@ -126,12 +126,17 @@ export class Database {
     this.db = null
   }
 
-  /** Close the database connection and stop the maintenance worker. */
-  close(): void {
-    if (this.maintenanceWorker) {
-      const worker = this.maintenanceWorker
-      this.maintenanceWorker = null
-      void worker.shutdown()
+  /**
+   * Close the database: gracefully shuts the maintenance worker down (typed
+   * shutdown sent, clean exit awaited, bounded force only on timeout) and then
+   * closes the primary connection. Awaitable so lifecycle code can be sure the
+   * worker has stopped and its connection is closed before teardown completes.
+   */
+  async close(): Promise<void> {
+    const worker = this.maintenanceWorker
+    this.maintenanceWorker = null
+    if (worker?.isRunning()) {
+      await worker.shutdown()
     }
     this.closeConnection()
     Logger.info('SQLite database closed')
@@ -293,11 +298,25 @@ export class Database {
     } catch (error) {
       result = { ok: false, reason: 'io', error: String(error) }
     }
-    // Reopen the primary connection on the restored (or, on failure, the
-    // unchanged) inode so the app stays usable regardless of the outcome.
-    await this.init().catch((error) => {
-      Logger.error('Failed to reopen the database after restore', error)
-    })
+    if (result.ok) {
+      // Reopen the primary connection on the restored inode. If the reopen
+      // fails, the restore must be reported as failed — a restored database
+      // the app cannot open is not a successful restore.
+      try {
+        await this.init()
+      } catch (error) {
+        return {
+          ok: false,
+          reason: 'io',
+          error: `restore completed but reopening the database failed: ${String(error)}`
+        }
+      }
+    } else {
+      // Reopen the unchanged inode best-effort so the app stays usable.
+      await this.init().catch((error) => {
+        Logger.error('Failed to reopen the database after a failed restore', error)
+      })
+    }
     return result
   }
 
@@ -323,6 +342,81 @@ export class Database {
       }
     }
     return runProviderDeltaSync(this, threadId, sessionId, messages)
+  }
+
+  // ── Serialized worker CRUD (bounded/paged reads, batched writes) ────────
+
+  /**
+   * Bounded read executed on the worker's connection (serialized with every
+   * other worker request and the maintenance loop). `sql` must not contain
+   * LIMIT; `maxRows` (>0) bounds the response. Falls back to the primary
+   * connection when no worker is available or the worker fails.
+   */
+  async queryViaWorker(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<{ ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.query(sql, params, maxRows)
+      if (response.ok) {
+        return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
+      }
+      if (response.error) {
+        Logger.error('Database worker query failed; falling back to primary connection', response.error)
+      }
+    }
+    return runLocalBoundedQuery(this, sql, params, maxRows)
+  }
+
+  /** Single write statement on the worker's connection; primary fallback. */
+  async executeViaWorker(
+    sql: string,
+    params: unknown[]
+  ): Promise<{ ok: boolean; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.execute(sql, params)
+      if (response.ok) return { ok: true }
+      if (response.error) {
+        Logger.error('Database worker execute failed; falling back to primary connection', response.error)
+      }
+    }
+    try {
+      this.run(sql, ...params)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: String(error) }
+    }
+  }
+
+  /**
+   * Atomic batch: all statements run in one transaction on the worker's
+   * connection (serialized). Primary-connection fallback keeps the same
+   * batching guarantee.
+   */
+  async transactionViaWorker(
+    statements: Array<{ sql: string; params: unknown[] }>
+  ): Promise<{ ok: boolean; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.transaction(statements)
+      if (response.ok) return { ok: true }
+      if (response.error) {
+        Logger.error('Database worker transaction failed; falling back to primary connection', response.error)
+      }
+    }
+    try {
+      this.transaction(() => {
+        for (const statement of statements) {
+          this.run(statement.sql, ...(statement.params ?? []))
+        }
+      })
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: String(error) }
+    }
   }
 
   /** Incremental vacuum to reclaim free pages (bounded, off-main). */
@@ -576,5 +670,31 @@ export class Database {
       SCHEMA_VERSION_KEY,
       String(version)
     )
+  }
+}
+
+/**
+ * Local fallback for the worker's bounded query: applies the same LIMIT +
+ * truncation semantics against a primary connection.
+ */
+function runLocalBoundedQuery(
+  db: Database,
+  sql: string,
+  params: unknown[],
+  maxRows: number
+): { ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string } {
+  try {
+    const bounded = Math.max(0, Math.floor(maxRows))
+    let statementSql = sql.replace(/;\s*$/u, '')
+    const boundParams = [...params]
+    if (bounded > 0) {
+      statementSql = `${statementSql} LIMIT ?`
+      boundParams.push(bounded + 1)
+    }
+    const rows = db.all<Record<string, unknown>>(statementSql, ...boundParams)
+    const truncated = bounded > 0 && rows.length > bounded
+    return { ok: true, rows: truncated ? rows.slice(0, bounded) : rows, truncated }
+  } catch (error) {
+    return { ok: false, rows: [], truncated: false, error: String(error) }
   }
 }

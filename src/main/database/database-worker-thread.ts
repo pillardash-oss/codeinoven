@@ -1,16 +1,19 @@
 /**
- * SQLite maintenance worker thread.
+ * SQLite worker thread.
  *
  * Runs inside a dedicated `worker_threads` Worker spawned by `DatabaseWorker`
  * (`database-worker.ts`). It opens a second WAL connection to the same database
- * file and is the single owner of maintenance work that is O(database size):
- * passive WAL checkpoints, integrity checks, size telemetry, online
- * backup/restore, VACUUM, FTS optimize/integrity/rebuild, bounded retention,
- * and corruption/full-disk detection and recovery. Keeping this work off the
- * Electron main process means a large database never stalls UI/IPC.
+ * file and is the single owner of every O(database-size) operation — passive
+ * WAL checkpoints, integrity checks, size telemetry, online backup/restore,
+ * VACUUM, FTS optimize/integrity/rebuild, bounded retention, corruption/full-
+ * disk recovery, and the latency-critical repository CRUD (delta sync,
+ * batched transactions) and normal FTS queries — so that no database work ever
+ * blocks the Electron main process.
  *
- * The primary read/write connection stays in the main process; the two
- * connections coordinate through SQLite's WAL locking (busy_timeout 5000).
+ * Every request and the scheduled maintenance loop run through a single-flight
+ * mutex (`enqueue`), so restore/backup/checkpoint/delta/query can never overlap.
+ * Shutdown clears the maintenance timer, closes the connection, acknowledges,
+ * then closes the port so the worker exits cleanly.
  */
 
 import { parentPort, workerData } from 'worker_threads'
@@ -71,6 +74,37 @@ function emit(message: { type: 'telemetry' | 'log'; level?: 'info' | 'warn' | 'e
   }
   port.postMessage({ type: 'log', level: message.level ?? 'info', message: message.message ?? '' })
 }
+
+// ─── Single-flight serialization ───────────────────────────────────────────
+
+let activeOps = 0
+let totalOps = 0
+let maxObservedConcurrency = 0
+let tail: Promise<unknown> = Promise.resolve()
+
+/**
+ * Serialize a task so only one database operation (request or maintenance
+ * pass) is ever executing at a time. Tracks concurrency for the serialization
+ * proof (`stats`).
+ */
+function enqueue<T>(fn: () => Promise<T> | T): Promise<T> {
+  const run = tail.then(async () => {
+    activeOps++
+    totalOps++
+    if (activeOps > maxObservedConcurrency) maxObservedConcurrency = activeOps
+    try {
+      return await fn()
+    } finally {
+      activeOps--
+    }
+  })
+  tail = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
+
 // ─── Operation handlers ───────────────────────────────────────────────────
 
 function checkpoint(request: Extract<DatabaseWorkerRequest, { kind: 'checkpoint' }>): DatabaseWorkerResult {
@@ -418,6 +452,63 @@ function health(): DatabaseWorkerResult {
   return { kind: 'health', ok: true, status: 'ok', quickCheck, details: telemetry, message: 'SQLite database healthy' }
 }
 
+/**
+ * Bounded read: the caller's SQL must not contain LIMIT; `maxRows` (>0) bounds
+ * the response and reports `truncated` when more rows matched.
+ */
+function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): DatabaseWorkerResult {
+  try {
+    const maxRows = Math.max(0, Math.floor(request.maxRows))
+    let sql = request.sql.replace(/;\s*$/u, '')
+    const params = [...request.params]
+    if (maxRows > 0) {
+      sql = `${sql} LIMIT ?`
+      params.push(maxRows + 1)
+    }
+    const rows = connection().prepare(sql).all(...params) as Record<string, unknown>[]
+    const truncated = maxRows > 0 && rows.length > maxRows
+    return { kind: 'query', ok: true, rows: truncated ? rows.slice(0, maxRows) : rows, truncated }
+  } catch (error) {
+    return { kind: 'query', ok: false, error: String(error) }
+  }
+}
+
+function execute(request: Extract<DatabaseWorkerRequest, { kind: 'execute' }>): DatabaseWorkerResult {
+  try {
+    connection().prepare(request.sql).run(...request.params)
+    return { kind: 'execute', ok: true }
+  } catch (error) {
+    return { kind: 'execute', ok: false, error: String(error) }
+  }
+}
+
+/** Run a batch of statements atomically in one transaction (rolls back on error). */
+function transaction(request: Extract<DatabaseWorkerRequest, { kind: 'transaction' }>): DatabaseWorkerResult {
+  try {
+    const conn = connection()
+    const run = conn.transaction(() => {
+      for (const statement of request.statements) {
+        conn.prepare(statement.sql).run(...(statement.params ?? []))
+      }
+    })
+    run()
+    return { kind: 'transaction', ok: true }
+  } catch (error) {
+    return { kind: 'transaction', ok: false, error: String(error) }
+  }
+}
+
+function stats(): DatabaseWorkerResult {
+  return {
+    kind: 'stats',
+    ok: true,
+    activeOps,
+    totalOps,
+    maxObservedConcurrency,
+    maintenanceEnabled: config.maintenanceEnabled && !shuttingDown
+  }
+}
+
 // ─── Request dispatch ─────────────────────────────────────────────────────
 
 function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<DatabaseWorkerResult> {
@@ -442,6 +533,14 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
       return recoverTo(request)
     case 'health':
       return health()
+    case 'query':
+      return query(request)
+    case 'execute':
+      return execute(request)
+    case 'transaction':
+      return transaction(request)
+    case 'stats':
+      return stats()
     case 'sync-provider-deltas': {
       try {
         return {
@@ -454,8 +553,10 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
       }
     }
     case 'shutdown': {
+      shuttingDown = true
+      clearMaintenanceTimer()
       try {
-        connection().close()
+        db?.close()
       } catch {
         // Best-effort close on shutdown.
       }
@@ -470,19 +571,35 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
 if (port) {
   port.on('message', (message: DatabaseWorkerOutbound) => {
     if (message.type !== 'request') return
-    void Promise.resolve(handle(message.request))
-      .then((result) => {
-        if (port) port.postMessage({ type: 'response', id: message.id, result })
-      })
-      .catch((error) => {
-        const result: DatabaseWorkerResult = { kind: 'ping', ok: false }
+    void enqueue(async () => {
+      let result: DatabaseWorkerResult
+      try {
+        result = await handle(message.request)
+      } catch (error) {
+        result = { kind: 'ping', ok: false }
         emit({ type: 'log', level: 'error', message: `database worker request failed: ${String(error)}` })
-        if (port) port.postMessage({ type: 'response', id: message.id, result })
-      })
+      }
+      if (port) port.postMessage({ type: 'response', id: message.id, result })
+      if (message.request.kind === 'shutdown' && port) {
+        // Close the port after the acknowledgement flushes so the worker exits
+        // cleanly once no handles remain.
+        setImmediate(() => port.close())
+      }
+    })
   })
 }
 
-// ─── Scheduled maintenance ────────────────────────────────────────────────
+// ─── Scheduled maintenance (serialized with requests) ─────────────────────
+
+let shuttingDown = false
+let maintenanceTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearMaintenanceTimer(): void {
+  if (maintenanceTimer) {
+    clearTimeout(maintenanceTimer)
+    maintenanceTimer = null
+  }
+}
 
 function lastRun(key: string): number {
   try {
@@ -548,11 +665,13 @@ function runMaintenancePass(): void {
 }
 
 function scheduleMaintenance(): void {
-  const timer = setTimeout(() => {
-    runMaintenancePass()
-    scheduleMaintenance()
+  clearMaintenanceTimer()
+  maintenanceTimer = setTimeout(() => {
+    void enqueue(runMaintenancePass).finally(() => {
+      if (!shuttingDown && config.maintenanceEnabled) scheduleMaintenance()
+    })
   }, Math.max(60_000, config.maintenanceIntervalMs))
-  timer.unref?.()
+  maintenanceTimer.unref?.()
 }
 
 if (port && config.maintenanceEnabled) {

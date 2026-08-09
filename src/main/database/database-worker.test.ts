@@ -142,7 +142,7 @@ describe('DatabaseWorker production wrapper', () => {
     expect(edited.applied).toBe(1)
     expect(edited.skipped).toBe(1)
 
-    db.close()
+    await db.close()
   })
 
   it('restores a backup end to end and passes post-restore integrity', async () => {
@@ -176,7 +176,7 @@ describe('DatabaseWorker production wrapper', () => {
     const health = await db.healthCheck()
     expect(health.ok).toBe(true)
 
-    db.close()
+    await db.close()
   })
 
   it('returns an explicit source_invalid kind when restoring a missing backup', async () => {
@@ -198,6 +198,169 @@ describe('DatabaseWorker production wrapper', () => {
     const integrity = await db.integrityCheck(true)
     expect(integrity.ok).toBe(true)
 
-    db.close()
+    await db.close()
+  })
+
+  it('serializes every worker request (flooded worker never overlaps)', async () => {
+    const dir = makeDir()
+    const worker = new Worker(bundledWorkerPath, {
+      workerData: {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      }
+    })
+    let nextId = 1
+    const pending = new Map<number, (result: unknown) => void>()
+    worker.on('message', (msg: { type: string; id: number; result: unknown }) => {
+      if (msg.type !== 'response') return
+      const resolve = pending.get(msg.id)
+      if (resolve) {
+        pending.delete(msg.id)
+        resolve(msg.result)
+      }
+    })
+    const request = (req: { kind: string }) =>
+      new Promise((resolve) => {
+        const id = nextId++
+        pending.set(id, resolve)
+        worker.postMessage({ type: 'request', id, request: req })
+      })
+
+    await new Promise((resolve) => worker.once('online', resolve))
+
+    // Flood the worker directly (bypassing the client's single-flight queue)
+    // with reads, writes, and a maintenance-style op to prove the mutex
+    // serializes. The raw database is schema-empty, so every op must not
+    // depend on application tables.
+    const requests = [
+      ...Array.from({ length: 15 }, () => ({ kind: 'ping' as const })),
+      { kind: 'checkpoint' as const, mode: 'passive' as const },
+      { kind: 'query' as const, sql: 'SELECT 1 AS one', params: [], maxRows: 1 },
+      { kind: 'transaction' as const, statements: [] }
+    ]
+    const results = await Promise.all(requests.map((req) => request(req)))
+    expect(results.every((r) => (r as { ok: boolean }).ok)).toBe(true)
+
+    const stats = (await request({ kind: 'stats' })) as {
+      ok: boolean
+      maxObservedConcurrency: number
+      totalOps: number
+    }
+    expect(stats.ok).toBe(true)
+    expect(stats.totalOps).toBeGreaterThanOrEqual(requests.length)
+    expect(stats.maxObservedConcurrency).toBe(1)
+
+    await request({ kind: 'shutdown' })
+    await worker.terminate()
+  })
+
+  it('keeps the main event loop responsive during heavy worker work (measured proof)', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    db.run(
+      `INSERT INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('p-meas', 'Measured project', '/measured', 'local', 'openai', 'default', 70, 'manual', 1, 1)`
+    )
+
+    const statements: Array<{ sql: string; params: unknown[] }> = []
+    for (let i = 0; i < 8000; i++) {
+      statements.push({
+        sql: 'INSERT INTO db_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+        params: [`measured-${i}`, String(i)]
+      })
+    }
+
+    const started = Date.now()
+    const heavy = db.transactionViaWorker(statements)
+
+    // Main-loop responsiveness while the worker is busy: 40 zero-delay timers.
+    const tickStart = Date.now()
+    await new Promise<void>((resolve) => {
+      let remaining = 40
+      for (let i = 0; i < 40; i++) {
+        setTimeout(() => {
+          remaining--
+          if (remaining === 0) resolve()
+        }, 0)
+      }
+    })
+    const ticksElapsed = Date.now() - tickStart
+
+    const result = await heavy
+    const totalElapsed = Date.now() - started
+    expect(result.ok).toBe(true)
+    expect(totalElapsed).toBeGreaterThan(0)
+    // If the write ran on the main thread, the timers would have been queued
+    // behind the synchronous transaction and ticksElapsed would approach
+    // totalElapsed. Off-main, they complete almost immediately.
+    expect(ticksElapsed).toBeLessThan(totalElapsed)
+    expect(ticksElapsed).toBeLessThan(500)
+
+    await db.close()
+  })
+
+  it('routes thread FTS search through the worker', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Redis notes' })
+    await manager.upsertMessages('p1', thread.id, [msg('search-1', 1, 'redis persistence internals')], 'sess')
+
+    const found = await manager.searchThreads('redis', { projectId: 'p1' })
+    expect(found.some((r) => r.thread.id === thread.id)).toBe(true)
+    const titleMatch = await manager.searchThreads('Redis', { projectId: 'p1' })
+    expect(titleMatch.some((r) => r.kind === 'title' && r.thread.id === thread.id)).toBe(true)
+
+    await db.close()
+  })
+
+  it('fails the restore when reopening the primary connection fails (injected)', async () => {
+    const dir = makeDir()
+    class FlakyDatabase extends Database {
+      failInit = false
+      async init(): Promise<void> {
+        if (this.failInit) throw new Error('injected reopen failure')
+        return super.init()
+      }
+    }
+    const db = new FlakyDatabase(join(dir, 'app.db'), realWorkerFactory)
+    await db.init()
+    db.run(
+      `INSERT INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('p-flaky', 'Flaky project', '/flaky', 'local', 'openai', 'default', 70, 'manual', 1, 1)`
+    )
+    const backup = await db.backupDatabaseToDefaultDir()
+    expect(backup.ok).toBe(true)
+
+    db.failInit = true
+    const restored = await db.restoreFromBackup(backup.path ?? '')
+    expect(restored.ok).toBe(false)
+    expect(restored.reason).toBe('io')
+    expect(restored.error).toContain('reopening')
+
+    await db.close()
+  })
+
+  it('awaits a graceful database close that stops the worker', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    expect(db.hasMaintenanceWorker()).toBe(true)
+    await db.close()
+    expect(db.isOpen()).toBe(false)
+    expect(db.hasMaintenanceWorker()).toBe(false)
   })
 })

@@ -491,65 +491,99 @@ export class ThreadRepo {
    * messages and the agent's final output from conversation-scoped records.
    */
   search(query: string, options: ThreadSearchOptions = {}): ThreadSearchResult[] {
-    const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
-    const projectId = options.projectId ?? null
-    const results: ThreadSearchResult[] = []
-    const seen = new Set<string>()
-
     const raw = query.trim()
-    if (!raw) return results
-
+    if (!raw) return []
+    const built = buildThreadSearchSql(raw, options)
     const titleRows = this.db.all<ThreadRow>(
-      `SELECT t.* FROM threads t
-       WHERE (? IS NULL OR t.project_id = ?)
-         AND t.title LIKE ? ESCAPE '\\'
-       ORDER BY t.last_activity DESC
-       LIMIT ?`,
-      projectId,
-      projectId,
-      `%${escapeLike(raw)}%`,
-      limit
+      `${built.title.sql} LIMIT ?`,
+      ...built.title.params,
+      built.limit
     )
-    for (const row of titleRows) {
-      if (seen.has(row.id)) continue
-      seen.add(row.id)
-      results.push({ thread: rowToThread(row), kind: 'title' })
-      if (results.length >= limit) return results
-    }
-
-    const ftsQuery = toFtsQuery(raw)
-    if (ftsQuery) {
-      const messageRows = this.db.all<ThreadRow & MessageMatchRow>(
-        `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
-                am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
-         FROM agent_messages_fts
-         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
-         JOIN threads t ON t.id = am.thread_id
-         WHERE agent_messages_fts MATCH ?
-           AND am.session_id IS NULL
-           AND am.visibility = 'conversation'
-           AND (? IS NULL OR t.project_id = ?)
-         ORDER BY bm25(agent_messages_fts), am.created_at DESC
-         LIMIT ?`,
-        ftsQuery,
-        projectId,
-        projectId,
-        Math.min(limit * 4, 200)
-      )
-      for (const row of messageRows) {
-        if (seen.has(row.id)) continue
-        if (results.length >= limit) break
-        seen.add(row.id)
-        results.push({
-          thread: rowToThread(row),
-          kind: 'message',
-          role: row.match_role === 'assistant' ? 'assistant' : 'user',
-          snippet: buildSnippet(row.snippet_text, raw),
-          timestamp: row.snippet_timestamp
-        })
-      }
-    }
-
-    return results
+    const messageRows = built.fts
+      ? this.db.all<ThreadRow & MessageMatchRow>(
+          `${built.fts.sql} LIMIT ?`,
+          ...built.fts.params,
+          Math.min(built.limit * 4, 200)
+        )
+      : []
+    return mergeThreadSearchResults(titleRows, messageRows, raw, built.limit)
   }
+}
+
+// ── Shared search SQL and result mapping (main + worker) ──────────────────
+
+export interface ThreadSearchSql {
+  /** Title-substring query (no LIMIT; caller bounds the result). */
+  title: { sql: string; params: unknown[] }
+  /** FTS5 message query (no LIMIT; null when the raw query has no tokens). */
+  fts: { sql: string; params: unknown[] } | null
+  /** Effective result cap. */
+  limit: number
+}
+
+/** Build the title + FTS search SQL from free-form input. */
+export function buildThreadSearchSql(
+  raw: string,
+  options: ThreadSearchOptions = {}
+): ThreadSearchSql {
+  const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
+  const projectId = options.projectId ?? null
+  const trimmed = raw.trim()
+  const title = {
+    sql: `SELECT t.* FROM threads t
+      WHERE (? IS NULL OR t.project_id = ?)
+        AND t.title LIKE ? ESCAPE '\\'
+      ORDER BY t.last_activity DESC`,
+    params: [projectId, projectId, `%${escapeLike(trimmed)}%`]
+  }
+  const ftsQuery = toFtsQuery(trimmed)
+  const fts = ftsQuery
+    ? {
+        sql: `SELECT t.*, am.role AS match_role, substr(am.search_text, 1, 2000) AS snippet_text,
+              am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
+        FROM agent_messages_fts
+        JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
+        JOIN threads t ON t.id = am.thread_id
+        WHERE agent_messages_fts MATCH ?
+          AND am.session_id IS NULL
+          AND am.visibility = 'conversation'
+          AND (? IS NULL OR t.project_id = ?)
+        ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
+        params: [ftsQuery, projectId, projectId]
+      }
+    : null
+  return { title, fts, limit }
+}
+
+/** Merge title + message matches, dedup by thread, and build snippets. */
+export function mergeThreadSearchResults(
+  titleRows: unknown[],
+  messageRows: unknown[],
+  raw: string,
+  limit: number
+): ThreadSearchResult[] {
+  const results: ThreadSearchResult[] = []
+  const seen = new Set<string>()
+  for (const row of titleRows) {
+    const threadRow = row as ThreadRow
+    if (seen.has(threadRow.id)) continue
+    seen.add(threadRow.id)
+    results.push({ thread: rowToThread(threadRow), kind: 'title' })
+    if (results.length >= limit) return results
+  }
+  for (const row of messageRows) {
+    const threadRow = row as ThreadRow
+    if (seen.has(threadRow.id)) continue
+    if (results.length >= limit) break
+    seen.add(threadRow.id)
+    const meta = row as { match_role?: unknown; snippet_text?: unknown; snippet_timestamp?: unknown }
+    results.push({
+      thread: rowToThread(threadRow),
+      kind: 'message',
+      role: String(meta.match_role) === 'assistant' ? 'assistant' : 'user',
+      snippet: buildSnippet(String(meta.snippet_text ?? ''), raw),
+      timestamp: Number(meta.snippet_timestamp)
+    })
+  }
+  return results
 }
