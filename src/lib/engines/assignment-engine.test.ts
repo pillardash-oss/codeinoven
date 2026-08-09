@@ -427,6 +427,8 @@ describe('AssignmentEngine', () => {
     expect(reviewed.task?.status).toBe('rework')
     expect(reassigned.thread?.id).toBe(workerThreadId)
     expect(reassigned.task?.status).toBe('running')
+    expect(reassigned.task?.report).toBeUndefined()
+    expect(reassigned.task?.review).toBeUndefined()
   })
 
   it('creates one durable linked auditor after Assignment completion', async () => {
@@ -634,7 +636,7 @@ describe('AssignmentEngine', () => {
     expect(abandoned?.assignmentId).toBeUndefined()
     expect(abandoned?.assignmentRole).toBeUndefined()
     expect(abandoned?.assignmentTaskId).toBeUndefined()
-    expect(abandoned?.coordinatorThreadId).toBeUndefined()
+    expect(abandoned?.coordinatorThreadId).toBe(coordinatorId)
   })
 
   it('lets the coordinator re-review a failed task as rework', async () => {

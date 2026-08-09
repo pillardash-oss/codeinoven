@@ -865,6 +865,10 @@
     })
     const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as Thread
+      scopeState.updateThread(thread)
+      if (workspaceState.selectedThread?.id === thread.id) {
+        workspaceState.updateThread(thread)
+      }
       if (thread.read) {
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }

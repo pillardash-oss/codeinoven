@@ -811,7 +811,9 @@ export class AssignmentEngine {
           workerName: undefined,
           threadId: undefined
         }
-      : task
+      : task.status === 'rework'
+        ? { ...task, report: undefined, review: undefined }
+        : task
     if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
       this.removeApiCapabilitiesForThread(active.id, staleThreadId)
       await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)

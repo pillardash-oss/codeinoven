@@ -216,6 +216,39 @@ export function isOrchestrationChildThread(thread: Thread): boolean {
   )
 }
 
+/** A harness is actively producing work for this persisted thread. */
+export function isThreadWorking(thread: Thread): boolean {
+  return thread.status === 'planning' || thread.status === 'executing'
+}
+
+/**
+ * The Sr. Engineer is the public source of truth for delegated work. Its row
+ * remains active while any owned worker/auditor is active, even though the
+ * coordinator's own harness turn is intentionally idle between handoffs.
+ */
+export function coordinatorHasActiveDelegates(
+  coordinator: Thread,
+  threads: readonly Thread[]
+): boolean {
+  if (
+    coordinator.assignmentRole !== 'coordinator' &&
+    coordinator.achievementRole !== 'coordinator'
+  ) {
+    return false
+  }
+  if (coordinator.auditState === 'running') return true
+  return threads.some(
+    (candidate) =>
+      candidate.id !== coordinator.id &&
+      isThreadWorking(candidate) &&
+      (candidate.coordinatorThreadId === coordinator.id ||
+        coordinator.auditorThreadId === candidate.id ||
+        (coordinator.assignmentId !== undefined &&
+          candidate.assignmentId === coordinator.assignmentId &&
+          isOrchestrationChildThread(candidate)))
+  )
+}
+
 export interface CreateThreadInput {
   projectId: string
   providerId: string

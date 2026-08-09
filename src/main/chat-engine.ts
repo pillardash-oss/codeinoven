@@ -5245,8 +5245,8 @@ export class ChatEngine {
     }
   }
 
-  private assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): boolean {
-    return assignment.content.tasks.some(
+  private async assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): Promise<boolean> {
+    const immediatelyActionable = assignment.content.tasks.some(
       (task) =>
         task.status === 'ready' ||
         task.status === 'rework' ||
@@ -5255,10 +5255,65 @@ export class ChatEngine {
         task.status === 'failed' ||
         (task.owner === 'senior' && task.status === 'running')
     )
+    if (immediatelyActionable) return true
+
+    const runningWorkers = assignment.content.tasks.filter(
+      (task) => task.owner === 'worker' && task.status === 'running'
+    )
+    if (runningWorkers.length > 0) {
+      const workers = await Promise.all(
+        runningWorkers.map((task) =>
+          task.threadId
+            ? this.threadManager.getThread(assignment.projectId, task.threadId)
+            : Promise.resolve(null)
+        )
+      )
+      return workers.some(
+        (worker) =>
+          !worker ||
+          (worker.status !== 'created' &&
+            worker.status !== 'planning' &&
+            worker.status !== 'executing')
+      )
+    }
+
+    return assignment.content.tasks.some((task) => task.status !== 'completed')
+  }
+
+  private async reconcileUnavailableAssignmentWorkers(
+    assignment: AssignmentPlan
+  ): Promise<AssignmentPlan> {
+    let current = assignment
+    const runningWorkers = assignment.content.tasks.filter(
+      (task) => task.owner === 'worker' && task.status === 'running' && task.threadId
+    )
+    for (const task of runningWorkers) {
+      const workerThreadId = task.threadId
+      if (!workerThreadId) continue
+      const worker = await this.threadManager.getThread(assignment.projectId, workerThreadId)
+      if (
+        worker &&
+        (worker.status === 'created' ||
+          worker.status === 'planning' ||
+          worker.status === 'executing')
+      ) {
+        continue
+      }
+      current = await this.assignmentEngine.stopWorker(current.id, workerThreadId)
+      Logger.info('Recovered unavailable Assignment worker for automatic re-dispatch', {
+        assignmentId: current.id,
+        taskId: task.id,
+        workerThreadId,
+        workerStatus: worker?.status ?? 'missing'
+      })
+    }
+    return current
   }
 
   private coordinatorAssignmentPrompt(assignment: AssignmentPlan): string {
-    const readyTasks = assignment.content.tasks.filter((task) => task.status === 'ready')
+    const actionableTasks = assignment.content.tasks.filter(
+      (task) => task.status !== 'completed' && task.status !== 'blocked'
+    )
     return [
       'You are the Sr. Engineer coordinating an approved Assignment. This is a live user-facing coordinator thread: the user can steer or stop you at any time.',
       'Assign ready tasks using the deterministic local API. For a worker task, the API creates and prompts its durable worker thread. For a Sr. Engineer task, the API returns the task and you perform it in this coordinator thread.',
@@ -5283,7 +5338,7 @@ export class ChatEngine {
           annotations: (assignment.annotations ?? []).filter(
             (annotation) => annotation.status === 'open'
           ),
-          readyTasks
+          actionableTasks
         },
         null,
         2
@@ -5932,6 +5987,53 @@ export class ChatEngine {
         JSON.stringify({ assignmentId: assignment.id, task, report }, null, 2)
       ].join('\n\n')
     )
+  }
+
+  private async notifyCoordinatorOfUnreportedWorkerCompletion(
+    worker: Thread,
+    sessionId: string,
+    turnCompletedAt: number | undefined
+  ): Promise<void> {
+    if (
+      worker.assignmentRole !== 'worker' ||
+      !worker.assignmentId ||
+      !worker.assignmentTaskId ||
+      !worker.coordinatorThreadId
+    ) {
+      return
+    }
+    const assignment = this.assignmentEngine.getActive(worker.projectId, worker.coordinatorThreadId)
+    const task = assignment?.content.tasks.find(
+      (candidate) => candidate.id === worker.assignmentTaskId
+    )
+    if (
+      !assignment ||
+      assignment.id !== worker.assignmentId ||
+      task?.status !== 'running' ||
+      task.threadId !== worker.id
+    ) {
+      return
+    }
+    if (task.report && (!task.startedAt || task.report.reportedAt >= task.startedAt)) return
+    if (task.startedAt && turnCompletedAt && task.startedAt > turnCompletedAt) return
+    const report: AssignmentTaskReport = {
+      status: 'blocked',
+      summary: 'The worker turn ended without submitting its deterministic task report.',
+      evidence: [
+        `Worker thread ${worker.id} became idle while Assignment task ${task.id} was still running.`
+      ],
+      reportedAt: Date.now()
+    }
+    const result = await this.assignmentEngine.reportTask(
+      assignment.id,
+      task.id,
+      worker.id,
+      report,
+      `worker-unreported-idle-${sessionId}`
+    )
+    if (!result.idempotent) {
+      await this.promptCoordinatorForAudit(result.assignment, task.id, report)
+    }
   }
 
   private readAssignmentApiBody(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -8354,12 +8456,13 @@ export class ChatEngine {
     try {
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
-        const assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
+        let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
         if (assignment?.status === 'draft') {
           continue
         }
         if (assignment && assignment.status !== 'completed') {
-          if (!this.assignmentNeedsCoordinatorTurn(assignment)) continue
+          assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
+          if (!(await this.assignmentNeedsCoordinatorTurn(assignment))) continue
           if (!thread.settings) continue
           await this.ensureAssignmentApi()
           const dispatched = await this.sendAssignmentCoordinatorPrompt(
@@ -10305,17 +10408,33 @@ export class ChatEngine {
             error: error instanceof Error ? error.message : String(error)
           })
         }
+        if (!userAborted) {
+          try {
+            await this.notifyCoordinatorOfUnreportedWorkerCompletion(
+              finishedThread,
+              sessionId,
+              turnAssistant?.completedAt
+            )
+          } catch (error) {
+            Logger.error('Unreported Assignment worker handoff failed', {
+              workerThreadId: finishedThread.id,
+              coordinatorThreadId: finishedThread.coordinatorThreadId,
+              error: rawErrorMessage(error)
+            })
+          }
+        }
       }
       if (!failure) {
-        const assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
+        let assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
         const coordinatorSettings = finishedThread?.settings
         if (assignment && assignment.status !== 'completed') {
+          assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
           if (
             !awaitingUser &&
             !userAborted &&
             finishedThread?.assignmentRole === 'coordinator' &&
             coordinatorSettings &&
-            this.assignmentNeedsCoordinatorTurn(assignment)
+            (await this.assignmentNeedsCoordinatorTurn(assignment))
           ) {
             assignmentContinuation = { assignment, settings: coordinatorSettings }
           } else {

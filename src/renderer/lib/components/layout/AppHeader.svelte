@@ -60,9 +60,11 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
+    coordinatorHasActiveDelegates,
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
+    isThreadWorking,
     type ScopeBucket
   } from '$shared/types'
   import type { Component } from 'svelte'
@@ -804,8 +806,8 @@
         {@const thread = workspaceState.selectedThread}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          thread.status === 'planning' ||
-          thread.status === 'executing'}
+          isThreadWorking(thread) ||
+          coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
             {@const headerProject =

@@ -20,7 +20,9 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
+    coordinatorHasActiveDelegates,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadWorking,
     isOrchestrationChildThread,
     type ScopeBucket
   } from '$shared/types'
@@ -286,6 +288,13 @@
   /** Whether the harness is processing a turn for this thread right now. */
   let isBusy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
+  /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
+  let delegatedWorkActive = $derived(
+    coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+  )
+
+  let isWorking = $derived(isThreadWorking(thread) || delegatedWorkActive)
+
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
    * thread's stale status before the harness confirms the working state. Hold
@@ -318,7 +327,7 @@
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
-    if (thread.status === 'planning' || thread.status === 'executing') return 'working'
+    if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
     if (!effectiveRead) return 'unread'
@@ -328,9 +337,6 @@
     return 'read'
   })
 
-  /** Whether the agent is actively working — controls the pulsing row border. */
-  let isWorking = $derived(thread.status === 'planning' || thread.status === 'executing')
-
   /** Human-readable stage label, only meaningful when isWorking is true. */
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {
@@ -339,7 +345,7 @@
       case 'executing':
         return 'Working'
       default:
-        return ''
+        return delegatedWorkActive ? 'Coordinating delegated work' : ''
     }
   })
 
