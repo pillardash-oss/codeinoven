@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -295,23 +296,14 @@
     config.theme === 'system' ? (systemDark ? 'dark' : 'light') : config.theme
   )
 
-  $effect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    systemDark = mq.matches
-    const onChange = (e: MediaQueryListEvent): void => {
-      systemDark = e.matches
-    }
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  })
-
-  $effect(() => {
+  function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
-  })
+  }
 
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
+      applyTheme()
       settingsError = undefined
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
@@ -323,11 +315,14 @@
   async function updateConfig(patch: AppConfigPatch): Promise<void> {
     const previous = config
     config = { ...config, ...patch }
+    applyTheme()
     try {
       config = await invoke('config:update', patch)
+      applyTheme()
       settingsError = undefined
     } catch {
       config = previous
+      applyTheme()
       settingsError = 'Your settings change could not be saved.'
     }
   }
@@ -362,6 +357,11 @@
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
     reconcileThreadForContentView(view, previousContentView)
+    observeNavigationLocation()
+  }
+
+  function observeNavigationLocation(): void {
+    navigationHistoryState.observe(currentLocation())
   }
 
   /** The most recently opened thread of the given kind that still exists. */
@@ -469,14 +469,19 @@
     }
   }
 
-  $effect(() => {
+  function installWorkspaceCallbacks(): () => void {
     workspaceState.navigateToSettings = (tab?: string) => {
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
     workspaceState.openThreadFromNotification = (thread, project) =>
       openThreadFromNotification(thread, project)
-  })
+    return () => {
+      workspaceState.navigateToSettings = null
+      workspaceState.navigateToContent = null
+      workspaceState.openThreadFromNotification = null
+    }
+  }
 
   async function handlePaletteSelection(selection: ActionSelection): Promise<void> {
     const settingsTab = settingsTabs.find(
@@ -850,8 +855,7 @@
     await invoke('app:confirmClose')
   }
 
-  /** Notification click navigates to the thread. */
-  $effect(() => {
+  function installIpcSubscriptions(): () => void {
     const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
       void openNotificationThread(payload)
     })
@@ -881,17 +885,16 @@
       unsubscribeCloseShortcut()
       updaterState.destroy()
     }
-  })
+  }
 
   /** Clean up renderer resources when the main process signals shutdown. */
-  $effect(() => {
-    const unsubscribe = subscribe('window:beforeQuit', () => {
+  function installShutdownSubscription(): () => void {
+    return subscribe('window:beforeQuit', () => {
       // Renderer should release event subscriptions — the main process
       // will dispose services and flush logs 500ms after this signal.
       // The component tree unmounts naturally as the window closes.
     })
-    return unsubscribe
-  })
+  }
 
   /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
@@ -960,81 +963,109 @@
   }
 
   /** Global application shortcuts. */
-  $effect(() => {
-    const onKeydown = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
-        // Primary path is the main process `before-input-event` → the
-        // `window:closeShortcut` event. This is a fallback for platforms where
-        // the key still reaches the renderer (the main process preventDefaults
-        // the page keydown, so this normally never fires twice).
-        e.preventDefault()
-        if (e.repeat) return
-        handleCloseShortcut()
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        if (e.repeat) return
-        handleFind()
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        if (e.repeat) return
-        toggleCommandPalette()
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-        e.preventDefault()
-        navigate('settings')
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
-        e.preventDefault()
-        if (e.repeat) return
+  function onKeydown(e: KeyboardEvent): void {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
+      // Primary path is the main process `before-input-event` → the
+      // `window:closeShortcut` event. This is a fallback for platforms where
+      // the key still reaches the renderer (the main process preventDefaults
+      // the page keydown, so this normally never fires twice).
+      e.preventDefault()
+      if (e.repeat) return
+      handleCloseShortcut()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      if (e.repeat) return
+      handleFind()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      if (e.repeat) return
+      toggleCommandPalette()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      e.preventDefault()
+      navigate('settings')
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      if (e.repeat) return
 
-        if (activeView === 'scope') {
-          if (scopeState.activeProjectId) {
-            const bucketId =
-              scopeState.sidebarContext?.bucketId ??
-              scopeState.buckets[0]?.id ??
-              DEFAULT_SCOPE_BUCKET_ID
-            scopeState.requestCreateScopedThread(bucketId)
-          }
-          return
+      if (activeView === 'scope') {
+        if (scopeState.activeProjectId) {
+          const bucketId =
+            scopeState.sidebarContext?.bucketId ??
+            scopeState.buckets[0]?.id ??
+            DEFAULT_SCOPE_BUCKET_ID
+          scopeState.requestCreateScopedThread(bucketId)
         }
+        return
+      }
 
-        if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
-        if (activeView === 'chats') {
-          workspaceState.requestNewChat()
-        } else if (
-          workspaceState.activeProject &&
-          workspaceState.activeProject.id !== INBOX_PROJECT_ID
-        ) {
-          const bucketId = scopeState.sidebarContext?.bucketId
-          workspaceState.requestCreateThread(bucketId)
-        } else {
-          workspaceState.requestAddProject()
-        }
+      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
+      if (activeView === 'chats') {
+        workspaceState.requestNewChat()
+      } else if (
+        workspaceState.activeProject &&
+        workspaceState.activeProject.id !== INBOX_PROJECT_ID
+      ) {
+        const bucketId = scopeState.sidebarContext?.bucketId
+        workspaceState.requestCreateThread(bucketId)
+      } else {
+        workspaceState.requestAddProject()
       }
     }
-    window.addEventListener('keydown', onKeydown)
-    return () => window.removeEventListener('keydown', onKeydown)
-  })
-
-  void loadConfig()
-  window.setTimeout(() => {
-    void loadScopeData().finally(() => {
-      // Signal the main process that the renderer finished its initial
-      // hydration so it can timestamp the final startup phases.
-      void invoke('app:rendererReady').catch(() => undefined)
-    })
-  }, 0)
+  }
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
-  /** Record every view/thread location change in the global navigation history. */
-  $effect(() => {
-    navigationHistoryState.observe(currentLocation())
+  onMount(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    systemDark = mq.matches
+    applyTheme()
+    const onColorSchemeChange = (event: MediaQueryListEvent): void => {
+      systemDark = event.matches
+      applyTheme()
+    }
+    mq.addEventListener('change', onColorSchemeChange)
+    window.addEventListener('keydown', onKeydown)
+
+    const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
+    const unsubscribeIpc = installIpcSubscriptions()
+    const unsubscribeShutdown = installShutdownSubscription()
+    const originalOpenThread = workspaceState.openThread.bind(workspaceState)
+    const originalClearThread = workspaceState.clearThread.bind(workspaceState)
+    workspaceState.openThread = (thread, project, iconUrl) => {
+      originalOpenThread(thread, project, iconUrl)
+      observeNavigationLocation()
+    }
+    workspaceState.clearThread = () => {
+      originalClearThread()
+      observeNavigationLocation()
+    }
+    observeNavigationLocation()
+    void loadConfig()
+    const hydrationTimer = window.setTimeout(() => {
+      void loadScopeData().finally(() => {
+        // Signal the main process that the renderer finished its initial
+        // hydration so it can timestamp the final startup phases.
+        void invoke('app:rendererReady').catch(() => undefined)
+      })
+    }, 0)
+
+    return () => {
+      mq.removeEventListener('change', onColorSchemeChange)
+      window.removeEventListener('keydown', onKeydown)
+      restoreWorkspaceCallbacks()
+      unsubscribeIpc()
+      unsubscribeShutdown()
+      window.clearTimeout(hydrationTimer)
+      workspaceState.openThread = originalOpenThread
+      workspaceState.clearThread = originalClearThread
+    }
   })
 </script>
 
