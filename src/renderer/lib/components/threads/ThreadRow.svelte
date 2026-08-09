@@ -179,17 +179,17 @@
         }
         // Each icon is 14px with a 4px gap. Show as many harness icons as fit,
         // favouring icons over a +n number; only reserve space for the +n chip
-        // once something actually overflows.
+        // once something actually overflows. Never render more icons than fit
+        // so overflow-hidden can't clip a partial icon off the edge.
         const ICON = 14
         const GAP = 4
         const PLUS = 22
         const perIcon = ICON + GAP
         let count = Math.floor((row.clientWidth + GAP) / perIcon)
-        count = Math.max(3, count)
         count = Math.min(total, count)
         if (count < total) {
           const withPlus = Math.floor((row.clientWidth - PLUS + GAP) / perIcon)
-          count = Math.max(3, Math.min(total, withPlus))
+          count = Math.max(1, Math.min(total, withPlus))
         }
         visibleHarnessCount = count
       })
@@ -775,7 +775,9 @@
     {#if showBottomRow}
       <!-- Bottom line: harnesses (left), scope (center), time (right) -->
       <span
-        class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3"
+        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
+          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
+          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
       >
         {#if harnessIds.length > 0}
           <span
