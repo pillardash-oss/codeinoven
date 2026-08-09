@@ -236,10 +236,11 @@ export class RemoteRpcDispatcher {
         deviceId: invoke.device?.deviceId ?? null,
         deviceName: invoke.device?.name ?? null,
         fingerprintPrefix: invoke.device?.fingerprint.slice(0, 8) ?? null,
-        transport: 'lan',
+        transport: invoke.device?.transport ?? 'lan',
         sessionId: invoke.device?.sessionId ?? null,
         requestId: invoke.device?.requestId ?? null,
         channel: invoke.channel,
+        resourceId: this.resourceForChannel(invoke.channel, invoke.args),
         authVersion: invoke.device?.authVersion ?? null
       })
       return { ok: true, result }
@@ -262,11 +263,82 @@ export class RemoteRpcDispatcher {
     { allowed: true } | { allowed: false; denied: RemoteRpcDenied | RemoteRpcStepUpRequired }
   > {
     const device = invoke.device as RemoteRpcDeviceContext
+    const resource = this.resourceForChannel(invoke.channel, invoke.args)
     const auth = authorizationForChannel(invoke.channel)
     if (!auth) {
+      this.credentials?.audit({
+        decision: 'rpc_denied',
+        reasonCode: 'denied_by_default',
+        deviceId: device.deviceId,
+        deviceName: device.name,
+        fingerprintPrefix: device.fingerprint.slice(0, 8),
+        transport: device.transport,
+        sessionId: device.sessionId,
+        requestId: device.requestId,
+        channel: invoke.channel,
+        resourceId: resource,
+        authVersion: device.authVersion
+      })
       return {
         allowed: false,
         denied: { code: 'authorization_denied', scope: null, reason: 'channel not authorized' }
+      }
+    }
+    // Per-invoke revalidation: revocation, expiry, idle expiry, and key/scope
+    // rotation take effect immediately — a bound session is never trusted
+    // statelessly even after the handshake succeeded.
+    if (this.credentials && !this.credentials.isDeviceActive(device.deviceId, device.authVersion)) {
+      this.credentials.audit({
+        decision: 'rpc_denied',
+        reasonCode:
+          device.authVersion !==
+          (this.credentials.getDevice(device.deviceId)?.authVersion ?? device.authVersion)
+            ? 'superseded_auth_version'
+            : 'revoked',
+        deviceId: device.deviceId,
+        deviceName: device.name,
+        fingerprintPrefix: device.fingerprint.slice(0, 8),
+        transport: device.transport,
+        sessionId: device.sessionId,
+        requestId: device.requestId,
+        channel: invoke.channel,
+        resourceId: resource,
+        requiredScope: auth.scope,
+        authVersion: device.authVersion
+      })
+      return {
+        allowed: false,
+        denied: {
+          code: 'authorization_denied',
+          scope: auth.scope,
+          reason: 'device no longer active'
+        }
+      }
+    }
+    // Argument-level project bounds (contract 5.1): a scope never implies
+    // workstation-wide access. Devices with a restricted project grant cannot
+    // reach projects outside that set.
+    if (!device.allProjects) {
+      const projectId = typeof invoke.args[0] === 'string' ? invoke.args[0] : null
+      if (projectId && !device.projectIds.includes(projectId)) {
+        this.credentials?.audit({
+          decision: 'rpc_denied',
+          reasonCode: 'denied_by_default',
+          deviceId: device.deviceId,
+          deviceName: device.name,
+          fingerprintPrefix: device.fingerprint.slice(0, 8),
+          transport: device.transport,
+          sessionId: device.sessionId,
+          requestId: device.requestId,
+          channel: invoke.channel,
+          resourceId: resource,
+          requiredScope: auth.scope,
+          authVersion: device.authVersion
+        })
+        return {
+          allowed: false,
+          denied: { code: 'authorization_denied', scope: auth.scope, reason: 'project not granted' }
+        }
       }
     }
     if (!device.scopes.includes(auth.scope)) {
@@ -276,10 +348,11 @@ export class RemoteRpcDispatcher {
         deviceId: device.deviceId,
         deviceName: device.name,
         fingerprintPrefix: device.fingerprint.slice(0, 8),
-        transport: 'lan',
+        transport: device.transport,
         sessionId: device.sessionId,
         requestId: device.requestId,
         channel: invoke.channel,
+        resourceId: resource,
         requiredScope: auth.scope,
         authVersion: device.authVersion
       })
@@ -299,7 +372,6 @@ export class RemoteRpcDispatcher {
       return { allowed: true }
     }
 
-    const resource = this.resourceForChannel(invoke.channel, invoke.args)
     const argsDigest = await sha256Hex(JSON.stringify(invoke.args))
     if (
       this.credentials.hasApprovalFor({
@@ -342,9 +414,12 @@ export class RemoteRpcDispatcher {
       reasonCode: 'denied_by_default',
       deviceId: device.deviceId,
       deviceName: device.name,
+      fingerprintPrefix: device.fingerprint.slice(0, 8),
+      transport: device.transport,
       sessionId: device.sessionId,
       requestId: device.requestId,
       channel: invoke.channel,
+      resourceId: resource,
       requiredScope: auth.scope,
       authVersion: device.authVersion
     })

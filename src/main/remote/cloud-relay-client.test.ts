@@ -6,6 +6,7 @@ import {
 } from './cloud-relay-client'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
 import {
+  createMemoryDeviceKeyStore,
   loadOrCreateDeviceKeyMaterial,
   signTranscript,
   handshakeTranscript
@@ -575,24 +576,6 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
 })
 
 describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
-  function memoryStorage(): Storage {
-    const store = new Map<string, string>()
-    return {
-      getItem: (key: string) => store.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        store.set(key, value)
-      },
-      removeItem: (key: string) => {
-        store.delete(key)
-      },
-      clear: () => store.clear(),
-      key: (index: number) => [...store.keys()][index] ?? null,
-      get length() {
-        return store.size
-      }
-    }
-  }
-
   function makeRawDatabase(): Database {
     const raw = new DatabaseConstructor(':memory:')
     raw.pragma('foreign_keys = ON')
@@ -648,7 +631,7 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     context: { deviceId?: string | null; authVersion?: number },
     bootstrapValue = 'bootstrap'
   ): Promise<Record<string, unknown>> {
-    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
     const transcript = handshakeTranscript({
       nonce,
       deviceId: context.deviceId ?? keyMaterial.deviceId,
@@ -656,7 +639,7 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
       bootstrap: bootstrapValue,
       context: 'relay'
     })
-    const signature = await signTranscript(keyMaterial.signingPrivateJwk, transcript)
+    const signature = await signTranscript(keyMaterial.signingKey, transcript)
     const frame: Record<string, unknown> = {
       type: 'remote:device:auth',
       nonce,
@@ -755,7 +738,10 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
         authVersion: 1,
         sessionId: 's',
         requestId: 'r',
-        scopes: ['workspace.read']
+        scopes: ['workspace.read'],
+        transport: 'relay',
+        allProjects: true,
+        projectIds: []
       }
     })
     expect(reply?.rpc).toBe('error')
@@ -893,6 +879,42 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     expect(reply?.rpc).toBe('error')
     if (typeof reply?.message === 'string')
       expect(reply.message).toContain('Device authentication required')
+    harness.client.close()
+    dispose()
+  })
+
+  it('revokes a bound cloud device and rejects its subsequent invokes (per-invoke revalidation)', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const nonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+    await receivedData(
+      socket,
+      await authFrame(nonce, { deviceId: null, authVersion: undefined }, bootstrap.value)
+    )
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    const ok = (await readBodies(socket)).find((body) => body.type === 'remote:device:ok')
+    const assignedId = ((ok?.['device'] as { id?: unknown }) ?? {}).id
+    expect(typeof assignedId).toBe('string')
+
+    // The bound device is revoked server-side → the next invoke must be rejected
+    // even though the relay session is still open (no stateless trust).
+    expect(credentials.revokeDevice(assignedId as string, 'stolen')).toBe(true)
+    const reply = await invokeReply(socket, 8, {
+      rpc: 'invoke',
+      id: 8,
+      channel: 'project:list',
+      args: []
+    })
+    expect(reply?.rpc).toBe('error')
+    if (typeof reply?.message === 'string') expect(reply.message).toContain('Access denied')
+    const deniedAudit = credentials
+      .listAudit(20)
+      .find((event) => event.decision === 'rpc_denied' && event.deviceId === assignedId)
+    expect(deniedAudit).toBeDefined()
     harness.client.close()
     dispose()
   })

@@ -316,6 +316,25 @@ export class RemoteModeController {
     }
   }
 
+  /**
+   * Rotate the live pairing bootstrap/QR immediately after a device enrolls:
+   * a stale QR value can no longer start another enrollment, and the pairing
+   * screen shows a fresh five-minute value for the next device.
+   */
+  private async rotatePairingBootstrap(): Promise<void> {
+    if (this.peerSecret) return
+    const directory = join(app.getPath('userData'), 'remote-gateway')
+    this.resolvedPeerSecret = await rotatePeerSecret(directory)
+    this.gateway?.setPeerSecret(this.resolvedPeerSecret)
+    this.pairingExpiresAt = Date.now() + 5 * 60 * 1_000
+    if (this.credentials && this.resolvedPeerSecret) {
+      await this.credentials.registerPairingValue(this.resolvedPeerSecret, {
+        expiresAt: this.pairingExpiresAt
+      })
+    }
+    this.broadcast()
+  }
+
   get status(): RemoteModeStatus {
     const gateway = this.gateway?.info() ?? {
       listening: false,
@@ -415,7 +434,9 @@ export class RemoteModeController {
         expiresAt: null,
         credentialExpiresAt: null,
         revokedAt: null,
-        authVersion: 0
+        authVersion: 0,
+        allProjects: true,
+        projectIds: []
       }))
       return
     }
@@ -439,7 +460,9 @@ export class RemoteModeController {
       expiresAt: device.expiresAt,
       credentialExpiresAt: device.credentialExpiresAt,
       revokedAt: device.revokedAt,
-      authVersion: device.authVersion
+      authVersion: device.authVersion,
+      allProjects: device.allProjects,
+      projectIds: device.projectIds
     }
   }
 
@@ -476,6 +499,13 @@ export class RemoteModeController {
     const revoked = this.credentials.revokeDevice(deviceId, reason || 'operator')
     if (!revoked) throw new Error('Device not found')
     this.gateway?.disconnectDevice(deviceId)
+    // Terminate any bound cloud relay session for this device immediately;
+    // per-invoke revalidation also rejects it if a socket survives.
+    if (this.cloudRelay?.boundDeviceId() === deviceId) {
+      this.cloudRelay.close()
+      this.cloudRelay = null
+      this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'device revoked' }
+    }
     this.refreshDevices(new Set(this.gateway?.listDevices().map((d) => d.id) ?? []))
     this.syncTray()
     this.broadcast()
@@ -549,6 +579,7 @@ export class RemoteModeController {
             transport: 'lan'
           })
           if (!outcome.ok || !outcome.device) return { accepted: false }
+          void this.rotatePairingBootstrap()
           return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
         }
         if (deviceId && typeof authVersion === 'number') {
@@ -941,11 +972,14 @@ export class RemoteModeController {
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
         this.broadcast()
       },
-      onRpc: async (channel, args, device) =>
-        this.rpc?.dispatch({ id: 0, channel, args, device }) ?? {
-          ok: false,
-          message: 'RPC unavailable'
-        }
+      onRpc: async (channel, args, device) => {
+        const rpc = this.rpc
+        const outcome = rpc
+          ? await rpc.dispatch({ id: 0, channel, args, device })
+          : { ok: false as const, message: 'RPC unavailable' }
+        this.broadcastPendingApprovals()
+        return outcome
+      }
     })
     this.cloudRelay = relay
     relay.connect()

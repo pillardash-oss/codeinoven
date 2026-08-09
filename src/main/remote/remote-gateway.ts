@@ -253,6 +253,15 @@ export class RemoteGateway {
     }
   }
 
+  /**
+   * Replace the peer secret (used for the pairing QR and the loopback legacy
+   * handshake). Called after a device enrolls so the live QR rotates and a
+   * stale QR value can no longer start another enrollment.
+   */
+  setPeerSecret(secret: string): void {
+    this.options.peerSecret = secret
+  }
+
   async start(): Promise<{ port: number; localPort: number }> {
     const { key, cert } = await loadOrCreateSelfSignedCertificate(this.options.certificateDir)
 
@@ -887,7 +896,9 @@ export class RemoteGateway {
         expiresAt: peer.device?.expiresAt ?? null,
         credentialExpiresAt: peer.device?.credentialExpiresAt ?? null,
         revokedAt: peer.device?.revokedAt ?? null,
-        authVersion: peer.device?.authVersion ?? 0
+        authVersion: peer.device?.authVersion ?? 0,
+        allProjects: peer.device?.allProjects ?? true,
+        projectIds: peer.device?.projectIds ?? []
       }))
   }
 
@@ -956,7 +967,10 @@ export class RemoteGateway {
           authVersion: peer.device.authVersion,
           sessionId: peer.sessionId,
           requestId: String(id),
-          scopes: peer.device.scopes as RemoteScope[]
+          scopes: peer.device.scopes as RemoteScope[],
+          transport: 'lan',
+          allProjects: peer.device.allProjects ?? true,
+          projectIds: peer.device.projectIds ?? []
         }
       : undefined
     const outcome = await this.options.handlers.onRpc(channel, args, device)

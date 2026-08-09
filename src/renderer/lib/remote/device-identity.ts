@@ -4,15 +4,20 @@
  * Every phone installs a stable identity (a random `deviceId` plus a
  * human-readable `deviceName`) so the desktop gateway can tell devices apart,
  * remember renames across reconnects, and let the user disconnect or rename a
- * specific phone. The identity is generated once and kept in `localStorage`;
- * the device name can be changed from the desktop (renames are persisted
+ * specific phone. The identity is generated once and kept in storage; the
+ * device name can be changed from the desktop (renames are persisted
  * desktop-side too) or locally by the user.
+ *
+ * Since the 2026-08-08 remediation (A-04) the phone also owns two
+ * NON-EXPORTABLE Web Crypto key pairs — an ECDSA P-256 signing key and an
+ * ECDH P-256 agreement key. Only the public halves are ever shared; the
+ * private `CryptoKey` objects live in IndexedDB (structured-cloneable) so a
+ * shared QR secret or a caller-supplied device id is never durable authority.
  */
 
-const DEVICE_ID_KEY = 'codeinoven.remote.deviceId'
-const DEVICE_NAME_KEY = 'codeinoven.remote.deviceName'
-const DEVICE_KEYS_KEY = 'codeinoven.remote.deviceKeys'
-const DEVICE_AUTH_VERSION_KEY = 'codeinoven.remote.deviceAuthVersion'
+const DEVICE_ID_KEY = 'deviceId'
+const DEVICE_NAME_KEY = 'deviceName'
+const DEVICE_AUTH_VERSION_KEY = 'authVersion'
 
 export interface DeviceIdentity {
   id: string
@@ -20,20 +25,117 @@ export interface DeviceIdentity {
 }
 
 /**
- * Per-device proof-of-possession key material (A-04). The phone owns an
- * ECDSA P-256 signing key plus an ECDH agreement key. Only the public halves
- * are ever shared; the private signing key proves possession during every
- * handshake so a shared QR secret or a caller-supplied device id is never
- * durable authority.
+ * Per-device proof-of-possession key material (A-04). The private signing and
+ * agreement `CryptoKey` objects are non-exportable and never transmitted.
  */
 export interface DeviceKeyMaterial {
   /** Assigned by the desktop at enrollment; null until then. */
   deviceId: string | null
   deviceName: string
-  signingPrivateJwk: JsonWebKey
+  signingKey: CryptoKey
   signingPublicJwk: JsonWebKey
+  agreementKey: CryptoKey
   agreementPublicJwk: JsonWebKey
   authVersion: number
+}
+
+/**
+ * Durable store for the phone's identity strings and non-exportable key
+ * objects. The default is IndexedDB (browser); tests inject an in-memory
+ * store. CryptoKeys are structured-cloneable, so IndexedDB can persist them
+ * directly without ever exposing the private material as JWK text.
+ */
+export interface DeviceKeyStore {
+  getString(key: string): Promise<string | null>
+  setString(key: string, value: string): Promise<void>
+  removeString(key: string): Promise<void>
+  getSigningKey(): Promise<CryptoKey | null>
+  setSigningKey(key: CryptoKey): Promise<void>
+  getAgreementKey(): Promise<CryptoKey | null>
+  setAgreementKey(key: CryptoKey): Promise<void>
+  removeKeys(): Promise<void>
+}
+
+/** In-memory key store used by tests and as a non-persistent fallback. */
+export function createMemoryDeviceKeyStore(): DeviceKeyStore {
+  const strings = new Map<string, string>()
+  let signing: CryptoKey | null = null
+  let agreement: CryptoKey | null = null
+  return {
+    getString: async (key) => strings.get(key) ?? null,
+    setString: async (key, value) => {
+      strings.set(key, value)
+    },
+    removeString: async (key) => {
+      strings.delete(key)
+    },
+    getSigningKey: async () => signing,
+    setSigningKey: async (key) => {
+      signing = key
+    },
+    getAgreementKey: async () => agreement,
+    setAgreementKey: async (key) => {
+      agreement = key
+    },
+    removeKeys: async () => {
+      signing = null
+      agreement = null
+    }
+  }
+}
+
+/**
+ * IndexedDB-backed store. CryptoKey objects are persisted via structured
+ * clone; string metadata is kept under the same object store.
+ */
+export function createIndexedDbDeviceKeyStore(
+  dbName = 'codeinoven-remote-device',
+  storeName = 'keys'
+): DeviceKeyStore {
+  function openDatabase(): Promise<IDBDatabase> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(dbName, 1)
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore(storeName)
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('indexeddb-open-failed'))
+    })
+  }
+
+  function withStore<T>(
+    mode: IDBTransactionMode,
+    run: (store: IDBObjectStore) => IDBRequest
+  ): Promise<T> {
+    return openDatabase().then(
+      (db) =>
+        new Promise<T>((resolve, reject) => {
+          const tx = db.transaction(storeName, mode)
+          const request = run(tx.objectStore(storeName))
+          request.onsuccess = () => resolve(request.result as T)
+          request.onerror = () => reject(request.error ?? new Error('indexeddb-failed'))
+          tx.oncomplete = () => db.close()
+        })
+    )
+  }
+
+  return {
+    getString: (key) => withStore<string>('readonly', (store) => store.get(key)),
+    setString: (key, value) =>
+      withStore<unknown>('readwrite', (store) => store.put(value, key)).then(() => undefined),
+    removeString: (key) =>
+      withStore<unknown>('readwrite', (store) => store.delete(key)).then(() => undefined),
+    getSigningKey: () => withStore<CryptoKey>('readonly', (store) => store.get('signing')),
+    setSigningKey: (key) =>
+      withStore<unknown>('readwrite', (store) => store.put(key, 'signing')).then(() => undefined),
+    getAgreementKey: () => withStore<CryptoKey>('readonly', (store) => store.get('agreement')),
+    setAgreementKey: (key) =>
+      withStore<unknown>('readwrite', (store) => store.put(key, 'agreement')).then(() => undefined),
+    removeKeys: async () => {
+      await withStore<unknown>('readwrite', (store) => store.delete('signing')).then(() => undefined)
+      await withStore<unknown>('readwrite', (store) => store.delete('agreement')).then(() => undefined)
+    }
+  }
 }
 
 const SIGNING_ALGO: EcKeyImportParams = { name: 'ECDSA', namedCurve: 'P-256' }
@@ -59,7 +161,9 @@ export function defaultDeviceName(): string {
 }
 
 /** Load the persisted device identity, creating it on first run. */
-export function loadDeviceIdentity(storage: Storage = globalThis.localStorage): DeviceIdentity {
+export async function loadDeviceIdentity(
+  storage: Storage = globalThis.localStorage
+): Promise<DeviceIdentity> {
   let id = ''
   let name = ''
   try {
@@ -88,7 +192,10 @@ export function loadDeviceIdentity(storage: Storage = globalThis.localStorage): 
 }
 
 /** Persist a local device name override (used when the phone sets its own). */
-export function persistDeviceName(name: string, storage: Storage = globalThis.localStorage): void {
+export async function persistDeviceName(
+  name: string,
+  storage: Storage = globalThis.localStorage
+): Promise<void> {
   try {
     storage.setItem(DEVICE_NAME_KEY, name)
   } catch {
@@ -96,140 +203,94 @@ export function persistDeviceName(name: string, storage: Storage = globalThis.lo
   }
 }
 
-async function generateEcKeyPair(algorithm: EcKeyImportParams): Promise<{
-  privateJwk: JsonWebKey
+/** Generate a non-extractable key pair; only the public JWK is exportable. */
+async function generateNonExtractablePair(algorithm: EcKeyImportParams): Promise<{
+  privateKey: CryptoKey
   publicJwk: JsonWebKey
 }> {
-  const pair = await crypto.subtle.generateKey(algorithm, true, [
-    ...(algorithm.name === 'ECDSA'
-      ? (['sign', 'verify'] as KeyUsage[])
-      : (['deriveKey'] as KeyUsage[]))
-  ])
+  const usages: KeyUsage[] = algorithm.name === 'ECDSA' ? ['sign', 'verify'] : ['deriveKey']
+  const pair = await crypto.subtle.generateKey(algorithm, false, usages)
   return {
-    privateJwk: await crypto.subtle.exportKey('jwk', pair.privateKey),
+    privateKey: pair.privateKey,
     publicJwk: await crypto.subtle.exportKey('jwk', pair.publicKey)
   }
 }
 
-function readStoredKeys(storage: Storage): {
-  signingPrivateJwk: JsonWebKey
-  signingPublicJwk: JsonWebKey
-  agreementPublicJwk: JsonWebKey
-} | null {
-  try {
-    const raw = storage.getItem(DEVICE_KEYS_KEY)
-    if (!raw) return null
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return null
-    const record = parsed as Record<string, unknown>
-    const signingPrivate = record['signingPrivateJwk']
-    const signingPublic = record['signingPublicJwk']
-    const agreement = record['agreementPublicJwk']
-    if (typeof signingPrivate !== 'object' || signingPrivate === null) return null
-    if (typeof signingPublic !== 'object' || signingPublic === null) return null
-    if (typeof agreement !== 'object' || agreement === null) return null
-    return {
-      signingPrivateJwk: signingPrivate as JsonWebKey,
-      signingPublicJwk: signingPublic as JsonWebKey,
-      agreementPublicJwk: agreement as JsonWebKey
-    }
-  } catch {
-    return null
-  }
-}
-
-function readAuthVersion(storage: Storage): number {
-  try {
-    const raw = storage.getItem(DEVICE_AUTH_VERSION_KEY)
-    const parsed = Number.parseInt(raw ?? '', 10)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
-  } catch {
-    return 1
-  }
+function defaultStore(): DeviceKeyStore {
+  return typeof indexedDB !== 'undefined'
+    ? createIndexedDbDeviceKeyStore()
+    : createMemoryDeviceKeyStore()
 }
 
 /**
  * Load (or create) the phone's persistent proof-of-possession keys. The
- * private signing JWK is kept locally and never transmitted.
+ * private `CryptoKey` objects are non-extractable and stored in IndexedDB;
+ * only the public JWKs leave the device.
  */
 export async function loadOrCreateDeviceKeyMaterial(
-  storage: Storage = globalThis.localStorage
+  options: {
+    store?: DeviceKeyStore
+  } = {}
 ): Promise<DeviceKeyMaterial> {
-  let name = ''
-  let deviceId: string | null = null
-  try {
-    name = storage.getItem(DEVICE_NAME_KEY) ?? ''
-    const rawId = storage.getItem(DEVICE_ID_KEY)
-    deviceId = rawId && rawId.length > 0 ? rawId : null
-  } catch {
-    // storage unavailable — ephemeral identity
-  }
-  if (!name) {
-    name = defaultDeviceName()
-    try {
-      storage.setItem(DEVICE_NAME_KEY, name)
-    } catch {
-      // best-effort
-    }
-  }
-  const existing = readStoredKeys(storage)
-  if (existing) {
+  const store = options.store ?? defaultStore()
+  const deviceName = (await store.getString(DEVICE_NAME_KEY)) || defaultDeviceName()
+  await store.setString(DEVICE_NAME_KEY, deviceName)
+  const rawId = await store.getString(DEVICE_ID_KEY)
+  const deviceId = rawId && rawId.length > 0 ? rawId : null
+
+  const signingKey = await store.getSigningKey()
+  const agreementKey = await store.getAgreementKey()
+  if (signingKey && agreementKey) {
+    const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
+    const parsedVersion = Number.parseInt(authVersionRaw ?? '', 10)
     return {
       deviceId,
-      deviceName: name,
-      ...existing,
-      authVersion: readAuthVersion(storage)
+      deviceName,
+      signingKey,
+      signingPublicJwk: await crypto.subtle.exportKey('jwk', signingKey),
+      agreementKey,
+      agreementPublicJwk: await crypto.subtle.exportKey('jwk', agreementKey),
+      authVersion: Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1
     }
   }
-  const signing = await generateEcKeyPair(SIGNING_ALGO)
-  const agreement = await generateEcKeyPair(AGREEMENT_ALGO)
-  const material = {
-    signingPrivateJwk: signing.privateJwk,
+
+  const signing = await generateNonExtractablePair(SIGNING_ALGO)
+  const agreement = await generateNonExtractablePair(AGREEMENT_ALGO)
+  await store.setSigningKey(signing.privateKey)
+  await store.setAgreementKey(agreement.privateKey)
+  await store.setString(DEVICE_AUTH_VERSION_KEY, '1')
+  return {
+    deviceId,
+    deviceName,
+    signingKey: signing.privateKey,
     signingPublicJwk: signing.publicJwk,
-    agreementPublicJwk: agreement.publicJwk
+    agreementKey: agreement.privateKey,
+    agreementPublicJwk: agreement.publicJwk,
+    authVersion: 1
   }
-  try {
-    storage.setItem(DEVICE_KEYS_KEY, JSON.stringify(material))
-    storage.setItem(DEVICE_AUTH_VERSION_KEY, '1')
-  } catch {
-    // storage unavailable — keys stay ephemeral for this session
-  }
-  return { deviceId, deviceName: name, ...material, authVersion: 1 }
 }
 
 /** Persist the desktop-assigned device id after the enrollment handshake. */
-export function saveAssignedDeviceId(
+export async function saveAssignedDeviceId(
   deviceId: string,
-  storage: Storage = globalThis.localStorage
-): void {
-  try {
-    storage.setItem(DEVICE_ID_KEY, deviceId)
-  } catch {
-    // best-effort
-  }
+  store: DeviceKeyStore = defaultStore()
+): Promise<void> {
+  await store.setString(DEVICE_ID_KEY, deviceId)
 }
 
 /** Persist a bumped authVersion (after a desktop-issued rotation). */
-export function saveDeviceAuthVersion(
+export async function saveDeviceAuthVersion(
   authVersion: number,
-  storage: Storage = globalThis.localStorage
-): void {
-  try {
-    storage.setItem(DEVICE_AUTH_VERSION_KEY, String(authVersion))
-  } catch {
-    // best-effort
-  }
+  store: DeviceKeyStore = defaultStore()
+): Promise<void> {
+  await store.setString(DEVICE_AUTH_VERSION_KEY, String(authVersion))
 }
 
 /** Clear the phone's device identity + keys (used by "forget device data"). */
-export function clearDeviceIdentity(storage: Storage = globalThis.localStorage): void {
-  try {
-    storage.removeItem(DEVICE_ID_KEY)
-    storage.removeItem(DEVICE_KEYS_KEY)
-    storage.removeItem(DEVICE_AUTH_VERSION_KEY)
-  } catch {
-    // best-effort
-  }
+export async function clearDeviceIdentity(store: DeviceKeyStore = defaultStore()): Promise<void> {
+  await store.removeString(DEVICE_ID_KEY)
+  await store.removeString(DEVICE_AUTH_VERSION_KEY)
+  await store.removeKeys()
 }
 
 const encoder = new TextEncoder()
@@ -241,11 +302,10 @@ function toBase64Url(bytes: Uint8Array): string {
 }
 
 /** ECDSA P-256/SHA-256 signature over a transcript (proof of possession). */
-export async function signTranscript(privateJwk: JsonWebKey, transcript: string): Promise<string> {
-  const key = await crypto.subtle.importKey('jwk', privateJwk, SIGNING_ALGO, false, ['sign'])
+export async function signTranscript(signingKey: CryptoKey, transcript: string): Promise<string> {
   const signature = await crypto.subtle.sign(
     { name: 'ECDSA', hash: 'SHA-256' },
-    key,
+    signingKey,
     encoder.encode(transcript)
   )
   return toBase64Url(new Uint8Array(signature))

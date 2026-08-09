@@ -124,6 +124,17 @@ describe('DeviceCredentialService — pairing bootstrap', () => {
     if (!consumed.ok) expect(consumed.reason).toBe('bootstrap_expired')
   })
 
+  it('rejects a bootstrap that expired at exactly the present time (<= now)', async () => {
+    let now = 1_000_000
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db, { now: () => now })
+    const bootstrap = await service.createPairingBootstrap()
+    now = bootstrap.expiresAt
+    const consumed = await service.consumePairingBootstrap(bootstrap.value)
+    expect(consumed.ok).toBe(false)
+    if (!consumed.ok) expect(consumed.reason).toBe('bootstrap_expired')
+  })
+
   it('rejects an unknown bootstrap value', async () => {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)
@@ -167,13 +178,16 @@ describe('DeviceCredentialService — enrollment', () => {
     const second = await service.createPairingBootstrap()
     const signing = await generateSigningKeyPair()
     const agreement = await generateSigningKeyPair()
+    const transcript = 'enroll-proof-transcript'
+    const proof = await signTranscript(signing.privateJwk, transcript)
 
     const outcome = await service.enrollDevice({
       bootstrapValue: second.value,
       name: 'Phone',
       signingPublicJwk: signing.publicJwk,
       agreementPublicJwk: agreement.publicJwk,
-      signingProof: '__desktop_generated__'
+      signingProof: proof,
+      proofTranscript: transcript
     })
     expect(outcome.ok).toBe(true)
     // The older bootstrap is invalidated by rotation.
@@ -207,7 +221,7 @@ describe('DeviceCredentialService — enrollment', () => {
       name: 'Phone',
       signingPublicJwk: bogus,
       agreementPublicJwk: bogus,
-      signingProof: '__desktop_generated__'
+      signingProof: 'dummy-proof'
     })
     expect(outcome.ok).toBe(false)
   })
@@ -221,12 +235,15 @@ describe('DeviceCredentialService — authentication and revocation', () => {
     const bootstrap = await service.createPairingBootstrap()
     const signing = await generateSigningKeyPair()
     const agreement = await generateSigningKeyPair()
+    const transcript = 'enroll-proof-transcript'
+    const proof = await signTranscript(signing.privateJwk, transcript)
     const outcome = await service.enrollDevice({
       bootstrapValue: bootstrap.value,
       name,
       signingPublicJwk: signing.publicJwk,
       agreementPublicJwk: agreement.publicJwk,
-      signingProof: '__desktop_generated__'
+      signingProof: proof,
+      proofTranscript: transcript
     })
     if (!outcome.ok || !outcome.device) throw new Error('enrollment failed')
     return {
@@ -479,9 +496,50 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
     getIconDataUrl: async () => null
   } as unknown as ProjectManager
 
+  async function enrollContextDevice(
+    service: DeviceCredentialService,
+    extraScopes: string[] = []
+  ): Promise<RemoteRpcDeviceContext> {
+    const bootstrap = await service.createPairingBootstrap()
+    const signing = await generateSigningKeyPair()
+    const agreement = await generateSigningKeyPair()
+    const transcript = 'enroll-context-proof'
+    const proof = await signTranscript(signing.privateJwk, transcript)
+    const outcome = await service.enrollDevice({
+      bootstrapValue: bootstrap.value,
+      name: 'iPhone',
+      signingPublicJwk: signing.publicJwk,
+      agreementPublicJwk: agreement.publicJwk,
+      signingProof: proof,
+      proofTranscript: transcript
+    })
+    if (!outcome.ok || !outcome.device) throw new Error('context enrollment failed')
+    const record = outcome.device
+    let scopes = record.scopes
+    let authVersion = record.authVersion
+    if (extraScopes.length > 0) {
+      scopes = [...new Set([...record.scopes, ...extraScopes])].sort()
+      service.updateScopes(record.deviceId, scopes)
+      authVersion += 1
+    }
+    return {
+      deviceId: record.deviceId,
+      name: record.name,
+      fingerprint: record.publicKeyFingerprint,
+      authVersion,
+      sessionId: 'session-1',
+      requestId: 'req-1',
+      scopes,
+      transport: 'lan',
+      allProjects: record.allProjects,
+      projectIds: record.projectIds
+    }
+  }
+
   async function buildContext(): Promise<{
     dispatcher: RemoteRpcDispatcher
     device: RemoteRpcDeviceContext
+    service: DeviceCredentialService
   }> {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)
@@ -491,16 +549,8 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
       projectManager: mockProjectManager,
       credentials: service
     })
-    const device: RemoteRpcDeviceContext = {
-      deviceId: 'device-1',
-      name: 'iPhone',
-      fingerprint: '0123456789abcdef0123456789abcdef',
-      authVersion: 1,
-      sessionId: 'session-1',
-      requestId: 'req-1',
-      scopes: ['workspace.read', 'conversation.read', 'conversation.control', 'git.read']
-    }
-    return { dispatcher, device }
+    const device = await enrollContextDevice(service)
+    return { dispatcher, device, service }
   }
 
   it('allows a channel within the device scopes', async () => {
@@ -553,15 +603,7 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
       projectManager: mockProjectManager,
       credentials: service
     })
-    const device: RemoteRpcDeviceContext = {
-      deviceId: 'device-1',
-      name: 'iPhone',
-      fingerprint: 'abcdef',
-      authVersion: 1,
-      sessionId: 'session-1',
-      requestId: 'req-permission',
-      scopes: ['conversation.read', 'permission.reply']
-    }
+    const device = await enrollContextDevice(service, ['permission.reply'])
 
     // permission.reply is Always step-up → the first call returns step_up_required.
     const first = await dispatcher.dispatch({
@@ -595,12 +637,65 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
     const events = dispatcher.listAuditEvents(50)
     const denied = events.find((event) => event.decision === 'rpc_denied')
     expect(denied).toBeDefined()
-    expect(denied?.deviceId).toBe('device-1')
+    expect(denied?.deviceId).toBe(device.deviceId)
     expect(denied?.channel).toBe('git:push')
     expect(denied?.requiredScope).toBe('git.write')
     const allowed = events.find((event) => event.decision === 'rpc_allowed')
     expect(allowed).toBeDefined()
-    expect(allowed?.deviceId).toBe('device-1')
+    expect(allowed?.deviceId).toBe(device.deviceId)
     expect(allowed?.channel).toBe('project:list')
+  })
+
+  it('enforces project grants for restricted devices', async () => {
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db)
+    const dispatcher = new RemoteRpcDispatcher({
+      database: {} as Database,
+      chatEngine: makeMockChatEngine(),
+      projectManager: mockProjectManager,
+      credentials: service
+    })
+    const device = await enrollContextDevice(service)
+    // Grant only project-a; project-b must be denied even within scopes.
+    const restricted: RemoteRpcDeviceContext = {
+      ...device,
+      allProjects: false,
+      projectIds: ['project-a']
+    }
+    const denied = await dispatcher.dispatch({
+      id: 5,
+      channel: 'project:get',
+      args: ['project-b'],
+      device: restricted
+    })
+    expect(denied.ok).toBe(false)
+    if (!denied.ok) expect(denied.message).toContain('Access denied')
+    const allowed = await dispatcher.dispatch({
+      id: 6,
+      channel: 'project:get',
+      args: ['project-a'],
+      device: restricted
+    })
+    expect(allowed.ok).toBe(true)
+  })
+
+  it('revalidates revocation per invoke (a bound device is never trusted statelessly)', async () => {
+    const { dispatcher, device, service } = await buildContext()
+    const before = await dispatcher.dispatch({
+      id: 7,
+      channel: 'project:list',
+      args: [],
+      device
+    })
+    expect(before.ok).toBe(true)
+    service.revokeDevice(device.deviceId, 'stolen')
+    const after = await dispatcher.dispatch({
+      id: 8,
+      channel: 'project:list',
+      args: [],
+      device
+    })
+    expect(after.ok).toBe(false)
+    if (!after.ok) expect(after.message).toContain('Access denied')
   })
 })

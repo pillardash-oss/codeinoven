@@ -116,6 +116,8 @@ export class CloudRelayClient {
   private readonly reconnect: CloudRelayClientOptions['reconnect']
   private readonly socketFactory: (url: string) => WebSocket
   private readonly credentials: DeviceCredentialService | null
+  /** Stable identifier for this relay connection (real session id). */
+  private readonly relaySessionId = randomBytes(16).toString('base64url')
   /** The authenticated phone device bound to this relay session. */
   private boundDevice: RemoteRpcDeviceContext | null = null
   /** The unspent desktop-issued relay device challenge (single-use). */
@@ -138,6 +140,11 @@ export class CloudRelayClient {
       options.socketFactory ?? ((target: string): WebSocket => new WebSocket(target))
     this.onAbort = () => this.cancelConnection('cancelled')
     this.options.signal?.addEventListener('abort', this.onAbort, { once: true })
+  }
+
+  /** The device id currently bound to this relay session, or null. */
+  boundDeviceId(): string | null {
+    return this.boundDevice?.deviceId ?? null
   }
 
   connect(): void {
@@ -403,7 +410,7 @@ export class CloudRelayClient {
       return
     }
     if (record['type'] === 'remote:device:auth') {
-      void this.handleDeviceAuth(record, wireId)
+      void this.handleDeviceAuth(record)
       return
     }
     if (record['rpc'] !== 'invoke' || typeof record['id'] !== 'number') return
@@ -425,10 +432,15 @@ export class CloudRelayClient {
     }
     const channel = typeof record['channel'] === 'string' ? record['channel'] : ''
     const args = Array.isArray(record['args']) ? record['args'] : []
+    // Carry the real request id (and transport/session) so audit records
+    // attribute every invoke to the device, capability, and request.
+    const invokeDevice: RemoteRpcDeviceContext | undefined = this.boundDevice
+      ? { ...this.boundDevice, requestId: String(id) }
+      : undefined
     this.processing.add(dedupKey)
     void withTimeout(
       this.options
-        .onRpc(channel, args, this.boundDevice ?? undefined)
+        .onRpc(channel, args, invokeDevice)
         .catch((): RpcOutcome => ({ ok: false, message: 'Remote invocation failed' })),
       this.requestTimeoutMs,
       { ok: false, message: 'Relay RPC request timed out' }
@@ -468,7 +480,7 @@ export class CloudRelayClient {
    * handshake, and the transcript is recomputed server-side (never taken from
    * the peer), so unsolicited, replayed, or mismatched proofs are rejected.
    */
-  private async handleDeviceAuth(record: Record<string, unknown>, wireId?: string): Promise<void> {
+  private async handleDeviceAuth(record: Record<string, unknown>): Promise<void> {
     const signature = typeof record['signature'] === 'string' ? record['signature'] : ''
     const presentedNonce = typeof record['nonce'] === 'string' ? record['nonce'] : ''
     const bootstrap = typeof record['bootstrap'] === 'string' ? record['bootstrap'] : ''
@@ -576,9 +588,12 @@ export class CloudRelayClient {
       name: device.name,
       fingerprint: device.publicKeyFingerprint,
       authVersion: device.authVersion,
-      sessionId: wireId ?? '',
+      sessionId: this.relaySessionId,
       requestId: '',
-      scopes: device.scopes
+      scopes: device.scopes,
+      transport: 'relay',
+      allProjects: device.allProjects,
+      projectIds: device.projectIds
     }
     void this.send({
       type: 'remote:device:ok',

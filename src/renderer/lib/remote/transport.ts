@@ -44,7 +44,7 @@ export interface LanDeviceCredentials {
   deviceId: string | null
   deviceName: string
   authVersion: number
-  signingPrivateJwk: JsonWebKey
+  signingKey: CryptoKey
   signingPublicJwk: JsonWebKey
   agreementPublicJwk: JsonWebKey
 }
@@ -290,7 +290,7 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
         authVersion: device.authVersion,
         bootstrap: options.pairingBootstrap
       })
-      const signature = await signTranscript(device.signingPrivateJwk, transcript)
+      const signature = await signTranscript(device.signingKey, transcript)
       if (!device.deviceId) {
         return {
           type: 'remote:hello',

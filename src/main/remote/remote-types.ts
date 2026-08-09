@@ -55,6 +55,10 @@ export interface RemoteDeviceInfo {
   credentialExpiresAt: number | null
   revokedAt: number | null
   authVersion: number
+  /** Whether the device may reach every project (local explicit choice). */
+  allProjects: boolean
+  /** Project ids allowed when `allProjects` is false. */
+  projectIds: string[]
 }
 
 export interface RemoteModeStatus {
