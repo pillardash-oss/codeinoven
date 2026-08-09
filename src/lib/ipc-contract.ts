@@ -1227,6 +1227,8 @@ export interface IpcInvokeContract {
    * traffic-light close button, so the working-threads confirmation gate applies.
    */
   'app:requestClose': Contract<[], void>
+  /** Resolves after post-paint feature IPC and harness services are registered. */
+  'app:waitForFeatures': Contract<[], void>
   /**
    * Signalled by the renderer after its initial hydration completes so the main
    * process can timestamp the `renderer:hydrated` / `workspace:ready` startup
@@ -1377,6 +1379,8 @@ export interface RemoteAuditEventInfo {
 }
 
 export interface IpcEventContract {
+  /** Post-paint feature IPC, chat, and harness registration completed. */
+  'app:featuresReady': []
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'notification:playSound': []
