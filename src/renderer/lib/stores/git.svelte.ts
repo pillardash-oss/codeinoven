@@ -176,7 +176,7 @@ export class GitState {
         ),
         invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
-      if (targetProject !== this.activeProjectId) return
+      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
       this.status = status
       this.branches = branches
       this.identity = identity
@@ -184,7 +184,7 @@ export class GitState {
       this.credentialStatus = credentialStatus
       this.stashes = stashes
     } catch (reason) {
-      if (targetProject !== this.activeProjectId) return
+      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
       this.error = errorMessage(reason, 'Git status could not be loaded')
       this.status = null
     } finally {
