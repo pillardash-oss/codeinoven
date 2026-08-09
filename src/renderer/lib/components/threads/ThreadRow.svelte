@@ -7,6 +7,7 @@
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -263,7 +264,7 @@
   ] as MenuItem[])
 
   const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 230
+  const POPOVER_ESTIMATED_HEIGHT = 290
   const POPOVER_GAP = 8
   const VIEWPORT_MARGIN = 8
 
@@ -417,13 +418,6 @@
     if (months < 12) return `${months}mo`
     const years = Math.floor(days / 365)
     return `${years}y`
-  }
-
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    })
   }
 
   // ─── Hover interactions ──────────────────────────────────────────────────
@@ -855,51 +849,7 @@
         class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
         style="left: {popoverPos.x}px; top: {popoverPos.y}px"
       >
-        <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
-        <dl class="space-y-1.5 text-[11px]">
-          {#if scopeBucket}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
-              <dd class="flex min-w-0 items-center gap-1 text-muted">
-                {#if scopeIconUrl}
-                  <img
-                    src={scopeIconUrl}
-                    alt=""
-                    class="h-3 w-3 shrink-0 object-contain"
-                    draggable="false"
-                  />
-                {/if}
-                <span class="min-w-0 break-words">{scopeBucket.name}</span>
-              </dd>
-            </div>
-          {/if}
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Created</dt>
-            <dd class="text-muted">{formatDate(thread.createdAt)}</dd>
-          </div>
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
-            <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
-          </div>
-          {#if isWorking}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
-              <dd class="flex items-center gap-1 text-muted">
-                <StatusBadge stage="working" animated size="sm" title={stageLabel} />
-                {stageLabel}
-              </dd>
-            </div>
-          {/if}
-          {#if threadState === 'approval'}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
-              <dd class="flex items-center gap-1 text-warning">
-                <StatusBadge kind="attention" animated size="sm" title="Needs Attention" />
-                Needs Attention
-              </dd>
-            </div>
-          {/if}
-        </dl>
+        <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
       </div>
     </Portal>
   {/if}

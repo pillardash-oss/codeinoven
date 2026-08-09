@@ -1,6 +1,10 @@
 <script lang="ts">
+  import { tick } from 'svelte'
+  import { Portal } from 'bits-ui'
+  import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
-  import type { Thread, ThreadSearchResult } from '$shared/types'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
 
   interface Props {
     result: ThreadSearchResult
@@ -27,6 +31,30 @@
     return null
   })
 
+  type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+
+  let isWorking = $derived(isThreadWorking(thread))
+
+  let stageLabel = $derived.by((): string => {
+    switch (thread.status) {
+      case 'planning':
+        return 'Planning'
+      case 'executing':
+        return 'Working'
+      default:
+        return ''
+    }
+  })
+
+  let threadState = $derived.by((): ThreadState => {
+    if (thread.status === 'failed') return 'error'
+    if (thread.status === 'awaiting_approval') return 'approval'
+    if (isWorking) return 'working'
+    if (!thread.read) return 'unread'
+    if (thread.status === 'created') return 'todo'
+    return 'read'
+  })
+
   function relativeTime(ts: number): string {
     const diff = Date.now() - ts
     const minutes = Math.floor(diff / 60_000)
@@ -40,14 +68,98 @@
     if (weeks < 5) return `${weeks}w`
     return `${Math.floor(days / 30)}mo`
   }
+
+  // ─── Hover popover (parity with ThreadRow) ────────────────────────────────
+
+  let showPopover = $state(false)
+  let rowEl = $state<HTMLButtonElement>()
+  let popoverEl = $state<HTMLDivElement>()
+  let popoverPos = $state({ x: 0, y: 0 })
+  let popoverTimer: ReturnType<typeof setTimeout> | undefined
+
+  const POPOVER_WIDTH = 256
+  const POPOVER_ESTIMATED_HEIGHT = 290
+  const POPOVER_GAP = 8
+  const VIEWPORT_MARGIN = 8
+
+  function calculatePopoverPosition(
+    anchor: DOMRect,
+    width: number,
+    height: number
+  ): { x: number; y: number } {
+    const availableRight = window.innerWidth - anchor.right - VIEWPORT_MARGIN
+    const availableLeft = anchor.left - VIEWPORT_MARGIN
+    const placeRight = availableRight >= width || availableRight >= availableLeft
+    const preferredX = placeRight ? anchor.right + POPOVER_GAP : anchor.left - POPOVER_GAP - width
+    const maxX = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN)
+    const maxY = Math.max(VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN)
+
+    return {
+      x: Math.max(VIEWPORT_MARGIN, Math.min(preferredX, maxX)),
+      y: Math.max(VIEWPORT_MARGIN, Math.min(anchor.top, maxY))
+    }
+  }
+
+  async function revealPopover(): Promise<void> {
+    if (!rowEl) return
+
+    popoverPos = calculatePopoverPosition(
+      rowEl.getBoundingClientRect(),
+      POPOVER_WIDTH,
+      POPOVER_ESTIMATED_HEIGHT
+    )
+    showPopover = true
+    await tick()
+
+    if (!rowEl || !popoverEl) return
+    const popoverRect = popoverEl.getBoundingClientRect()
+    popoverPos = calculatePopoverPosition(
+      rowEl.getBoundingClientRect(),
+      popoverRect.width,
+      popoverRect.height
+    )
+  }
+
+  function onRowEnter(): void {
+    clearTimeout(popoverTimer)
+    popoverTimer = setTimeout(() => {
+      void revealPopover()
+    }, 550)
+  }
+
+  function onRowLeave(): void {
+    clearTimeout(popoverTimer)
+    showPopover = false
+  }
+
+  const captureRowElement: Attachment<HTMLButtonElement> = (element) => {
+    rowEl = element
+    return () => {
+      if (rowEl === element) rowEl = undefined
+    }
+  }
+
+  const capturePopoverElement: Attachment<HTMLDivElement> = (element) => {
+    popoverEl = element
+    return () => {
+      if (popoverEl === element) popoverEl = undefined
+    }
+  }
 </script>
 
 <button
+  {@attach captureRowElement}
   class="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors {selected
     ? 'bg-selected'
     : 'hover:bg-elevated'}"
   title={thread.title}
-  onclick={() => onOpen(thread)}
+  onclick={() => {
+    showPopover = false
+    clearTimeout(popoverTimer)
+    onOpen(thread)
+  }}
+  onmouseenter={onRowEnter}
+  onmouseleave={onRowLeave}
 >
   <span class="flex min-w-0 items-center gap-2">
     <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
@@ -79,3 +191,15 @@
     </span>
   {/if}
 </button>
+
+{#if showPopover}
+  <Portal>
+    <div
+      {@attach capturePopoverElement}
+      class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
+      style="left: {popoverPos.x}px; top: {popoverPos.y}px"
+    >
+      <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
+    </div>
+  </Portal>
+{/if}
