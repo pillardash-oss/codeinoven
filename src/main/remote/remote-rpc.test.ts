@@ -22,6 +22,7 @@ const coreAllowed = new Set([
   'thread:setStatus',
   'thread:updateSettings',
   'thread:setContextUsage',
+  'thread:harnessUsage',
   'agent:loadMessages',
   'agent:listProviderSnapshot',
   'agent:getSessionStatus',
