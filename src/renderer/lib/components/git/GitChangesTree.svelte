@@ -167,7 +167,7 @@
   </ContextMenu.Item>
   <ContextMenu.Item
     class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onIgnorePaths(allPathsFor(node))}
+    onSelect={() => onIgnorePaths([node.path])}
   >
     <span class="inline-block w-3 text-center text-[10px]">⊘</span>
     Add directory to gitignore
