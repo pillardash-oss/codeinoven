@@ -120,6 +120,9 @@
 
   let { mode, active = true, navigate, config, updateConfig }: Props = $props()
 
+  const INITIAL_THREAD_LIMIT = 100
+  const HISTORY_PAGE_LIMIT = 50
+
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
   let loading = $state(true)
@@ -843,6 +846,16 @@
 
   // ─── Data loading ────────────────────────────────────────────────────────
 
+  /** Keep keyed sidebar rows safe even when hydration and live updates overlap. */
+  function uniqueThreadList(threads: Thread[]): Thread[] {
+    const seen = new SvelteSet<string>()
+    return threads.filter((thread) => {
+      if (seen.has(thread.id)) return false
+      seen.add(thread.id)
+      return true
+    })
+  }
+
   /** Insert or refresh a thread in the sidebar list. The bounded hydration
    *  query only loads recent threads, so a thread opened from the scope board
    *  or history — or one the harness just started working on — must be added
@@ -854,7 +867,11 @@
       return
     }
     const existing = allThreads[index]
+    const hasDuplicate = allThreads.some(
+      (candidate, candidateIndex) => candidateIndex !== index && candidate.id === thread.id
+    )
     if (
+      !hasDuplicate &&
       existing.updatedAt === thread.updatedAt &&
       existing.lastActivity === thread.lastActivity &&
       existing.status === thread.status &&
@@ -864,9 +881,13 @@
     ) {
       return
     }
-    allThreads = allThreads.map((candidate, candidateIndex) =>
-      candidateIndex === index ? thread : candidate
-    )
+    let replaced = false
+    allThreads = allThreads.flatMap((candidate) => {
+      if (candidate.id !== thread.id) return [candidate]
+      if (replaced) return []
+      replaced = true
+      return [thread]
+    })
   }
 
   // Any thread the user lands on (notification click, cache restore, scope
@@ -1021,7 +1042,7 @@
     const newThread = workspaceState.pendingMoveThread
     if (count && oldId && newThread) {
       allThreads = allThreads.filter((t) => t.id !== oldId)
-      allThreads = [newThread, ...allThreads]
+      upsertThreadInList(newThread)
     }
   })
 
@@ -1031,23 +1052,26 @@
         invoke('project:list'),
         invoke('thread:listRecent', {
           projectId: rendererRecovery.selectedProjectId ?? undefined,
-          limit: 100
+          limit: INITIAL_THREAD_LIMIT
         })
       ])
       projects = projectList
-      allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
+      const uniqueThreads = uniqueThreadList(threadList)
+      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      historyOffset = threadList.length
+      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
       await migrateTimelinePins()
-      notificationPanelState.hydrateFromThreads(threadList)
+      notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(threadList)
+      scopeState.setThreads(uniqueThreads)
       initExpandedFolders(projectList.filter((p) => !p.hidden))
       const saved = rendererRecovery.selectedThread
       const restoredThread = saved
-        ? threadList.find(
+        ? uniqueThreads.find(
             (candidate) =>
               candidate.id === saved.threadId &&
               candidate.projectId === saved.projectId &&
@@ -1107,18 +1131,21 @@
         invoke('project:list'),
         invoke('thread:listRecent', {
           projectId: workspaceState.activeProject?.id ?? undefined,
-          limit: 100
+          limit: INITIAL_THREAD_LIMIT
         })
       ])
       projects = projectList
-      allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
-      notificationPanelState.hydrateFromThreads(threadList)
+      const uniqueThreads = uniqueThreadList(threadList)
+      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      historyOffset = threadList.length
+      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(threadList)
+      scopeState.setThreads(uniqueThreads)
     } catch {
       // Non-fatal — keep the current lists on failure.
     }
@@ -1139,18 +1166,22 @@
     if (historyLoading || !hasMoreHistory) return
     historyLoading = true
     try {
-      const page = await invoke('thread:listHistoryPage', { limit: 50, offset: historyOffset })
+      const page = await invoke('thread:listHistoryPage', {
+        limit: HISTORY_PAGE_LIMIT,
+        offset: historyOffset
+      })
       historyOffset += page.length
-      hasMoreHistory = page.length === 50
-      const known = new Set(allThreads.map((thread) => thread.id))
-      const additions = page.filter(
+      hasMoreHistory = page.length === HISTORY_PAGE_LIMIT
+      const uniqueCurrentThreads = uniqueThreadList(allThreads)
+      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
+      const additions = uniqueThreadList(page).filter(
         (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
       )
       for (const thread of page) {
         if (!thread.archived) scopeState.updateThread(thread)
       }
-      if (additions.length > 0) {
-        allThreads = [...allThreads, ...additions]
+      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
+        allThreads = [...uniqueCurrentThreads, ...additions]
       }
     } finally {
       historyLoading = false
@@ -1433,7 +1464,7 @@
 
     const updated = await invoke('thread:reorder', projectId, projectThreads)
     for (const t of updated) {
-      allThreads = allThreads.map((th) => (th.id === t.id ? t : th))
+      upsertThreadInList(t)
     }
   }
 
@@ -1461,7 +1492,7 @@
       settings: { ...threadSettings.lastUsed },
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
-    allThreads = [thread, ...allThreads]
+    upsertThreadInList(thread)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
       scopeState.updateThread(thread)
@@ -1492,7 +1523,7 @@
         workingDirectory: '',
         settings: chatEffectiveSettings()
       })
-      allThreads = [thread, ...allThreads]
+      upsertThreadInList(thread)
       chatDraft.message = msg
       chatDraft.attachments = files
       workspaceState.openThread(thread, inbox)
@@ -1584,13 +1615,13 @@
       title: newName,
       titleSource: 'manual'
     })
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     workspaceState.updateThread(updated)
   }
 
   async function togglePin(thread: Thread): Promise<void> {
     const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
   }
@@ -1609,7 +1640,7 @@
       thread.id,
       `${thread.title} (fork)`
     )
-    allThreads = [forked, ...allThreads]
+    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (scopeState.sidebarContext?.projectId === forked.projectId) {
       scopeState.showSidebarForThread(forked, scopeState.sidebarContext.bucketId)
@@ -1619,13 +1650,13 @@
 
   /** A message-level fork succeeded inside the thread view — surface and open it. */
   function handleForkedThread(forked: Thread): void {
-    allThreads = [forked, ...allThreads]
+    upsertThreadInList(forked)
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
   }
 
   /** A chat was continued into a project — register the thread and open it there. */
   function handleContinuedInProject(forked: Thread): void {
-    allThreads = [forked, ...allThreads]
+    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (forked.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
@@ -1658,7 +1689,7 @@
       tab.settings
     )
     contextSidebarState.close(tab.id)
-    allThreads = [converted, ...allThreads]
+    upsertThreadInList(converted)
     scopeState.updateThread(converted)
     if (converted.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')

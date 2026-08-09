@@ -5147,7 +5147,7 @@
     const finalText = getTurnFinalText(turnEndIndex)
     for (let i = startMsgIndex; i <= turnEndIndex; i++) {
       const m = messages[i]
-      if (m.role === 'user') break
+      if (!m || m.role === 'user') break
       for (const p of m.parts) {
         if (
           p.type === 'text' &&
@@ -5177,8 +5177,9 @@
     let finalText: AgentPart | null = null
     for (let i = turnStart; i <= endMsgIndex; i++) {
       if (i >= messages.length) break
-      if (messages[i]?.role === 'user') break
-      for (const p of messages[i].parts) {
+      const message = messages[i]
+      if (!message || message.role === 'user') break
+      for (const p of message.parts) {
         if (p.type === 'text') finalText = p
       }
     }

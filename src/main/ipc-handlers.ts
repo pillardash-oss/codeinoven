@@ -3275,7 +3275,12 @@ export function registerIpcHandlers(
         : validateEntityId(options.projectId, 'Project ID')
     const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 100)
     const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
-    const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
+    const threads = await threadManager.listAllThreads({
+      includeArchived: false,
+      limit,
+      offset,
+      order: 'activity'
+    })
     return projectId ? threads.filter((thread) => thread.projectId === projectId) : threads
   })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
