@@ -52,7 +52,9 @@
   )
 
   onMount(() => {
-    void threadMessages.load(thread.projectId, thread.id)
+    // Keep mobile hydration below the encrypted transport's frame cap. Older
+    // history remains available through the existing paged thread API.
+    void threadMessages.load(thread.projectId, thread.id, 40)
     if (thread.sessionId) {
       threadMessages.setSessionId(thread.projectId, thread.id, thread.sessionId)
     } else {

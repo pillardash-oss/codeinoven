@@ -139,7 +139,7 @@ class ThreadMessagesStore {
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
-  async load(projectId: string, threadId: string): Promise<void> {
+  async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.entry(projectId, threadId)
     if (entry.loading) return
     entry.loading = true
@@ -147,7 +147,11 @@ class ThreadMessagesStore {
     this.#notify()
 
     try {
-      const serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+      const serverMessages =
+        recentLimit === undefined
+          ? await invoke('agent:loadMessages', projectId, threadId)
+          : (await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit))
+              .messages
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
     } catch (err) {
