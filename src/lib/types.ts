@@ -2952,6 +2952,42 @@ export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview
   hasDeployments: boolean
 }
 
+/** One step inside a workflow run job — the granular "why did it fail" data. */
+export interface GitHubDeploymentJobStep {
+  number: number
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+}
+
+/** One workflow run job, with its step-level breakdown. */
+export interface GitHubDeploymentJob {
+  id: number
+  name: string
+  status: string
+  conclusion: string | null
+  startedAt: string
+  completedAt: string | null
+  url: string
+  steps: GitHubDeploymentJobStep[]
+}
+
+/** Everything the in-app deployment detail view needs. */
+export interface GitHubDeploymentDetail {
+  deployment: GitHubDeployment
+  statuses: GitHubDeploymentStatus[]
+  workflowRun: GitHubWorkflowRun | null
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
+}
+
+/** Capped raw log text for one workflow run job. */
+export interface GitHubDeploymentJobLog {
+  jobId: number
+  log: string
+  truncated: boolean
+}
+
 /** One entry from `git stash list`, e.g. `stash@{0}`. */
 export interface GitStashEntry {
   /** Reflog selector, e.g. `stash@{0}`. */
