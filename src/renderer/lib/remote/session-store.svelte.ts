@@ -334,28 +334,34 @@ export class RemoteSessionStore {
     const scheme = target?.scheme ?? 'ws'
     const manualHosts = target && target.host.length > 0 ? [target.host] : config.lan.hosts
 
-    // Probe reachability without keeping the probe sockets: every probe is
-    // closed as soon as it resolves, so no channels are orphaned.
-    const peers = await discoverPeers({
-      port,
-      manualHosts,
-      useMdns: config.lan.useMdns,
-      timeoutMs: 0,
-      reachable: async (peer) => {
-        const probe = createLanTransport({
-          peer,
-          authSecret: secret,
-          scheme,
-          handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
-          device,
-          pairingBootstrap: keyMaterial ? secret : null,
-          onEvent: () => undefined
-        })
-        const outcome = await probe.connect()
-        probe.close()
-        return outcome === 'open'
-      }
-    })
+    // Account discovery already supplies one exact LAN endpoint. Do not probe
+    // it with device credentials: first-use authentication consumes the
+    // one-time bootstrap, so a successful probe would enroll the phone and
+    // then immediately discard the only authenticated socket. The kept session
+    // below is both the reachability check and the single enrollment attempt.
+    const peers: DiscoveredPeer[] =
+      target && keyMaterial
+        ? [{ host: target.host, port, source: 'manual' }]
+        : await discoverPeers({
+            port,
+            manualHosts,
+            useMdns: config.lan.useMdns,
+            timeoutMs: 0,
+            reachable: async (peer) => {
+              const probe = createLanTransport({
+                peer,
+                authSecret: secret,
+                scheme,
+                handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
+                device,
+                pairingBootstrap: null,
+                onEvent: () => undefined
+              })
+              const outcome = await probe.connect()
+              probe.close()
+              return outcome === 'open'
+            }
+          })
 
     const peer = peers[0]
     if (peer) {
