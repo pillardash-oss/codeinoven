@@ -194,7 +194,11 @@
   // Intentional initial-value capture — the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
-  let sidebarRevealSuppressed = false
+  // Reactive so the focus-follow effect re-runs (and re-reveals the active
+  // thread) the moment the mode-switch suppression window closes. As a plain
+  // `let` the reveal would be skipped forever whenever a mode switch coincided
+  // with the active thread falling out of view.
+  let sidebarRevealSuppressed = $state(false)
   let sidebarRevealSuppressTimer: ReturnType<typeof setTimeout> | undefined
 
   // Runs before the DOM swaps: capture the outgoing mode's scrollTop while its
@@ -959,10 +963,15 @@
     }
   })
 
+  /** Whether the sidebar is showing the scope-board project view. That view has
+   *  its own per-stage lists and inner scrolling; the focus-follow reveal below
+   *  is only for the regular Projects/Threads/Chats views. */
+  let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
+
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
   // suppression; list changes re-reveal the row if background activity pushed
-  // it out of view.
+  // it out of view. The scope-board view is left untouched.
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
@@ -987,9 +996,14 @@
         if (!sidebarRevealSuppressed) {
           void tick().then(() => revealThreadInSidebar(thread.id))
         }
+      } else if (!sidebarRevealSuppressed) {
+        // Standalone chats (inbox) have no folder to expand — reveal directly
+        // once the mode's list has rendered the row.
+        void tick().then(() => revealThreadInSidebar(thread.id))
       }
     }
     if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
+    if (isScopeBoardView) return
     revealThreadInSidebar(thread.id)
   })
 
