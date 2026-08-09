@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createLanTransport, type TransportEvent, type TransportSocket } from './transport'
 import { createHandshakeToken, decryptPayload, generateNonce } from './session-security'
+import { loadOrCreateDeviceKeyMaterial } from './device-identity'
 
 class FakeSocket implements TransportSocket {
   sent: string[] = []
@@ -173,5 +174,152 @@ describe('browser WebSocket default', () => {
     })
     void transport.connect()
     expect(factory).toHaveBeenCalledWith('ws://192.168.1.5:4455')
+  })
+})
+
+describe('createLanTransport — proof of possession (A-04)', () => {
+  function memoryStorage(): Storage {
+    const store = new Map<string, string>()
+    return {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size
+      }
+    }
+  }
+
+  it('signs the challenge instead of deriving a shared-secret token on first enrollment', async () => {
+    const socket = new FakeSocket()
+    const events: TransportEvent[] = []
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    const transport = createLanTransport({
+      peer,
+      authSecret: 'bootstrap',
+      pairingBootstrap: 'bootstrap',
+      socketFactory: () => socket,
+      device: {
+        deviceId: keyMaterial.deviceId,
+        deviceName: keyMaterial.deviceName,
+        authVersion: keyMaterial.authVersion,
+        signingPrivateJwk: keyMaterial.signingPrivateJwk,
+        signingPublicJwk: keyMaterial.signingPublicJwk,
+        agreementPublicJwk: keyMaterial.agreementPublicJwk
+      },
+      onEvent: (event) => events.push(event)
+    })
+
+    const connectPromise = transport.connect()
+    socket.open()
+    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'challenge-1' }))
+    await vi.waitFor(() => {
+      expect(socket.sent.length).toBe(1)
+    })
+    const hello = JSON.parse(socket.sent[0] ?? '') as {
+      type: string
+      version: number
+      nonce: string
+      token?: string
+      signature: string
+      transcript: string
+      bootstrap: string
+      signingPublicJwk: JsonWebKey
+      agreementPublicJwk: JsonWebKey
+    }
+    expect(hello.type).toBe('remote:hello')
+    expect(hello.version).toBe(3)
+    expect(hello.nonce).toBe('challenge-1')
+    expect(hello.token).toBeUndefined()
+    expect(hello.bootstrap).toBe('bootstrap')
+    expect(hello.signature.length).toBeGreaterThan(40)
+    expect(hello.transcript).toContain('codeinoven:enroll:bootstrap:challenge-1')
+    expect(hello.signingPublicJwk.kty).toBe('EC')
+    expect(hello.agreementPublicJwk.kty).toBe('EC')
+
+    socket.receive(JSON.stringify({ type: 'remote:hello:ok' }))
+    await expect(connectPromise).resolves.toBe('open')
+  })
+
+  it('reports the desktop-assigned device id from a successful enrollment reply', async () => {
+    const socket = new FakeSocket()
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    let assigned = ''
+    const transport = createLanTransport({
+      peer,
+      authSecret: 'bootstrap',
+      pairingBootstrap: 'bootstrap',
+      socketFactory: () => socket,
+      device: {
+        deviceId: keyMaterial.deviceId,
+        deviceName: keyMaterial.deviceName,
+        authVersion: keyMaterial.authVersion,
+        signingPrivateJwk: keyMaterial.signingPrivateJwk,
+        signingPublicJwk: keyMaterial.signingPublicJwk,
+        agreementPublicJwk: keyMaterial.agreementPublicJwk
+      },
+      onAssignedDevice: (deviceId) => {
+        assigned = deviceId
+      },
+      onEvent: () => undefined
+    })
+
+    const connectPromise = transport.connect()
+    socket.open()
+    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'challenge-2' }))
+    await vi.waitFor(() => expect(socket.sent.length).toBe(1))
+    socket.receive(
+      JSON.stringify({
+        type: 'remote:hello:ok',
+        device: { id: 'desktop-assigned-42', authVersion: 1 }
+      })
+    )
+    await expect(connectPromise).resolves.toBe('open')
+    expect(assigned).toBe('desktop-assigned-42')
+  })
+
+  it('binds the reconnect signature to the device id and auth version', async () => {
+    const socket = new FakeSocket()
+    const transport = createLanTransport({
+      peer,
+      authSecret: 'bootstrap',
+      socketFactory: () => socket,
+      device: {
+        deviceId: 'device-abc',
+        deviceName: 'iPhone',
+        authVersion: 2,
+        signingPrivateJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage())).signingPrivateJwk,
+        signingPublicJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage())).signingPublicJwk,
+        agreementPublicJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage()))
+          .agreementPublicJwk
+      },
+      onEvent: () => undefined
+    })
+
+    const connectPromise = transport.connect()
+    socket.open()
+    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'challenge-3' }))
+    await vi.waitFor(() => expect(socket.sent.length).toBe(1))
+    const hello = JSON.parse(socket.sent[0] ?? '') as {
+      version: number
+      deviceId: string
+      authVersion: number
+      transcript: string
+      token?: string
+    }
+    expect(hello.version).toBe(3)
+    expect(hello.deviceId).toBe('device-abc')
+    expect(hello.authVersion).toBe(2)
+    expect(hello.token).toBeUndefined()
+    expect(hello.transcript).toBe('codeinoven:auth:challenge-3:device-abc:2')
+
+    socket.receive(JSON.stringify({ type: 'remote:hello:ok' }))
+    await expect(connectPromise).resolves.toBe('open')
   })
 })

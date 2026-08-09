@@ -197,6 +197,21 @@ export class RemoteRpcDispatcher {
     if (!this.isAllowed(invoke.channel)) {
       return { ok: false, message: `Channel not allowed over the remote bridge: ${invoke.channel}` }
     }
+    // Fail closed: when device identity is configured, no invocation executes
+    // without an authenticated device — the cloud relay cannot bypass device
+    // authorization by calling the dispatcher without a device context.
+    if (!invoke.device && this.credentials) {
+      this.credentials.audit({
+        decision: 'rpc_denied',
+        reasonCode: 'denied_by_default',
+        deviceId: null,
+        transport: 'lan',
+        sessionId: null,
+        requestId: String(invoke.id),
+        channel: invoke.channel
+      })
+      return { ok: false, message: 'Device authentication required for remote RPC' }
+    }
     if (invoke.device) {
       const authorized = await this.authorizeDevice(invoke)
       if (!authorized.allowed) {

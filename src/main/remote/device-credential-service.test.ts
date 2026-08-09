@@ -526,6 +526,19 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
     if (!outcome.ok) expect(outcome.message).toContain('Access denied')
   })
 
+  it('rejects device-less invocations when a credential service is configured', async () => {
+    const { dispatcher } = await buildContext()
+    // The cloud relay dispatches RPC without any device context — this must
+    // fail closed instead of executing as the trusted desktop path.
+    const outcome = await dispatcher.dispatch({
+      id: 99,
+      channel: 'project:list',
+      args: []
+    })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.message).toContain('Device authentication required')
+  })
+
   it('requires step-up approval for high-risk channels and executes after approval', async () => {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)

@@ -5,6 +5,18 @@ import {
   type CloudRelayClientOptions
 } from './cloud-relay-client'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
+import {
+  loadOrCreateDeviceKeyMaterial,
+  signTranscript,
+  handshakeTranscript
+} from '../../renderer/lib/remote/device-identity'
+import { DeviceCredentialService } from './device-credential-service'
+import { RemoteRpcDispatcher, type RemoteRpcServices } from './remote-rpc'
+import DatabaseConstructor from 'better-sqlite3'
+import type { Database } from '../database/database'
+import { REMOTE_DEVICE_SQL } from '../database/schema'
+import { createTestDb, destroyTestDb } from '../database/test-helper'
+import type { ProjectManager } from '../../lib/engines/project-manager'
 
 const SECRET = 'control-secret'
 
@@ -559,5 +571,329 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
       expect(bodies[0]['rpc']).toBe('error')
       expect(bodies[0]['id']).toBe(11)
     })
+  })
+})
+
+describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
+  function memoryStorage(): Storage {
+    const store = new Map<string, string>()
+    return {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value)
+      },
+      removeItem: (key: string) => {
+        store.delete(key)
+      },
+      clear: () => store.clear(),
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size
+      }
+    }
+  }
+
+  function makeRawDatabase(): Database {
+    const raw = new DatabaseConstructor(':memory:')
+    raw.pragma('foreign_keys = ON')
+    raw.exec(REMOTE_DEVICE_SQL)
+    const prepared = raw.prepare.bind(raw)
+    return {
+      run: (sql: string, ...params: unknown[]) => {
+        prepared(sql).run(...params)
+      },
+      get: <T>(sql: string, ...params: unknown[]) => prepared(sql).get(...params) as T | undefined,
+      all: <T>(sql: string, ...params: unknown[]) => prepared(sql).all(...params) as T[],
+      prepare: (sql: string) => ({
+        run: (...params: unknown[]) => prepared(sql).run(...params)
+      }),
+      transaction: <T>(fn: () => T) => raw.transaction(fn)()
+    } as unknown as Database
+  }
+
+  function makeDispatcher(
+    credentials: DeviceCredentialService,
+    database: Database
+  ): RemoteRpcDispatcher {
+    const chatEngine = {
+      loadMessages: async () => [],
+      deleteThreadSession: async () => undefined,
+      listProviderSnapshot: async () => [],
+      getSessionStatus: async () => null,
+      ensureSession: async () => 'session-1',
+      sendPrompt: async () => ({ id: 'm1', role: 'assistant', parts: [], createdAt: 0 }),
+      steerPrompt: async () => ({ id: 'm2', role: 'assistant', parts: [], createdAt: 0 }),
+      abort: async () => undefined,
+      listPermissions: async () => [],
+      replyPermission: async () => undefined,
+      listQuestions: async () => [],
+      answerQuestion: async () => undefined
+    } as unknown as RemoteRpcServices['chatEngine']
+    const projectManager = {
+      listProjects: async () => [{ id: 'p1', name: 'P1' }],
+      getProject: async () => null,
+      getIconDataUrl: async () => null
+    } as unknown as ProjectManager
+    return new RemoteRpcDispatcher({
+      database,
+      chatEngine,
+      projectManager,
+      credentials
+    })
+  }
+
+  /** Build an auth frame signing a DESKTOP-issued challenge nonce. */
+  async function authFrame(
+    nonce: string,
+    context: { deviceId?: string | null; authVersion?: number },
+    bootstrapValue = 'bootstrap'
+  ): Promise<Record<string, unknown>> {
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    const transcript = handshakeTranscript({
+      nonce,
+      deviceId: context.deviceId ?? keyMaterial.deviceId,
+      authVersion: context.authVersion ?? keyMaterial.authVersion,
+      bootstrap: bootstrapValue,
+      context: 'relay'
+    })
+    const signature = await signTranscript(keyMaterial.signingPrivateJwk, transcript)
+    const frame: Record<string, unknown> = {
+      type: 'remote:device:auth',
+      nonce,
+      signature,
+      deviceName: keyMaterial.deviceName
+    }
+    if (context.deviceId) {
+      frame['deviceId'] = context.deviceId
+      frame['authVersion'] = context.authVersion ?? keyMaterial.authVersion
+    } else {
+      frame['bootstrap'] = bootstrapValue
+      frame['signingPublicJwk'] = keyMaterial.signingPublicJwk
+      frame['agreementPublicJwk'] = keyMaterial.agreementPublicJwk
+    }
+    return frame
+  }
+
+  async function challengeNonceOf(socket: FakeSocket): Promise<string> {
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:challenge')).toBe(true)
+    })
+    const challenge = (await readBodies(socket)).find(
+      (body) => body.type === 'remote:device:challenge'
+    )
+    expect(typeof challenge?.['nonce']).toBe('string')
+    return challenge?.['nonce'] as string
+  }
+
+  async function invokeReply(
+    socket: FakeSocket,
+    id: number,
+    invoke: Record<string, unknown>
+  ): Promise<Record<string, unknown> | undefined> {
+    await receivedData(socket, invoke)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(
+        bodies.some((body) => (body.rpc === 'result' || body.rpc === 'error') && body.id === id)
+      ).toBe(true)
+    })
+    return (await readBodies(socket)).find(
+      (body) => (body.rpc === 'result' || body.rpc === 'error') && body.id === id
+    )
+  }
+
+  async function makeRelayHarness(credentials: DeviceCredentialService): Promise<{
+    harness: Harness
+    socket: FakeSocket
+    dispose: () => void
+  }> {
+    const database = await createTestDb()
+    const dispatcher = makeDispatcher(credentials, database)
+    const harness = makeHarness({
+      credentials,
+      onRpc: async (channel, args, device) => dispatcher.dispatch({ id: 0, channel, args, device })
+    })
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    return { harness, socket, dispose: () => destroyTestDb(database) }
+  }
+
+  it('issues a fresh challenge and rejects an invoke with no authenticated device', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    expect((await challengeNonceOf(socket)).length).toBeGreaterThan(0)
+
+    // No device handshake → the invoke fails closed (device-less bypass).
+    const reply = await invokeReply(socket, 1, {
+      rpc: 'invoke',
+      id: 1,
+      channel: 'project:list',
+      args: []
+    })
+    expect(reply?.rpc).toBe('error')
+    if (typeof reply?.message === 'string')
+      expect(reply.message).toContain('Device authentication required')
+    harness.client.close()
+    dispose()
+  })
+
+  it('rejects an invoke carrying a caller-forged device context', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    await challengeNonceOf(socket)
+
+    const reply = await invokeReply(socket, 2, {
+      rpc: 'invoke',
+      id: 2,
+      channel: 'project:list',
+      args: [],
+      device: {
+        deviceId: 'forged',
+        name: 'x',
+        fingerprint: 'x',
+        authVersion: 1,
+        sessionId: 's',
+        requestId: 'r',
+        scopes: ['workspace.read']
+      }
+    })
+    expect(reply?.rpc).toBe('error')
+    if (typeof reply?.message === 'string')
+      expect(reply.message).toContain('Device authentication required')
+    harness.client.close()
+    dispose()
+  })
+
+  it('binds an enrolled device after signing the desktop challenge and dispatches with capability context', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const nonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+
+    await receivedData(
+      socket,
+      await authFrame(nonce, { deviceId: null, authVersion: undefined }, bootstrap.value)
+    )
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    const ok = (await readBodies(socket)).find((body) => body.type === 'remote:device:ok')
+    const assignedId = ((ok?.['device'] as { id?: unknown }) ?? {}).id
+    expect(typeof assignedId).toBe('string')
+
+    // project:list and thread:harnessUsage are default workspace.read → succeed.
+    const list = await invokeReply(socket, 3, {
+      rpc: 'invoke',
+      id: 3,
+      channel: 'project:list',
+      args: []
+    })
+    expect(list?.rpc).toBe('result')
+    const usage = await invokeReply(socket, 4, {
+      rpc: 'invoke',
+      id: 4,
+      channel: 'thread:harnessUsage',
+      args: ['p1', 't1']
+    })
+    expect(usage?.rpc).toBe('result')
+
+    // git:push is outside the default scopes → capability-bound denial.
+    const denied = await invokeReply(socket, 5, {
+      rpc: 'invoke',
+      id: 5,
+      channel: 'git:push',
+      args: ['p1']
+    })
+    expect(denied?.rpc).toBe('error')
+    if (typeof denied?.message === 'string') expect(denied.message).toContain('Access denied')
+
+    const events = credentials.listAudit(20)
+    const allowedAudit = events.find(
+      (event) => event.decision === 'rpc_allowed' && event.channel === 'project:list'
+    )
+    expect(allowedAudit?.deviceId).toBe(assignedId)
+    expect(allowedAudit?.channel).toBe('project:list')
+    harness.client.close()
+    dispose()
+  })
+
+  it('rejects a replayed proof against the same challenge and keeps the session unbound', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const nonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+    const frame = await authFrame(
+      nonce,
+      { deviceId: null, authVersion: undefined },
+      bootstrap.value
+    )
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+
+    // Replaying the SAME proof cannot rebind or escalate: the single-use
+    // challenge was consumed, so the desktop issues a fresh challenge and
+    // never emits a second bind.
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:challenge')).toBe(true)
+    })
+    const bindCount = (await readBodies(socket)).filter(
+      (body) => body.type === 'remote:device:ok'
+    ).length
+    expect(bindCount).toBe(1)
+    harness.client.close()
+    dispose()
+  })
+
+  it('rejects a mismatched nonce (stale proof from another connection)', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const issued = await challengeNonceOf(socket)
+
+    // Sign a transcript over a DIFFERENT nonce — the desktop recomputes the
+    // canonical transcript from ITS challenge, so the signature must not verify.
+    const frame = await authFrame('stale-nonce-123', { deviceId: null, authVersion: undefined })
+    void issued
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      // A mismatched proof yields a fresh challenge, never a bind.
+      expect(bodies.some((body) => body.type === 'remote:device:challenge')).toBe(true)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(false)
+    })
+    harness.client.close()
+    dispose()
+  })
+
+  it('rejects a forged enrollment bootstrap and keeps the session unbound', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const nonce = await challengeNonceOf(socket)
+    const frame = await authFrame(nonce, { deviceId: null, authVersion: undefined })
+    // The frame signs a transcript bound to bootstrap 'bootstrap', but the
+    // frame itself carries no bootstrap value → malformed and rejected.
+    delete frame['bootstrap']
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:error')).toBe(true)
+    })
+    const reply = await invokeReply(socket, 7, {
+      rpc: 'invoke',
+      id: 7,
+      channel: 'project:list',
+      args: []
+    })
+    expect(reply?.rpc).toBe('error')
+    if (typeof reply?.message === 'string')
+      expect(reply.message).toContain('Device authentication required')
+    harness.client.close()
+    dispose()
   })
 })

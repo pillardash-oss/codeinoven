@@ -5,6 +5,7 @@
   import PeerConnect from '$lib/components/remote/PeerConnect.svelte'
   import PairingQr from '$lib/components/remote/PairingQr.svelte'
   import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
+  import StepUpApproval from '$lib/components/remote/StepUpApproval.svelte'
   import { remoteSession, type RemoteConnectionTarget } from '$lib/remote/session-store.svelte'
   import { buildRemoteConfig, loadRemoteConfig, type RemoteConfig } from '$lib/remote/config'
   import {
@@ -14,7 +15,7 @@
     type RemoteLogEntry
   } from '$lib/remote/logger'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import type { RemoteModeStatus } from '$shared/ipc-contract'
+  import type { RemoteModeStatus, RemotePendingStepUpApproval } from '$shared/ipc-contract'
 
   interface Props {
     onBack?: () => void
@@ -44,6 +45,7 @@
   let configError = $state(resolvedConfig.error)
 
   let remoteStatus = $state<RemoteModeStatus | null>(null)
+  let pendingApprovals = $state<RemotePendingStepUpApproval[]>([])
   let secret = $state(remoteSession.secretValue)
   let busy = $state(false)
   let diagnostics = $state<readonly RemoteLogEntry[]>([])
@@ -76,7 +78,7 @@
       } else {
         target = { host: '127.0.0.1', port: config.lan.localPort, scheme: 'ws' }
       }
-      await remoteSession.connect(effective.trim(), target)
+      await remoteSession.connect(effective.trim(), target, { deviceCredentials: pwa })
     } finally {
       busy = false
     }
@@ -116,6 +118,16 @@
     } catch {
       // The status event will resync the list if the revocation failed.
     }
+  }
+
+  async function handleApproveStepUp(approvalId: string): Promise<void> {
+    if (!desktop) return
+    await invoke('remote:approveStepUp', approvalId)
+  }
+
+  async function handleRejectStepUp(approvalId: string): Promise<void> {
+    if (!desktop) return
+    await invoke('remote:rejectStepUp', approvalId)
   }
 
   function gatewayHost(): string | null {
@@ -174,7 +186,13 @@
       remoteStatus = status
       remoteSession.setKeepAlive(status.phase)
     })
-    return unsubscribe
+    const unsubscribeStepUp = subscribe('remote:stepUpPending', (approvals) => {
+      pendingApprovals = approvals
+    })
+    return () => {
+      unsubscribe()
+      unsubscribeStepUp()
+    }
   })
 
   // The phone client reads `#pair=<secret>` from the QR code and connects
@@ -232,6 +250,14 @@
   {/if}
 
   <main class={embedded ? 'w-full space-y-6' : 'mx-auto w-full max-w-md flex-1 space-y-6 p-6'}>
+    {#if !pwa && desktop}
+      <StepUpApproval
+        approvals={pendingApprovals}
+        {busy}
+        onApprove={(approvalId) => void handleApproveStepUp(approvalId)}
+        onReject={(approvalId) => void handleRejectStepUp(approvalId)}
+      />
+    {/if}
     {#if configError}
       <section
         class="rounded-xl border border-danger/30 bg-danger/5 p-4 text-sm text-danger"

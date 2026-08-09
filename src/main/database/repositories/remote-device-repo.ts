@@ -80,6 +80,7 @@ export type RemoteAuditReasonCode =
   | 'missing_approval'
   | 'approval_mismatch'
   | 'approval_replay'
+  | 'mismatch'
   | 'overflow'
   | 'malformed'
   | 'denied_by_default'

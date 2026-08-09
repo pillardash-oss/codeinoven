@@ -373,7 +373,8 @@ const EVENT_CHANNELS = [
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
   'computerUse:pipState',
-  'remote:status'
+  'remote:status',
+  'remote:stepUpPending'
 ] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]
