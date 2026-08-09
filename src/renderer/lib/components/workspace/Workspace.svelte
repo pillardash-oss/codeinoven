@@ -1061,7 +1061,22 @@
         )
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
-        rendererRecovery.clearSelectedThread()
+        // The saved thread may sit beyond the bounded recent hydration list
+        // (e.g. it was manually reordered below the cut). Fetch it directly so
+        // the workspace restores onto the same thread instead of clearing it.
+        try {
+          const savedThread = await invoke('thread:get', saved.projectId, saved.threadId)
+          const project = projectList.find((candidate) => candidate.id === saved.projectId) ?? null
+          if (savedThread && !savedThread.archived) {
+            upsertThreadInList(savedThread)
+            workspaceState.openThread(savedThread, project)
+            void scopeState.ensureBoardLoaded(saved.projectId)
+          } else {
+            rendererRecovery.clearSelectedThread()
+          }
+        } catch {
+          rendererRecovery.clearSelectedThread()
+        }
       }
 
       // Restore the last active project even without a thread
@@ -1494,7 +1509,7 @@
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     workspaceState.updateThread(updated)
     scopeState.updateThread(updated)
   }
