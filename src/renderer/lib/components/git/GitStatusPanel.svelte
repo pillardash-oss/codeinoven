@@ -946,14 +946,14 @@
     </div>
 
     {#if repoState === 'git'}
-      <!-- Tab row -->
-      <div class="flex items-center gap-4 px-3">
+      <!-- Tab row — never wraps; scrolls horizontally when the tabs overflow -->
+      <div class="flex items-center gap-4 overflow-x-auto px-3 [scrollbar-width:thin]">
         {#each tabs as tab (tab.id)}
           {@const TabIcon = tab.icon}
           <button
             type="button"
             class={[
-              'flex items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[11px] font-medium transition-colors',
+              'flex shrink-0 items-center gap-1.5 border-b-2 pb-1.5 pt-0.5 text-[11px] font-medium transition-colors',
               activeTab === tab.id
                 ? 'border-primary text-foreground'
                 : 'border-transparent text-dimmed hover:text-muted'
