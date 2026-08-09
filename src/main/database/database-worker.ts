@@ -248,12 +248,10 @@ export class DatabaseWorker {
   async shutdown(): Promise<void> {
     const worker = this.worker
     if (!worker) return
-    const response = this.request({ kind: 'shutdown' })
-    const timeout = new Promise<never>((resolve) => {
-      setTimeout(resolve, WORKER_SHUTDOWN_TIMEOUT_MS)
-    })
-    await Promise.race([response, timeout])
 
+    // Register the exit listener BEFORE sending the shutdown request so a fast
+    // worker exit (ack + port close) can never fire before the listener is
+    // attached — otherwise the clean exit is missed and we would force-terminate.
     let exitedCleanly = false
     const cleanExit = new Promise<void>((resolve) => {
       const onExit = () => {
@@ -267,6 +265,12 @@ export class DatabaseWorker {
       }, WORKER_SHUTDOWN_TIMEOUT_MS)
       timer.unref?.()
     })
+
+    const response = this.request({ kind: 'shutdown' })
+    const timeout = new Promise<never>((resolve) => {
+      setTimeout(resolve, WORKER_SHUTDOWN_TIMEOUT_MS)
+    })
+    await Promise.race([response, timeout])
     await cleanExit
 
     if (!exitedCleanly) {

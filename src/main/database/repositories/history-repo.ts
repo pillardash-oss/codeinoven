@@ -129,3 +129,84 @@ export class HistoryRepo {
     return rows.map(rowToEntry)
   }
 }
+
+// ── Shared SQL builders and row mapping (main + worker) ───────────────────
+
+/** Map raw `history_entries` rows to history entries. */
+export function mapHistoryRows(rows: unknown[]): HistoryEntry[] {
+  return rows.map((row) => rowToEntry(row as HistoryRow))
+}
+
+/** INSERT statement for one history entry. */
+export function insertHistoryStatement(
+  id: string,
+  threadId: string,
+  role: HistoryRole,
+  content: string,
+  metadata: Record<string, unknown> | undefined,
+  sequence: number,
+  timestamp: number
+): { sql: string; params: unknown[] } {
+  return {
+    sql: `INSERT INTO history_entries(id, thread_id, role, content, metadata, "sequence", timestamp)
+       VALUES(?,?,?,?,?,?,?)`,
+    params: [id, threadId, role, content, metadata ? JSON.stringify(metadata) : null, sequence, timestamp]
+  }
+}
+
+/** DELETE statement for a truncation from a sequence onward. */
+export function truncateHistoryStatement(threadId: string, sequence: number): { sql: string; params: unknown[] } {
+  return {
+    sql: 'DELETE FROM history_entries WHERE thread_id = ? AND "sequence" >= ?',
+    params: [threadId, sequence]
+  }
+}
+
+/** Bounded history load (ascending sequence). */
+export function buildHistoryLoadSql(
+  threadId: string,
+  limit?: number
+): { sql: string; params: unknown[]; maxRows: number } {
+  return {
+    sql: `SELECT * FROM history_entries WHERE thread_id = ? ORDER BY "sequence" ASC`,
+    params: [threadId],
+    maxRows: limit !== undefined && limit > 0 ? Math.min(limit, 5000) : 1000
+  }
+}
+
+/** Bounded recent-history load (descending sequence). */
+export function buildHistoryRecentSql(threadId: string, count: number): { sql: string; params: unknown[]; maxRows: number } {
+  return {
+    sql: `SELECT * FROM history_entries WHERE thread_id = ? ORDER BY "sequence" DESC`,
+    params: [threadId],
+    maxRows: Math.max(1, Math.min(count, 5000))
+  }
+}
+
+/** Bounded history FTS search. */
+export function buildHistorySearchSql(
+  query: string,
+  projectId?: string,
+  limit = 20
+): { sql: string; params: unknown[]; maxRows: number } {
+  const maxRows = Math.max(1, Math.min(limit, 200))
+  if (projectId) {
+    return {
+      sql: `SELECT he.* FROM history_entries he
+        JOIN threads t ON t.id = he.thread_id
+        JOIN history_fts fts ON he.rowid = fts.rowid
+        WHERE t.project_id = ? AND history_fts MATCH ?
+        ORDER BY he."sequence" DESC`,
+      params: [projectId, query],
+      maxRows
+    }
+  }
+  return {
+    sql: `SELECT he.* FROM history_entries he
+      JOIN history_fts fts ON he.rowid = fts.rowid
+      WHERE history_fts MATCH ?
+      ORDER BY he."sequence" DESC`,
+    params: [query],
+    maxRows
+  }
+}

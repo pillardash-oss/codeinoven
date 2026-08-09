@@ -8,11 +8,15 @@ import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage
 import {
   AgentMessageRepo,
   type ProviderDeltaSyncResult,
-  buildLoadAllSql,
-  buildLoadByThreadSql,
+  buildLoadAllPageSql,
+  buildLoadByThreadPageSql,
   buildLoadPageSql,
+  buildLoadSessionPageSql,
+  buildLoadUserMessagesPageSql,
   buildSaveMessagesStatements,
-  mapMessageRows
+  buildSaveSubagentStatements,
+  mapMessageRows,
+  mapUserMessageRows
 } from '../../main/database/repositories/agent-message-repo'
 import {
   buildThreadSearchSql,
@@ -612,10 +616,9 @@ export class ThreadManager {
   /** Load the mirrored agent conversation, or an empty list when absent. */
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const built = buildLoadByThreadSql(threadId)
-    const result = await this.db.queryViaWorker(built.sql, built.params, 0)
-    if (result.ok) return mapMessageRows(result.rows)
-    return this.agentMessageRepo.loadByThread(threadId)
+    const page = await this.pagedMessageRows((after) => buildLoadByThreadPageSql(threadId, after))
+    if (!page.ok) return this.agentMessageRepo.loadByThread(threadId)
+    return mapMessageRows(page.rows)
   }
 
   /** Load one bounded page of mirrored conversation history, newest page first. */
@@ -646,25 +649,29 @@ export class ThreadManager {
     if (!this.getOwnedThread(projectId, threadId)) {
       return { messages: [], hasOlder: false, hasNewer: false }
     }
-    return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    return this.loadPageAroundViaWorker(threadId, anchorId, limit)
   }
 
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    return this.agentMessageRepo.loadUserMessagesByThread(threadId)
+    const page = await this.pagedMessageRows((after) => buildLoadUserMessagesPageSql(threadId, after))
+    if (!page.ok) return this.agentMessageRepo.loadUserMessagesByThread(threadId)
+    return mapUserMessageRows(page.rows)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */
   async loadMessageRecords(projectId: string, threadId: string): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const built = buildLoadAllSql(threadId)
-    const result = await this.db.queryViaWorker(built.sql, built.params, 0)
-    if (result.ok) return mapMessageRows(result.rows, true)
-    return this.agentMessageRepo.loadAllByThread(threadId)
+    const page = await this.pagedMessageRows((after) => buildLoadAllPageSql(threadId, after))
+    if (!page.ok) return this.agentMessageRepo.loadAllByThread(threadId)
+    return mapMessageRows(page.rows, true)
   }
 
-  /** Persist one provider-neutral child-agent transcript for durable audit. */
+  /**
+   * Persist one provider-neutral child-agent transcript for durable audit.
+   * Runs as one atomic worker transaction when available.
+   */
   async saveSubagentMessages(
     projectId: string,
     threadId: string,
@@ -672,12 +679,14 @@ export class ThreadManager {
     messages: AgentMessage[]
   ): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    this.db.transaction(() => {
-      this.agentMessageRepo.deleteBySession(threadId, sessionId)
-      for (const msg of messages) {
-        this.agentMessageRepo.upsert(msg, threadId, sessionId)
-      }
-    })
+    const outcome = await this.db.transactionViaWorker(buildSaveSubagentStatements(threadId, sessionId, messages))
+    if (!outcome.ok) {
+      this.db.transaction(() => {
+        for (const statement of buildSaveSubagentStatements(threadId, sessionId, messages)) {
+          this.db.run(statement.sql, ...statement.params)
+        }
+      })
+    }
   }
 
   /** Load a mirrored child-agent transcript without contacting the provider. */
@@ -687,7 +696,9 @@ export class ThreadManager {
     sessionId: string
   ): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    return this.agentMessageRepo.loadBySession(threadId, sessionId)
+    const page = await this.pagedMessageRows((after) => buildLoadSessionPageSql(threadId, sessionId, after))
+    if (!page.ok) return this.agentMessageRepo.loadBySession(threadId, sessionId)
+    return mapMessageRows(page.rows)
   }
 
   async setArchived(projectId: string, threadId: string, archived: boolean): Promise<Thread> {
@@ -818,5 +829,92 @@ export class ThreadManager {
     await writeFile(join(branchDir, 'origin.json'), JSON.stringify(branchMeta, null, 2))
 
     return forked
+  }
+
+  // ── Worker-routed paged reads ───────────────────────────────────────────
+
+  /** Bounded page size for worker transcript reads. */
+  private static readonly TRANSCRIPT_PAGE_SIZE = 1000
+  /** Safety cap on the number of cursor pages read through the worker. */
+  private static readonly MAX_TRANSCRIPT_PAGES = 100_000
+
+  /**
+   * Read the full row set by cursor-paging through the worker in bounded
+   * chunks, so no single worker query is unbounded (no `maxRows = 0`). Returns
+   * `ok: false` when the worker path is unavailable so the caller can fall back.
+   */
+  private async pagedMessageRows(
+    buildPage: (after: ThreadMessageCursor | undefined) => { sql: string; params: unknown[] }
+  ): Promise<{ ok: true; rows: Record<string, unknown>[] } | { ok: false }> {
+    const rows: Record<string, unknown>[] = []
+    let after: ThreadMessageCursor | undefined
+    for (let page = 0; page < ThreadManager.MAX_TRANSCRIPT_PAGES; page++) {
+      const built = buildPage(after)
+      const result = await this.db.queryViaWorker(built.sql, built.params, ThreadManager.TRANSCRIPT_PAGE_SIZE)
+      if (!result.ok) return { ok: false }
+      rows.push(...result.rows)
+      if (!result.truncated || result.rows.length === 0) break
+      if (result.rows.length < ThreadManager.TRANSCRIPT_PAGE_SIZE) break
+      const last = result.rows[result.rows.length - 1]
+      after = { createdAt: Number(last.created_at), id: String(last.id) }
+    }
+    return { ok: true, rows }
+  }
+
+  /** Centered window around a message id, read through bounded worker queries. */
+  private async loadPageAroundViaWorker(
+    threadId: string,
+    anchorId: string,
+    limit: number
+  ): Promise<ThreadMessagePage> {
+    const anchor = await this.db.queryViaWorker(
+      'SELECT created_at FROM agent_messages WHERE thread_id = ? AND id = ?',
+      [threadId, anchorId],
+      1
+    )
+    if (!anchor.ok || anchor.rows.length === 0) {
+      return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    }
+    const anchorCreatedAt = Number(anchor.rows[0].created_at)
+    const half = Math.max(1, Math.floor(limit / 2))
+    const cursor = (older: boolean): string =>
+      older
+        ? ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+        : ` AND (created_at > ? OR (created_at = ? AND id > ?))`
+    const order = (older: boolean): string => (older ? 'DESC, id DESC' : 'ASC, id ASC')
+    const older = await this.db.queryViaWorker(
+      `SELECT * FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL
+         AND visibility IN ('conversation','working_trace')${cursor(true)}
+       ORDER BY created_at ${order(true)}`,
+      [threadId, anchorCreatedAt, anchorCreatedAt, anchorId],
+      half + 1
+    )
+    if (!older.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    const newer = await this.db.queryViaWorker(
+      `SELECT * FROM agent_messages
+       WHERE thread_id = ? AND session_id IS NULL
+         AND visibility IN ('conversation','working_trace')${cursor(false)}
+       ORDER BY created_at ${order(false)}`,
+      [threadId, anchorCreatedAt, anchorCreatedAt, anchorId],
+      half + 1
+    )
+    if (!newer.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    const anchorRow = await this.db.queryViaWorker(
+      'SELECT * FROM agent_messages WHERE thread_id = ? AND id = ?',
+      [threadId, anchorId],
+      1
+    )
+    if (!anchorRow.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    const olderRows = older.rows
+    const newerRows = newer.rows
+    const hasOlder = olderRows.length > half
+    const hasNewer = newerRows.length > half
+    const rows = [
+      ...olderRows.slice(0, half).reverse(),
+      ...(anchorRow.rows.length > 0 ? [anchorRow.rows[0]] : []),
+      ...newerRows.slice(0, half)
+    ]
+    return { messages: mapMessageRows(rows), hasOlder, hasNewer }
   }
 }
