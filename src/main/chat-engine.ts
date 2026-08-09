@@ -1064,7 +1064,10 @@ export class ChatEngine {
   ) {
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
-    this.threadManager = new ThreadManager(database, broadcastThreadUpdate)
+    this.threadManager = new ThreadManager(database, broadcastThreadUpdate, async (thread) => {
+      await this.deleteThreadSession(thread.projectId, thread.id)
+      await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
+    })
     this.checkpointManager = new CheckpointManager(database)
     this.memoryService = new MemoryService(storage)
     this.promptAssembler = new PromptAssembler(this.memoryService)

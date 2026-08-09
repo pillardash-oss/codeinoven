@@ -227,6 +227,9 @@ class MobileState {
   async handleDelete(thread: Thread): Promise<void> {
     await invoke('thread:delete', thread.projectId, thread.id)
     this.allThreads = this.allThreads.filter((t) => t.id !== thread.id)
+    this.orchestrationThreads = this.orchestrationThreads.filter(
+      (candidate) => candidate.id !== thread.id && candidate.coordinatorThreadId !== thread.id
+    )
     this.refreshAttention()
     if (this.selectedThread?.id === thread.id) {
       this.selectedThread = null
