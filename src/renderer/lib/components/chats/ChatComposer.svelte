@@ -283,12 +283,32 @@
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
   let taskReferences = $state<PromptAssignmentTaskReference[]>([...initialTaskReferences])
+  let projectReferenceIcons = $state<Record<string, string>>({})
+
+  $effect(() => {
+    const references = projectReferences.map((reference) => ({ ...reference }))
+    let current = true
+    void Promise.all(
+      references.map(
+        async (reference) =>
+          [
+            projectReferenceToken(reference),
+            reference.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(reference.name)
+              : await getInlineFileTypeIconDataUri(reference.path)
+          ] as const
+      )
+    ).then((entries) => {
+      if (current) projectReferenceIcons = Object.fromEntries(entries)
+    })
+    return () => {
+      current = false
+    }
+  })
+
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
     ...projectReferences.map((reference) => ({
-      iconSrc:
-        reference.kind === 'directory'
-          ? getInlineFolderTypeIconDataUri(reference.name)
-          : getInlineFileTypeIconDataUri(reference.path),
+      iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
       title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
       value: projectReferenceToken(reference)

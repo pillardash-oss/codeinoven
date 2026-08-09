@@ -36,7 +36,6 @@
   import TerminalPanel from '../terminal/TerminalPanel.svelte'
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
-  import GitStatusPanel from '../git/GitStatusPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
@@ -2829,10 +2828,12 @@
                   threadId={activeContextTab.threadId}
                 />
               {:else if activeContextTab.kind === 'git'}
-                <GitStatusPanel
-                  projectId={activeContextTab.projectId}
-                  threadId={activeContextTab.threadId}
-                />
+                {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+                  <GitStatusPanel
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
                 <TemporaryChatView
                   tab={activeContextTab}
