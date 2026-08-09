@@ -1111,21 +1111,21 @@
         <ScopeView {navigateToProjects} />
       {/await}
     {:else if isSettingsView(activeView)}
-      <!-- Each settings section is its own dedicated page. -->
-      {#key activeView}
-        {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
-          <SettingsView
-            {config}
-            {settingsReady}
-            error={settingsError}
-            {setPreference}
-            {updateConfig}
-            section={settingsSectionForView(activeView) ?? 'general'}
-            onNavigateSection={(section) => navigate(settingsViewForSection(section))}
-            onBack={() => navigate(lastViewBeforeSettings)}
-          />
-        {/await}
-      {/key}
+      <!-- Each settings section is its own dedicated page in the navigation model.
+           The view stays mounted and SettingsView swaps its content on the section
+           prop — a keyed remount here would flash the screen on every tab switch. -->
+      {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
+        <SettingsView
+          {config}
+          {settingsReady}
+          error={settingsError}
+          {setPreference}
+          {updateConfig}
+          section={settingsSectionForView(activeView) ?? 'general'}
+          onNavigateSection={(section) => navigate(settingsViewForSection(section))}
+          onBack={() => navigate(lastViewBeforeSettings)}
+        />
+      {/await}
     {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
       <div class="flex h-full items-center justify-center">
         <p class="text-sm text-dimmed">Coming soon</p>
