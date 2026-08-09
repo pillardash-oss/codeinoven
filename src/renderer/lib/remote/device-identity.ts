@@ -18,6 +18,8 @@
 const DEVICE_ID_KEY = 'deviceId'
 const DEVICE_NAME_KEY = 'deviceName'
 const DEVICE_AUTH_VERSION_KEY = 'authVersion'
+const SIGNING_PUBLIC_JWK_KEY = 'signingPublicJwk'
+const AGREEMENT_PUBLIC_JWK_KEY = 'agreementPublicJwk'
 
 export interface DeviceIdentity {
   id: string
@@ -132,8 +134,12 @@ export function createIndexedDbDeviceKeyStore(
     setAgreementKey: (key) =>
       withStore<unknown>('readwrite', (store) => store.put(key, 'agreement')).then(() => undefined),
     removeKeys: async () => {
-      await withStore<unknown>('readwrite', (store) => store.delete('signing')).then(() => undefined)
-      await withStore<unknown>('readwrite', (store) => store.delete('agreement')).then(() => undefined)
+      await withStore<unknown>('readwrite', (store) => store.delete('signing')).then(
+        () => undefined
+      )
+      await withStore<unknown>('readwrite', (store) => store.delete('agreement')).then(
+        () => undefined
+      )
     }
   }
 }
@@ -222,6 +228,26 @@ function defaultStore(): DeviceKeyStore {
     : createMemoryDeviceKeyStore()
 }
 
+function parsePublicJwk(value: string | null): JsonWebKey | null {
+  if (!value) return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+    const key = parsed as Record<string, unknown>
+    if (
+      key['kty'] !== 'EC' ||
+      key['crv'] !== 'P-256' ||
+      typeof key['x'] !== 'string' ||
+      typeof key['y'] !== 'string'
+    ) {
+      return null
+    }
+    return { kty: 'EC', crv: 'P-256', x: key['x'], y: key['y'] }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Load (or create) the phone's persistent proof-of-possession keys. The
  * private `CryptoKey` objects are non-extractable and stored in IndexedDB;
@@ -236,28 +262,43 @@ export async function loadOrCreateDeviceKeyMaterial(
   const deviceName = (await store.getString(DEVICE_NAME_KEY)) || defaultDeviceName()
   await store.setString(DEVICE_NAME_KEY, deviceName)
   const rawId = await store.getString(DEVICE_ID_KEY)
-  const deviceId = rawId && rawId.length > 0 ? rawId : null
+  let deviceId = rawId && rawId.length > 0 ? rawId : null
 
   const signingKey = await store.getSigningKey()
   const agreementKey = await store.getAgreementKey()
-  if (signingKey && agreementKey) {
-    const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
-    const parsedVersion = Number.parseInt(authVersionRaw ?? '', 10)
-    return {
-      deviceId,
-      deviceName,
-      signingKey,
-      signingPublicJwk: await crypto.subtle.exportKey('jwk', signingKey),
-      agreementKey,
-      agreementPublicJwk: await crypto.subtle.exportKey('jwk', agreementKey),
-      authVersion: Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1
+  if (signingKey || agreementKey) {
+    const signingPublicJwk = parsePublicJwk(await store.getString(SIGNING_PUBLIC_JWK_KEY))
+    const agreementPublicJwk = parsePublicJwk(await store.getString(AGREEMENT_PUBLIC_JWK_KEY))
+    if (signingKey && agreementKey && signingPublicJwk && agreementPublicJwk) {
+      const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
+      const parsedVersion = Number.parseInt(authVersionRaw ?? '', 10)
+      return {
+        deviceId,
+        deviceName,
+        signingKey,
+        signingPublicJwk,
+        agreementKey,
+        agreementPublicJwk,
+        authVersion: Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1
+      }
     }
+
+    // Older builds stored only non-exportable private keys, so their public
+    // halves cannot be recovered. Replace that incomplete identity atomically
+    // and require a fresh enrollment instead of weakening key exportability.
+    await store.removeString(DEVICE_ID_KEY)
+    const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
+    if (authVersionRaw !== null) await store.removeString(DEVICE_AUTH_VERSION_KEY)
+    await store.removeKeys()
+    deviceId = null
   }
 
   const signing = await generateNonExtractablePair(SIGNING_ALGO)
   const agreement = await generateNonExtractablePair(AGREEMENT_ALGO)
   await store.setSigningKey(signing.privateKey)
   await store.setAgreementKey(agreement.privateKey)
+  await store.setString(SIGNING_PUBLIC_JWK_KEY, JSON.stringify(signing.publicJwk))
+  await store.setString(AGREEMENT_PUBLIC_JWK_KEY, JSON.stringify(agreement.publicJwk))
   await store.setString(DEVICE_AUTH_VERSION_KEY, '1')
   return {
     deviceId,
@@ -290,6 +331,8 @@ export async function saveDeviceAuthVersion(
 export async function clearDeviceIdentity(store: DeviceKeyStore = defaultStore()): Promise<void> {
   await store.removeString(DEVICE_ID_KEY)
   await store.removeString(DEVICE_AUTH_VERSION_KEY)
+  await store.removeString(SIGNING_PUBLIC_JWK_KEY)
+  await store.removeString(AGREEMENT_PUBLIC_JWK_KEY)
   await store.removeKeys()
 }
 
