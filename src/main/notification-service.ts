@@ -146,7 +146,9 @@ export class NotificationService {
     if (thread.assignmentId) {
       try {
         const assignment = this.assignmentRepo.getActive(thread.projectId, thread.id)
-        if (assignment && assignment.status !== 'completed') return true
+        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
+          return true
+        }
       } catch (error) {
         Logger.dev('Assignment state lookup failed for notification suppression:', error)
       }

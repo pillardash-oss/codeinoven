@@ -414,7 +414,7 @@ CREATE TABLE IF NOT EXISTS assignment_versions (
   coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   spec_id              TEXT NOT NULL,
   spec_version         INTEGER NOT NULL,
-  status               TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed')),
+  status               TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
   data                 TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL,
@@ -430,7 +430,7 @@ CREATE TABLE IF NOT EXISTS assignment_workflow (
   assignment_id         TEXT NOT NULL,
   active_version        INTEGER NOT NULL,
   approved_version      INTEGER,
-  status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed')),
+  status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
   updated_at            INTEGER NOT NULL,
   PRIMARY KEY (project_id, coordinator_thread_id)
 );

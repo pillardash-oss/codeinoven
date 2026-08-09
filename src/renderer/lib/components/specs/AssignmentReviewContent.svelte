@@ -98,7 +98,8 @@
       onTaskModelChange !== undefined &&
       task.owner === 'worker' &&
       !task.threadId &&
-      task.status !== 'completed'
+      task.status !== 'completed' &&
+      task.status !== 'stopped'
     )
   }
 

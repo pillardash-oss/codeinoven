@@ -1398,7 +1398,8 @@
     settings.loopMode === true &&
       spec?.status === 'approved' &&
       settings.engineeringMode === false &&
-      (settings.assignmentMode !== true || (assignment !== null && assignment.status !== 'draft'))
+      (settings.assignmentMode !== true ||
+        (assignment !== null && !['draft', 'stopped'].includes(assignment.status)))
   )
   let studioAssignment = $derived(
     assignmentVersions.find((candidate) => candidate.version === selectedAssignmentVersion) ??
@@ -3805,6 +3806,32 @@
       [],
       { action: 'Resume Assignment coordination' }
     )
+  }
+
+  async function stopAssignment(): Promise<void> {
+    const current = assignment
+    if (!current || assignmentBusy) return
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      const stoppedAssignment = await invoke(
+        'agent:stopAssignment',
+        current.projectId,
+        current.coordinatorThreadId
+      )
+      assignment = stoppedAssignment
+      assignmentVersions = assignmentVersions.map((candidate) =>
+        candidate.id === stoppedAssignment.id && candidate.version === stoppedAssignment.version
+          ? stoppedAssignment
+          : candidate
+      )
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The Assignment could not be stopped.'
+      throw error
+    } finally {
+      assignmentBusy = false
+    }
   }
 
   function resumeAchievementCoordination(): void {
@@ -6376,6 +6403,7 @@
         onOpenThread={(worker) => workspaceState.openThread(worker, project)}
         onOpenTask={openAssignmentTask}
         onResume={resumeAssignmentCoordination}
+        onStop={stopAssignment}
         onWidthChange={(width) => (assignmentPanelWidth = width)}
       />
     {:else if achievementOnly && spec && !isAssignmentAuditorThread}

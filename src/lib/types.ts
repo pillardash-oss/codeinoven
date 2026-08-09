@@ -2129,7 +2129,7 @@ export interface EngineeringWorkflowState {
 // ─── Assignment Plans ──────────────────────────────────────────────────────
 
 export type AssignmentStatus =
-  'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed'
+  'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed' | 'stopped'
 
 export type AssignmentTaskStatus =
   | 'planned'
@@ -2142,6 +2142,7 @@ export type AssignmentTaskStatus =
   | 'attention'
   | 'completed'
   | 'failed'
+  | 'stopped'
 
 export type AssignmentTaskOwner = 'senior' | 'worker'
 
@@ -2212,6 +2213,7 @@ export type AssignmentAuditCycleStatus =
   | 'awaiting_rework_approval'
   | 'reworking'
   | 'completed'
+  | 'stopped'
 
 /** Persisted hand-off between Assignment implementation and its independent audit. */
 export interface AssignmentAuditCycle {
@@ -2274,6 +2276,7 @@ export interface AssignmentPlan {
   updatedAt: number
   approvedAt?: number
   completedAt?: number
+  stoppedAt?: number
 }
 
 export type AssignmentValidationCode =
