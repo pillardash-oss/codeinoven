@@ -1,8 +1,8 @@
 # CodeInOven remote control service
 
-This is the GitHub account, entitlement, desktop registry, enrollment, and opaque WebSocket relay
-for the hosted mobile PWA. Both the desktop and phone create outbound connections, so the desktop
-does not need an inbound public port and continues to work behind NAT and normal firewalls.
+This is the GitHub account, desktop registry, enrollment, and opaque WebSocket relay for the hosted
+mobile PWA. Both the desktop and phone create outbound connections, so the desktop does not need an
+inbound public port and continues to work behind NAT and normal firewalls.
 
 ## Run locally
 
@@ -19,11 +19,8 @@ non-extractable Web Crypto key.
 ## GitHub identity
 
 Better Auth is the sole hosted-account authority. GitHub OAuth creates one canonical user ID that
-owns remote desktops and is also the key for the server-owned `account_entitlements` record used
-by current or future Pro access. This table was introduced with GitHub OAuth specifically to honor
-the requirement that Pro licensing and remote access share one account. It is not a preferences
-table, defaults every new account to `free`, and currently has no public endpoint that can promote
-an account to `pro`. There is no separate remote password.
+owns remote desktops. CodeInOven is permanently free: the service has no payment tiers,
+subscriptions, billing state, or entitlement records. There is no separate remote password.
 
 ## Audit events
 

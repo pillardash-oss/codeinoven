@@ -82,13 +82,6 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
 );
 CREATE INDEX IF NOT EXISTS mobile_devices_user_idx ON mobile_devices(user_id, revoked_at);
 
-CREATE TABLE IF NOT EXISTS account_entitlements (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  plan TEXT NOT NULL DEFAULT 'free' CHECK(plan IN ('free', 'pro')),
-  valid_until INTEGER,
-  updated_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -106,6 +99,9 @@ export class RemoteControlDatabase {
   constructor(path: string) {
     this.db = new Database(path)
     this.db.exec(SCHEMA)
+    // Destructive migration required by the product's permanently free model.
+    // This removes tier data left by builds that briefly introduced it.
+    this.db.exec('DROP TABLE IF EXISTS account_entitlements')
     this.ensureLanEndpointColumn()
     this.ensureEnrollmentGrantColumns()
   }
@@ -132,20 +128,6 @@ export class RemoteControlDatabase {
            display_name = excluded.display_name`
       )
       .run(input.id, input.email, input.displayName, now)
-    this.db
-      .prepare(
-        `INSERT INTO account_entitlements(user_id, plan, valid_until, updated_at)
-         VALUES(?, 'free', NULL, ?)
-         ON CONFLICT(user_id) DO NOTHING`
-      )
-      .run(input.id, now)
-  }
-
-  entitlementForUser(userId: string): { plan: 'free' | 'pro'; validUntil: number | null } {
-    const row = this.db
-      .prepare('SELECT plan, valid_until FROM account_entitlements WHERE user_id = ?')
-      .get(userId) as { plan: 'free' | 'pro'; valid_until: number | null } | undefined
-    return { plan: row?.plan ?? 'free', validUntil: row?.valid_until ?? null }
   }
 
   rememberOAuthSession(session: AuthenticatedSession): void {
