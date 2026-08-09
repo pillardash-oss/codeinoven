@@ -12,15 +12,29 @@ import type { StartupTelemetry } from './startup-telemetry'
  * credentials.
  */
 
+/** One initialized resource that a fatal startup failure must close. */
+export interface FatalStartupResource {
+  /** Human-readable label used in the failure report (e.g. "database"). */
+  name: string
+  /** Close the resource. May throw; failures are recorded, not propagated. */
+  close: () => void
+}
+
 export interface FatalStartupContext {
   error: unknown
   /** Application display name used in the user-facing error box. */
   appName: string
-  /** Close the SQLite database when the startup chain initialized it. */
+  /** Every resource initialized by the startup chain that must be closed. */
+  resources?: FatalStartupResource[]
+  /** Close the SQLite database (convenience; equivalent to a named resource). */
   closeDatabase?: () => void
   /** Show a blocking error dialog; only used when a window can be shown. */
   showErrorBox?: (title: string, message: string) => void
-  /** Quit the application process with the given exit code. */
+  /**
+   * Quit the application process with the given exit code. When this throws or
+   * returns without exiting, `handleFatalStartupFailure` falls back to
+   * `process.exit`, so a failed quit can never leave a headless process alive.
+   */
   quit?: (code: number) => void
   /** Optional startup telemetry whose final report is emitted before exit. */
   telemetry?: StartupTelemetry
@@ -31,7 +45,14 @@ export interface FatalStartupContext {
 export interface FatalStartupOutcome {
   exitCode: number
   logged: boolean
-  resourcesClosed: boolean
+  /** Every resource that was successfully closed, by name. */
+  closed: string[]
+  /** Every resource whose close callback threw, by name. */
+  closeFailures: string[]
+  /** Whether the quit callback itself threw (and process.exit was attempted). */
+  quitFailed: boolean
+  /** Whether an exit was actually invoked (quit callback or process.exit). */
+  exited: boolean
 }
 
 export interface LifecycleSpan {
@@ -95,10 +116,11 @@ export class LifecycleDiagnostics {
 
 /**
  * Deterministically respond to a fatal startup failure: log the error, flush
- * the logger so the failure is durable, close the database when the startup
- * chain opened it, show the blocking error box, and quit with a nonzero
- * diagnostic exit code. Guarantees the app never lingers as a headless process
- * after a failed boot.
+ * the logger so the failure is durable, close every initialized resource,
+ * show the blocking error box, and quit with a nonzero diagnostic exit code.
+ * Guarantees the app never lingers as a headless process after a failed boot:
+ * if the injected quit callback throws or returns without exiting, the process
+ * is terminated with `process.exit(code)`.
  */
 export async function handleFatalStartupFailure(
   context: FatalStartupContext
@@ -122,12 +144,22 @@ export async function handleFatalStartupFailure(
     // Nothing more can be written; continue the teardown regardless.
   }
 
-  let resourcesClosed = false
-  try {
-    context.closeDatabase?.()
-    resourcesClosed = true
-  } catch (closeError) {
-    Logger.error('Database close failed during fatal startup exit', closeError)
+  // Close every resource the startup chain initialized, reporting each result
+  // so the audit trail records exactly what was torn down and what failed.
+  const closed: string[] = []
+  const closeFailures: string[] = []
+  const resources = [
+    ...(context.resources ?? []),
+    ...(context.closeDatabase ? [{ name: 'database', close: context.closeDatabase }] : [])
+  ]
+  for (const resource of resources) {
+    try {
+      resource.close()
+      closed.push(resource.name)
+    } catch (closeError) {
+      closeFailures.push(resource.name)
+      Logger.error(`Resource close failed during fatal startup exit: ${resource.name}`, closeError)
+    }
   }
 
   try {
@@ -140,14 +172,32 @@ export async function handleFatalStartupFailure(
   }
 
   const exitCode = 1
+  let quitFailed = false
+  let exited = false
   try {
-    context.quit?.(exitCode)
+    if (context.quit) {
+      context.quit(exitCode)
+      exited = true
+    }
   } catch {
-    // Quit is best-effort; fall back to the return contract for callers that
-    // run in a non-Electron context (tests).
+    quitFailed = true
   }
 
-  return { exitCode, logged, resourcesClosed }
+  // Process-fail-safe: if there is no quit callback, or the quit callback threw
+  // (e.g. `app.exit` itself failed), force the process to terminate nonzero so
+  // a failed boot can never leave a headless process alive.
+  if (!exited || quitFailed) {
+    try {
+      process.exit(exitCode)
+      exited = true
+    } catch {
+      // process.exit does not normally throw; if it somehow does, there is
+      // nothing more this process can do — the outcome still records it.
+      exited = false
+    }
+  }
+
+  return { exitCode, logged, closed, closeFailures, quitFailed, exited }
 }
 
 /**

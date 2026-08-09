@@ -1143,6 +1143,16 @@ export interface IpcInvokeContract {
   'thread:get': Contract<[projectId: string, threadId: string], Thread | null>
   'thread:list': Contract<[projectId: string], Thread[]>
   'thread:listAll': Contract<[], Thread[]>
+  /**
+   * Bounded, active-only thread listing for startup hydration. Never returns
+   * archived threads and never crosses the full thread history over IPC.
+   * `projectId` (when given) is ordered first so the selected project's recent
+   * active threads render before anything else.
+   */
+  'thread:listRecent': Contract<
+    [options: { projectId?: string; limit?: number; offset?: number }],
+    Thread[]
+  >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
   'thread:reorderScope': Contract<
     [projectId: string, bucketId: string, slice: ScopeSlice, orderedIds: string[]],

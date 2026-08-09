@@ -9,35 +9,12 @@ import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { StorageEngine } from './storage-engine'
-import { UpdaterService } from './updater-service'
 import { registerIpcHandlers } from './ipc-handlers'
-import { registerProviderAccountIpc } from './provider-account-ipc'
-import { registerBaseUrlProviderIpc } from './base-url-provider-ipc'
-import { registerUtilityIpc } from './utility-ipc'
-import { PtyService } from './pty-service'
-import { ProviderConnectionService } from './provider-connection'
-import { HarnessUpdateService } from './harness-update-service'
-import { HarnessInstallService } from './harness-install-service'
-import { HarnessManifestService } from './harness-manifest-service'
-import { ChatEngine } from './chat-engine'
-import { ComputerUsePipService } from './computer-use-pip-service'
 import { ProjectManager } from '../lib/engines/project-manager'
 import { ProjectFilesService } from './project-files-service'
 import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
-import { RestartRecoveryService } from './restart-recovery-service'
 import { WindowStateService } from './window-state'
-import { NotificationService } from './notification-service'
 import { setNotificationService, setPowerWakeService } from './thread-events'
-import { PowerWakeService } from './power-wake-service'
-import { RetrySchedulerService } from './retry-scheduler-service'
-import {
-  RemoteModeController,
-  DEFAULT_LAN_PORT,
-  remoteEnvInt,
-  remotePeerSecret
-} from './remote/remote-mode'
-import { RemoteRpcDispatcher } from './remote/remote-rpc'
-import { DeviceCredentialService } from './remote/device-credential-service'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -48,6 +25,19 @@ import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-
 import type { Thread } from '../lib/types'
 import { startupTelemetry } from './startup-telemetry'
 import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './lifecycle-diagnostics'
+import { ChatEngine } from './chat-engine'
+import { HarnessManifestService } from './harness-manifest-service'
+import { ComputerUsePipService } from './computer-use-pip-service'
+import { UpdaterService } from './updater-service'
+import { PowerWakeService } from './power-wake-service'
+import { RetrySchedulerService } from './retry-scheduler-service'
+import type { PtyService } from './pty-service'
+import type { ProviderConnectionService } from './provider-connection'
+import type { HarnessUpdateService } from './harness-update-service'
+import type { HarnessInstallService } from './harness-install-service'
+import type { NotificationService } from './notification-service'
+import type { RemoteModeController } from './remote/remote-mode'
+import type { DeviceCredentialService } from './remote/device-credential-service'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -82,6 +72,8 @@ registerSignalHandlers()
 // telemetry histogram captures the whole boot window, including module
 // evaluation and Electron's ready handshake.
 startupTelemetry.startEventLoopMonitor()
+// The very first phase: process entry. Marked exactly once at module scope.
+startupTelemetry.mark('process:entry')
 // Privacy-preserving process-wide crash policy: uncaught exceptions and
 // unhandled rejections are logged and exit nonzero instead of leaving a
 // headless or silently-hung process.
@@ -184,7 +176,9 @@ ipcMain.handle('app:confirmClose', async () => {
   // processes) so no agent keeps working after the app exits, then proceed.
   quitConfirmed = true
   try {
-    await chatEngine.terminateActiveConnections()
+    if (chatEngine) {
+      await chatEngine.terminateActiveConnections()
+    }
   } catch (error) {
     Logger.error('Could not terminate active harness connections on close', error)
   }
@@ -203,13 +197,19 @@ ipcMain.handle('app:requestClose', () => {
   }
 })
 
+/** Guard so the renderer's readiness signal is timestamped at most once. */
+let rendererReadyReported = false
+
 /**
  * The renderer reports when its initial hydration is done (visible projects,
  * selected project, recent active threads). Timestamps the final startup
  * phases so the boot telemetry spans the whole chain from process entry to an
- * interactive workspace.
+ * interactive workspace. Idempotent: repeated signals (e.g. renderer reload)
+ * never re-record phases or re-emit the report.
  */
 ipcMain.handle('app:rendererReady', () => {
+  if (rendererReadyReported) return
+  rendererReadyReported = true
   startupTelemetry.mark('renderer:hydrated')
   startupTelemetry.mark('workspace:ready')
   startupTelemetry.stopEventLoopMonitor()
@@ -250,36 +250,26 @@ const windowBoundaryValidator = new PrivilegedIpcValidator({
 const storage = new StorageEngine()
 const windowStateService = new WindowStateService(storage)
 const database = new Database()
-const ptyService = new PtyService(storage, database)
-const providerConnection = new ProviderConnectionService()
-const harnessUpdateService = new HarnessUpdateService(providerConnection)
-const harnessInstallService = new HarnessInstallService(providerConnection)
-const harnessManifestService = new HarnessManifestService(storage)
-const computerUsePipService = new ComputerUsePipService(storage)
-const chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
-const notificationService = new NotificationService(storage, database, openThreadFromNotification)
-const updaterService = new UpdaterService(storage)
-const powerWakeService = new PowerWakeService(storage, database)
-const retryScheduler = new RetrySchedulerService(storage)
 
-/** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
-const remoteCredentials = new DeviceCredentialService(database)
-const remoteMode = new RemoteModeController({
-  lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
-  localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
-  peerSecret: remotePeerSecret(),
-  staticRoot: join(mainBundleDirectory, '../renderer'),
-  iconPath: getAppIconPath(),
-  rpc: new RemoteRpcDispatcher({
-    database,
-    chatEngine,
-    storage,
-    credentials: remoteCredentials
-  }),
-  storage,
-  credentials: remoteCredentials,
-  onSessionActiveChange: (active) => powerWakeService.setRemoteSessionActive(active)
-})
+/**
+ * Optional services constructed after the primary window paints (see
+ * `bootOptionalServices`). Module evaluation only declares the bindings so the
+ * heavy service graph (chat engine, PTY, harness, remote mode, …) never blocks
+ * the splash or the first window. Every consumer guards for `null`.
+ */
+let chatEngine: ChatEngine | null = null
+let ptyService: PtyService | null = null
+let providerConnection: ProviderConnectionService | null = null
+let harnessUpdateService: HarnessUpdateService | null = null
+let harnessInstallService: HarnessInstallService | null = null
+let harnessManifestService: HarnessManifestService | null = null
+let computerUsePipService: ComputerUsePipService | null = null
+let notificationService: NotificationService | null = null
+let updaterService: UpdaterService | null = null
+let powerWakeService: PowerWakeService | null = null
+let retryScheduler: RetrySchedulerService | null = null
+let remoteCredentials: DeviceCredentialService | null = null
+let remoteMode: RemoteModeController | null = null
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
@@ -359,26 +349,105 @@ function closeSplash(): void {
 }
 
 /**
- * Start non-critical startup work after the first paint so the splash can be
- * replaced by the main shell immediately.
+ * Construct and register the optional service graph after the primary window
+ * has painted. Dynamic imports keep the heavy modules (PTY, harness services,
+ * provider connection, remote mode, notifications, …) out of the
+ * module-evaluation path so first paint is never blocked by their construction.
+ * Optional IPC is registered here — the essential data surface
+ * (config/project/thread/scope/file handlers, `app:*`, session policy, file
+ * preview, chat/agent catalog) is registered before the window is created.
  */
-function startBackgroundBoot(): void {
+function bootOptionalServices(): void {
   void (async () => {
+    const [
+      { PtyService },
+      { ProviderConnectionService },
+      { HarnessUpdateService },
+      { HarnessInstallService },
+      { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
+      { RemoteRpcDispatcher },
+      { DeviceCredentialService },
+      { NotificationService },
+      { RestartRecoveryService }
+    ] = await Promise.all([
+      import('./pty-service'),
+      import('./provider-connection'),
+      import('./harness-update-service'),
+      import('./harness-install-service'),
+      import('./remote/remote-mode'),
+      import('./remote/remote-rpc'),
+      import('./remote/device-credential-service'),
+      import('./notification-service'),
+      import('./restart-recovery-service')
+    ])
+
+    ptyService = new PtyService(storage, database)
+    providerConnection = new ProviderConnectionService()
+    harnessUpdateService = new HarnessUpdateService(providerConnection)
+    harnessInstallService = new HarnessInstallService(providerConnection)
+    notificationService = new NotificationService(storage, database, openThreadFromNotification)
+
+    /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
+    remoteCredentials = new DeviceCredentialService(database)
+    remoteMode = new RemoteModeController({
+      lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
+      localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
+      peerSecret: remotePeerSecret(),
+      staticRoot: join(mainBundleDirectory, '../renderer'),
+      iconPath: getAppIconPath(),
+      rpc: new RemoteRpcDispatcher({
+        database,
+        chatEngine: chatEngine!,
+        storage,
+        credentials: remoteCredentials
+      }),
+      storage,
+      credentials: remoteCredentials,
+      onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
+    })
+
+    // Optional IPC — registered only after the services exist.
+    if (updaterService) {
+      updaterService.addActivitySource({
+        activeSessionCount: () => ptyService?.activeSessionCount() ?? 0
+      })
+      updaterService.addActivitySource({
+        activeSessionCount: () => (remoteMode?.status.blockedQuit ? 1 : 0)
+      })
+    }
+    remoteMode.registerIpc()
+    ptyService.register()
+    providerConnection.register()
+    harnessUpdateService.register()
+    harnessInstallService.register()
+
+    const { registerProviderAccountIpc } = await import('./provider-account-ipc')
+    const { registerBaseUrlProviderIpc } = await import('./base-url-provider-ipc')
+    const { registerUtilityIpc } = await import('./utility-ipc')
+    registerProviderAccountIpc()
+    registerBaseUrlProviderIpc(storage)
+    registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
+
+    // Wire PTY to the window now that it exists.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      ptyService.attach(mainWindow.webContents)
+    }
+
     try {
-      chatEngine.backfillHarnessUsage()
+      chatEngine?.backfillHarnessUsage()
     } catch (error) {
       Logger.error('Harness usage backfill failed (non-fatal):', error)
     }
 
     try {
-      await powerWakeService.start()
-      setPowerWakeService(powerWakeService)
+      await powerWakeService?.start()
+      if (powerWakeService) setPowerWakeService(powerWakeService)
     } catch (error) {
       Logger.error('Power wake startup failed (non-fatal):', error)
     }
 
     try {
-      await retryScheduler.start()
+      await retryScheduler?.start()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
     }
@@ -409,6 +478,7 @@ function startBackgroundBoot(): void {
 
     try {
       providerConnection.warmUp()
+      startupTelemetry.mark('provider:warmup')
     } catch (error) {
       Logger.error('Provider service warm-up failed (non-fatal):', error)
     }
@@ -416,7 +486,7 @@ function startBackgroundBoot(): void {
     try {
       notificationService.start()
       setNotificationService(notificationService)
-      updaterService.start()
+      updaterService?.start()
     } catch (error) {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
@@ -487,7 +557,9 @@ function createWindow(): BrowserWindow {
     if (mainWindow === window) mainWindow = null
   })
 
-  ptyService.attach(window.webContents)
+  if (ptyService) {
+    ptyService.attach(window.webContents)
+  }
   windowStateService.attach(window)
 
   window.webContents.on('before-input-event', (event, input) => {
@@ -596,16 +668,22 @@ void app
     await windowStateService.load()
     Logger.info(`${APP_NAME} main process initialized`)
 
-    updaterService.setChatEngine(chatEngine)
-    updaterService.addActivitySource({
-      activeSessionCount: () => ptyService.activeSessionCount()
-    })
-    updaterService.addActivitySource({
-      activeSessionCount: () => (remoteMode.status.blockedQuit ? 1 : 0)
-    })
+    // ── Essential services (needed by the essential IPC surface) ──────────
     const projectManager = new ProjectManager(database)
     const projectFilesService = new ProjectFilesService(projectManager)
     installFilePreviewProtocol(projectFilesService)
+    // The chat engine is essential: the renderer's initial hydration calls
+    // `agent:listProviderSnapshot` / `agent:refreshProviderCatalog` for the
+    // selected project's catalog, so its IPC must exist before the window
+    // paints. Construct it up front with the lightweight helper services.
+    computerUsePipService = new ComputerUsePipService(storage)
+    harnessManifestService = new HarnessManifestService(storage)
+    chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
+    updaterService = new UpdaterService(storage)
+    powerWakeService = new PowerWakeService(storage, database)
+    retryScheduler = new RetrySchedulerService(storage)
+
+    updaterService.setChatEngine(chatEngine)
     registerIpcHandlers(storage, database, updaterService, chatEngine, {
       projectManager,
       projectFilesService,
@@ -613,15 +691,8 @@ void app
       retryScheduler,
       harnessManifestService
     })
-    registerProviderAccountIpc()
-    registerBaseUrlProviderIpc(storage)
-    registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService)
-    remoteMode.registerIpc()
+    // Essential agent/chat catalog + harness manifest IPC surface.
     chatEngine.register()
-    ptyService.register()
-    providerConnection.register()
-    harnessUpdateService.register()
-    harnessInstallService.register()
     harnessManifestService.register()
     chatEngine.attachRetryScheduler(retryScheduler)
 
@@ -651,11 +722,11 @@ void app
       startupTelemetry.mark('window:firstPaint')
       clearTimeout(splashFailsafe)
       closeSplash()
-      // Optional services (provider warming, updater, notifications, power
-      // wake, retry scheduler, remote mode) start only after the primary
-      // window path so first paint is never blocked by their construction or
-      // disk/network work.
-      startBackgroundBoot()
+      // Optional services (PTY, provider connection, harness update/install,
+      // remote mode, notifications) are imported and constructed only after
+      // the primary window path so first paint is never blocked by their
+      // module evaluation or construction/disk/network work.
+      bootOptionalServices()
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)
@@ -675,11 +746,46 @@ void app
     closeSplash()
     // Deterministically close resources and quit with a nonzero diagnostic
     // code so a failed boot never leaves a headless process. Logs, flushes the
-    // durable log, closes the database, shows the error box, then exits(1).
+    // durable log, closes the database (and any other initialized resource),
+    // shows the error box, then exits(1) — falling back to process.exit if the
+    // Electron quit callback throws.
     await handleFatalStartupFailure({
       error,
       appName: APP_NAME,
-      closeDatabase: () => database.close(),
+      resources: [
+        {
+          name: 'database',
+          close: () => database.close()
+        },
+        {
+          name: 'chatEngine',
+          close: () => void chatEngine?.dispose()
+        },
+        {
+          name: 'remoteMode',
+          close: () => void remoteMode?.dispose()
+        },
+        {
+          name: 'ptyService',
+          close: () => ptyService?.destroyAll()
+        },
+        {
+          name: 'updaterService',
+          close: () => updaterService?.stop()
+        },
+        {
+          name: 'notificationService',
+          close: () => notificationService?.stop()
+        },
+        {
+          name: 'powerWakeService',
+          close: () => powerWakeService?.stop()
+        },
+        {
+          name: 'retryScheduler',
+          close: () => retryScheduler?.dispose()
+        }
+      ],
       showErrorBox: (title, message) => dialog.showErrorBox(title, message),
       quit: (code) => app.exit(code),
       telemetry: startupTelemetry
@@ -712,44 +818,44 @@ async function runShutdownPipeline(): Promise<void> {
   // Close the phone gateway, destroy the Tray, and disarm keep-alive first so
   // closing the app disconnects every remote session and leaves nothing behind.
   try {
-    await remoteMode.dispose()
+    await remoteMode?.dispose()
   } catch (error) {
     Logger.error('Remote mode cleanup failed during shutdown:', error)
   }
 
   try {
-    updaterService.stop()
+    updaterService?.stop()
   } catch (error) {
     Logger.error('Updater service cleanup failed during shutdown:', error)
   }
 
   try {
-    ptyService.destroyAll()
+    ptyService?.destroyAll()
   } catch (error) {
     Logger.error('PTY cleanup failed during shutdown:', error)
   }
 
   try {
-    notificationService.stop()
+    notificationService?.stop()
   } catch (error) {
     Logger.error('Notification service cleanup failed during shutdown:', error)
   }
   setNotificationService(null)
   setPowerWakeService(null)
   try {
-    powerWakeService.stop()
+    powerWakeService?.stop()
   } catch (error) {
     Logger.error('Power-wake cleanup failed during shutdown:', error)
   }
 
   try {
-    retryScheduler.dispose()
+    retryScheduler?.dispose()
   } catch (error) {
     Logger.error('Retry scheduler cleanup failed during shutdown:', error)
   }
 
   try {
-    await computerUsePipService.dispose()
+    await computerUsePipService?.dispose()
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
   }
@@ -763,7 +869,7 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   try {
-    await chatEngine.dispose()
+    await chatEngine?.dispose()
   } catch (error) {
     Logger.error('Chat engine disposal failed during shutdown:', error)
   }

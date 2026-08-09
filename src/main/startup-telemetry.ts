@@ -47,13 +47,21 @@ export interface StartupTelemetrySnapshot {
   eventLoop: EventLoopDelaySnapshot
 }
 
+/** `monitorEventLoopDelay` histograms report in nanoseconds. */
+const NANOSECONDS_PER_MILLISECOND = 1e6
+
 function round(value: number): number {
   return Math.round(value * 10) / 10
+}
+
+function histogramMilliseconds(value: number): number {
+  return round(value / NANOSECONDS_PER_MILLISECOND)
 }
 
 export class StartupTelemetry {
   private readonly origin: number
   private readonly now: () => number
+  private readonly marked = new Set<StartupPhase>()
   private phases: StartupPhaseRecord[] = []
   private previousAt: number
   private loopHistogram: IntervalHistogram | null = null
@@ -61,7 +69,9 @@ export class StartupTelemetry {
   constructor(options: { now?: () => number } = {}) {
     this.now = options.now ?? (() => performance.now())
     this.origin = this.now()
-    this.previousAt = this.origin
+    // Phase timestamps are relative to origin, so the first delta is simply the
+    // first phase's elapsed time. Previous-relative deltas start at zero.
+    this.previousAt = 0
   }
 
   /** Begin tracking event-loop delay for the rest of the boot window. */
@@ -77,12 +87,24 @@ export class StartupTelemetry {
     this.loopHistogram?.disable()
   }
 
-  /** Record a named startup phase with its elapsed time. */
+  /**
+   * Record a named startup phase with its elapsed time. Each phase is recorded
+   * at most once: repeated marks (e.g. renderer signals its readiness more than
+   * once) are ignored, so `process:entry` and `provider:warmup` are guaranteed
+   * to appear exactly once in the final report.
+   */
   mark(phase: StartupPhase): void {
+    if (this.marked.has(phase)) return
+    this.marked.add(phase)
     const atMs = this.now() - this.origin
     const deltaMs = Math.max(0, atMs - this.previousAt)
     this.phases.push({ phase, atMs, deltaMs })
     this.previousAt = atMs
+  }
+
+  /** Whether the given phase has already been recorded. */
+  hasMarked(phase: StartupPhase): boolean {
+    return this.marked.has(phase)
   }
 
   /** Ordered list of recorded phases, newest last. */
@@ -96,11 +118,11 @@ export class StartupTelemetry {
     const samples = histogram ? histogram.count : 0
     const eventLoop: EventLoopDelaySnapshot = histogram
       ? {
-          meanMs: round(histogram.mean),
-          p50Ms: round(histogram.percentile(50)),
-          p95Ms: round(histogram.percentile(95)),
-          p99Ms: round(histogram.percentile(99)),
-          maxMs: round(histogram.max),
+          meanMs: histogramMilliseconds(histogram.mean),
+          p50Ms: histogramMilliseconds(histogram.percentile(50)),
+          p95Ms: histogramMilliseconds(histogram.percentile(95)),
+          p99Ms: histogramMilliseconds(histogram.percentile(99)),
+          maxMs: histogramMilliseconds(histogram.max),
           samples
         }
       : { meanMs: 0, p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0, samples: 0 }
@@ -135,8 +157,9 @@ export class StartupTelemetry {
   reset(): void {
     this.stopEventLoopMonitor()
     this.loopHistogram = null
+    this.marked.clear()
     this.phases = []
-    this.previousAt = this.origin
+    this.previousAt = 0
   }
 }
 

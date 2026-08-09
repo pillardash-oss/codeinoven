@@ -24,6 +24,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -690,10 +691,15 @@
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
-      // 2. Threads — recent active (non-archived) only. Archived threads are
-      //    never eagerly loaded into renderer state; they page in on demand
-      //    through the workspace/scope views that request them.
-      const threadList = await invoke('thread:listAll')
+      // 2. Threads — recent active (non-archived) only, via the bounded
+      //    hydration query. Archived threads and the full thread history never
+      //    cross IPC at startup; they page in on demand through the
+      //    workspace/scope views that request them. The selected project is
+      //    ordered first so its visible threads render immediately.
+      const threadList = await invoke('thread:listRecent', {
+        projectId: scopeState.activeProjectId ?? undefined,
+        limit: 200
+      })
       const activeThreads = threadList.filter((thread) => !thread.archived)
       scopeState.setThreads(activeThreads)
       notificationPanelState.hydrateFromThreads(activeThreads)
@@ -860,6 +866,10 @@
       handleCloseShortcut()
     })
     updaterState.init()
+    // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
+    // initialise the store here so the overlay's dynamic import can be gated on
+    // `pipState.active` without ever missing a frame.
+    pipState.init()
     return () => {
       unsubscribeClick()
       unsubscribeShow()
@@ -1079,47 +1089,55 @@
       </div>
     {/if}
   </main>
-  {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
-    <CommandPalette
-      open={commandPaletteOpen}
-      actions={paletteActions}
-      title="Search actions"
-      placeholder="Search models, modes, skills, MCP, and commands…"
-      emptyLabel="No matching actions"
-      onSelect={handlePaletteSelection}
-      onClose={() => (commandPaletteOpen = false)}
-      onRestoreFocus={restorePaletteFocus}
-      shortcutLabel="Ctrl K"
-    />
-  {/await}
-  {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
-    <FileSearchPalette
-      open={fileSearchPaletteOpen}
-      actions={fileSearchActions}
-      title="Search files across projects"
-      placeholder="Type at least two characters…"
-      emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
-      onQueryChange={handleFileSearchQuery}
-      onSelect={handleFileSearchSelection}
-      onClose={() => {
-        fileSearchPaletteOpen = false
-        resetFileSearch()
-      }}
-    />
-  {/await}
+  {#if commandPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
+      <CommandPalette
+        open={commandPaletteOpen}
+        actions={paletteActions}
+        title="Search actions"
+        placeholder="Search models, modes, skills, MCP, and commands…"
+        emptyLabel="No matching actions"
+        onSelect={handlePaletteSelection}
+        onClose={() => (commandPaletteOpen = false)}
+        onRestoreFocus={restorePaletteFocus}
+        shortcutLabel="Ctrl K"
+      />
+    {/await}
+  {/if}
+  {#if fileSearchPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
+      <FileSearchPalette
+        open={fileSearchPaletteOpen}
+        actions={fileSearchActions}
+        title="Search files across projects"
+        placeholder="Type at least two characters…"
+        emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+        onQueryChange={handleFileSearchQuery}
+        onSelect={handleFileSearchSelection}
+        onClose={() => {
+          fileSearchPaletteOpen = false
+          resetFileSearch()
+        }}
+      />
+    {/await}
+  {/if}
   <Toaster />
   <TooltipHost />
-  {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
-    <PipOverlay />
-  {/await}
+  {#if pipState.active && pipState.frameDataUrl !== null}
+    {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
+      <PipOverlay />
+    {/await}
+  {/if}
 
-  {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
-    <CloseConfirmationModal
-      payload={closeConfirmation}
-      onDismiss={() => (closeConfirmation = null)}
-      onConfirm={confirmForceClose}
-    />
-  {/await}
+  {#if closeConfirmation}
+    {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
+      <CloseConfirmationModal
+        payload={closeConfirmation}
+        onDismiss={() => (closeConfirmation = null)}
+        onConfirm={confirmForceClose}
+      />
+    {/await}
+  {/if}
 
   {#if harnessLifecycleStore.runs.length}
     <!-- Floats above every view — survives navigation while tasks keep running. -->
