@@ -205,6 +205,24 @@
   )
   let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
   let visibleMessages = $derived(messages.slice(visibleStartIndex))
+  /** The last turn in the list and whether it is still the "active" turn. A
+   *  trailing steer — a user message the agent has not responded to yet — does
+   *  not end the turn it intervenes in, so the streaming trace for the current
+   *  request stays open until that turn actually completes (or the agent starts
+   *  a newer turn). */
+  const latestTurnInfo = $derived.by(() => {
+    const startIndex = lastTurnStartIndex(messages)
+    if (startIndex === -1) return { startIndex: -1, active: false }
+    let endIndex = startIndex
+    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role === 'assistant') {
+      endIndex += 1
+    }
+    const trailingUserOnly =
+      endIndex < messages.length - 1 &&
+      messages.slice(endIndex + 1).every((message) => message.role === 'user')
+    const turnCompleted = messages[endIndex]?.completedAt !== undefined
+    return { startIndex, active: !(trailingUserOnly && turnCompleted) }
+  })
   let olderMessagesAvailable = $state(false)
   let loadingNewerMessages = $state(false)
   let jumpLoading = $state(false)
@@ -5096,6 +5114,21 @@
     )
   }
 
+  /** Return the index of the first assistant message of the last turn in the
+   *  list. A trailing steer — a user message the agent has not responded to yet
+   *  — does not end the turn it intervenes in, so the last turn is the one that
+   *  contains the last assistant message, regardless of unresponded steers
+   *  appended after it. Returns -1 when no assistant message exists. */
+  function lastTurnStartIndex(messageList: AgentMessage[]): number {
+    for (let i = messageList.length - 1; i >= 0; i--) {
+      if (messageList[i]?.role !== 'assistant') continue
+      let j = i
+      while (j > 0 && messageList[j - 1]?.role === 'assistant') j--
+      return j
+    }
+    return -1
+  }
+
   /** Collect every ordered intermediate part; only the final text is rendered below the trace. */
   function getTurnWorkingParts(startMsgIndex: number, includeCurrentFinal: boolean): AgentPart[] {
     const preceding = messages[startMsgIndex - 1]
@@ -5634,9 +5667,8 @@
                 visibleMsgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
               {@const isTurnEnd =
                 msgIndex === messages.length - 1 || messages[msgIndex + 1]?.role === 'user'}
-              {@const isLatestTurn = !messages
-                .slice(msgIndex + 1)
-                .some((message) => message.role === 'user')}
+              {@const isLatestTurn =
+                msgIndex === latestTurnInfo.startIndex && latestTurnInfo.active}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
