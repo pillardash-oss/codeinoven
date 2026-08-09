@@ -178,6 +178,7 @@ export class ProjectManager {
       color: input.color,
       iconType: input.iconType,
       changeTrackingMode: input.changeTrackingMode ?? 'manual',
+      hasDeployments: input.hasDeployments ?? false,
       createdAt: now,
       updatedAt: now
     }
@@ -266,6 +267,25 @@ export class ProjectManager {
     const updated: Project = {
       ...existing,
       pinned: pinned || undefined,
+      updatedAt: Date.now()
+    }
+    this.projectRepo.upsert(updated)
+    return updated
+  }
+
+  /** Record whether the repo is known to have GitHub deployments. No-ops when
+   *  the flag is already set, so repeated background checks don't churn the DB. */
+  async setHasDeployments(projectId: string, hasDeployments: boolean): Promise<Project> {
+    const existing = this.projectRepo.get(projectId)
+    if (!existing) {
+      throw new Error(`Project not found: ${projectId}`)
+    }
+
+    if (existing.hasDeployments === hasDeployments) return existing
+
+    const updated: Project = {
+      ...existing,
+      hasDeployments,
       updatedAt: Date.now()
     }
     this.projectRepo.upsert(updated)

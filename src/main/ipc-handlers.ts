@@ -2449,6 +2449,12 @@ export function registerIpcHandlers(
       validateBoolean(pinned, 'Pinned')
     )
   )
+  ipcMain.handle('project:setHasDeployments', (_, projectId: unknown, hasDeployments: unknown) =>
+    projectManager.setHasDeployments(
+      validateEntityId(projectId, 'Project ID'),
+      validateBoolean(hasDeployments, 'Has deployments')
+    )
+  )
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
     projectManager.reorderProjects(validateStringArray(orderedIds, 'Ordered IDs'))
   )
@@ -3001,12 +3007,20 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'deployment:overview',
     async (_, projectId: unknown, owner: unknown, repo: unknown) => {
-      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
-      return provider.getDeploymentOverview({
+      const overview = await provider.getDeploymentOverview({
         owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
       })
+      // The repo either deploys or it doesn't — persist that fact so the
+      // Deployments tab only ever appears when there is something to show.
+      const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0
+      if (hasDeployments) {
+        await projectManager.setHasDeployments(safeProjectId, true).catch(() => undefined)
+      }
+      return { ...overview, hasDeployments }
     }
   )
 

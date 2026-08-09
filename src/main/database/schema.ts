@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS projects (
   color              TEXT,
   icon_type          TEXT,
   change_tracking_mode TEXT NOT NULL DEFAULT 'manual' CHECK(change_tracking_mode IN ('git','manual')),
+  has_deployments    INTEGER NOT NULL DEFAULT 0,
   created_at         INTEGER NOT NULL,
   updated_at         INTEGER NOT NULL
 );`
