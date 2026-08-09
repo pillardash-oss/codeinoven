@@ -434,11 +434,11 @@
       void scopeState.ensureBoardLoaded(cached.projectId)
       return
     }
-    const allThreads: Thread[] = await invoke('thread:listAll')
-    const thread = allThreads.find((candidate) => candidate.id === entry.thread?.threadId)
+    const [thread, project] = await Promise.all([
+      invoke('thread:get', entry.thread.projectId, entry.thread.threadId),
+      invoke('project:get', entry.thread.projectId)
+    ])
     if (!thread) return
-    const projects: Project[] = await invoke('project:list')
-    const project = projects.find((candidate) => candidate.id === thread.projectId) ?? null
     workspaceState.openThread(thread, project)
     void scopeState.ensureBoardLoaded(thread.projectId)
   }

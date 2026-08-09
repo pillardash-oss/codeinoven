@@ -122,6 +122,9 @@
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
   let loading = $state(true)
+  let historyOffset = $state(0)
+  let historyLoading = $state(false)
+  let hasMoreHistory = $state(true)
   /** Remounts the empty-state chats composer to restore a failed first send. */
   let chatsComposerRestoreKey = $state(0)
 
@@ -780,6 +783,9 @@
 
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => timelinePins.isPinned(t.id)))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => !timelinePins.isPinned(t.id)))
+  let archivedTimelineThreads = $derived(
+    allThreads.filter((thread) => thread.archived && thread.projectId !== INBOX_PROJECT_ID)
+  )
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -952,7 +958,10 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listAll')
+        invoke('thread:listRecent', {
+          projectId: rendererRecovery.selectedProjectId ?? undefined,
+          limit: 100
+        })
       ])
       projects = projectList
       allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
@@ -1009,7 +1018,10 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listAll')
+        invoke('thread:listRecent', {
+          projectId: workspaceState.activeProject?.id ?? undefined,
+          limit: 100
+        })
       ])
       projects = projectList
       allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
@@ -1033,6 +1045,28 @@
     }
     wasActive = nowActive
   })
+
+  /** Explicit archive/timeline expansion. The initial shell intentionally
+   * carries only a bounded active slice; history remains paged and deduped. */
+  async function loadHistoryPage(): Promise<void> {
+    if (historyLoading || !hasMoreHistory) return
+    historyLoading = true
+    try {
+      const page = await invoke('thread:listHistoryPage', { limit: 50, offset: historyOffset })
+      historyOffset += page.length
+      hasMoreHistory = page.length === 50
+      const known = new Set(allThreads.map((thread) => thread.id))
+      const additions = page.filter(
+        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
+      )
+      if (additions.length > 0) {
+        allThreads = [...allThreads, ...additions]
+        scopeState.setThreads(allThreads.filter((thread) => !thread.archived))
+      }
+    } finally {
+      historyLoading = false
+    }
+  }
 
   // ─── Folder interactions ─────────────────────────────────────────────────
 
@@ -2098,6 +2132,37 @@
                 </div>
               {/each}
             </div>
+            {#if archivedTimelineThreads.length > 0}
+              <div class="mt-3 border-t pt-2">
+                <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                  Archived history
+                </p>
+                <div class="space-y-px" role="list">
+                  {#each archivedTimelineThreads as thread (thread.id)}
+                    <ThreadRow
+                      {thread}
+                      compact
+                      projectIconUrl={getThreadIcon(thread)}
+                      selected={selectedThread?.id === thread.id}
+                      onOpen={openThread}
+                      onRename={handleRename}
+                      onTogglePin={() => timelinePins.toggle(thread.id)}
+                      onDelete={handleDelete}
+                      onFork={forkThread}
+                    />
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {#if hasMoreHistory}
+              <button
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                disabled={historyLoading}
+                onclick={() => void loadHistoryPage()}
+              >
+                {historyLoading ? 'Loading history…' : 'Load older and archived threads'}
+              </button>
+            {/if}
           {/if}
         </div>
         <div class={mode === 'projects' ? '' : 'hidden'}>

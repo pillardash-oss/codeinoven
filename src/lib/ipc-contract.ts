@@ -1153,6 +1153,11 @@ export interface IpcInvokeContract {
     [options: { projectId?: string; limit?: number; offset?: number }],
     Thread[]
   >
+  /** Paged history for an explicit archive/all-history request. */
+  'thread:listHistoryPage': Contract<
+    [options: { projectId?: string; limit?: number; offset?: number }],
+    Thread[]
+  >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
   'thread:reorderScope': Contract<
     [projectId: string, bucketId: string, slice: ScopeSlice, orderedIds: string[]],
