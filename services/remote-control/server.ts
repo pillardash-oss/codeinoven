@@ -287,6 +287,10 @@ async function handleGrantUpload(request: Request, desktopId: string): Promise<R
   if (!database.saveDesktopGrant(desktopId, mobileDeviceId, desktopPublicKey, ciphertext)) {
     return json({ error: 'not-found' }, 404)
   }
+  // A refreshed grant can carry a rotated transport key. Close both peers and
+  // discard outstanding ciphertext before either side reconnects; replaying a
+  // frame encrypted with the previous key creates an unrecoverable loop.
+  closeDesktop(desktopId, 4004, 'control-key-rotated')
   database.audit('desktop.control-grant-created', desktop.user_id, desktopId)
   return json({ ok: true })
 }

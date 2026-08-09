@@ -120,12 +120,17 @@ export class RelayHub {
     if (registry.get(desktopId) === socket) registry.delete(desktopId)
   }
 
-  /** Close and remove every socket for a desktop (revocation / replacement). */
+  /**
+   * Close and remove every socket and retained frame for a desktop.
+   * Revocation and control-key rotation both make buffered ciphertext invalid,
+   * so it must never be replayed into a replacement cryptographic session.
+   */
   closePeer(desktopId: string, code: number, reason: string): void {
     this.desktopSockets.get(desktopId)?.close(code, reason)
     this.mobileSockets.get(desktopId)?.close(code, reason)
     this.desktopSockets.delete(desktopId)
     this.mobileSockets.delete(desktopId)
+    this.outstanding.delete(desktopId)
   }
 
   /**
