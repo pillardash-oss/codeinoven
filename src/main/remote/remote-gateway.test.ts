@@ -58,13 +58,17 @@ function deviceInfo(device: EnrolledDevice): RemoteDeviceInfo {
 async function makeGateway(
   secret: string | null = SECRET,
   overrides: Partial<ConstructorParameters<typeof RemoteGateway>[0]> = {},
-  beforeStart?: (staticRoot: string) => Promise<void> | void
+  beforeStart?: (
+    staticRoot: string,
+    certificateDir: string
+  ) => Promise<void> | void
 ): Promise<{
   gateway: RemoteGateway
   port: number
   localPort: number
   devices: RemoteDeviceInfo[][]
   staticRoot: string
+  certificateDir: string
 }> {
   const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-'))
   const staticRoot = join(dir, 'renderer')
@@ -74,8 +78,6 @@ async function makeGateway(
   await writeFile(join(staticRoot, 'remote.html'), '<h1>phone client</h1>', 'utf8')
   await writeFile(join(staticRoot, 'manifest.webmanifest'), '{"name":"test"}', 'utf8')
   await writeFile(join(staticRoot, 'service-worker.js'), 'self.onfetch=()=>{}', 'utf8')
-  if (beforeStart) await beforeStart(staticRoot)
-
   const devices: RemoteDeviceInfo[][] = []
   const handlers: GatewayHandlers = {
     onDevicesChange: (next) => devices.push(next)
@@ -89,8 +91,9 @@ async function makeGateway(
     handlers,
     ...overrides
   })
+  if (beforeStart) await beforeStart(staticRoot, certificateDir)
   const { port, localPort } = await gateway.start()
-  return { gateway, port, localPort, devices, staticRoot }
+  return { gateway, port, localPort, devices, staticRoot, certificateDir }
 }
 
 function waitForMessage(events: TransportEvent[], data: string, timeoutMs = 3_000): Promise<void> {
@@ -759,6 +762,23 @@ describe('RemoteGateway', () => {
       expect(info.pairingUrl).toMatch(/^https:\/\/.+:\d+\/remote\.html#pair=/)
       expect(info.pairingUrl).toContain(encodeURIComponent(SECRET))
       expect(info.url).not.toContain('pair=')
+    } finally {
+      await gateway.stop()
+    }
+  })
+
+  it('renders IPv6 pairing URLs in bracketed host form using advertised gateway metadata', async () => {
+    const { gateway, port, certificateDir } = await makeGateway()
+    try {
+      await writeFile(
+        join(certificateDir, 'meta.json'),
+        JSON.stringify({ hosts: ['2001:db8::2'] }),
+        'utf8'
+      )
+      const info = gateway.info()
+      expect(port).toBeGreaterThan(0)
+      expect(info.url).toContain('https://[2001:db8::2]:')
+      expect(info.pairingUrl).toContain('https://[2001:db8::2]:')
     } finally {
       await gateway.stop()
     }

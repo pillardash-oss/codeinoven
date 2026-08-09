@@ -71,16 +71,20 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          flags=()
-          if [ -z "$CSC_LINK" ]; then
-            flags+=(-c.forceCodeSigning=false)
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
+            exit 1
           fi
           if [ "${{ matrix.target }}" = "mac" ]; then
-            if [ -z "$APPLE_ID" ]; then
-              flags+=(-c.mac.identity=null -c.mac.notarize=false)
+            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
+              exit 1
             fi
           fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never "${flags[@]}"
+          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.forceCodeSigning=true
+
+      - name: Verify packaged artifacts
+        run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
