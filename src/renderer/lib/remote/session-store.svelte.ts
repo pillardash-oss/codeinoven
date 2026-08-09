@@ -295,9 +295,13 @@ export class RemoteSessionStore {
   async connectAccountDesktop(input: AccountDesktopRoute): Promise<void> {
     this.accountRoute = input
     if (input.lanTarget) {
-      await this.connect(input.controlSecret, input.lanTarget, { deviceCredentials: true })
-      this.accountRoute = input
-      if (this.snapshot.route.kind === 'LAN_CONNECTED') return
+      try {
+        await this.connect(input.controlSecret, input.lanTarget, { deviceCredentials: true })
+        this.accountRoute = input
+        if (this.snapshot.route.kind === 'LAN_CONNECTED') return
+      } catch (error) {
+        remoteLog.info(`Account LAN route unavailable; using cloud relay: ${String(error)}`)
+      }
     }
     await this.connectCloud(input)
   }
