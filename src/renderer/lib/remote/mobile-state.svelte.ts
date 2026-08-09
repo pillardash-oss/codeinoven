@@ -18,6 +18,7 @@ import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
+  coordinatorHasActiveDelegates,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   type Project,
@@ -61,6 +62,7 @@ export interface MobileJumpTarget {
 class MobileState {
   projects = $state<Project[]>([])
   allThreads = $state<Thread[]>([])
+  orchestrationThreads = $state<Thread[]>([])
   loading = $state(true)
 
   selectedThread = $state<Thread | null>(null)
@@ -160,6 +162,7 @@ class MobileState {
       ])
       this.projects = projectList
       this.allThreads = (threadList as Thread[]).filter((t) => !isOrchestrationChildThread(t))
+      this.orchestrationThreads = (threadList as Thread[]).filter(isOrchestrationChildThread)
       this.refreshAttention()
       this.projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(this.projects)) {
@@ -168,6 +171,7 @@ class MobileState {
     } catch {
       this.projects = []
       this.allThreads = []
+      this.orchestrationThreads = []
     } finally {
       this.loading = false
     }
@@ -254,6 +258,13 @@ class MobileState {
 
   /** Apply a pushed thread update to the list and the selection. */
   applyThreadUpdate(updated: Thread): void {
+    if (isOrchestrationChildThread(updated)) {
+      const exists = this.orchestrationThreads.some((thread) => thread.id === updated.id)
+      this.orchestrationThreads = exists
+        ? this.orchestrationThreads.map((thread) => (thread.id === updated.id ? updated : thread))
+        : [updated, ...this.orchestrationThreads]
+      return
+    }
     this.allThreads = this.allThreads.map((t) => (t.id === updated.id ? updated : t))
     this.refreshAttention()
     if (this.selectedThread?.id === updated.id) {
@@ -262,6 +273,14 @@ class MobileState {
         void invoke('thread:markRead', updated.projectId, updated.id).catch(() => undefined)
       }
     }
+  }
+
+  isWorking(thread: Thread): boolean {
+    return (
+      thread.status === 'planning' ||
+      thread.status === 'executing' ||
+      coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
+    )
   }
 }
 

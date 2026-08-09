@@ -151,13 +151,13 @@
   }
 
   function folderWorking(projectId: string): boolean {
-    return folderThreads(projectId).some((t) => t.status === 'planning' || t.status === 'executing')
+    return folderThreads(projectId).some((thread) => mobileState.isWorking(thread))
   }
 
   function threadDot(thread: Thread): string {
     if (thread.status === 'failed') return 'bg-thread-error'
     if (thread.status === 'awaiting_approval') return 'bg-thread-pinned'
-    if (thread.status === 'planning' || thread.status === 'executing') return 'bg-thread-working'
+    if (mobileState.isWorking(thread)) return 'bg-thread-working'
     if (!thread.read) return 'bg-thread-unread'
     if (thread.status === 'completed') return 'bg-thread-done'
     return 'bg-thread-done/40'

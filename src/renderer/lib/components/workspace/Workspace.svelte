@@ -87,9 +87,11 @@
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import { timelinePins } from '$lib/stores/timeline-pins.svelte'
   import {
+    coordinatorHasActiveDelegates,
     INBOX_PROJECT_ID,
     DEFAULT_THREAD_TITLE,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
@@ -470,6 +472,12 @@
     return threads.filter((t) => t.title.toLowerCase().includes(q))
   }
 
+  function threadHasVisibleWork(thread: Thread): boolean {
+    return (
+      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+    )
+  }
+
   // Threads-view global search (activation + query), mirroring the per-project
   // search above: the popover only hosts the input, results render in the sidebar
   // and stay put until the search is explicitly dismissed (Escape / re-click / X).
@@ -820,9 +828,10 @@
   $effect(() => {
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
+      scopeState.updateThread(updated)
+      if (isOrchestrationChildThread(updated)) return
       if (!allThreads.some((t) => t.id === updated.id)) return
       allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
-      scopeState.updateThread(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         if (!updated.read) {
@@ -921,9 +930,7 @@
       return
     }
     const projectThreads = allThreads.filter((t) => t.projectId === projectId && !t.archived)
-    const working = projectThreads.filter(
-      (t) => t.status === 'planning' || t.status === 'executing'
-    ).length
+    const working = projectThreads.filter((thread) => threadHasVisibleWork(thread)).length
     workspaceState.setActiveProjectStats(projectThreads.length, working)
   })
 
@@ -1059,9 +1066,11 @@
       const additions = page.filter(
         (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
       )
+      for (const thread of page) {
+        if (!thread.archived) scopeState.updateThread(thread)
+      }
       if (additions.length > 0) {
         allThreads = [...allThreads, ...additions]
-        scopeState.setThreads(allThreads.filter((thread) => !thread.archived))
       }
     } finally {
       historyLoading = false
@@ -2193,9 +2202,7 @@
                   {@const folderThreads = threadsByProject.get(project.id) ?? []}
                   {@const expanded =
                     expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                  {@const working = folderThreads.some(
-                    (t) => t.status === 'planning' || t.status === 'executing'
-                  )}
+                  {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
                   <DropdownMenu.Root
                     open={openProjectMenuId === project.id}
                     onOpenChange={(o) => {
@@ -2395,9 +2402,7 @@
                 {@const folderThreads = threadsByProject.get(project.id) ?? []}
                 {@const expanded =
                   expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                {@const working = folderThreads.some(
-                  (t) => t.status === 'planning' || t.status === 'executing'
-                )}
+                {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
                 <DropdownMenu.Root
                   open={openProjectMenuId === project.id}
                   onOpenChange={(o) => {

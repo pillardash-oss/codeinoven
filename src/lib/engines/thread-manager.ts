@@ -432,16 +432,16 @@ export class ThreadManager {
 
   /**
    * Detach a worker thread from its Assignment after its task is re-dispatched
-   * to a fresh worker. The abandoned thread must no longer be treated as an
-   * Assignment worker so a late harness session error on it cannot report as
-   * the task's current worker.
+   * to a fresh worker. Keep its coordinator lineage so the retired child stays
+   * hidden from ordinary thread surfaces and remains inspectable through Scope.
+   * Clearing its Assignment identity still prevents a late harness error from
+   * reporting as the task's current worker.
    */
   async unlinkAssignmentThread(projectId: string, threadId: string): Promise<void> {
     this.requireOwnedThread(projectId, threadId)
     this.threadRepo.updateField(threadId, 'assignment_id', null)
     this.threadRepo.updateField(threadId, 'assignment_role', null)
     this.threadRepo.updateField(threadId, 'assignment_task_id', null)
-    this.threadRepo.updateField(threadId, 'coordinator_thread_id', null)
     const updated = this.threadRepo.get(threadId)
     if (updated) this.onChange?.(updated)
   }
@@ -567,7 +567,9 @@ export class ThreadManager {
    */
   async saveMessages(projectId: string, threadId: string, messages: AgentMessage[]): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    const outcome = await this.db.transactionViaWorker(buildSaveMessagesStatements(threadId, messages))
+    const outcome = await this.db.transactionViaWorker(
+      buildSaveMessagesStatements(threadId, messages)
+    )
     if (!outcome.ok) {
       // Fallback: identical batching semantics on the primary connection.
       this.db.transaction(() => {
@@ -655,7 +657,9 @@ export class ThreadManager {
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const page = await this.pagedMessageRows((after) => buildLoadUserMessagesPageSql(threadId, after))
+    const page = await this.pagedMessageRows((after) =>
+      buildLoadUserMessagesPageSql(threadId, after)
+    )
     if (!page.ok) return this.agentMessageRepo.loadUserMessagesByThread(threadId)
     return mapUserMessageRows(page.rows)
   }
@@ -679,7 +683,9 @@ export class ThreadManager {
     messages: AgentMessage[]
   ): Promise<void> {
     if (!this.getOwnedThread(projectId, threadId)) return
-    const outcome = await this.db.transactionViaWorker(buildSaveSubagentStatements(threadId, sessionId, messages))
+    const outcome = await this.db.transactionViaWorker(
+      buildSaveSubagentStatements(threadId, sessionId, messages)
+    )
     if (!outcome.ok) {
       this.db.transaction(() => {
         for (const statement of buildSaveSubagentStatements(threadId, sessionId, messages)) {
@@ -696,7 +702,9 @@ export class ThreadManager {
     sessionId: string
   ): Promise<AgentMessage[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
-    const page = await this.pagedMessageRows((after) => buildLoadSessionPageSql(threadId, sessionId, after))
+    const page = await this.pagedMessageRows((after) =>
+      buildLoadSessionPageSql(threadId, sessionId, after)
+    )
     if (!page.ok) return this.agentMessageRepo.loadBySession(threadId, sessionId)
     return mapMessageRows(page.rows)
   }
@@ -752,7 +760,11 @@ export class ThreadManager {
     if (!built.fts) {
       return mergeThreadSearchResults(title.rows, [], raw, built.limit)
     }
-    const message = await this.db.queryViaWorker(built.fts.sql, built.fts.params, Math.min(built.limit * 4, 200))
+    const message = await this.db.queryViaWorker(
+      built.fts.sql,
+      built.fts.params,
+      Math.min(built.limit * 4, 200)
+    )
     if (!message.ok) return this.threadRepo.search(query, options)
     return mergeThreadSearchResults(title.rows, message.rows, raw, built.limit)
   }
@@ -850,7 +862,11 @@ export class ThreadManager {
     let after: ThreadMessageCursor | undefined
     for (let page = 0; page < ThreadManager.MAX_TRANSCRIPT_PAGES; page++) {
       const built = buildPage(after)
-      const result = await this.db.queryViaWorker(built.sql, built.params, ThreadManager.TRANSCRIPT_PAGE_SIZE)
+      const result = await this.db.queryViaWorker(
+        built.sql,
+        built.params,
+        ThreadManager.TRANSCRIPT_PAGE_SIZE
+      )
       if (!result.ok) return { ok: false }
       rows.push(...result.rows)
       if (!result.truncated || result.rows.length === 0) break
@@ -905,7 +921,8 @@ export class ThreadManager {
       [threadId, anchorId],
       1
     )
-    if (!anchorRow.ok) return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
+    if (!anchorRow.ok)
+      return this.agentMessageRepo.loadPageAroundByThread(threadId, anchorId, limit)
     const olderRows = older.rows
     const newerRows = newer.rows
     const hasOlder = olderRows.length > half
