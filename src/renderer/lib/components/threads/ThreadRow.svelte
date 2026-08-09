@@ -41,6 +41,8 @@
     pinnedOverride?: boolean
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
+    /** Hide the scope chip — used when the surrounding view is already scoped. */
+    hideScope?: boolean
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
@@ -60,6 +62,7 @@
     projectIconUrl = null,
     pinnedOverride = undefined,
     showChangeScope = true,
+    hideScope = false,
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
@@ -788,7 +791,7 @@
           </span>
         {/if}
 
-        {#if scopeBucket}
+        {#if scopeBucket && !hideScope}
           <span
             class="relative flex min-w-0 max-w-[10rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
             title={scopeBucket.name}
