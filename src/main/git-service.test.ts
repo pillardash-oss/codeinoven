@@ -136,7 +136,7 @@ describe('GitService', () => {
     await service.stage(working, ['feature.txt'])
     await service.commit(working, 'feature commit')
 
-    await simpleGit(bare).init(true)
+    await simpleGit(bare).init(true, { '--initial-branch': 'main' })
     const remotes = await service.addRemote(working, 'origin', bare)
     expect(remotes[0]?.name).toBe('origin')
 
@@ -162,7 +162,7 @@ describe('GitService', () => {
     await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'first')
-    await simpleGit(bare).init(true)
+    await simpleGit(bare).init(true, { '--initial-branch': 'main' })
     await service.addRemote(working, 'origin', bare)
     const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
     await service.push(working, { setUpstream: true, remote: 'origin', branch: branchName })
@@ -363,7 +363,7 @@ describe('GitService', () => {
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'initial')
 
-    await simpleGit(bare).init(true)
+    await simpleGit(bare).init(true, { '--initial-branch': 'main' })
     await service.addRemote(working, 'origin', bare)
 
     const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
@@ -403,7 +403,7 @@ describe('GitService', () => {
     await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'first')
-    await simpleGit(bare).init(true)
+    await simpleGit(bare).init(true, { '--initial-branch': 'main' })
     await service.addRemote(working, 'origin', bare)
     const branchName = (await simpleGit(working).revparse(['--abbrev-ref', 'HEAD'])).trim()
     await service.push(working, { setUpstream: true, remote: 'origin', branch: branchName })
