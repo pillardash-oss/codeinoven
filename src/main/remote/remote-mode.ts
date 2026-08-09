@@ -20,6 +20,7 @@ import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
+import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
 import {
   isPairingExpired,
   loadOrCreatePeerSecret,
@@ -27,11 +28,7 @@ import {
   rotatePeerSecret
 } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
-import {
-  DeviceCredentialService,
-  generateSigningKeyPair,
-  type EnrolledDevice
-} from './device-credential-service'
+import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
 import {
   readRemoteDeviceNames,
@@ -48,9 +45,16 @@ declare global {
 /** Gateway device-authentication callback shape (see RemoteGateway options). */
 type GatewayAuthHandler = (input: {
   nonce: string
-  token: string
+  token?: string
+  signature?: string
+  transcript?: string
+  bootstrap?: string
+  signingPublicJwk?: JsonWebKey
+  agreementPublicJwk?: JsonWebKey
+  authVersion?: number
   deviceId: string
   deviceName: string
+  originPolicy: 'strict' | 'local'
   transport: 'lan' | 'relay'
 }) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
 
@@ -490,7 +494,9 @@ export class RemoteModeController {
 
   /** Trusted desktop step-up disposition for a pending high-risk request. */
   approveStepUp(approvalId: string, decision: 'approved' | 'rejected'): boolean {
-    return this.rpc?.approveStepUp(approvalId, decision) ?? false
+    const resolved = this.rpc?.approveStepUp(approvalId, decision) ?? false
+    this.broadcastPendingApprovals()
+    return resolved
   }
 
   listPendingApprovals(): ReturnType<RemoteRpcDispatcher['listPendingApprovals']> {
@@ -502,39 +508,93 @@ export class RemoteModeController {
   }
 
   /**
-   * Gateway device-authentication handler. During the migration window the
-   * shared secret only grants a pairing; every session is bound to an enrolled
-   * device record, so revoking a device closes its sessions and rejects its
-   * reconnects even when an offline copy of the old credential is presented.
+   * Gateway device-authentication handler. Phones authenticate by proving
+   * possession of their signing key (ECDSA over the challenge transcript);
+   * first-time enrollment additionally presents a single-use pairing
+   * bootstrap and the device's public keys. The shared secret is never a
+   * durable authority: on the LAN-exposed listener it only authorizes the
+   * one-shot enrollment, and the legacy HMAC path is accepted solely for the
+   * desktop renderer's own loopback session.
    */
   private makeAuthenticateDevice(): GatewayAuthHandler {
-    return async ({ nonce, token, deviceId, deviceName }) => {
-      const secret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
-      if (!secret) return { accepted: false }
-      const verified = await verifyHandshakeToken(secret, nonce, token)
-      if (!verified) return { accepted: false }
-      const existing = this.credentials?.getDevice(deviceId) ?? null
-      if (existing) {
-        if (existing.revokedAt !== null) return { accepted: false }
-        if (existing.expiresAt < Date.now()) return { accepted: false }
-        return { accepted: true, device: this.toDeviceInfo(existing, true) }
+    return async ({
+      nonce,
+      token,
+      signature,
+      bootstrap,
+      signingPublicJwk,
+      agreementPublicJwk,
+      authVersion,
+      deviceId,
+      deviceName,
+      originPolicy
+    }) => {
+      const credentials = this.credentials
+      if (signature && credentials) {
+        // The canonical LAN transcript is recomputed server-side from the
+        // desktop-issued challenge nonce plus the identity/bootstraps — never
+        // taken from the peer — so a captured proof cannot be replayed.
+        if (bootstrap && signingPublicJwk && agreementPublicJwk) {
+          const transcript = handshakeTranscript({ nonce, bootstrap, context: 'lan' })
+          // First-time enrollment: the single-use pairing bootstrap from the QR
+          // authorizes exactly one enrollment; the signature proves the device
+          // owns the signing key it is submitting.
+          const outcome = await credentials.enrollDevice({
+            bootstrapValue: bootstrap,
+            name: deviceName,
+            signingPublicJwk,
+            agreementPublicJwk,
+            signingProof: signature,
+            proofTranscript: transcript,
+            transport: 'lan'
+          })
+          if (!outcome.ok || !outcome.device) return { accepted: false }
+          return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
+        }
+        if (deviceId && typeof authVersion === 'number') {
+          const transcript = handshakeTranscript({ nonce, deviceId, authVersion, context: 'lan' })
+          const result = await credentials.authenticateDevice({
+            deviceId,
+            authVersion,
+            transcript,
+            signature,
+            transport: 'lan'
+          })
+          if (!result.ok || !result.device) return { accepted: false }
+          return { accepted: true, device: this.toDeviceInfo(result.device, true) }
+        }
+        credentials.audit({
+          decision: 'auth_failed',
+          reasonCode: 'malformed',
+          deviceId: deviceId || null,
+          deviceName: deviceName || null,
+          transport: 'lan'
+        })
+        return { accepted: false }
       }
-      if (!this.credentials) return { accepted: true }
-      // New device: enroll with a desktop-generated key pair so the one-scan
-      // setup stays zero-configuration while the identity service records the
-      // device, its scopes, and its credential lifetime.
-      const signing = await generateSigningKeyPair()
-      const agreement = await generateSigningKeyPair()
-      const outcome = await this.credentials.enrollDevice({
-        bootstrapValue: secret,
-        name: deviceName,
-        signingPublicJwk: signing.publicJwk,
-        agreementPublicJwk: agreement.publicJwk,
-        signingProof: '__desktop_generated__',
+      // Legacy shared-secret handshake: only the desktop renderer's own
+      // loopback session, never a phone on the LAN-exposed listener.
+      if (token && originPolicy === 'local' && credentials) {
+        const secret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
+        const verified = secret ? await verifyHandshakeToken(secret, nonce, token) : false
+        if (!verified) {
+          credentials.audit({
+            decision: 'auth_failed',
+            reasonCode: 'signature_invalid',
+            deviceId: null,
+            transport: 'lan'
+          })
+        }
+        return { accepted: verified }
+      }
+      credentials?.audit({
+        decision: 'auth_failed',
+        reasonCode: 'denied_by_default',
+        deviceId: deviceId || null,
+        deviceName: deviceName || null,
         transport: 'lan'
       })
-      if (!outcome.ok || !outcome.device) return { accepted: false }
-      return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
+      return { accepted: false }
     }
   }
 
@@ -858,6 +918,7 @@ export class RemoteModeController {
       apiOrigin: config.apiOrigin,
       deviceToken,
       controlSecret,
+      credentials: this.credentials ?? undefined,
       signal,
       connectTimeoutMs: remoteEnvInt('RELAY_CONNECT_TIMEOUT_MS', 15_000),
       authTimeoutMs: remoteEnvInt('RELAY_AUTH_TIMEOUT_MS', 10_000),
@@ -880,8 +941,8 @@ export class RemoteModeController {
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
         this.broadcast()
       },
-      onRpc: async (channel, args) =>
-        this.rpc?.dispatch({ id: 0, channel, args }) ?? {
+      onRpc: async (channel, args, device) =>
+        this.rpc?.dispatch({ id: 0, channel, args, device }) ?? {
           ok: false,
           message: 'RPC unavailable'
         }
@@ -925,11 +986,14 @@ export class RemoteModeController {
         onDevicesChange: (devices) => this.onDevicesChange(devices),
         authenticateDevice: this.makeAuthenticateDevice(),
         onRpc: this.rpc
-          ? async (channel, args, device) =>
-              this.rpc?.dispatch({ id: 0, channel, args, device }) ?? {
-                ok: false,
-                message: 'RPC unavailable'
-              }
+          ? async (channel, args, device) => {
+              const rpc = this.rpc
+              const outcome = rpc
+                ? await rpc.dispatch({ id: 0, channel, args, device })
+                : { ok: false as const, message: 'RPC unavailable' }
+              this.broadcastPendingApprovals()
+              return outcome
+            }
           : undefined
       }
     })
@@ -979,6 +1043,16 @@ export class RemoteModeController {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
         window.webContents.send('remote:status', status)
+      }
+    }
+  }
+
+  /** Push pending high-risk approvals to the desktop renderer for disposition. */
+  private broadcastPendingApprovals(): void {
+    const approvals = this.listPendingApprovals()
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+        window.webContents.send('remote:stepUpPending', approvals)
       }
     }
   }

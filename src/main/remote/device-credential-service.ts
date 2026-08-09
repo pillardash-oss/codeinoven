@@ -140,9 +140,9 @@ async function isValidP256PublicJwk(jwk: JsonWebKey): Promise<boolean> {
   if (jwk?.kty !== 'EC' || jwk.crv !== 'P-256') return false
   if (typeof jwk.x !== 'string' || typeof jwk.y !== 'string') return false
   try {
-    await crypto.subtle.importKey('jwk', jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, [
-      'verify'
-    ])
+    // Validate the EC point generically: a P-256 public point imports as ECDH
+    // regardless of whether the key was created for ECDSA signing or ECDH.
+    await crypto.subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, false, [])
     return true
   } catch {
     return false

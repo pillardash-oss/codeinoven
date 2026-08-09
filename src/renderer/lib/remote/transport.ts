@@ -14,6 +14,7 @@
 import type { PeerRef } from './routes'
 import { remoteLog } from './logger'
 import { createHandshakeToken, decryptPayload, encryptPayload } from './session-security'
+import { handshakeTranscript, signTranscript } from './device-identity'
 
 export type TransportEvent =
   | { kind: 'connecting'; peer: PeerRef }
@@ -34,6 +35,20 @@ export interface TransportSocket {
 
 export type SocketFactory = (url: string) => TransportSocket
 
+/**
+ * Proof-of-possession credentials for a phone device. When present the
+ * handshake signs the challenge with the device's private key instead of
+ * deriving an HMAC token from a shared secret.
+ */
+export interface LanDeviceCredentials {
+  deviceId: string | null
+  deviceName: string
+  authVersion: number
+  signingPrivateJwk: JsonWebKey
+  signingPublicJwk: JsonWebKey
+  agreementPublicJwk: JsonWebKey
+}
+
 export interface LanTransportOptions {
   peer: PeerRef
   authSecret: string | null
@@ -46,6 +61,14 @@ export interface LanTransportOptions {
   deviceId?: string
   /** Human-readable device name announced during the handshake. */
   deviceName?: string
+  /** Proof-of-possession device keys (PWA phones). */
+  device?: LanDeviceCredentials
+  /** Single-use pairing bootstrap from the QR code for first enrollment. */
+  pairingBootstrap?: string | null
+  /** Called with the desktop-assigned device id returned by `remote:hello:ok`. */
+  onAssignedDevice?: (deviceId: string) => void
+  /** Called with the current credential version returned by `remote:hello:ok`. */
+  onAssignedAuthVersion?: (authVersion: number) => void
 }
 
 export interface LanTransport {
@@ -60,7 +83,13 @@ interface HelloMessage {
   type: 'remote:hello'
   version: number
   nonce: string
-  token: string
+  token?: string
+  signature?: string
+  transcript?: string
+  bootstrap?: string
+  signingPublicJwk?: JsonWebKey
+  agreementPublicJwk?: JsonWebKey
+  authVersion?: number
   deviceId?: string
   deviceName?: string
 }
@@ -69,6 +98,7 @@ interface ReplyMessage {
   type: 'remote:challenge' | 'remote:hello:ok' | 'remote:error'
   reason?: string
   nonce?: string
+  device?: { id?: string; authVersion?: number }
 }
 
 interface DataEnvelope {
@@ -87,10 +117,24 @@ function parseReply(data: string): ReplyMessage | null {
       record.type !== 'remote:error'
     )
       return null
+    const deviceRecord = record.device
     return {
       type: record.type,
       reason: typeof record.reason === 'string' ? record.reason : undefined,
-      nonce: typeof record.nonce === 'string' ? record.nonce : undefined
+      nonce: typeof record.nonce === 'string' ? record.nonce : undefined,
+      device:
+        typeof deviceRecord === 'object' && deviceRecord !== null
+          ? {
+              id:
+                typeof (deviceRecord as Record<string, unknown>)['id'] === 'string'
+                  ? ((deviceRecord as Record<string, unknown>)['id'] as string)
+                  : undefined,
+              authVersion:
+                typeof (deviceRecord as Record<string, unknown>)['authVersion'] === 'number'
+                  ? ((deviceRecord as Record<string, unknown>)['authVersion'] as number)
+                  : undefined
+            }
+          : undefined
     }
   } catch {
     return null
@@ -159,23 +203,19 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
         const reply = parseReply(event.data)
         if (reply) {
           if (reply.type === 'remote:challenge' && reply.nonce) {
-            const secret = options.authSecret ?? ''
-            void createHandshakeToken(secret, reply.nonce).then((token) => {
+            void buildHello(reply.nonce).then((hello) => {
               if (settled) return
-              const hello: HelloMessage = {
-                type: 'remote:hello',
-                version: 2,
-                nonce: reply.nonce ?? '',
-                token,
-                ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-                ...(options.deviceName ? { deviceName: options.deviceName } : {})
-              }
               socket.send(JSON.stringify(hello))
             })
             return
           }
           if (reply.type === 'remote:hello:ok') {
             open = true
+            const assigned = reply.device?.id
+            if (assigned) options.onAssignedDevice?.(assigned)
+            if (typeof reply.device?.authVersion === 'number') {
+              options.onAssignedAuthVersion?.(reply.device.authVersion)
+            }
             remoteLog.dev(`LAN handshake accepted for ${url}`)
             finish('open', { kind: 'handshake:ok', peer })
             return
@@ -237,6 +277,53 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
     close(): void {
       if (!socket) return
       socket.close()
+    }
+  }
+
+  /** Build the handshake hello: proof-of-possession signature or legacy HMAC. */
+  async function buildHello(nonce: string): Promise<HelloMessage> {
+    const device = options.device
+    if (device) {
+      const transcript = handshakeTranscript({
+        nonce,
+        deviceId: device.deviceId,
+        authVersion: device.authVersion,
+        bootstrap: options.pairingBootstrap
+      })
+      const signature = await signTranscript(device.signingPrivateJwk, transcript)
+      if (!device.deviceId) {
+        return {
+          type: 'remote:hello',
+          version: 3,
+          nonce,
+          signature,
+          transcript,
+          bootstrap: options.pairingBootstrap ?? undefined,
+          signingPublicJwk: device.signingPublicJwk,
+          agreementPublicJwk: device.agreementPublicJwk,
+          deviceName: device.deviceName
+        }
+      }
+      return {
+        type: 'remote:hello',
+        version: 3,
+        nonce,
+        signature,
+        transcript,
+        authVersion: device.authVersion,
+        deviceId: device.deviceId,
+        deviceName: device.deviceName
+      }
+    }
+    const secret = options.authSecret ?? ''
+    const token = await createHandshakeToken(secret, nonce)
+    return {
+      type: 'remote:hello',
+      version: 2,
+      nonce,
+      token,
+      ...(options.deviceId ? { deviceId: options.deviceId } : {}),
+      ...(options.deviceName ? { deviceName: options.deviceName } : {})
     }
   }
 }

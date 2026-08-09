@@ -1391,6 +1391,11 @@ export interface IpcEventContract {
   'computerUse:pipState': [state: ComputerUsePipState]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
+  /**
+   * Pending single-use local step-up approvals awaiting desktop disposition.
+   * Emitted whenever a high-risk remote operation requires local approval.
+   */
+  'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

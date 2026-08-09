@@ -1,5 +1,9 @@
 import { Logger } from '../logger'
+import { randomBytes } from 'node:crypto'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
+import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
+import type { RemoteRpcDeviceContext } from '../../lib/remote-rpc'
+import type { DeviceCredentialService, EnrolledDevice } from './device-credential-service'
 import {
   BoundedMap,
   BoundedSet,
@@ -22,8 +26,15 @@ export interface CloudRelayClientOptions {
   onDisconnected: (reason: string) => void
   onRpc: (
     channel: string,
-    args: unknown[]
+    args: unknown[],
+    device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
+  /**
+   * Device credential service used to authenticate the phone over the relay.
+   * Every RPC invoke is bound to the device that authenticated this relay
+   * session; without it, invokes fail closed (no device-less cloud bypass).
+   */
+  credentials?: DeviceCredentialService
   /** Abort the connection when the signal fires (shutdown / config change). */
   signal?: AbortSignal
   /** Deadlines in milliseconds. */
@@ -104,6 +115,11 @@ export class CloudRelayClient {
   private readonly replayLimit: number
   private readonly reconnect: CloudRelayClientOptions['reconnect']
   private readonly socketFactory: (url: string) => WebSocket
+  private readonly credentials: DeviceCredentialService | null
+  /** The authenticated phone device bound to this relay session. */
+  private boundDevice: RemoteRpcDeviceContext | null = null
+  /** The unspent desktop-issued relay device challenge (single-use). */
+  private pendingDeviceChallenge = ''
 
   constructor(private readonly options: CloudRelayClientOptions) {
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
@@ -112,6 +128,7 @@ export class CloudRelayClient {
     this.queueLimit = options.queueLimit ?? DEFAULT_QUEUE_LIMIT
     this.replayLimit = options.replayLimit ?? DEFAULT_REPLAY_LIMIT
     this.reconnect = options.reconnect
+    this.credentials = options.credentials ?? null
     this.inFlight = new BoundedMap<OutboundRecord>(this.queueLimit)
     this.replay = new BoundedMap<RpcOutcome>(this.replayLimit)
     this.seenInboundIds = new BoundedSet(this.replayLimit)
@@ -132,6 +149,8 @@ export class CloudRelayClient {
     this.closing = true
     this.closed = true
     this.authenticated = false
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
     this.clearTimers()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.queue.length = 0
@@ -145,6 +164,8 @@ export class CloudRelayClient {
     if (this.closing || this.closed) return
     this.closed = true
     this.authenticated = false
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
     this.clearTimers()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.socket?.close()
@@ -205,6 +226,8 @@ export class CloudRelayClient {
     this.closed = true
     this.clearTimers()
     this.authenticated = false
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
     this.requeueInFlight()
     this.socket?.close()
     this.socket = null
@@ -315,6 +338,7 @@ export class CloudRelayClient {
       this.reconnecting = false
       this.reconnectAttempt = 0
       this.options.onAuthenticated()
+      this.issueDeviceChallenge()
       void this.flushQueue()
       return
     }
@@ -378,6 +402,10 @@ export class CloudRelayClient {
     } catch {
       return
     }
+    if (record['type'] === 'remote:device:auth') {
+      void this.handleDeviceAuth(record, wireId)
+      return
+    }
     if (record['rpc'] !== 'invoke' || typeof record['id'] !== 'number') return
     const id = record['id']
     // Deduplicate and replay by the sender's wire id (epoch-scoped), so a
@@ -400,7 +428,7 @@ export class CloudRelayClient {
     this.processing.add(dedupKey)
     void withTimeout(
       this.options
-        .onRpc(channel, args)
+        .onRpc(channel, args, this.boundDevice ?? undefined)
         .catch((): RpcOutcome => ({ ok: false, message: 'Remote invocation failed' })),
       this.requestTimeoutMs,
       { ok: false, message: 'Relay RPC request timed out' }
@@ -416,5 +444,145 @@ export class CloudRelayClient {
       .finally(() => {
         this.processing.delete(dedupKey)
       })
+  }
+
+  /**
+   * Issue a fresh, single-use per-connection device challenge. The phone must
+   * sign this nonce; the desktop recomputes the canonical relay transcript
+   * server-side from the challenge plus the enrolled identity/authVersion (or
+   * the enrollment bootstrap), so a captured proof from an earlier connection
+   * cannot be replayed against a new challenge.
+   */
+  private issueDeviceChallenge(): void {
+    if (!this.credentials) return
+    this.pendingDeviceChallenge = randomBytes(32).toString('base64url')
+    void this.send({ type: 'remote:device:challenge', nonce: this.pendingDeviceChallenge })
+  }
+
+  /**
+   * Authenticate (or enroll) the phone device for this relay session using a
+   * desktop-issued single-use challenge and proof-of-possession — the same
+   * contract as the LAN handshake. The bound device context is then attached
+   * to every RPC invoke on this session. Caller-supplied device ids in invoke
+   * frames are never trusted; the context always comes from this verified
+   * handshake, and the transcript is recomputed server-side (never taken from
+   * the peer), so unsolicited, replayed, or mismatched proofs are rejected.
+   */
+  private async handleDeviceAuth(record: Record<string, unknown>, wireId?: string): Promise<void> {
+    const signature = typeof record['signature'] === 'string' ? record['signature'] : ''
+    const presentedNonce = typeof record['nonce'] === 'string' ? record['nonce'] : ''
+    const bootstrap = typeof record['bootstrap'] === 'string' ? record['bootstrap'] : ''
+    const deviceName = typeof record['deviceName'] === 'string' ? record['deviceName'].trim() : ''
+    const deviceId = typeof record['deviceId'] === 'string' ? record['deviceId'].trim() : ''
+    const authVersion =
+      typeof record['authVersion'] === 'number' ? record['authVersion'] : undefined
+    const signingJwk =
+      typeof record['signingPublicJwk'] === 'object' && record['signingPublicJwk'] !== null
+        ? (record['signingPublicJwk'] as JsonWebKey)
+        : undefined
+    const agreementJwk =
+      typeof record['agreementPublicJwk'] === 'object' && record['agreementPublicJwk'] !== null
+        ? (record['agreementPublicJwk'] as JsonWebKey)
+        : undefined
+
+    const fail = (reason: string): void => {
+      this.credentials?.audit({
+        decision: 'auth_failed',
+        reasonCode:
+          reason === 'bootstrap_used' || reason === 'signature_invalid' || reason === 'mismatch'
+            ? reason
+            : 'malformed',
+        deviceId: deviceId || null,
+        deviceName: deviceName || null,
+        transport: 'relay'
+      })
+      void this.send({ type: 'remote:device:error', reason })
+    }
+
+    if (!signature || !this.credentials) {
+      fail('malformed')
+      return
+    }
+    // Unsolicited or replayed proof: the nonce must be the exact unspent
+    // challenge issued for THIS connection. Re-challenge instead of binding so
+    // a phone that reconnected after missing the challenge can retry, while a
+    // stale captured proof (different nonce) can never bind.
+    if (
+      presentedNonce !== this.pendingDeviceChallenge ||
+      this.pendingDeviceChallenge.length === 0
+    ) {
+      this.credentials.audit({
+        decision: 'auth_failed',
+        reasonCode: 'mismatch',
+        deviceId: deviceId || null,
+        deviceName: deviceName || null,
+        transport: 'relay'
+      })
+      this.pendingDeviceChallenge = ''
+      this.issueDeviceChallenge()
+      return
+    }
+    // Consume the single-use challenge; any subsequent replay is a mismatch.
+    this.pendingDeviceChallenge = ''
+
+    let device: EnrolledDevice
+    if (bootstrap && signingJwk && agreementJwk) {
+      const transcript = handshakeTranscript({
+        nonce: presentedNonce,
+        bootstrap,
+        context: 'relay'
+      })
+      const outcome = await this.credentials.enrollDevice({
+        bootstrapValue: bootstrap,
+        name: deviceName,
+        signingPublicJwk: signingJwk,
+        agreementPublicJwk: agreementJwk,
+        signingProof: signature,
+        proofTranscript: transcript,
+        transport: 'relay'
+      })
+      if (!outcome.ok || !outcome.device) {
+        fail(outcome.reason ?? 'malformed')
+        return
+      }
+      device = outcome.device
+    } else if (deviceId && typeof authVersion === 'number') {
+      const transcript = handshakeTranscript({
+        nonce: presentedNonce,
+        deviceId,
+        authVersion,
+        context: 'relay'
+      })
+      const result = await this.credentials.authenticateDevice({
+        deviceId,
+        authVersion,
+        transcript,
+        signature,
+        transport: 'relay'
+      })
+      if (!result.ok || !result.device) {
+        fail(result.reason ?? 'auth_failed')
+        return
+      }
+      device = result.device
+    } else {
+      fail('malformed')
+      return
+    }
+
+    // Bind the authenticated device to this relay session.
+    this.boundDevice = {
+      deviceId: device.deviceId,
+      name: device.name,
+      fingerprint: device.publicKeyFingerprint,
+      authVersion: device.authVersion,
+      sessionId: wireId ?? '',
+      requestId: '',
+      scopes: device.scopes
+    }
+    void this.send({
+      type: 'remote:device:ok',
+      device: { id: device.deviceId, authVersion: device.authVersion }
+    })
   }
 }

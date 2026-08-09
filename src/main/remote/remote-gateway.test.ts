@@ -8,9 +8,67 @@ import { request as httpsRequest } from 'node:https'
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
+import { loadOrCreateDeviceKeyMaterial } from '../../renderer/lib/remote/device-identity'
+import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
+import DatabaseConstructor from 'better-sqlite3'
+import type { Database } from '../database/database'
+import { REMOTE_DEVICE_SQL } from '../database/schema'
 import type { RemoteDeviceInfo } from './remote-types'
 
 const SECRET = 'shared-peer-secret'
+
+function makeRawDatabase(): Database {
+  const raw = new DatabaseConstructor(':memory:')
+  raw.pragma('foreign_keys = ON')
+  raw.exec(REMOTE_DEVICE_SQL)
+  const prepared = raw.prepare.bind(raw)
+  return {
+    run: (sql: string, ...params: unknown[]) => {
+      prepared(sql).run(...params)
+    },
+    get: <T>(sql: string, ...params: unknown[]) => prepared(sql).get(...params) as T | undefined,
+    all: <T>(sql: string, ...params: unknown[]) => prepared(sql).all(...params) as T[],
+    prepare: (sql: string) => ({
+      run: (...params: unknown[]) => prepared(sql).run(...params)
+    }),
+    transaction: <T>(fn: () => T) => raw.transaction(fn)()
+  } as unknown as Database
+}
+
+function deviceInfo(device: EnrolledDevice): RemoteDeviceInfo {
+  return {
+    id: device.deviceId,
+    name: device.name,
+    connectedAt: device.lastUsedAt ?? device.createdAt,
+    transport: device.lastTransport,
+    connected: true,
+    scopes: device.scopes,
+    fingerprint: device.publicKeyFingerprint,
+    lastUsedAt: device.lastUsedAt,
+    expiresAt: device.expiresAt,
+    credentialExpiresAt: device.credentialExpiresAt,
+    revokedAt: device.revokedAt,
+    authVersion: device.authVersion
+  }
+}
+
+function memoryStorage(): Storage {
+  const store = new Map<string, string>()
+  return {
+    getItem: (key: string) => store.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      store.set(key, value)
+    },
+    removeItem: (key: string) => {
+      store.delete(key)
+    },
+    clear: () => store.clear(),
+    key: (index: number) => [...store.keys()][index] ?? null,
+    get length() {
+      return store.size
+    }
+  }
+}
 
 async function makeGateway(
   secret: string | null = SECRET,
@@ -834,6 +892,155 @@ describe('RemoteGateway', () => {
         poll()
       })
       transport.close()
+    } finally {
+      await gateway.stop()
+    }
+  })
+})
+
+describe('RemoteGateway — device proof of possession (A-04)', () => {
+  it('enrolls a phone from a single-use bootstrap and authenticates its reconnect by signature', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-pop-'))
+    const staticRoot = join(dir, 'renderer')
+    const certificateDir = join(dir, 'cert')
+    const { mkdir } = await import('node:fs/promises')
+    await mkdir(staticRoot, { recursive: true })
+    await writeFile(join(staticRoot, 'remote.html'), '<h1>phone client</h1>', 'utf8')
+
+    const db = makeRawDatabase()
+    const service = new DeviceCredentialService(db)
+    const bootstrap = await service.createPairingBootstrap()
+
+    const devices: RemoteDeviceInfo[][] = []
+    let lastAuthReason: string | null = null
+    const gateway = new RemoteGateway({
+      port: 0,
+      localPort: 0,
+      peerSecret: SECRET,
+      certificateDir,
+      staticRoot,
+      handlers: {
+        onDevicesChange: (next) => devices.push(next),
+        authenticateDevice: async ({
+          signature,
+          transcript,
+          bootstrap: presentedBootstrap,
+          signingPublicJwk,
+          agreementPublicJwk,
+          authVersion,
+          deviceId,
+          deviceName
+        }) => {
+          if (!signature || !transcript) return { accepted: false }
+          if (presentedBootstrap && signingPublicJwk && agreementPublicJwk) {
+            const outcome = await service.enrollDevice({
+              bootstrapValue: presentedBootstrap,
+              name: deviceName,
+              signingPublicJwk,
+              agreementPublicJwk,
+              signingProof: signature,
+              proofTranscript: transcript,
+              transport: 'lan'
+            })
+            if (!outcome.ok || !outcome.device) {
+              lastAuthReason = outcome.reason ?? 'enroll-failed'
+              return { accepted: false }
+            }
+            return { accepted: true, device: deviceInfo(outcome.device) }
+          }
+          if (deviceId && typeof authVersion === 'number') {
+            const result = await service.authenticateDevice({
+              deviceId,
+              authVersion,
+              transcript,
+              signature,
+              transport: 'lan'
+            })
+            if (!result.ok || !result.device) {
+              lastAuthReason = result.reason ?? 'auth-failed'
+              return { accepted: false }
+            }
+            return { accepted: true, device: deviceInfo(result.device) }
+          }
+          lastAuthReason = 'missing-fields'
+          return { accepted: false }
+        }
+      }
+    })
+    try {
+      const { localPort } = await gateway.start()
+
+      // First connection: the phone presents its public keys + bootstrap + a
+      // signature proving it owns the signing key. The desktop assigns the id.
+      const storage = memoryStorage()
+      const keyMaterial = await loadOrCreateDeviceKeyMaterial(storage)
+      let assignedId = ''
+      const first = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: bootstrap.value,
+        pairingBootstrap: bootstrap.value,
+        scheme: 'ws',
+        device: {
+          deviceId: keyMaterial.deviceId,
+          deviceName: keyMaterial.deviceName,
+          authVersion: keyMaterial.authVersion,
+          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingPublicJwk: keyMaterial.signingPublicJwk,
+          agreementPublicJwk: keyMaterial.agreementPublicJwk
+        },
+        onAssignedDevice: (deviceId) => {
+          assignedId = deviceId
+        },
+        onEvent: () => undefined
+      })
+      const firstResult = await first.connect()
+      expect({ firstResult, lastAuthReason }).toEqual({ firstResult: 'open', lastAuthReason: null })
+      expect(assignedId.length).toBeGreaterThan(0)
+      expect(service.listDevices()).toHaveLength(1)
+
+      // The bootstrap is single-use — a second enrollment with it fails.
+      const second = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: bootstrap.value,
+        pairingBootstrap: bootstrap.value,
+        scheme: 'ws',
+        device: {
+          deviceId: keyMaterial.deviceId,
+          deviceName: keyMaterial.deviceName,
+          authVersion: keyMaterial.authVersion,
+          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingPublicJwk: keyMaterial.signingPublicJwk,
+          agreementPublicJwk: keyMaterial.agreementPublicJwk
+        },
+        onEvent: () => undefined
+      })
+      await expect(second.connect()).resolves.toBe('rejected')
+      first.close()
+      second.close()
+
+      // Reconnect: the enrolled phone proves possession of its signing key.
+      const reconnect = createLanTransport({
+        peer: { host: '127.0.0.1', port: localPort },
+        authSecret: SECRET,
+        scheme: 'ws',
+        device: {
+          deviceId: assignedId,
+          deviceName: keyMaterial.deviceName,
+          authVersion: 1,
+          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingPublicJwk: keyMaterial.signingPublicJwk,
+          agreementPublicJwk: keyMaterial.agreementPublicJwk
+        },
+        onEvent: () => undefined
+      })
+      lastAuthReason = null
+      const reconnectResult = await reconnect.connect()
+      expect({ reconnectResult, lastAuthReason }).toEqual({
+        reconnectResult: 'open',
+        lastAuthReason: null
+      })
+      expect(gateway.listDevices().some((device) => device.id === assignedId)).toBe(true)
+      reconnect.close()
     } finally {
       await gateway.stop()
     }

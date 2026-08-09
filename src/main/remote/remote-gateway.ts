@@ -63,14 +63,23 @@ export interface GatewayHandlers {
   ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
   /**
    * Authenticates a device handshake against the device credential service.
-   * When absent the gateway falls back to the shared-secret handshake so the
-   * desktop renderer and legacy clients keep working.
+   * Proof-of-possession: the hello carries an ECDSA signature over the
+   * challenge transcript (plus a single-use pairing bootstrap + public keys
+   * for first-time enrollment). When absent the gateway falls back to the
+   * shared-secret handshake so the desktop renderer loopback keeps working.
    */
   authenticateDevice?: (input: {
     nonce: string
-    token: string
+    token?: string
+    signature?: string
+    transcript?: string
+    bootstrap?: string
+    signingPublicJwk?: JsonWebKey
+    agreementPublicJwk?: JsonWebKey
+    authVersion?: number
     deviceId: string
     deviceName: string
+    originPolicy: 'strict' | 'local'
     transport: 'lan' | 'relay'
   }) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
 }
@@ -104,6 +113,7 @@ interface PeerConnection {
   /** Enrolled-device record resolved by the `authenticateDevice` handler. */
   device?: RemoteDeviceInfo
   sessionId: string
+  originPolicy: 'strict' | 'local'
 }
 
 /** An on-disk file with its raw bytes, ETag, and lazily-compressed variants. */
@@ -639,7 +649,8 @@ export class RemoteGateway {
       deviceName: '',
       connectedAt: 0,
       authChallenge: randomBytes(32).toString('base64url'),
-      sessionId: randomBytes(16).toString('base64url')
+      sessionId: randomBytes(16).toString('base64url'),
+      originPolicy
     }
     this.peers.add(peer)
     socketSend(peer, { type: 'remote:challenge', nonce: peer.authChallenge })
@@ -762,16 +773,35 @@ export class RemoteGateway {
       }
       const nonce = typeof record.nonce === 'string' ? record.nonce : ''
       const token = typeof record.token === 'string' ? record.token : ''
+      const signature = typeof record.signature === 'string' ? record.signature : ''
+      const transcript = typeof record.transcript === 'string' ? record.transcript : ''
+      const bootstrap = typeof record.bootstrap === 'string' ? record.bootstrap : ''
       const deviceId = typeof record.deviceId === 'string' ? record.deviceId.trim() : ''
       const deviceName = typeof record.deviceName === 'string' ? record.deviceName.trim() : ''
+      const authVersion = typeof record.authVersion === 'number' ? record.authVersion : undefined
+      const signingJwk =
+        typeof record.signingPublicJwk === 'object' && record.signingPublicJwk !== null
+          ? (record.signingPublicJwk as JsonWebKey)
+          : undefined
+      const agreementJwk =
+        typeof record.agreementPublicJwk === 'object' && record.agreementPublicJwk !== null
+          ? (record.agreementPublicJwk as JsonWebKey)
+          : undefined
       const challengeAccepted = nonce === peer.authChallenge && peer.authChallenge.length > 0
       peer.authChallenge = ''
       const verify = this.options.handlers.authenticateDevice
         ? this.options.handlers.authenticateDevice({
             nonce,
-            token,
+            token: token || undefined,
+            signature: signature || undefined,
+            transcript: transcript || undefined,
+            bootstrap: bootstrap || undefined,
+            signingPublicJwk: signingJwk,
+            agreementPublicJwk: agreementJwk,
+            authVersion,
             deviceId,
             deviceName,
+            originPolicy: peer.originPolicy,
             transport: 'lan'
           })
         : authenticateHandshake(this.options.peerSecret, nonce, token).then((verified) => ({
