@@ -123,7 +123,7 @@
     <div class="space-y-4">
       <p class="flex items-start gap-2 text-xs leading-relaxed text-muted">
         <VendorIcon name="GitHub" size={14} class="mt-0.5 text-foreground" />
-        Enter this code on GitHub to connect your account. No password is shared with CodeInOven.
+        Enter this code on GitHub to connect your account.
       </p>
 
       <button
