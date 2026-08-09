@@ -1,4 +1,5 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { execFile, spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../lib/types'
 import { buildHarnessEnvironment } from './drivers/cli-environment'

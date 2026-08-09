@@ -1,9 +1,9 @@
-import { app, ipcMain, dialog, shell, clipboard, BrowserWindow } from 'electron'
+import { app, dialog, shell, clipboard, BrowserWindow } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { readFile, writeFile, mkdtemp, mkdir, stat } from 'fs/promises'
 import { tmpdir, release } from 'os'
 import { basename, dirname, extname, join } from 'path'
-import { fileURLToPath, pathToFileURL } from 'url'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import type { Database } from './database/database'
 import { StorageEngine } from './storage-engine'
@@ -211,19 +211,6 @@ const AGENT_DEFAULT_FIELDS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/**
- * Exact URLs the app's own renderer document lives at. Privileged IPC sender
- * frames and main-frame navigation are bound to these URLs.
- */
-function appRendererNavigationTargets(): string[] {
-  const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
-  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
-    return [process.env['ELECTRON_RENDERER_URL']]
-  }
-  const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
-  return [pathToFileURL(join(mainBundleDirectory, '../renderer/index.html')).href]
 }
 
 function requireString(value: unknown, label: string, allowEmpty = false): string {

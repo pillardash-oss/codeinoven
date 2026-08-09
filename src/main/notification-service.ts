@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, Notification } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import { Logger } from './logger'
 import { forwardRemoteEvent } from './remote/remote-event-forwarder'

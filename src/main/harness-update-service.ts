@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type { HarnessUpdateHandoff, HarnessUpdateStatus } from '../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
 import type { ProviderConnectionService } from './provider-connection'

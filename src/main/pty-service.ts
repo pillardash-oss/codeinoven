@@ -1,4 +1,5 @@
-import { ipcMain, type WebContents } from 'electron'
+import type { WebContents } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { basename } from 'path'
