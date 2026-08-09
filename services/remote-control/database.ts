@@ -1,3 +1,5 @@
+/// <reference types="bun" />
+
 import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
@@ -6,6 +8,16 @@ import type {
   MobileDeviceRecord,
   UserRecord
 } from './types'
+
+export type AuditEventKind =
+  | 'desktop.enrollment-created'
+  | 'desktop.claimed'
+  | 'desktop.control-grant-created'
+  | 'desktop.revoked'
+  | 'desktop.renamed'
+  | 'desktop.revoked-by-device'
+  | 'relay.desktop-connected'
+  | 'relay.desktop-disconnected'
 
 const SCHEMA = `
 PRAGMA journal_mode = WAL;
@@ -214,15 +226,6 @@ export class RemoteControlDatabase {
       .all(userId) as DesktopRecord[]
   }
 
-  claimDesktop(desktopId: string, userId: string): boolean {
-    const result = this.db
-      .prepare(
-        'UPDATE desktops SET user_id = ? WHERE id = ? AND user_id IS NULL AND revoked_at IS NULL'
-      )
-      .run(userId, desktopId)
-    return result.changes === 1
-  }
-
   touchDesktop(id: string): void {
     this.db.prepare('UPDATE desktops SET last_seen_at = ? WHERE id = ?').run(Date.now(), id)
   }
@@ -278,16 +281,6 @@ export class RemoteControlDatabase {
       )
   }
 
-  enrollmentByCodeHash(hash: string): EnrollmentRecord | null {
-    return (
-      (this.db
-        .prepare(
-          'SELECT * FROM enrollments WHERE code_hash = ? AND expires_at > ? AND claimed_at IS NULL'
-        )
-        .get(hash, Date.now()) as EnrollmentRecord | undefined) ?? null
-    )
-  }
-
   enrollmentForDesktop(desktopId: string): EnrollmentRecord | null {
     return (
       (this.db.prepare('SELECT * FROM enrollments WHERE desktop_id = ?').get(desktopId) as
@@ -302,36 +295,79 @@ export class RemoteControlDatabase {
     )
   }
 
-  registerMobileDevice(input: {
-    id: string
+  /**
+   * Atomically consume one enrollment code, bind its desktop to the account,
+   * and register the claiming mobile device. BEGIN IMMEDIATE takes SQLite's
+   * single-writer reservation before the eligibility read, so two requests
+   * can never both observe and consume the same one-time code.
+   */
+  claimEnrollment(input: {
+    codeHash: string
     userId: string
-    name: string
-    publicKey: string
-  }): boolean {
-    const existing = this.findMobileDevice(input.id)
-    if (existing && existing.user_id !== input.userId) return false
-    const now = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO mobile_devices(id, user_id, name, public_key, created_at, last_seen_at, revoked_at)
-         VALUES(?, ?, ?, ?, ?, ?, NULL)
-         ON CONFLICT(id) DO UPDATE SET
-           name = excluded.name,
-           public_key = excluded.public_key,
-           last_seen_at = excluded.last_seen_at,
-           revoked_at = NULL
-         WHERE mobile_devices.user_id = excluded.user_id`
-      )
-      .run(input.id, input.userId, input.name, input.publicKey, now, now)
-    return true
-  }
+    mobileDeviceId: string
+    mobileName: string
+    mobilePublicKey: string
+  }): { desktopId: string } | null {
+    const claim = this.db.transaction((claimInput: typeof input) => {
+      const now = Date.now()
+      const enrollment = this.db
+        .prepare(
+          `SELECT e.id, e.desktop_id, d.user_id
+           FROM enrollments e
+           JOIN desktops d ON d.id = e.desktop_id
+           WHERE e.code_hash = ? AND e.expires_at > ? AND e.claimed_at IS NULL
+             AND d.revoked_at IS NULL`
+        )
+        .get(claimInput.codeHash, now) as
+        { id: string; desktop_id: string; user_id: string | null } | undefined
+      if (!enrollment || (enrollment.user_id && enrollment.user_id !== claimInput.userId)) {
+        return null
+      }
 
-  bindEnrollmentToMobile(id: string, mobileDeviceId: string, mobilePublicKey: string): void {
-    this.db
-      .prepare(
-        'UPDATE enrollments SET claimed_at = ?, mobile_device_id = ?, mobile_public_key = ? WHERE id = ?'
-      )
-      .run(Date.now(), mobileDeviceId, mobilePublicKey, id)
+      const existingDevice = this.findMobileDevice(claimInput.mobileDeviceId)
+      if (existingDevice && existingDevice.user_id !== claimInput.userId) return null
+
+      const consumed = this.db
+        .prepare(
+          `UPDATE enrollments
+           SET claimed_at = ?, mobile_device_id = ?, mobile_public_key = ?
+           WHERE id = ? AND claimed_at IS NULL AND expires_at > ?`
+        )
+        .run(now, claimInput.mobileDeviceId, claimInput.mobilePublicKey, enrollment.id, now)
+      if (consumed.changes !== 1) return null
+
+      const desktopClaimed = this.db
+        .prepare(
+          `UPDATE desktops SET user_id = ?
+           WHERE id = ? AND revoked_at IS NULL AND (user_id IS NULL OR user_id = ?)`
+        )
+        .run(claimInput.userId, enrollment.desktop_id, claimInput.userId)
+      if (desktopClaimed.changes !== 1) throw new Error('Desktop enrollment ownership changed')
+
+      this.db
+        .prepare(
+          `INSERT INTO mobile_devices(id, user_id, name, public_key, created_at, last_seen_at, revoked_at)
+           VALUES(?, ?, ?, ?, ?, ?, NULL)
+           ON CONFLICT(id) DO UPDATE SET
+             name = excluded.name,
+             public_key = excluded.public_key,
+             last_seen_at = excluded.last_seen_at,
+             revoked_at = NULL
+           WHERE mobile_devices.user_id = excluded.user_id`
+        )
+        .run(
+          claimInput.mobileDeviceId,
+          claimInput.userId,
+          claimInput.mobileName,
+          claimInput.mobilePublicKey,
+          now,
+          now
+        )
+
+      return { desktopId: enrollment.desktop_id }
+    })
+
+    return claim.immediate(input)
   }
 
   saveDesktopGrant(
@@ -380,7 +416,7 @@ export class RemoteControlDatabase {
       .run()
   }
 
-  audit(kind: string, userId: string | null, desktopId: string | null): void {
+  audit(kind: AuditEventKind, userId: string | null, desktopId: string | null): void {
     this.db
       .prepare(
         'INSERT INTO audit_events(id, user_id, desktop_id, kind, metadata_json, created_at) VALUES(?, ?, ?, ?, ?, ?)'

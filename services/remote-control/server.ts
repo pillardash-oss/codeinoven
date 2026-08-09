@@ -237,25 +237,16 @@ async function handleEnrollmentClaim(
   if (!withinRateLimit(request, `claim:${session.userId}`, 20)) {
     return json({ error: 'rate-limited' }, 429)
   }
-  const enrollment = database.enrollmentByCodeHash(tokenHash(rawCode))
-  const desktop = enrollment ? database.findDesktop(enrollment.desktop_id) : null
-  if (!enrollment || !desktop) return json({ error: 'invalid-enrollment-code' }, 400)
-  const mobileRegistered = database.registerMobileDevice({
-    id: mobileDeviceId,
+  const claimed = database.claimEnrollment({
+    codeHash: tokenHash(rawCode),
     userId: session.userId,
-    name: mobileName,
-    publicKey: mobilePublicKey
+    mobileDeviceId,
+    mobileName,
+    mobilePublicKey
   })
-  if (
-    !mobileRegistered ||
-    (desktop.user_id !== null && desktop.user_id !== session.userId) ||
-    (desktop.user_id === null && !database.claimDesktop(desktop.id, session.userId))
-  ) {
-    return json({ error: 'invalid-enrollment-code' }, 400)
-  }
-  database.bindEnrollmentToMobile(enrollment.id, mobileDeviceId, mobilePublicKey)
-  database.audit('desktop.claimed', session.userId, enrollment.desktop_id)
-  return json({ desktopId: enrollment.desktop_id })
+  if (!claimed) return json({ error: 'invalid-enrollment-code' }, 400)
+  database.audit('desktop.claimed', session.userId, claimed.desktopId)
+  return json({ desktopId: claimed.desktopId })
 }
 
 function handleEnrollmentStatus(request: Request, desktopId: string): Response {

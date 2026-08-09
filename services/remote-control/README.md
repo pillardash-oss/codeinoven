@@ -20,7 +20,23 @@ non-extractable Web Crypto key.
 
 Better Auth is the sole hosted-account authority. GitHub OAuth creates one canonical user ID that
 owns remote desktops and is also the key for the server-owned `account_entitlements` record used
-by current or future Pro access. There is no separate remote password.
+by current or future Pro access. This table was introduced with GitHub OAuth specifically to honor
+the requirement that Pro licensing and remote access share one account. It is not a preferences
+table, defaults every new account to `free`, and currently has no public endpoint that can promote
+an account to `pro`. There is no separate remote password.
+
+## Audit events
+
+The hosted audit log records security lifecycle event names only; it does not store prompts, files,
+terminal contents, desktop control payloads, OAuth tokens, or relay frame contents. The complete
+event set is:
+
+- `desktop.enrollment-created`, `desktop.claimed`, and `desktop.control-grant-created`
+- `desktop.renamed`, `desktop.revoked`, and `desktop.revoked-by-device`
+- `relay.desktop-connected` and `relay.desktop-disconnected`
+
+Each row contains the event name, timestamp, and the related user/desktop IDs when available. The
+metadata field is currently an empty JSON object reserved for a future versioned schema.
 
 Configure a GitHub App or OAuth App with:
 
@@ -44,6 +60,9 @@ client ID; the client secret must remain in Coolify.
   configure WAL-aware backups for that volume before launch.
 - SQLite is supported for a single service instance. Use a durable volume, WAL-aware backups, and
   one active instance. Move the repository methods to Postgres before horizontal scaling.
+- Enrollment-code consumption, account ownership, and mobile-device registration execute in one
+  `BEGIN IMMEDIATE` transaction. Concurrent claims for the same one-time code serialize, and only
+  one can commit.
 
 `Dockerfile.pwa` builds the renderer inside the image, so deployment never depends on the ignored
 local `out/renderer` directory. The internal Caddy server handles SPA fallback, security headers,
