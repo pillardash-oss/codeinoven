@@ -11,7 +11,20 @@
 
   let { name, open = false, size = 13, class: className = '' }: Props = $props()
 
-  let dataUri = $derived(getFolderTypeIconDataUri(name, open))
+  let dataUri = $state<string | null>(null)
+
+  $effect(() => {
+    const requestedName = name
+    const requestedOpen = open
+    let current = true
+    dataUri = null
+    void getFolderTypeIconDataUri(requestedName, requestedOpen).then((resolved) => {
+      if (current && name === requestedName && open === requestedOpen) dataUri = resolved
+    })
+    return () => {
+      current = false
+    }
+  })
 </script>
 
 {#if dataUri}
