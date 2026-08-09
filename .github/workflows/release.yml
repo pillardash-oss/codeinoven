@@ -36,16 +36,19 @@ jobs:
             target: mac
             arch: --arm64
             artifact: mac-arm64
+            app_dir: dist/mac-arm64
           - name: Windows (x64)
             os: windows-latest
             target: win
             arch: --x64
             artifact: win-x64
+            app_dir: dist/win-unpacked
           - name: Linux (x64)
             os: ubuntu-latest
             target: linux
             arch: --x64
             artifact: linux-x64
+            app_dir: dist/linux-unpacked
 
     steps:
       - name: Check out repository
@@ -85,6 +88,17 @@ jobs:
 
       - name: Verify packaged artifacts
         run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
+
+      - name: Launch packaged application through workspace readiness
+        shell: bash
+        run: |
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          if [ "${{ matrix.target }}" = "linux" ]; then
+            xvfb-run -a "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -97,6 +111,7 @@ jobs:
             dist/*.deb
             dist/*.blockmap
             dist/latest*.yml
+            agent-out/startup-smoke-*.json
           if-no-files-found: error
 
   release:
