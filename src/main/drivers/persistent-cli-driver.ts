@@ -61,6 +61,10 @@ export interface CliTurnCommand {
   env?: NodeJS.ProcessEnv
   /** Display model that produced the turn when it differs from the selected base model. */
   provenanceModelId?: string
+  /** Called on the first stdout activity, before provider-specific parsing. */
+  onStdoutActivity?: () => void
+  /** Called when spawning fails or the child exits. Must be safe to call more than once. */
+  onProcessExit?: () => void
 }
 
 /** Output of parsing one provider JSONL record. */
@@ -272,11 +276,17 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       invocation.provenanceModelId ?? opts.settings.modelId
     )
     this.appendUserMessage(session, opts)
-    const child = spawn(invocation.command, invocationArgs, {
-      cwd: projectPath,
-      env: invocationEnv,
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    let child: ChildProcess
+    try {
+      child = spawn(invocation.command, invocationArgs, {
+        cwd: projectPath,
+        env: invocationEnv,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      invocation.onProcessExit?.()
+      throw error
+    }
     this.observeHarnessProcess(session.id, child, invocation.command, projectPath)
     this.structuredProcessIssues.delete(session.id)
     this.activeProcesses.set(session.id, child)
@@ -287,6 +297,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const finish = async (error?: string): Promise<void> => {
       if (completed) return
       completed = true
+      invocation.onProcessExit?.()
       this.activeProcesses.delete(session.id)
       if (!this.deletedSessions.has(session.id)) {
         try {
@@ -304,6 +315,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
+      invocation.onStdoutActivity?.()
       stdoutBuffer += chunk.toString()
       stdoutBuffer = this.consumeJsonLines(stdoutBuffer, session, projectPath)
     })

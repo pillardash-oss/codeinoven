@@ -125,6 +125,7 @@ describe('ClaudeCodeDriver', () => {
       expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'dontAsk']),
       expect.any(Object)
     )
+    next.emit('exit', 0, null)
   })
 
   it('maps tool use, results, and quota failures into events', async () => {
@@ -211,6 +212,7 @@ describe('ClaudeCodeDriver', () => {
         parent_tool_use_id: null
       })}\n`
     )
+    child.emit('exit', 0, null)
   })
 })
 
@@ -298,10 +300,12 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const driver = new ClaudeCodeDriver(await storage())
     const promise = driver.readAccountUsage('/project')
-    expect(spawnMock).toHaveBeenCalledWith(
-      'claude',
-      ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+    await vi.waitFor(() =>
+      expect(spawnMock).toHaveBeenCalledWith(
+        'claude',
+        ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
+        expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      )
     )
     const written = child.stdin.write.mock.calls.map(([value]) => JSON.parse(value as string))
     expect(written[0]).toMatchObject({
@@ -363,6 +367,7 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const driver = new ClaudeCodeDriver(await storage())
     const promise = driver.readAccountUsage('/project')
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled())
     child.stdout.emit(
       'data',
       Buffer.from(
