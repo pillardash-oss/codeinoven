@@ -44,7 +44,7 @@
 
 <button
   class="flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left transition-colors {selected
-    ? 'bg-elevated'
+    ? 'bg-selected'
     : 'hover:bg-elevated'}"
   title={thread.title}
   onclick={() => onOpen(thread)}

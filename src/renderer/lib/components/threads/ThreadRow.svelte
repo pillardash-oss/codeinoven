@@ -533,7 +533,7 @@
 {#if picker}
   <div
     class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
-      ? 'border-foreground bg-elevated'
+      ? 'border-foreground bg-selected'
       : isWorking
         ? 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
@@ -659,7 +659,7 @@
     class="relative mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
-      ? 'border-foreground bg-elevated'
+      ? 'border-foreground bg-selected'
       : isWorking
         ? 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
