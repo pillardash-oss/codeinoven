@@ -1,5 +1,6 @@
 import { mkdirSync } from 'fs'
 import { dirname, join } from 'path'
+import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
@@ -43,6 +44,8 @@ import type { AgentMessage } from '../../lib/types'
 
 const SCHEMA_VERSION_KEY = 'schema_version'
 const CURRENT_SCHEMA_VERSION = 6
+/** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
+export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
 /**
  * Database — synchronous SQLite wrapper for the Electron main process.
@@ -66,6 +69,7 @@ export class Database {
   /** Initialise the database: open connection, apply schema, set WAL mode. */
   async init(): Promise<void> {
     if (this.db) return
+    const startedAt = performance.now()
 
     // On a fresh install the config root does not exist yet and
     // `storage.initialize()` runs concurrently with this call, so create the
@@ -93,7 +97,10 @@ export class Database {
 
     this.startMaintenanceWorker()
 
-    Logger.info('SQLite database initialised', { path: this.path })
+    Logger.info('SQLite database initialised', {
+      path: this.path,
+      durationMs: this.roundDuration(performance.now() - startedAt)
+    })
   }
 
   /**
@@ -148,6 +155,7 @@ export class Database {
 
   /** Execute a write query (INSERT/UPDATE/DELETE) with optional params. */
   run(sql: string, ...params: unknown[]): void {
+    const startedAt = performance.now()
     try {
       this.requireDb()
         .prepare(sql)
@@ -155,11 +163,14 @@ export class Database {
     } catch (error) {
       Logger.error('Database.run failed', { sql, error: String(error) })
       throw error
+    } finally {
+      this.reportSlowMainThreadOperation('run', startedAt)
     }
   }
 
   /** Fetch a single row as an object. */
   get<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T | undefined {
+    const startedAt = performance.now()
     try {
       return this.requireDb()
         .prepare(sql)
@@ -167,11 +178,14 @@ export class Database {
     } catch (error) {
       Logger.error('Database.get failed', { sql, error: String(error) })
       throw error
+    } finally {
+      this.reportSlowMainThreadOperation('get', startedAt)
     }
   }
 
   /** Fetch all rows as an array of objects. */
   all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
+    const startedAt = performance.now()
     try {
       return this.requireDb()
         .prepare(sql)
@@ -179,6 +193,8 @@ export class Database {
     } catch (error) {
       Logger.error('Database.all failed', { sql, error: String(error) })
       throw error
+    } finally {
+      this.reportSlowMainThreadOperation('all', startedAt)
     }
   }
 
@@ -194,12 +210,29 @@ export class Database {
 
   /** Execute a callback within a transaction. */
   transaction<T>(fn: () => T): T {
+    const startedAt = performance.now()
     try {
       return this.requireDb().transaction(fn)()
     } catch (error) {
       Logger.error('Database.transaction failed', { error: String(error) })
       throw error
+    } finally {
+      this.reportSlowMainThreadOperation('transaction', startedAt)
     }
+  }
+
+  private roundDuration(durationMs: number): number {
+    return Math.round(durationMs * 10) / 10
+  }
+
+  /** Log only operation class and duration; SQL text and user data are omitted. */
+  private reportSlowMainThreadOperation(operation: string, startedAt: number): void {
+    const durationMs = performance.now() - startedAt
+    if (durationMs < MAIN_THREAD_DATABASE_WARNING_MS) return
+    Logger.info('Slow synchronous SQLite operation on Electron main', {
+      operation,
+      durationMs: this.roundDuration(durationMs)
+    })
   }
 
   /** Return the raw better-sqlite3 Database instance (for advanced usage). */
