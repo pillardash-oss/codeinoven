@@ -266,15 +266,23 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       open = false
       if (closing) return
       const reason = event.reason || `relay-closed-${event.code}`
+      const controlKeyRotated = event.reason === 'control-key-rotated'
+      if (controlKeyRotated) {
+        // Retrying with the in-memory key would reproduce the same decrypt
+        // failure forever. Stop this client so the account screen can fetch
+        // the newly uploaded encrypted grant before the next connection.
+        queue.length = 0
+        inFlight.clear()
+      }
       if (wasOpen || settled) {
-        requeueInFlight()
+        if (!controlKeyRotated) requeueInFlight()
         options.onEvent({ kind: 'disconnected', reason })
-        scheduleReconnect()
+        if (!controlKeyRotated) scheduleReconnect()
         return
       }
       if (!settled) finish('failed')
       options.onEvent({ kind: 'disconnected', reason })
-      scheduleReconnect()
+      if (!controlKeyRotated) scheduleReconnect()
     }
     socket.onerror = () => {
       remoteLog.error('Cloud relay WebSocket failed')

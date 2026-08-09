@@ -299,14 +299,17 @@ export class RemoteModeController {
    * expired and register the current value with the credential service so a
    * single-use enrollment can consume it. A stale QR never grants a session.
    */
-  private async syncPairingState(): Promise<void> {
+  private async syncPairingState(): Promise<boolean> {
     const directory = join(app.getPath('userData'), 'remote-gateway')
+    let rotated = false
     if (this.credentials && !this.peerSecret && (await isPairingExpired(directory))) {
       this.resolvedPeerSecret = await rotatePeerSecret(directory)
+      this.gateway?.setPeerSecret(this.resolvedPeerSecret)
+      rotated = true
       Logger.info('Remote pairing bootstrap rotated: previous QR value expired')
     }
     const secret = this.resolvedPeerSecret
-    if (!secret) return
+    if (!secret) return rotated
     const expiresAt = await readPairingExpiry(directory)
     this.pairingExpiresAt = expiresAt
     if (this.credentials) {
@@ -314,6 +317,7 @@ export class RemoteModeController {
         expiresAt: expiresAt ?? Date.now() + 5 * 60 * 1_000
       })
     }
+    return rotated
   }
 
   /**
@@ -389,6 +393,14 @@ export class RemoteModeController {
   async ensureGateway(): Promise<RemoteModeStatus> {
     if (!this.gateway && this.staticRoot) {
       await this.startGateway()
+    } else if (this.gateway) {
+      const pairingRotated = await this.syncPairingState()
+      if (pairingRotated && this.remoteModeActive) {
+        // The transport key changed with the LAN pairing bootstrap. Refresh
+        // the hosted control grant before cloud fallback can reuse the old key.
+        this.stopCloudAccess()
+        await this.restoreCloudAccess()
+      }
     }
     this.syncTray()
     this.broadcast()
@@ -895,44 +907,49 @@ export class RemoteModeController {
           enrollmentCode: null,
           lastError: null
         }
-        if (payload['grantReady'] !== true) {
-          const mobileDeviceId = payload['mobileDeviceId']
-          const mobilePublicKey = payload['mobilePublicKey']
-          const controlSecret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
-          if (
-            typeof mobileDeviceId !== 'string' ||
-            typeof mobilePublicKey !== 'object' ||
-            mobilePublicKey === null ||
-            !controlSecret
-          ) {
-            throw new Error('Enrollment grant request is invalid')
-          }
-          const grant = await createDesktopControlGrant({
-            desktopId: config.desktopId,
-            mobileDeviceId,
-            mobilePublicKey: mobilePublicKey as JsonWebKey,
-            controlSecret
-          })
-          const grantResponse = await fetch(
-            new URL(
-              `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/grant`,
-              config.apiOrigin
-            ),
-            {
-              method: 'PUT',
-              headers: {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({
-                mobileDeviceId,
-                desktopPublicKey: grant.desktopPublicKey,
-                ciphertext: grant.ciphertext
-              })
-            }
-          )
-          if (!grantResponse.ok) throw new Error('Control grant upload failed')
+        // The peer secret is also the transport encryption key. It can rotate
+        // when an expired LAN pairing code is refreshed, so a previously
+        // uploaded grant may be cryptographically stale even though the server
+        // reports it as present. Refresh it before every relay startup; the
+        // service invalidates sockets and buffered ciphertext from the old key.
+        const mobileDeviceId = payload['mobileDeviceId']
+        const mobilePublicKey = payload['mobilePublicKey']
+        const controlSecret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
+        if (
+          typeof mobileDeviceId !== 'string' ||
+          typeof mobilePublicKey !== 'object' ||
+          mobilePublicKey === null ||
+          !controlSecret
+        ) {
+          throw new Error('Enrollment grant request is invalid')
         }
+        const grant = await createDesktopControlGrant({
+          desktopId: config.desktopId,
+          mobileDeviceId,
+          mobilePublicKey: mobilePublicKey as JsonWebKey,
+          controlSecret
+        })
+        const grantResponse = await fetchWithDeadline(
+          new URL(
+            `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/grant`,
+            config.apiOrigin
+          ),
+          {
+            method: 'PUT',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              mobileDeviceId,
+              desktopPublicKey: grant.desktopPublicKey,
+              ciphertext: grant.ciphertext
+            })
+          },
+          CLOUD_REQUEST_TIMEOUT_MS,
+          this.cloudAbortController?.signal
+        )
+        if (!grantResponse.ok) throw new Error('Control grant upload failed')
         this.connectCloudRelay(token)
         return
       }
@@ -1020,8 +1037,12 @@ export class RemoteModeController {
       return
     }
     await this.loadDeviceNames()
-    const peerSecret = await this.resolvePeerSecret()
+    await this.resolvePeerSecret()
     await this.syncPairingState()
+    // syncPairingState may rotate an expired persisted secret. Read the
+    // resolved value only after that rotation so the gateway, QR, credential
+    // bootstrap, cloud grant, and payload encryption all use the same key.
+    const peerSecret = this.resolvedPeerSecret
     const gateway = new RemoteGateway({
       port: this.lanPort,
       localPort: this.localPort,
