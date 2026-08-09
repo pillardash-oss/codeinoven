@@ -37,8 +37,6 @@
     picker?: boolean
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
-    /** Override the displayed pin state (e.g. for timeline pins). */
-    pinnedOverride?: boolean
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
     /** Hide the scope chip — used when the surrounding view is already scoped. */
@@ -60,7 +58,6 @@
     compact = false,
     picker = false,
     projectIconUrl = null,
-    pinnedOverride = undefined,
     showChangeScope = true,
     hideScope = false,
     onOpen = () => {},
@@ -80,7 +77,7 @@
    *  confirms the new working state. */
   const DRAFT_GRACE_MS = 2000
 
-  let effectivePinned = $derived(pinnedOverride ?? thread.pinned)
+  let effectivePinned = $derived(thread.pinned)
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 

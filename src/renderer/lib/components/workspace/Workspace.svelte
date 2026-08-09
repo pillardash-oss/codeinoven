@@ -85,7 +85,6 @@
   import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
-  import { timelinePins } from '$lib/stores/timeline-pins.svelte'
   import {
     coordinatorHasActiveDelegates,
     INBOX_PROJECT_ID,
@@ -94,7 +93,7 @@
     isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
-  import { APP_NAME } from '$shared/brand'
+  import { APP_NAME, APP_SLUG } from '$shared/brand'
   import type {
     AgentPart,
     AppConfig,
@@ -739,7 +738,7 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: all non-archived threads sorted by the active sort mode, timeline-pinned first by default. */
+  /** Threads mode: all active threads sorted by the selected mode, persisted pins first. */
   let allThreadsFlat = $derived.by(() => {
     const list = allThreads.filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
     if (threadSortState.mode === 'status') {
@@ -747,8 +746,8 @@
     }
     return list.sort((a, b) => {
       if (threadSortState.mode === 'default') {
-        const aPinned = timelinePins.isPinned(a.id)
-        const bPinned = timelinePins.isPinned(b.id)
+        const aPinned = a.pinned
+        const bPinned = b.pinned
         if (aPinned !== bPinned) return aPinned ? -1 : 1
       }
       return b.lastActivity - a.lastActivity
@@ -789,11 +788,34 @@
     void ensureRecentScopeBoards(projectIds)
   })
 
-  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => timelinePins.isPinned(t.id)))
-  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => !timelinePins.isPinned(t.id)))
-  let archivedTimelineThreads = $derived(
-    allThreads.filter((thread) => thread.archived && thread.projectId !== INBOX_PROJECT_ID)
-  )
+  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
+  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
+
+  async function migrateTimelinePins(): Promise<void> {
+    const key = `${APP_SLUG}.timelinePins.v1`
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) {
+        window.localStorage.removeItem(key)
+        return
+      }
+      const ids = new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      const persistedThreads = await invoke('thread:listAll')
+      for (const thread of persistedThreads) {
+        if (!ids.has(thread.id) || thread.pinned || thread.archived) continue
+        const updated = await invoke('thread:setPinned', thread.projectId, thread.id, true)
+        upsertThreadInList(updated)
+        scopeState.updateThread(updated)
+        if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
+      }
+      window.localStorage.removeItem(key)
+    } catch {
+      // Keep the legacy IDs so a transient IPC/storage failure cannot remove
+      // cleanup protection before the persisted-pin migration succeeds.
+    }
+  }
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -821,6 +843,41 @@
 
   // ─── Data loading ────────────────────────────────────────────────────────
 
+  /** Insert or refresh a thread in the sidebar list. The bounded hydration
+   *  query only loads recent threads, so a thread opened from the scope board
+   *  or history — or one the harness just started working on — must be added
+   *  on first sighting instead of silently dropped. */
+  function upsertThreadInList(thread: Thread): void {
+    const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
+    if (index < 0) {
+      allThreads = [thread, ...allThreads]
+      return
+    }
+    const existing = allThreads[index]
+    if (
+      existing.updatedAt === thread.updatedAt &&
+      existing.lastActivity === thread.lastActivity &&
+      existing.status === thread.status &&
+      existing.title === thread.title &&
+      existing.pinned === thread.pinned &&
+      existing.read === thread.read
+    ) {
+      return
+    }
+    allThreads = allThreads.map((candidate, candidateIndex) =>
+      candidateIndex === index ? thread : candidate
+    )
+  }
+
+  // Any thread the user lands on (notification click, cache restore, scope
+  // board, switcher) must be visible in the regular sidebar even when it sits
+  // beyond the bounded recent hydration list — otherwise its row never appears
+  // and its live status transitions are lost.
+  $effect(() => {
+    const selected = workspaceState.selectedThread
+    if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
+  })
+
   // Live thread updates pushed from the main process (status/read changes
   // during agent runs) — keeps the sidebar indicators in sync without polling.
   // Updates are applied immediately so a finished turn flips the status badge
@@ -830,14 +887,21 @@
       const updated = args[0] as Thread
       scopeState.updateThread(updated)
       if (isOrchestrationChildThread(updated)) return
-      if (!allThreads.some((t) => t.id === updated.id)) return
-      allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+      upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         if (!updated.read) {
           void invoke('thread:markRead', updated.projectId, updated.id)
         }
       }
+    })
+  })
+
+  $effect(() => {
+    return subscribe('thread:deleted', (_projectId, threadId) => {
+      allThreads = allThreads.filter((thread) => thread.id !== threadId)
+      scopeState.removeThread(threadId)
+      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
   })
 
@@ -972,6 +1036,7 @@
       ])
       projects = projectList
       allThreads = threadList.filter((t) => !isOrchestrationChildThread(t))
+      await migrateTimelinePins()
       notificationPanelState.hydrateFromThreads(threadList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -1053,8 +1118,8 @@
     wasActive = nowActive
   })
 
-  /** Explicit archive/timeline expansion. The initial shell intentionally
-   * carries only a bounded active slice; history remains paged and deduped. */
+  /** Explicit timeline expansion. The initial shell intentionally carries
+   * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {
     if (historyLoading || !hasMoreHistory) return
     historyLoading = true
@@ -2112,10 +2177,9 @@
                       compact
                       projectIconUrl={getThreadIcon(thread)}
                       selected={selectedThread?.id === thread.id}
-                      pinnedOverride={true}
                       onOpen={openThread}
                       onRename={handleRename}
-                      onTogglePin={() => timelinePins.toggle(thread.id)}
+                      onTogglePin={togglePin}
                       onDelete={handleDelete}
                       onFork={forkThread}
                     />
@@ -2129,10 +2193,9 @@
                   {thread}
                   projectIconUrl={getThreadIcon(thread)}
                   selected={selectedThread?.id === thread.id}
-                  pinnedOverride={timelinePins.isPinned(thread.id)}
                   onOpen={openThread}
                   onRename={handleRename}
-                  onTogglePin={() => timelinePins.toggle(thread.id)}
+                  onTogglePin={togglePin}
                   onDelete={handleDelete}
                   onFork={forkThread}
                 />
@@ -2142,35 +2205,13 @@
                 </div>
               {/each}
             </div>
-            {#if archivedTimelineThreads.length > 0}
-              <div class="mt-3 border-t pt-2">
-                <p class="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                  Archived history
-                </p>
-                <div class="space-y-px" role="list">
-                  {#each archivedTimelineThreads as thread (thread.id)}
-                    <ThreadRow
-                      {thread}
-                      compact
-                      projectIconUrl={getThreadIcon(thread)}
-                      selected={selectedThread?.id === thread.id}
-                      onOpen={openThread}
-                      onRename={handleRename}
-                      onTogglePin={() => timelinePins.toggle(thread.id)}
-                      onDelete={handleDelete}
-                      onFork={forkThread}
-                    />
-                  {/each}
-                </div>
-              </div>
-            {/if}
             {#if hasMoreHistory}
               <button
                 class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}
                 onclick={() => void loadHistoryPage()}
               >
-                {historyLoading ? 'Loading history…' : 'Load older and archived threads'}
+                {historyLoading ? 'Loading history…' : 'Load older threads'}
               </button>
             {/if}
           {/if}

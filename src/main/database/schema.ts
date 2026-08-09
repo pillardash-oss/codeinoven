@@ -486,19 +486,9 @@ CREATE TABLE IF NOT EXISTS maintenance_meta (
   value TEXT NOT NULL
 );
 
--- ─── Retention archive ────────────────────────────────────────────────────
--- Bounded, recoverable retention: high-volume log rows are moved here before
--- they are pruned, and the archive itself is capped so disk use stays bounded.
-CREATE TABLE IF NOT EXISTS retention_archive (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  source     TEXT NOT NULL,
-  source_id  TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  payload    TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_retention_archive_source_time
-  ON retention_archive(source, created_at);`
+-- Archive is not a product state. Remove legacy retained copies; bounded
+-- maintenance permanently deletes expired rows instead.
+DROP TABLE IF EXISTS retention_archive;`
 
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────

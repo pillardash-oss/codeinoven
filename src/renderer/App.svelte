@@ -696,18 +696,17 @@
       const icons = await loadProjectIcons(projectList)
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
-      // 2. Threads — recent active (non-archived) only, via the bounded
-      //    hydration query. Archived threads and the full thread history never
-      //    cross IPC at startup; they page in on demand through the
-      //    workspace/scope views that request them. The selected project is
+      // 2. Tasks — recent rows only, via the bounded hydration query. The full
+      //    task history never crosses IPC at startup; older rows page in on
+      //    demand through the workspace/scope views. The selected project is
       //    ordered first so its visible threads render immediately.
       const threadList = await invoke('thread:listRecent', {
         projectId: scopeState.activeProjectId ?? undefined,
         limit: 200
       })
-      const activeThreads = threadList.filter((thread) => !thread.archived)
-      scopeState.setThreads(activeThreads)
-      notificationPanelState.hydrateFromThreads(activeThreads)
+      const visibleThreads = threadList.filter((thread) => !thread.archived)
+      scopeState.setThreads(visibleThreads)
+      notificationPanelState.hydrateFromThreads(visibleThreads)
 
       // 3. The selected project's scope board is the visible surface — load it
       //    before warming any provider data.
@@ -873,6 +872,11 @@
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }
     })
+    const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
+      scopeState.removeThread(threadId)
+      notificationPanelState.dismissForThread(projectId, threadId)
+      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    })
     const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
       handleCloseShortcut()
     })
@@ -886,6 +890,7 @@
       unsubscribeShow()
       unsubscribeConfirmClose()
       unsubscribeThreadUpdated()
+      unsubscribeThreadDeleted()
       unsubscribeCloseShortcut()
       updaterState.destroy()
     }

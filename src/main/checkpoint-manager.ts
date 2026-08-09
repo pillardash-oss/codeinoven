@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { APP_NAME } from '../lib/brand'
 import { generateId, getConfigRoot } from '../lib/utils'
@@ -251,6 +251,43 @@ export class CheckpointManager {
     return rows.map((row) =>
       this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
     )
+  }
+
+  /** Remove project checkpoint blobs that no remaining thread references. */
+  async pruneUnusedBlobs(projectId: string): Promise<number> {
+    assertId(projectId)
+    const referenced = new Set<string>()
+    const rows = this.db.all<{ data: string }>(
+      'SELECT data FROM turn_checkpoints WHERE project_id = ?',
+      projectId
+    )
+    for (const row of rows) {
+      try {
+        const checkpoint = JSON.parse(row.data) as TurnCheckpoint
+        for (const file of Object.values(checkpoint.before.files)) referenced.add(file.hash)
+        for (const file of Object.values(checkpoint.after?.files ?? {})) referenced.add(file.hash)
+      } catch {
+        // A corrupt remaining checkpoint cannot safely identify its blobs, so
+        // preserve the project blob directory rather than risk data loss.
+        return 0
+      }
+    }
+
+    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return 0
+      throw error
+    }
+    let deleted = 0
+    for (const entry of entries) {
+      if (!entry.isFile() || referenced.has(entry.name)) continue
+      await rm(join(directory, entry.name), { force: true })
+      deleted++
+    }
+    return deleted
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {

@@ -31,10 +31,8 @@ export interface DatabaseWorkerConfig {
   dbPath: string
   /** Directory where atomic backup/restore artifacts are written. */
   backupDir: string
-  /** High-volume event rows older than this many days are archived. */
+  /** High-volume event rows older than this many days are deleted. */
   retentionDays: number
-  /** Maximum retained rows in the retention archive. */
-  retentionArchiveCap: number
   /** Whether the periodic maintenance loop is enabled. */
   maintenanceEnabled: boolean
   /** Base interval between maintenance passes (ms). */
@@ -43,7 +41,6 @@ export interface DatabaseWorkerConfig {
 
 export const DATABASE_WORKER_DEFAULTS = {
   retentionDays: 90,
-  retentionArchiveCap: 5000,
   maintenanceIntervalMs: 30 * 60 * 1000
 } as const
 
@@ -134,9 +131,7 @@ export interface WorkerFtsResult {
 
 export interface WorkerRetentionResult {
   ok: boolean
-  archived: number
-  pruned: number
-  archiveRows: number
+  deleted: number
   error?: string
 }
 
@@ -169,11 +164,17 @@ export type DatabaseWorkerResult =
   | ({ kind: 'retention' } & WorkerRetentionResult)
   | ({ kind: 'recover-to' } & WorkerRecoverResult)
   | ({ kind: 'health' } & WorkerHealthResult)
-  | ({ kind: 'query'; ok: boolean; rows?: Record<string, unknown>[]; truncated?: boolean; error?: string })
-  | ({ kind: 'execute'; ok: boolean; error?: string })
-  | ({ kind: 'transaction'; ok: boolean; error?: string })
-  | ({ kind: 'history-append'; ok: boolean; sequence?: number; error?: string })
-  | ({
+  | {
+      kind: 'query'
+      ok: boolean
+      rows?: Record<string, unknown>[]
+      truncated?: boolean
+      error?: string
+    }
+  | { kind: 'execute'; ok: boolean; error?: string }
+  | { kind: 'transaction'; ok: boolean; error?: string }
+  | { kind: 'history-append'; ok: boolean; sequence?: number; error?: string }
+  | {
       kind: 'stats'
       ok: boolean
       activeOps: number
@@ -181,8 +182,8 @@ export type DatabaseWorkerResult =
       maxObservedConcurrency: number
       maintenanceEnabled: boolean
       error?: string
-    })
-  | ({ kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string })
+    }
+  | { kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string }
   | ({ kind: 'shutdown' } & { ok: boolean })
   | ({ kind: 'ping' } & { ok: boolean })
 
@@ -193,7 +194,10 @@ export type DatabaseWorkerMessage =
 
 export type DatabaseWorkerOutbound = { type: 'request'; id: number; request: DatabaseWorkerRequest }
 
-type ResultForRequest<K extends DatabaseWorkerRequest['kind']> = Extract<DatabaseWorkerResult, { kind: K }>
+type ResultForRequest<K extends DatabaseWorkerRequest['kind']> = Extract<
+  DatabaseWorkerResult,
+  { kind: K }
+>
 
 // ─── Client ───────────────────────────────────────────────────────────────
 
@@ -368,7 +372,9 @@ export class DatabaseWorker {
   }
 
   /** Atomic batch: all statements run in one transaction (serialized). */
-  async transaction(statements: Array<{ sql: string; params: unknown[] }>): Promise<ResultForRequest<'transaction'>> {
+  async transaction(
+    statements: Array<{ sql: string; params: unknown[] }>
+  ): Promise<ResultForRequest<'transaction'>> {
     return this.request({ kind: 'transaction', statements })
   }
 
@@ -465,7 +471,11 @@ export class DatabaseWorker {
     request: Extract<DatabaseWorkerRequest, { kind: K }>
   ): Promise<ResultForRequest<K>> {
     if (!this.worker) {
-      return Promise.resolve({ kind: request.kind, ok: false, error: UNAVAILABLE } as ResultForRequest<K>)
+      return Promise.resolve({
+        kind: request.kind,
+        ok: false,
+        error: UNAVAILABLE
+      } as ResultForRequest<K>)
     }
     const id = this.nextId++
     const result = this.requestTail.then(

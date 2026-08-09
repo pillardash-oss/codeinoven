@@ -202,7 +202,7 @@ export interface ThreadListOptions {
   limit?: number
   /** Rows to skip before returning (offset paging). */
   offset?: number
-  /** Exclude archived threads when false. Defaults to including them. */
+  /** Exclude legacy rows pending startup deletion when false. */
   includeArchived?: boolean
 }
 
@@ -417,15 +417,6 @@ export class ThreadRepo {
     this.db.run(
       'UPDATE threads SET pinned = ?, updated_at = ? WHERE id = ?',
       pinned ? 1 : 0,
-      Date.now(),
-      id
-    )
-  }
-
-  setArchived(id: string, archived: boolean): void {
-    this.db.run(
-      'UPDATE threads SET archived = ?, updated_at = ? WHERE id = ?',
-      archived ? 1 : 0,
       Date.now(),
       id
     )

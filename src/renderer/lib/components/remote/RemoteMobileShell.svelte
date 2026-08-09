@@ -186,6 +186,9 @@
       const updated = args[0] as Thread
       if (updated) mobileState.applyThreadUpdate(updated)
     })
+    const unsubscribeThreadDeleted = subscribe('thread:deleted', (_projectId, threadId) => {
+      mobileState.applyThreadDeletion(threadId)
+    })
     mobileNotifications.init()
     mobileNotifications.setOpenHandler(
       (projectId, threadId) => void mobileState.openThreadById(projectId, threadId)
@@ -200,6 +203,7 @@
     navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
     return () => {
       unsubscribeThreadUpdates()
+      unsubscribeThreadDeleted()
       navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
       mobileNotifications.setOpenHandler(null)
     }

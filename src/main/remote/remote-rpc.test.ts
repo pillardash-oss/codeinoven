@@ -17,7 +17,6 @@ const coreAllowed = new Set([
   'thread:get',
   'thread:create',
   'thread:markRead',
-  'thread:setArchived',
   'thread:setPinned',
   'thread:setStatus',
   'thread:updateSettings',

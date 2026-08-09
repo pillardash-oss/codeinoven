@@ -45,6 +45,15 @@ export function broadcastThreadUpdate(thread: Thread): void {
   void _notificationService?.notify(thread)
 }
 
+/** Push permanent task deletion so every desktop and remote view drops it. */
+export function broadcastThreadDeleted(thread: Thread): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('thread:deleted', thread.projectId, thread.id)
+  }
+  forwardRemoteEvent('thread:deleted', [thread.projectId, thread.id])
+  dismissThreadNotifications(thread.projectId, thread.id)
+}
+
 /** Notify renderers that one task's live process list changed. */
 export function broadcastAgentProcessesChanged(projectId: string, threadId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {

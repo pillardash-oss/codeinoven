@@ -84,7 +84,6 @@ export class Database {
     this.applySchema()
     this.ensureThreadWorkflowSchema()
     this.backfillAssignmentThreadLineage()
-    this.restoreLegacyOrchestrationEvictions()
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
     this.ensureHarnessUsageSchema()
@@ -229,12 +228,20 @@ export class Database {
 
   /** Passive WAL checkpoint — returns an explicit result. */
   async passiveCheckpoint(): Promise<WorkerCheckpointResult> {
-    return this.maintenanceWorker?.passiveCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.passiveCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
+    )
   }
 
   /** Full integrity strategy: quick_check by default, full `integrity_check` when asked. */
   async integrityCheck(quick = true): Promise<WorkerIntegrityResult> {
-    return this.maintenanceWorker?.integrityCheck(quick) ?? { ok: false, text: '', error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.integrityCheck(quick) ?? {
+        ok: false,
+        text: '',
+        error: 'no maintenance worker'
+      }
+    )
   }
 
   /** Current on-disk size telemetry (db/wal/shm bytes, pages, journal mode). */
@@ -257,7 +264,9 @@ export class Database {
 
   /** Atomic online backup of the database to `targetPath` (tmp + rename). */
   async backupDatabase(targetPath: string): Promise<WorkerBackupResult> {
-    return this.maintenanceWorker?.backup(targetPath) ?? { ok: false, error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.backup(targetPath) ?? { ok: false, error: 'no maintenance worker' }
+    )
   }
 
   /** Atomic backup to the worker's default backups directory. */
@@ -341,7 +350,10 @@ export class Database {
         return response.result
       }
       if (response.error) {
-        Logger.error('Database worker delta sync failed; falling back to primary connection', response.error)
+        Logger.error(
+          'Database worker delta sync failed; falling back to primary connection',
+          response.error
+        )
       }
     }
     return runProviderDeltaSync(this, threadId, sessionId, messages)
@@ -367,23 +379,26 @@ export class Database {
         return { ok: true, rows: response.rows ?? [], truncated: response.truncated ?? false }
       }
       if (response.error) {
-        Logger.error('Database worker query failed; falling back to primary connection', response.error)
+        Logger.error(
+          'Database worker query failed; falling back to primary connection',
+          response.error
+        )
       }
     }
     return runLocalBoundedQuery(this, sql, params, maxRows)
   }
 
   /** Single write statement on the worker's connection; primary fallback. */
-  async executeViaWorker(
-    sql: string,
-    params: unknown[]
-  ): Promise<{ ok: boolean; error?: string }> {
+  async executeViaWorker(sql: string, params: unknown[]): Promise<{ ok: boolean; error?: string }> {
     const worker = this.maintenanceWorker
     if (worker?.isRunning()) {
       const response = await worker.execute(sql, params)
       if (response.ok) return { ok: true }
       if (response.error) {
-        Logger.error('Database worker execute failed; falling back to primary connection', response.error)
+        Logger.error(
+          'Database worker execute failed; falling back to primary connection',
+          response.error
+        )
       }
     }
     try {
@@ -407,7 +422,10 @@ export class Database {
       const response = await worker.transaction(statements)
       if (response.ok) return { ok: true }
       if (response.error) {
-        Logger.error('Database worker transaction failed; falling back to primary connection', response.error)
+        Logger.error(
+          'Database worker transaction failed; falling back to primary connection',
+          response.error
+        )
       }
     }
     try {
@@ -441,11 +459,21 @@ export class Database {
       const response = await worker.appendHistory(id, threadId, role, content, metadata, timestamp)
       if (response.ok) return { ok: true, sequence: response.sequence }
       if (response.error) {
-        Logger.error('Database worker history append failed; falling back to primary connection', response.error)
+        Logger.error(
+          'Database worker history append failed; falling back to primary connection',
+          response.error
+        )
       }
     }
     try {
-      const { sequence } = runHistoryAppend(this, { id, threadId, role, content, metadata, timestamp })
+      const { sequence } = runHistoryAppend(this, {
+        id,
+        threadId,
+        role,
+        content,
+        metadata,
+        timestamp
+      })
       return { ok: true, sequence }
     } catch (error) {
       return { ok: false, error: String(error) }
@@ -454,7 +482,12 @@ export class Database {
 
   /** Incremental vacuum to reclaim free pages (bounded, off-main). */
   async incrementalVacuum(pages = 128): Promise<WorkerVacuumResult> {
-    return this.maintenanceWorker?.incrementalVacuum(pages) ?? { ok: false, error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.incrementalVacuum(pages) ?? {
+        ok: false,
+        error: 'no maintenance worker'
+      }
+    )
   }
 
   /** Full VACUUM (heavy; off-main). */
@@ -464,12 +497,26 @@ export class Database {
 
   /** FTS ownership: merge index segments. */
   async optimizeFts(): Promise<WorkerFtsResult> {
-    return this.maintenanceWorker?.optimizeFts() ?? { ok: false, action: 'optimize', details: '', error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.optimizeFts() ?? {
+        ok: false,
+        action: 'optimize',
+        details: '',
+        error: 'no maintenance worker'
+      }
+    )
   }
 
   /** FTS ownership: rebuild all indexes from their source tables. */
   async rebuildFts(): Promise<WorkerFtsResult> {
-    return this.maintenanceWorker?.rebuildFts() ?? { ok: false, action: 'rebuild', details: '', error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.rebuildFts() ?? {
+        ok: false,
+        action: 'rebuild',
+        details: '',
+        error: 'no maintenance worker'
+      }
+    )
   }
 
   /** FTS ownership: integrity-check all indexes. */
@@ -484,14 +531,12 @@ export class Database {
     )
   }
 
-  /** Bounded retention: archive + prune high-volume log rows. */
+  /** Bounded retention: permanently delete expired high-volume log rows. */
   async runRetention(): Promise<WorkerRetentionResult> {
     return (
       this.maintenanceWorker?.runRetention() ?? {
         ok: false,
-        archived: 0,
-        pruned: 0,
-        archiveRows: 0,
+        deleted: 0,
         error: 'no maintenance worker'
       }
     )
@@ -499,7 +544,13 @@ export class Database {
 
   /** Rebuild a clean, verified copy of a corrupt database at `targetPath`. */
   async recoverTo(targetPath: string): Promise<WorkerRecoverResult> {
-    return this.maintenanceWorker?.recoverTo(targetPath) ?? { ok: false, reason: 'unrecoverable', error: 'no maintenance worker' }
+    return (
+      this.maintenanceWorker?.recoverTo(targetPath) ?? {
+        ok: false,
+        reason: 'unrecoverable',
+        error: 'no maintenance worker'
+      }
+    )
   }
 
   /** Explicit corruption / full-disk health check. */
@@ -605,37 +656,6 @@ export class Database {
     }
   }
 
-  /**
-   * Before orchestration children were exempt from project capacity, creating
-   * one archived an unrelated public thread at the same timestamp. Restore
-   * only rows carrying that exact deterministic legacy-eviction signature.
-   */
-  private restoreLegacyOrchestrationEvictions(): void {
-    const now = Date.now()
-    const result = this.db
-      ?.prepare(
-        `UPDATE threads AS public_thread
-        SET archived = 0, updated_at = ?
-        WHERE public_thread.archived = 1
-          AND public_thread.coordinator_thread_id IS NULL
-          AND COALESCE(public_thread.assignment_role, '') != 'worker'
-          AND COALESCE(public_thread.achievement_role, '') != 'auditor'
-          AND EXISTS (
-            SELECT 1
-            FROM threads AS orchestration_child
-            WHERE orchestration_child.project_id = public_thread.project_id
-              AND orchestration_child.coordinator_thread_id IS NOT NULL
-              AND ABS(orchestration_child.created_at - public_thread.updated_at) <= 10
-          )`
-      )
-      .run(now)
-    if (result && result.changes > 0) {
-      Logger.info('Restored threads evicted by legacy orchestration capacity counting', {
-        count: result.changes
-      })
-    }
-  }
-
   private ensureAgentMessageCreditsSchema(): void {
     const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
     const hasContentHash = columns.some((column) => column.name === 'content_hash')
@@ -696,7 +716,9 @@ export class Database {
             }
           })
         }
-        this.run("INSERT OR REPLACE INTO db_meta(key, value) VALUES('content_hash_backfilled', '1')")
+        this.run(
+          "INSERT OR REPLACE INTO db_meta(key, value) VALUES('content_hash_backfilled', '1')"
+        )
       }
     }
   }
