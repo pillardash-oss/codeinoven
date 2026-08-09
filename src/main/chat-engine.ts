@@ -1526,6 +1526,9 @@ export class ChatEngine {
     ipcMain.handle('agent:stopAssignment', (_, projectId: string, coordinatorThreadId: string) =>
       this.stopAssignment(projectId, coordinatorThreadId)
     )
+    ipcMain.handle('agent:resumeAssignment', (_, projectId: string, coordinatorThreadId: string) =>
+      this.resumeAssignment(projectId, coordinatorThreadId)
+    )
     ipcMain.handle('agent:ensureInitialSpec', (_, projectId: string, threadId: string) =>
       this.ensureInitialSpec(projectId, threadId)
     )
@@ -5239,14 +5242,18 @@ export class ChatEngine {
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
     const current = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (!current) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
 
     const assignment = await this.withAssignmentApiLock(current.id, () =>
-      this.assignmentEngine.stop(projectId, coordinatorThreadId)
+      this.assignmentEngine.stop(
+        projectId,
+        coordinatorThreadId,
+        coordinator?.settings?.loopMode === true
+      )
     )
     this.revokeAssignmentCapabilities(assignment.id)
     this.activeAssignmentAuditRuns.delete(`${projectId}:${assignment.id}`)
 
-    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (coordinator?.settings) {
       await this.threadManager.updateSettings(projectId, coordinatorThreadId, {
         ...coordinator.settings,
@@ -5277,6 +5284,63 @@ export class ChatEngine {
         })
       }
     })
+    return assignment
+  }
+
+  /** Resume only after an explicit user action, restoring safe orchestration state. */
+  async resumeAssignment(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const current = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!current) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const assignment = await this.withAssignmentApiLock(current.id, () =>
+      this.assignmentEngine.resume(projectId, coordinatorThreadId)
+    )
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
+    const settings: ThreadSettings = {
+      ...coordinator.settings,
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: assignment.loopModeBeforeStop === true
+    }
+    await this.threadManager.updateSettings(projectId, coordinatorThreadId, settings)
+    await this.ensureAssignmentApi()
+
+    if (['approved', 'running', 'attention'].includes(assignment.status)) {
+      await this.sendAssignmentCoordinatorPrompt(
+        assignment,
+        settings,
+        this.coordinatorAssignmentPrompt(assignment),
+        { action: 'Resume Assignment' },
+        true
+      )
+    } else if (assignment.auditCycle?.status === 'available') {
+      const auditor = assignment.auditorThreadId
+        ? await this.threadManager.getThread(projectId, assignment.auditorThreadId)
+        : null
+      void this.generateAssignmentAudit(
+        projectId,
+        coordinatorThreadId,
+        auditor?.settings ?? settings
+      ).catch((error) => {
+        Logger.error('Resumed Assignment audit failed', {
+          assignmentId: assignment.id,
+          error: rawErrorMessage(error)
+        })
+      })
+    } else if (
+      assignment.auditCycle?.status === 'planning_rework' ||
+      assignment.auditCycle?.status === 'reworking'
+    ) {
+      await this.sendAssignmentCoordinatorPrompt(
+        assignment,
+        settings,
+        this.coordinatorAssignmentPrompt(assignment),
+        { action: 'Resume Assignment' },
+        true
+      )
+    }
     return assignment
   }
 

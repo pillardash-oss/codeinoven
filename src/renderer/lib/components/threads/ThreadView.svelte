@@ -3834,6 +3834,32 @@
     }
   }
 
+  async function resumeStoppedAssignment(): Promise<void> {
+    const current = assignment
+    if (!current || assignmentBusy) return
+    assignmentBusy = true
+    assignmentError = ''
+    try {
+      const resumedAssignment = await invoke(
+        'agent:resumeAssignment',
+        current.projectId,
+        current.coordinatorThreadId
+      )
+      assignment = resumedAssignment
+      assignmentVersions = assignmentVersions.map((candidate) =>
+        candidate.id === resumedAssignment.id && candidate.version === resumedAssignment.version
+          ? resumedAssignment
+          : candidate
+      )
+    } catch (error) {
+      assignmentError =
+        error instanceof Error ? error.message : 'The Assignment could not be resumed.'
+      throw error
+    } finally {
+      assignmentBusy = false
+    }
+  }
+
   function resumeAchievementCoordination(): void {
     if (busy) return
     void sendMessage(
@@ -6404,6 +6430,7 @@
         onOpenTask={openAssignmentTask}
         onResume={resumeAssignmentCoordination}
         onStop={stopAssignment}
+        onResumeAssignment={resumeStoppedAssignment}
         onWidthChange={(width) => (assignmentPanelWidth = width)}
       />
     {:else if achievementOnly && spec && !isAssignmentAuditorThread}

@@ -432,7 +432,11 @@ export class AssignmentEngine {
   }
 
   /** Permanently stop orchestration without deleting its reviewable history. */
-  async stop(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+  async stop(
+    projectId: string,
+    coordinatorThreadId: string,
+    loopModeBeforeStop = false
+  ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
     if (active.status === 'stopped') return active
     if (active.status === 'draft') {
@@ -449,14 +453,28 @@ export class AssignmentEngine {
     const stopped: AssignmentPlan = {
       ...active,
       status: 'stopped',
+      statusBeforeStop: active.status,
+      loopModeBeforeStop,
       content: {
         ...active.content,
-        tasks: active.content.tasks.map((task) =>
-          task.status === 'completed' ? task : { ...task, status: 'stopped' as const }
-        )
+        tasks: active.content.tasks.map((task) => {
+          if (task.status === 'completed') return task
+          const statusBeforeStop =
+            task.status === 'stopped' ? (task.statusBeforeStop ?? 'attention') : task.status
+          return { ...task, status: 'stopped' as const, statusBeforeStop }
+        })
       },
       ...(active.auditCycle && active.auditCycle.status !== 'completed'
-        ? { auditCycle: { ...active.auditCycle, status: 'stopped' as const } }
+        ? {
+            auditCycle: {
+              ...active.auditCycle,
+              status: 'stopped' as const,
+              statusBeforeStop:
+                active.auditCycle.status === 'stopped'
+                  ? (active.auditCycle.statusBeforeStop ?? 'available')
+                  : active.auditCycle.status
+            }
+          }
         : {}),
       completedAt: undefined,
       stoppedAt: now,
@@ -466,6 +484,54 @@ export class AssignmentEngine {
     this.removeApiCapabilitiesForAssignment(stopped.id)
     await this.writeMarkdown(stopped)
     return stopped
+  }
+
+  /** Restore a stopped Assignment to a safe, explicitly user-requested continuation state. */
+  async resume(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status !== 'stopped') {
+      throw new AssignmentEngineError('invalid_transition', 'The Assignment is not stopped')
+    }
+
+    const tasks = active.content.tasks.map((task): AssignmentTask => {
+      if (task.status !== 'stopped') return task
+      const restoredStatus = task.statusBeforeStop ?? 'attention'
+      const { statusBeforeStop: _statusBeforeStop, ...rest } = task
+      return {
+        ...rest,
+        status: restoredStatus === 'running' ? 'attention' : restoredStatus
+      }
+    })
+    const previousStatus =
+      active.statusBeforeStop ??
+      (tasks.every((task) => task.status === 'completed') ? 'completed' : 'attention')
+    const resumedStatus =
+      previousStatus === 'failed' || tasks.some((task) => task.status === 'attention')
+        ? 'attention'
+        : previousStatus
+    const auditCycle = active.auditCycle
+      ? (() => {
+          if (active.auditCycle.status !== 'stopped') return active.auditCycle
+          const restoredStatus = active.auditCycle.statusBeforeStop ?? 'available'
+          const { statusBeforeStop: _statusBeforeStop, ...rest } = active.auditCycle
+          return {
+            ...rest,
+            status: restoredStatus === 'running' ? ('available' as const) : restoredStatus
+          }
+        })()
+      : undefined
+    const resumed: AssignmentPlan = {
+      ...active,
+      status: resumedStatus,
+      statusBeforeStop: undefined,
+      content: { ...active.content, tasks },
+      auditCycle,
+      stoppedAt: undefined,
+      updatedAt: this.now()
+    }
+    this.repo.save(resumed, active.version)
+    await this.writeMarkdown(resumed)
+    return resumed
   }
 
   async approveWithSpec(

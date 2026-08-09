@@ -2193,6 +2193,7 @@ export interface AssignmentTask {
   auditChecklist: string[]
   model?: AssignmentModelSelection
   status: AssignmentTaskStatus
+  statusBeforeStop?: Exclude<AssignmentTaskStatus, 'stopped'>
   workerName?: string
   threadId?: string
   report?: AssignmentTaskReport
@@ -2221,6 +2222,7 @@ export type AssignmentAuditCycleStatus =
 /** Persisted hand-off between Assignment implementation and its independent audit. */
 export interface AssignmentAuditCycle {
   status: AssignmentAuditCycleStatus
+  statusBeforeStop?: Exclude<AssignmentAuditCycleStatus, 'stopped'>
   availableAt?: number
   startedAt?: number
   reportId?: string
@@ -2266,6 +2268,8 @@ export interface AssignmentPlan {
   specVersion: number
   version: number
   status: AssignmentStatus
+  statusBeforeStop?: Exclude<AssignmentStatus, 'stopped'>
+  loopModeBeforeStop?: boolean
   scopeBucketId?: string
   /** Durable auditor thread created after this Assignment completes. */
   auditorThreadId?: string
