@@ -3063,13 +3063,23 @@
     )
     if (exact) return exact
 
+    // When the turn's source user message IS loaded, the id match is
+    // authoritative: a checkpoint that doesn't match this turn's user message
+    // belongs to a different — earlier — turn. A previous turn can be
+    // temporally adjacent to the current in-progress turn (e.g. a queued
+    // message sent the moment the agent idled), so a time-based fallback here
+    // would render the previous turn's file card under the current turn while
+    // it is still working. The time fallback is only valid when the source
+    // user message is outside the loaded history window.
+    if (sourceMessage) return null
+
     // The source user message may not be paged in yet (it can live outside the
     // initially loaded history window — a single turn can span dozens of tool
     // messages), so an id match alone can miss a turn until the user scrolls.
     // Fall back to matching the checkpoint to this turn by time: the checkpoint
     // is created at the turn's start and completed just after its last message,
     // so compare its completedAt against this assistant message.
-    const turnStart = sourceMessage?.createdAt ?? assistant.createdAt
+    const turnStart = assistant.createdAt
     const nextUser = messages.slice(messageIndex + 1).find((message) => message.role === 'user')
     const turnEnd = nextUser?.createdAt ?? Number.POSITIVE_INFINITY
     const withinTurn = completed.filter(
