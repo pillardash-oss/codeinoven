@@ -9,6 +9,7 @@ import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { StorageEngine } from './storage-engine'
+import { registerHydrationIpcHandlers } from './hydration-ipc'
 import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
 import { WindowStateService } from './window-state'
 import { setNotificationService, setPowerWakeService } from './thread-events'
@@ -355,14 +356,11 @@ function closeSplash(): void {
  * preview, chat/agent catalog) is registered before the window is created.
  */
 async function bootPostPaintServices(): Promise<void> {
-  if (chatEngine) return
+  if (updaterService) return
   const [
     { registerIpcHandlers },
     { ProjectManager },
     { ProjectFilesService },
-    { ChatEngine },
-    { HarnessManifestService },
-    { ComputerUsePipService },
     { UpdaterService },
     { PowerWakeService },
     { RetrySchedulerService }
@@ -370,20 +368,17 @@ async function bootPostPaintServices(): Promise<void> {
     import('./ipc-handlers'),
     import('../lib/engines/project-manager'),
     import('./project-files-service'),
-    import('./chat-engine'),
-    import('./harness-manifest-service'),
-    import('./computer-use-pip-service'),
     import('./updater-service'),
     import('./power-wake-service'),
     import('./retry-scheduler-service')
   ])
 
+  if (!chatEngine || !harnessManifestService || !computerUsePipService) {
+    throw new Error('Hydration services were not initialized before feature startup')
+  }
   const projectManager = new ProjectManager(database)
   const projectFilesService = new ProjectFilesService(projectManager)
   installFilePreviewProtocol(projectFilesService)
-  computerUsePipService = new ComputerUsePipService(storage)
-  harnessManifestService = new HarnessManifestService(storage)
-  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
@@ -393,10 +388,9 @@ async function bootPostPaintServices(): Promise<void> {
     projectFilesService,
     powerWakeService,
     retryScheduler,
-    harnessManifestService
+    harnessManifestService,
+    hydrationHandlersRegistered: true
   })
-  chatEngine.register()
-  harnessManifestService.register()
   chatEngine.attachRetryScheduler(retryScheduler)
 
   void (async () => {
@@ -532,6 +526,27 @@ async function bootPostPaintServices(): Promise<void> {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
   })()
+}
+
+/**
+ * Initialize only the services whose IPC is used while the renderer document
+ * evaluates. All feature engines remain dynamically imported after first
+ * paint, but provider snapshots and canonical harness ordering are available
+ * to the selected-project catalog warm-up from its first animation frame.
+ */
+async function bootHydrationServices(): Promise<void> {
+  const [{ ChatEngine }, { HarnessManifestService }, { ComputerUsePipService }] = await Promise.all(
+    [
+      import('./chat-engine'),
+      import('./harness-manifest-service'),
+      import('./computer-use-pip-service')
+    ]
+  )
+  computerUsePipService = new ComputerUsePipService(storage)
+  harnessManifestService = new HarnessManifestService(storage)
+  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
+  chatEngine.register()
+  harnessManifestService.register()
 }
 
 /**
@@ -708,6 +723,12 @@ void app
     startupTelemetry.mark('database:ready')
     await windowStateService.load()
     Logger.info(`${APP_NAME} main process initialized`)
+
+    // The renderer invokes its first config/project/scope/thread reads while
+    // its document evaluates. Register that bounded surface before navigation;
+    // the feature graph remains dynamically imported after first paint.
+    registerHydrationIpcHandlers(storage, database)
+    await bootHydrationServices()
 
     // Deny every permission request from the renderer (camera, microphone,
     // notifications, geolocation, fullscreen, etc.). No desktop feature relies
