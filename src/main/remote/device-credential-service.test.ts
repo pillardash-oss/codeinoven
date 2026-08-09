@@ -21,7 +21,7 @@ import {
 } from './device-credential-service'
 import { RemoteRpcDispatcher, type RemoteRpcServices } from './remote-rpc'
 import type { ProjectManager } from '../../lib/engines/project-manager'
-import type { RemoteRpcDeviceContext } from '../../lib/remote-rpc'
+import type { RemoteRpcDeviceContext, RemoteScope } from '../../lib/remote-rpc'
 import {
   REMOTE_ALLOWED_CHANNELS,
   assertRemoteChannelRegistry,
@@ -498,7 +498,7 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
 
   async function enrollContextDevice(
     service: DeviceCredentialService,
-    extraScopes: string[] = []
+    extraScopes: RemoteScope[] = []
   ): Promise<RemoteRpcDeviceContext> {
     const bootstrap = await service.createPairingBootstrap()
     const signing = await generateSigningKeyPair()
