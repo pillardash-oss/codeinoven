@@ -10,6 +10,7 @@ publish:
   releaseType: release
 files:
   - out/**/*
+  - '!out/**/.DS_Store'
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/binding.gyp'
@@ -17,6 +18,20 @@ files:
 # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
 # produce unsigned artifacts so contributors can package locally.
 forceCodeSigning: false
+electronFuses:
+  # CodeInOven intentionally keeps RunAsNode enabled because the packaged
+  # Electron binary hosts the stdio utility gateway. The remaining production
+  # escape hatches are disabled and app.asar is integrity-bound before signing.
+  runAsNode: true
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  loadBrowserProcessSpecificV8Snapshot: true
+  # The desktop renderer still loads from file://; remove this compatibility
+  # fuse only after migrating the main document to a custom app protocol.
+  grantFileProtocolExtraPrivileges: true
 mac:
   hardenedRuntime: true
   notarize: true

@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type { Database } from './database/database'
 import { StorageEngine } from './storage-engine'
 import { ProjectManager } from '../lib/engines/project-manager'

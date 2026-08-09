@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { isAbsolute } from 'node:path'
 import type { ProviderAccountLoginOptions } from '../lib/types'
 import { validateEntityId } from './ipc-validation'

@@ -8,7 +8,8 @@
  * via `src/renderer/lib/remote/keep-alive.ts`.
  */
 
-import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
 import { Logger } from '../logger'

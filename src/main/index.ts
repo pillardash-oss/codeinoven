@@ -1,7 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, session, shell } from 'electron'
 import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
-import { fileURLToPath, pathToFileURL } from 'url'
+import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
 import { Logger } from './logger'
@@ -12,11 +12,7 @@ import { StorageEngine } from './storage-engine'
 import { registerHydrationIpcHandlers } from './hydration-ipc'
 import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
 import { WindowStateService } from './window-state'
-import {
-  setNotificationService,
-  setPowerWakeService,
-  broadcastThreadUpdate
-} from './thread-events'
+import { setNotificationService, setPowerWakeService, broadcastThreadUpdate } from './thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -40,10 +36,15 @@ import type { HarnessInstallService } from './harness-install-service'
 import type { NotificationService } from './notification-service'
 import type { RemoteModeController } from './remote/remote-mode'
 import type { DeviceCredentialService } from './remote/device-credential-service'
+import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
+// Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
+// per-window preferences below remain explicit so future windows inherit the
+// secure expectation even when reviewed in isolation.
+app.enableSandbox()
 // Custom scheme must be registered as privileged before the app is ready so
 // Chromium recognizes it when the renderer frames `appfile://` previews.
 registerFilePreviewScheme()
@@ -245,14 +246,6 @@ const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
  * foreign documents; file-path scoping lives in `ipc-handlers.ts`.
  */
 
-/** The exact URLs the main frame may navigate to (the app's own renderer). */
-function appRendererNavigationTargets(): string[] {
-  if (!isProduction && process.env['ELECTRON_RENDERER_URL']) {
-    return [process.env['ELECTRON_RENDERER_URL']]
-  }
-  return [pathToFileURL(join(mainBundleDirectory, '../renderer/index.html')).href]
-}
-
 const windowBoundaryValidator = new PrivilegedIpcValidator({
   navigationTargets: appRendererNavigationTargets(),
   allowDevelopmentHttp: !isProduction
@@ -334,7 +327,7 @@ function createSplashWindow(): BrowserWindow {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       devTools: false
     }
   })
@@ -597,7 +590,7 @@ function createWindow(): BrowserWindow {
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
       preload: getPreloadPath(),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
       devTools: !isProduction,

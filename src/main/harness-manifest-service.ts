@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type {
   ConfirmedHarnessBehavior,
   HarnessConfirmationSource,

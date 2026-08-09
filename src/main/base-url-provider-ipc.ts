@@ -1,4 +1,5 @@
-import { clipboard, ipcMain } from 'electron'
+import { clipboard } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type {
   BaseUrlProviderCreateRequest,
   BaseUrlProviderModel,
