@@ -9,7 +9,8 @@ import {
   createMemoryDeviceKeyStore,
   loadOrCreateDeviceKeyMaterial,
   signTranscript,
-  handshakeTranscript
+  handshakeTranscript,
+  type DeviceKeyMaterial
 } from '../../renderer/lib/remote/device-identity'
 import { DeviceCredentialService } from './device-credential-service'
 import { RemoteRpcDispatcher, type RemoteRpcServices } from './remote-rpc'
@@ -629,30 +630,32 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
   async function authFrame(
     nonce: string,
     context: { deviceId?: string | null; authVersion?: number },
-    bootstrapValue = 'bootstrap'
+    bootstrapValue = 'bootstrap',
+    keyMaterial: DeviceKeyMaterial | null = null
   ): Promise<Record<string, unknown>> {
-    const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
+    const km =
+      keyMaterial ?? (await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() }))
     const transcript = handshakeTranscript({
       nonce,
-      deviceId: context.deviceId ?? keyMaterial.deviceId,
-      authVersion: context.authVersion ?? keyMaterial.authVersion,
+      deviceId: context.deviceId ?? km.deviceId,
+      authVersion: context.authVersion ?? km.authVersion,
       bootstrap: bootstrapValue,
       context: 'relay'
     })
-    const signature = await signTranscript(keyMaterial.signingKey, transcript)
+    const signature = await signTranscript(km.signingKey, transcript)
     const frame: Record<string, unknown> = {
       type: 'remote:device:auth',
       nonce,
       signature,
-      deviceName: keyMaterial.deviceName
+      deviceName: km.deviceName
     }
     if (context.deviceId) {
       frame['deviceId'] = context.deviceId
-      frame['authVersion'] = context.authVersion ?? keyMaterial.authVersion
+      frame['authVersion'] = context.authVersion ?? km.authVersion
     } else {
       frame['bootstrap'] = bootstrapValue
-      frame['signingPublicJwk'] = keyMaterial.signingPublicJwk
-      frame['agreementPublicJwk'] = keyMaterial.agreementPublicJwk
+      frame['signingPublicJwk'] = km.signingPublicJwk
+      frame['agreementPublicJwk'] = km.agreementPublicJwk
     }
     return frame
   }
@@ -917,5 +920,73 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     expect(deniedAudit).toBeDefined()
     harness.client.close()
     dispose()
+  })
+
+  it('reports a trusted enrollment-success callback for rotation after relay enrollment', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const enrolledIds: string[] = []
+    const database = await createTestDb()
+    const dispatcher = makeDispatcher(credentials, database)
+    const harness = makeHarness({
+      credentials,
+      onDeviceEnrolled: (deviceId) => enrolledIds.push(deviceId),
+      onRpc: async (channel, args, device) => dispatcher.dispatch({ id: 0, channel, args, device })
+    })
+    harness.client.connect()
+    const socket = openAuthenticated(harness)
+    const nonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
+
+    // Enrollment fires the callback exactly once with the assigned device id.
+    await receivedData(
+      socket,
+      await authFrame(
+        nonce,
+        { deviceId: null, authVersion: undefined },
+        bootstrap.value,
+        keyMaterial
+      )
+    )
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    expect(enrolledIds).toHaveLength(1)
+    expect(enrolledIds[0]?.length).toBeGreaterThan(0)
+
+    // The single-use bootstrap is consumed (rotated): it cannot enroll again.
+    const stale = await credentials.consumePairingBootstrap(bootstrap.value)
+    expect(stale.ok).toBe(false)
+
+    // A reconnect auth (same key, same device, fresh challenge) must NOT fire
+    // the enrollment callback again — only the initial enrollment rotates.
+    // The consumed challenge mismatches, so the desktop re-challenges first.
+    await receivedData(
+      socket,
+      await authFrame(
+        nonce,
+        { deviceId: enrolledIds[0], authVersion: 1 },
+        bootstrap.value,
+        keyMaterial
+      )
+    )
+    const fresh = await challengeNonceOf(socket)
+    await receivedData(
+      socket,
+      await authFrame(
+        fresh,
+        { deviceId: enrolledIds[0], authVersion: 1 },
+        bootstrap.value,
+        keyMaterial
+      )
+    )
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    expect(enrolledIds).toHaveLength(1)
+    harness.client.close()
+    destroyTestDb(database)
   })
 })

@@ -377,7 +377,7 @@ describe('DeviceCredentialService — step-up approval', () => {
       })
     ).toBe(true)
 
-    // The retry consumes the approval exactly once.
+    // The retry consumes the approval exactly once (returns the approval id).
     expect(
       service.hasApprovalFor({
         deviceId: 'device-a',
@@ -388,7 +388,7 @@ describe('DeviceCredentialService — step-up approval', () => {
         resource: 'proj-1',
         argsDigest: 'digest-1'
       })
-    ).toBe(true)
+    ).toBe(created.approval.approvalId)
     expect(
       service.hasApprovalFor({
         deviceId: 'device-a',
@@ -399,7 +399,7 @@ describe('DeviceCredentialService — step-up approval', () => {
         resource: 'proj-1',
         argsDigest: 'digest-1'
       })
-    ).toBe(false)
+    ).toBeNull()
   })
 
   it('rejects a mismatched binding (different digest or device)', async () => {
@@ -457,7 +457,7 @@ describe('DeviceCredentialService — step-up approval', () => {
         channel: 'git:commit',
         argsDigest: 'd'
       })
-    ).toBe(false)
+    ).toBeNull()
   })
 
   it('rejects overflow beyond five pending approvals per device', async () => {
@@ -697,5 +697,88 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
     })
     expect(after.ok).toBe(false)
     if (!after.ok) expect(after.message).toContain('Access denied')
+  })
+
+  it('records requiredScope and stepUpApprovalId on an approved high-risk success', async () => {
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db)
+    const chatEngine = makeMockChatEngine()
+    chatEngine.replyPermission = async () => undefined
+    const dispatcher = new RemoteRpcDispatcher({
+      database: {} as Database,
+      chatEngine,
+      projectManager: mockProjectManager,
+      credentials: service
+    })
+    const device = await enrollContextDevice(service, ['permission.reply'])
+
+    const first = await dispatcher.dispatch({
+      id: 20,
+      channel: 'agent:replyPermission',
+      args: ['p', 't', 'approve'],
+      device: { ...device, requestId: '20' }
+    })
+    expect(first.ok).toBe(false)
+    if (first.ok) return
+    const payload = JSON.parse(first.message) as { code: string; approvalId: string }
+    expect(payload.code).toBe('step_up_required')
+    expect(dispatcher.approveStepUp(payload.approvalId, 'approved')).toBe(true)
+
+    const second = await dispatcher.dispatch({
+      id: 20,
+      channel: 'agent:replyPermission',
+      args: ['p', 't', 'approve'],
+      device: { ...device, requestId: '20' }
+    })
+    expect(second.ok).toBe(true)
+
+    const allowed = dispatcher
+      .listAuditEvents(30)
+      .find(
+        (event) => event.decision === 'rpc_allowed' && event.channel === 'agent:replyPermission'
+      )
+    expect(allowed).toBeDefined()
+    expect(allowed?.deviceId).toBe(device.deviceId)
+    expect(allowed?.requiredScope).toBe('permission.reply')
+    expect(allowed?.stepUpApprovalId).toBe(payload.approvalId)
+    expect(allowed?.transport).toBe('lan')
+    expect(allowed?.sessionId).toBe(device.sessionId)
+    expect(allowed?.requestId).toBe('20')
+  })
+
+  it('records an explicit failure audit when dispatch execution throws', async () => {
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db)
+    const chatEngine = makeMockChatEngine()
+    chatEngine.loadMessages = async () => {
+      throw new Error('boom')
+    }
+    const dispatcher = new RemoteRpcDispatcher({
+      database: {} as Database,
+      chatEngine,
+      projectManager: mockProjectManager,
+      credentials: service
+    })
+    const device = await enrollContextDevice(service)
+
+    const outcome = await dispatcher.dispatch({
+      id: 21,
+      channel: 'agent:loadMessages',
+      args: ['p1', 't1'],
+      device: { ...device, requestId: '21' }
+    })
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.message).toBe('boom')
+
+    const failed = dispatcher
+      .listAuditEvents(30)
+      .find((event) => event.decision === 'rpc_failed' && event.channel === 'agent:loadMessages')
+    expect(failed).toBeDefined()
+    expect(failed?.deviceId).toBe(device.deviceId)
+    expect(failed?.requiredScope).toBe('conversation.read')
+    expect(failed?.reasonCode).toBe('execution_failed')
+    expect(failed?.transport).toBe('lan')
+    expect(failed?.sessionId).toBe(device.sessionId)
+    expect(failed?.requestId).toBe('21')
   })
 })

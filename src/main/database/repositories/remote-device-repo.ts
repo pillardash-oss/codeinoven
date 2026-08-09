@@ -60,6 +60,7 @@ export type RemoteAuditDecision =
   | 'revoked'
   | 'rpc_allowed'
   | 'rpc_denied'
+  | 'rpc_failed'
   | 'step_up_required'
   | 'step_up_approved'
   | 'step_up_rejected'
@@ -84,6 +85,7 @@ export type RemoteAuditReasonCode =
   | 'overflow'
   | 'malformed'
   | 'denied_by_default'
+  | 'execution_failed'
 
 export interface RemoteAuditEvent {
   id: string
