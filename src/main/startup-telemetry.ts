@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { performance, monitorEventLoopDelay } from 'node:perf_hooks'
 import type { IntervalHistogram } from 'node:perf_hooks'
 import { Logger } from './logger'
@@ -6,8 +8,8 @@ import { Logger } from './logger'
  * Privacy-preserving startup telemetry.
  *
  * Records the elapsed time of each named startup phase (process entry, Electron
- * ready, splash, storage/database ready, window created, first paint, renderer
- * hydration, workspace ready, provider warmup) and samples the Electron main
+ * ready, splash, storage/database ready, window creation, renderer document
+ * load, visual readiness, hydration, workspace readiness, provider warmup) and samples the Electron main
  * event-loop delay during the boot window. Only phase names and millisecond
  * durations are ever emitted — never paths, project names, usernames, or
  * message content — so the data is safe to keep in durable logs and
@@ -20,8 +22,10 @@ export type StartupPhase =
   | 'storage:ready'
   | 'database:ready'
   | 'window:created'
-  | 'window:firstPaint'
+  | 'renderer:documentLoaded'
+  | 'window:visualReady'
   | 'renderer:hydrated'
+  | 'features:ready'
   | 'workspace:ready'
   | 'provider:warmup'
 

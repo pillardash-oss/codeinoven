@@ -207,11 +207,52 @@ ipcMain.handle('app:requestClose', () => {
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
 let rendererReadyReported = false
+let packagedSmokeProofStarted = false
+let startupTelemetryReported = false
 let featuresReady = false
 let resolveFeaturesReady: (() => void) | null = null
 const featuresReadyPromise = new Promise<void>((resolve) => {
   resolveFeaturesReady = resolve
 })
+
+/**
+ * A packaged smoke pass proves more than script execution: the document must
+ * load, Electron must report a rendered visual frame, and application
+ * hydration must complete. The guard makes concurrent milestone callbacks
+ * converge on one atomic proof and one clean shutdown.
+ */
+function markWorkspaceReadyIfInteractive(): void {
+  if (!rendererReadyReported || !featuresReady) return
+  startupTelemetry.mark('workspace:ready')
+  void completeStartupIfReady()
+}
+
+async function completeStartupIfReady(): Promise<void> {
+  const output = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
+  if (
+    !startupTelemetry.hasMarked('workspace:ready') ||
+    !startupTelemetry.hasMarked('renderer:documentLoaded') ||
+    !startupTelemetry.hasMarked('window:visualReady')
+  ) {
+    return
+  }
+
+  if (!startupTelemetryReported) {
+    startupTelemetryReported = true
+    startupTelemetry.stopEventLoopMonitor()
+    startupTelemetry.report()
+  }
+
+  if (!output || packagedSmokeProofStarted) return
+  packagedSmokeProofStarted = true
+  try {
+    await writePackagedSmokeProof(output, startupTelemetry.snapshot())
+    setImmediate(() => app.quit())
+  } catch (error) {
+    Logger.error('Could not write packaged startup proof', error)
+    app.exit(1)
+  }
+}
 
 /** Sticky readiness query: unlike an event subscription, callers that mount
  * after post-paint registration still observe feature availability. */
@@ -228,14 +269,8 @@ ipcMain.handle('app:rendererReady', async () => {
   if (rendererReadyReported) return
   rendererReadyReported = true
   startupTelemetry.mark('renderer:hydrated')
-  startupTelemetry.mark('workspace:ready')
-  startupTelemetry.stopEventLoopMonitor()
-  startupTelemetry.report()
-  const smokeOutput = app.isPackaged ? process.env[PACKAGED_SMOKE_OUTPUT_ENV] : undefined
-  if (smokeOutput) {
-    await writePackagedSmokeProof(smokeOutput, startupTelemetry.snapshot())
-    setImmediate(() => app.quit())
-  }
+  markWorkspaceReadyIfInteractive()
+  await completeStartupIfReady()
 })
 
 /** Cmd/Ctrl+W is "close the active surface" — the renderer decides what that is. */
@@ -417,6 +452,8 @@ async function bootPostPaintServices(): Promise<void> {
   harnessManifestService.register()
   chatEngine.attachRetryScheduler(retryScheduler)
   featuresReady = true
+  startupTelemetry.mark('features:ready')
+  markWorkspaceReadyIfInteractive()
   resolveFeaturesReady?.()
   resolveFeaturesReady = null
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
@@ -563,6 +600,7 @@ async function bootPostPaintServices(): Promise<void> {
     try {
       providerConnection.warmUp()
       startupTelemetry.mark('provider:warmup')
+      startupTelemetry.report('startup background warmup')
     } catch (error) {
       Logger.error('Provider service warm-up failed (non-fatal):', error)
     }
@@ -618,9 +656,9 @@ function createWindow(): BrowserWindow {
     lockDownProductionWindow(window)
   }
 
-  window.webContents.once('did-finish-load', () => {
-    // Restore the maximized state before the first paint so the window never
-    // flashes at its restored size while the splash is closing.
+  window.once('ready-to-show', () => {
+    // Restore the maximized state before revealing the first rendered frame so
+    // the window never flashes at its restored size while the splash closes.
     if (windowStateService.shouldRestoreMaximized() && !window.isMaximized()) {
       window.maximize()
     }
@@ -774,19 +812,20 @@ void app
     startupTelemetry.mark('window:created')
 
     // Failsafe: never let the splash outlive the app even if the renderer
-    // never paints (e.g. a script error) — dismiss it on first load or close.
+    // never paints (e.g. a script error) — dismiss it after the bounded budget.
     // The budget is generous (60s) because on a low-end machine the renderer
     // legitimately takes a long time to boot; closing early would drop the
     // user onto a bare window while it still loads.
-    const splashFailsafe = setTimeout(closeSplash, 60_000)
-    window.webContents.once('did-finish-load', () => {
-      startupTelemetry.mark('window:firstPaint')
-      clearTimeout(splashFailsafe)
-      closeSplash()
+    let documentLoaded = false
+    let visualReady = false
+    let postVisualServicesStarted = false
+
+    const startPostVisualServices = (force = false): void => {
+      if (postVisualServicesStarted || (!force && (!documentLoaded || !visualReady))) return
+      postVisualServicesStarted = true
       // All feature service graphs are imported and constructed only after
-      // the primary window paints. This includes the IPC graph, so History,
-      // Plan, Spec, Brainstorm, Audit, Assignment, Memory, Git/GitHub and
-      // diagnostics engines never compete with the visible workspace.
+      // the primary window has both loaded and rendered. This includes the IPC
+      // graph, so optional engines never compete with the visible workspace.
       void bootPostPaintServices().catch((error) => {
         void handleFatalStartupFailure({
           error,
@@ -797,6 +836,31 @@ void app
           telemetry: startupTelemetry
         })
       })
+    }
+
+    const splashFailsafe = setTimeout(() => {
+      closeSplash()
+      if (!window.isDestroyed() && !window.isVisible()) window.show()
+      if (!postVisualServicesStarted) {
+        Logger.error(
+          'Visual startup milestone timed out; starting optional services in fallback mode'
+        )
+        startPostVisualServices(true)
+      }
+    }, 60_000)
+    window.webContents.once('did-finish-load', () => {
+      documentLoaded = true
+      startupTelemetry.mark('renderer:documentLoaded')
+      startPostVisualServices()
+      void completeStartupIfReady()
+    })
+    window.once('ready-to-show', () => {
+      visualReady = true
+      startupTelemetry.mark('window:visualReady')
+      clearTimeout(splashFailsafe)
+      closeSplash()
+      startPostVisualServices()
+      void completeStartupIfReady()
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)
