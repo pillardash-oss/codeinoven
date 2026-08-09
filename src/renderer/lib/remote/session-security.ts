@@ -115,12 +115,17 @@ export async function authenticateHandshake(
   return verifyHandshakeToken(secret, nonce, token)
 }
 
-/** Derived keys are deterministic per secret, so cache them per session. */
+/** Derived keys are deterministic per secret, so retain a small LRU. */
+export const MAX_DERIVED_KEY_CACHE_ENTRIES = 8
 const KEY_CACHE = new Map<string, CryptoKey>()
 
 async function deriveAesGcmKey(secret: string): Promise<CryptoKey> {
   const cached = KEY_CACHE.get(secret)
-  if (cached) return cached
+  if (cached) {
+    KEY_CACHE.delete(secret)
+    KEY_CACHE.set(secret, cached)
+    return cached
+  }
   const material = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, [
     'deriveKey'
   ])
@@ -137,6 +142,11 @@ async function deriveAesGcmKey(secret: string): Promise<CryptoKey> {
     ['encrypt', 'decrypt']
   )
   KEY_CACHE.set(secret, key)
+  while (KEY_CACHE.size > MAX_DERIVED_KEY_CACHE_ENTRIES) {
+    const oldest = KEY_CACHE.keys().next().value as string | undefined
+    if (!oldest) break
+    KEY_CACHE.delete(oldest)
+  }
   return key
 }
 
