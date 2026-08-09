@@ -437,6 +437,8 @@ export class RemoteRpcDispatcher {
           args[2] as ThreadContextUsage
         )
         return undefined
+      case 'thread:harnessUsage':
+        return this.threadManager.harnessUsageFor(this.string(args[0]), this.string(args[1]))
       case 'thread:loadMessages': {
         const before = args[2] as { createdAt?: number; id?: string } | undefined
         return this.threadManager.loadMessagePage(
