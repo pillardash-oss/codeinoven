@@ -579,7 +579,10 @@ export class RemoteModeController {
             transport: 'lan'
           })
           if (!outcome.ok || !outcome.device) return { accepted: false }
-          void this.rotatePairingBootstrap()
+          // enrollDevice atomically consumes the one-time bootstrap. Keep the
+          // granted transport key stable so account-backed LAN and relay
+          // reconnects can continue decrypting their existing cloud grant.
+          // An explicit "Create new code" action rotates it before re-enrollment.
           return { accepted: true, device: this.toDeviceInfo(outcome.device, true) }
         }
         if (deviceId && typeof authVersion === 'number') {
