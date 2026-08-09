@@ -927,6 +927,8 @@ export interface RegisterIpcHandlersOptions {
   retryScheduler?: RetrySchedulerService
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
+  /** Hydration channels already registered before BrowserWindow navigation. */
+  hydrationHandlersRegistered?: boolean
 }
 
 export function registerIpcHandlers(
@@ -997,7 +999,9 @@ export function registerIpcHandlers(
   }
 
   // ─── Application config ────────────────────────────────────────────────
-  ipcMain.handle('config:get', () => storage.getConfig())
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('config:get', () => storage.getConfig())
+  }
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
     const config = { ...(await storage.getConfig()), ...patch }
@@ -2392,12 +2396,14 @@ export function registerIpcHandlers(
       threadLimit: input.threadLimit ?? config.threadLimit
     })
   })
-  ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-  ipcMain.handle('project:list', () => projectManager.listProjects())
-  ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
-  ipcMain.handle('scope:get', (_, projectId: unknown) =>
-    scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
+    ipcMain.handle('project:list', () => projectManager.listProjects())
+    ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
+    ipcMain.handle('scope:get', (_, projectId: unknown) =>
+      scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
+    )
+  }
   ipcMain.handle('scope:save', (_, projectId: unknown, board: unknown) =>
     scopeManager.saveBoard(validateEntityId(projectId, 'Project ID'), validateScopeBoard(board))
   )
@@ -2413,9 +2419,11 @@ export function registerIpcHandlers(
     await projectManager.deleteProject(projectId)
     projectFilesService.invalidateProject(projectId)
   })
-  ipcMain.handle('project:getIcon', (_, projectId: string) =>
-    projectManager.getIconDataUrl(projectId)
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('project:getIcon', (_, projectId: string) =>
+      projectManager.getIconDataUrl(projectId)
+    )
+  }
   ipcMain.handle('project:setIcon', (_, projectId: string, sourcePath: string) =>
     projectManager.setIcon(projectId, sourcePath)
   )
@@ -3208,31 +3216,35 @@ export function registerIpcHandlers(
     }
     return thread
   })
-  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-    threadManager.getThread(projectId, threadId)
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
+      threadManager.getThread(projectId, threadId)
+    )
+  }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
-  // Bounded active-only hydration query: archived threads never cross IPC and
-  // the payload is capped, with the selected project ordered first so the
-  // visible workspace renders before the rest of the workspace data.
-  ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
-    const options = isRecord(rawOptions) ? rawOptions : {}
-    const projectId =
-      options.projectId === undefined
-        ? undefined
-        : validateEntityId(options.projectId, 'Project ID')
-    const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
-    const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
-    const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
-    if (!projectId) return threads
-    const preferred: Thread[] = []
-    const rest: Thread[] = []
-    for (const thread of threads) {
-      ;(thread.projectId === projectId ? preferred : rest).push(thread)
-    }
-    return [...preferred, ...rest]
-  })
+  if (!options.hydrationHandlersRegistered) {
+    // Bounded active-only hydration query: archived threads never cross IPC and
+    // the payload is capped, with the selected project ordered first so the
+    // visible workspace renders before the rest of the workspace data.
+    ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
+      const options = isRecord(rawOptions) ? rawOptions : {}
+      const projectId =
+        options.projectId === undefined
+          ? undefined
+          : validateEntityId(options.projectId, 'Project ID')
+      const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
+      const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
+      const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
+      if (!projectId) return threads
+      const preferred: Thread[] = []
+      const rest: Thread[] = []
+      for (const thread of threads) {
+        ;(thread.projectId === projectId ? preferred : rest).push(thread)
+      }
+      return [...preferred, ...rest]
+    })
+  }
   // Full history is deliberately opt-in: it is paged for the archive/timeline
   // controls and never participates in initial renderer hydration.
   ipcMain.handle('thread:listHistoryPage', async (_, rawOptions: unknown) => {
