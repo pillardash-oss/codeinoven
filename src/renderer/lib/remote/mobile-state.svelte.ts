@@ -29,6 +29,8 @@ export type MobileSidebarMode = 'projects' | 'threads' | 'chats'
 
 /** Status-based sort key mirroring the desktop sidebar ordering. */
 function threadSortKey(thread: Thread): number {
+  // The empty "New Thread" placeholder stays pinned at the top until first use.
+  if (thread.status === 'created') return 0
   if (
     thread.status === 'planning' ||
     thread.status === 'executing' ||
