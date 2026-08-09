@@ -51,6 +51,7 @@ describe('GitState store', () => {
 
   it('refresh resolves a typed GitStatus shape and derived accessors', async () => {
     mockInvokeForRefresh()
+    gitState.activate('project-1')
     await gitState.refresh('project-1')
 
     expect(invoke).toHaveBeenCalledWith('git:status', 'project-1')
@@ -81,6 +82,7 @@ describe('GitState store', () => {
     invoke.mockRejectedValue(
       new Error("Error invoking remote method 'git:status': Error: repository is locked")
     )
+    gitState.activate('project-1')
     await gitState.refresh('project-1')
     expect(gitState.error).toBe('repository is locked')
     expect(gitState.status).toBeNull()
@@ -112,8 +114,34 @@ describe('GitState store', () => {
       }
       return undefined
     })
+    gitState.activate('project-2')
     await gitState.refresh('project-2')
     expect(gitState.conflictState).toBe('merge')
     expect(gitState.conflicted).toEqual(['src/a.ts'])
+  })
+
+  it('never writes a stale refresh from a project that is no longer active', async () => {
+    mockInvokeForRefresh()
+    gitState.activate('project-1')
+    await gitState.refresh('project-1')
+    expect(gitState.status?.branch).toBe('feature/x')
+
+    // A refresh for the previous project starts, then the user switches.
+    let resolveStale: (status: GitStatus) => void
+    invoke.mockImplementation(async (channel: string) => {
+      if (channel === 'git:status') {
+        return new Promise<GitStatus>((resolve) => {
+          resolveStale = resolve
+        })
+      }
+      return undefined
+    })
+    const stale = gitState.refresh('project-1')
+    gitState.activate('project-2')
+    resolveStale!({ ...fixtureStatus, branch: 'stale/project-1' })
+    await stale
+
+    expect(gitState.status).toBeNull()
+    expect(gitState.branch).toBeNull()
   })
 })

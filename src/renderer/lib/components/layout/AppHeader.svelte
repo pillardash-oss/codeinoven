@@ -463,6 +463,10 @@
     if (!thread) return
     gitState.ensureProjectEvents(thread.projectId)
     const projectId = thread.projectId
+    // Claim this project first so the shared state is cleared of the previous
+    // project's data before a fresh load — never show one project's status
+    // while another is active.
+    gitState.activate(projectId)
     queueMicrotask(() => void gitState.refresh(projectId))
   })
 
