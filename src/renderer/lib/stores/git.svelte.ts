@@ -6,6 +6,9 @@ import type {
   GitDiff,
   GitFileChange,
   GitHubAuthStatus,
+  GitHubDeploymentDetail,
+  GitHubDeploymentJobLog,
+  GitHubDeploymentOverviewResult,
   GitHubDeviceCode,
   GitHubPollResult,
   GitIdentity,
@@ -55,9 +58,18 @@ export type GitOperation =
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
+  | 'deployments'
+  | 'deployment-detail'
+  | 'deployment-log'
 
 /** How long a cached PR page or bundle is served without refetching. */
 const PR_CACHE_TTL_MS = 60_000
+
+/** How long a cached deployment overview/detail is served without refetching. */
+const DEPLOYMENT_CACHE_TTL_MS = 60_000
+
+/** Job logs change rarely and are heavy — hold them a little longer. */
+const DEPLOYMENT_LOG_CACHE_TTL_MS = 5 * 60_000
 
 /**
  * How long a failed PR request is remembered before it may be tried again.
@@ -547,9 +559,43 @@ export class GitState {
   prAgentReports: Record<string, PrAgentReport> = $state({})
 
   /**
-   * Epoch ms of the last failure per PR cache key. Deliberately plain (not
-   * `$state`) — it only gates fetching, and making it reactive would feed the
-   * very effects that triggered the request.
+   * Cached deployment overviews, details, and job logs — the same
+   * stale-while-revalidate pattern as the PR caches. The Deployments tab is
+   * mounted/unmounted on every tab switch, so cached data renders instantly
+   * and is revalidated in the background once it ages past the TTL.
+   */
+  deploymentOverviews: Record<
+    string,
+    { overview: GitHubDeploymentOverviewResult; fetchedAt: number }
+  > = $state({})
+  deploymentDetails: Record<string, { detail: GitHubDeploymentDetail; fetchedAt: number }> = $state(
+    {}
+  )
+  deploymentLogs: Record<string, { log: GitHubDeploymentJobLog; fetchedAt: number }> = $state({})
+
+  /**
+   * Epoch ms of the last failure per deployment cache key. Deliberately plain
+   * (not `$state`) — it only gates fetching, and making it reactive would feed
+   * the very effects that triggered the request.
+   */
+  private deploymentFailures: Record<string, number> = {}
+
+  /** True while a key is inside its post-failure cooldown. */
+  private deploymentCoolingDown(key: string): boolean {
+    const failedAt = this.deploymentFailures[key]
+    if (failedAt === undefined) return false
+    if (Date.now() - failedAt < PR_ERROR_COOLDOWN_MS) return true
+    delete this.deploymentFailures[key]
+    return false
+  }
+
+  private markDeploymentFailure(key: string): void {
+    this.deploymentFailures[key] = Date.now()
+  }
+
+  /** Epoch ms of the last failure per PR cache key. Deliberately plain (not
+   *  `$state`) — it only gates fetching, and making it reactive would feed the
+   *  very effects that triggered the request.
    */
   private prFailures: Record<string, number> = {}
 
@@ -572,6 +618,18 @@ export class GitState {
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {
     return `${owner}/${repo}#${pullNumber}`
+  }
+
+  static deploymentKey(owner: string, repo: string): string {
+    return `${owner}/${repo}`
+  }
+
+  static deploymentDetailKey(owner: string, repo: string, deploymentId: number): string {
+    return `${owner}/${repo}#${deploymentId}`
+  }
+
+  static deploymentLogKey(owner: string, repo: string, jobId: number): string {
+    return `${owner}/${repo}/jobs/${jobId}`
   }
 
   /**
@@ -642,6 +700,105 @@ export class GitState {
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit files could not be loaded')
       return []
+    }
+  }
+
+  /**
+   * Load the deployment overview, serving cache first.
+   *
+   * Returns immediately when fresh cache exists; otherwise fetches and updates
+   * the cache. `force` bypasses both the TTL and the failure cooldown (explicit
+   * refresh). Failures rethrow so the caller can surface a tailored message
+   * (e.g. the GitHub App permission screen) while any stale cache stays on screen.
+   */
+  async ensureDeploymentOverview(
+    projectId: string,
+    owner: string,
+    repo: string,
+    force = false
+  ): Promise<GitHubDeploymentOverviewResult | null> {
+    const key = GitState.deploymentKey(owner, repo)
+    const cached = this.deploymentOverviews[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < DEPLOYMENT_CACHE_TTL_MS) {
+      return cached.overview
+    }
+    if (!force && this.deploymentCoolingDown(key)) return cached?.overview ?? null
+    this.markBusy('deployments', true)
+    try {
+      const result = await invoke('deployment:overview', projectId, owner, repo)
+      this.deploymentOverviews = {
+        ...this.deploymentOverviews,
+        [key]: { overview: result, fetchedAt: Date.now() }
+      }
+      delete this.deploymentFailures[key]
+      return result
+    } catch (reason) {
+      this.markDeploymentFailure(key)
+      throw reason
+    } finally {
+      this.markBusy('deployments', false)
+    }
+  }
+
+  /** Load one deployment's rich detail, serving cache first (same pattern). */
+  async ensureDeploymentDetail(
+    projectId: string,
+    owner: string,
+    repo: string,
+    deploymentId: number,
+    force = false
+  ): Promise<GitHubDeploymentDetail | null> {
+    const key = GitState.deploymentDetailKey(owner, repo, deploymentId)
+    const cached = this.deploymentDetails[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < DEPLOYMENT_CACHE_TTL_MS) {
+      return cached.detail
+    }
+    if (!force && this.deploymentCoolingDown(key)) return cached?.detail ?? null
+    this.markBusy('deployment-detail', true)
+    try {
+      const result = await invoke('deployment:detail', projectId, owner, repo, deploymentId)
+      this.deploymentDetails = {
+        ...this.deploymentDetails,
+        [key]: { detail: result, fetchedAt: Date.now() }
+      }
+      delete this.deploymentFailures[key]
+      return result
+    } catch (reason) {
+      this.markDeploymentFailure(key)
+      throw reason
+    } finally {
+      this.markBusy('deployment-detail', false)
+    }
+  }
+
+  /** Load a job log, serving cache first. Logs hold a longer TTL than other caches. */
+  async ensureDeploymentJobLog(
+    projectId: string,
+    owner: string,
+    repo: string,
+    jobId: number,
+    force = false
+  ): Promise<GitHubDeploymentJobLog | null> {
+    const key = GitState.deploymentLogKey(owner, repo, jobId)
+    const cached = this.deploymentLogs[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < DEPLOYMENT_LOG_CACHE_TTL_MS) {
+      return cached.log
+    }
+    if (!force && this.deploymentCoolingDown(key)) return cached?.log ?? null
+    this.markBusy('deployment-log', true)
+    try {
+      const result = await invoke('deployment:jobLog', projectId, owner, repo, jobId)
+      this.deploymentLogs = {
+        ...this.deploymentLogs,
+        [key]: { log: result, fetchedAt: Date.now() }
+      }
+      delete this.deploymentFailures[key]
+      return result
+    } catch (reason) {
+      this.markDeploymentFailure(key)
+      throw reason
+    } finally {
+      this.markBusy('deployment-log', false)
     }
   }
 

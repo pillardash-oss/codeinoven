@@ -256,17 +256,23 @@
   /**
    * Discover whether the repo has GitHub deployment activity so the Deployments
    * tab can appear on its own. Only meaningful while signed in with a GitHub
-   * origin remote. The main process persists the DB flag; we mirror it into
-   * localStorage here for fast rendering on the next panel open.
+   * origin remote. Routes through the store so the probe also warms the overview
+   * cache the Deployments tab reads — first visit renders instantly.
    */
   async function detectDeployments(): Promise<void> {
     const identity = githubIdentity
     if (!githubConnected || !identity || detectingDeployments) return
     detectingDeployments = true
     try {
-      const overview = await invoke('deployment:overview', projectId, identity.owner, identity.repo)
-      hasDeployments = overview.hasDeployments
-      cacheHasDeployments(projectId, overview.hasDeployments)
+      const overview = await gitState.ensureDeploymentOverview(
+        projectId,
+        identity.owner,
+        identity.repo
+      )
+      if (overview) {
+        hasDeployments = overview.hasDeployments
+        cacheHasDeployments(projectId, overview.hasDeployments)
+      }
     } catch {
       // Sign-in or network failure — keep the current flag and try again later.
     } finally {
