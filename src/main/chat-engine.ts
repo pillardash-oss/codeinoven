@@ -27,7 +27,7 @@ import {
   clearNotificationAborting,
   notifyTemporaryChat
 } from './thread-events'
-import { MemoryService, estimateTokens, modelTitlesEnabled } from './memory-service'
+import { MemoryService, estimateTokens } from './memory-service'
 import { PromptAssembler } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from './permissions/permission-policy'
 import { validateBoundedString, validateEntityId, validateThreadSettings } from './ipc-validation'
@@ -4721,10 +4721,6 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual') return
-    // Heuristic titles are the default (the fallback is applied in
-    // `sendPrompt()`); model-generated titles run only when explicitly opted
-    // in so ordinary turns never spawn an auxiliary model session (A-06).
-    if (!modelTitlesEnabled()) return
 
     let generated: string | null
     try {

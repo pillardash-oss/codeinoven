@@ -7,8 +7,7 @@ vi.mock('electron', () => ({
 
 vi.mock('./memory-service', () => ({
   MemoryService: class {},
-  estimateTokens: (text: string) => Math.ceil(text.length / 4),
-  modelTitlesEnabled: () => false
+  estimateTokens: (text: string) => Math.ceil(text.length / 4)
 }))
 
 import { formatHistoryRecap } from './chat-engine'
