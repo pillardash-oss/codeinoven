@@ -73,6 +73,7 @@ export class RemoteSessionStore {
   private keyMaterial: DeviceKeyMaterial | null = null
   /** Resolves once the phone has authenticated as a device over the relay. */
   private relayDeviceAuth: Promise<void> | null = null
+  private relayChallengeReceived = false
 
   private async ensureKeyMaterial(): Promise<DeviceKeyMaterial> {
     if (this.keyMaterial) return this.keyMaterial
@@ -116,6 +117,7 @@ export class RemoteSessionStore {
         if (typeof parsed !== 'object' || parsed === null) return
         const record = parsed as Record<string, unknown>
         if (record['type'] === 'remote:device:challenge' && typeof record['nonce'] === 'string') {
+          this.relayChallengeReceived = true
           void this.respondToRelayChallenge(record['nonce'] as string).catch((error) => {
             remoteLog.error(`Could not respond to the relay device challenge: ${String(error)}`)
             clearTimeout(timer)
@@ -228,15 +230,16 @@ export class RemoteSessionStore {
     this.secret = input.controlSecret
     this.closeChannels()
     this.dispatch({ type: 'relayProbeStart' })
-    // Register the relay device challenge-response before connecting so no
-    // desktop-issued challenge is missed, and surface a human-readable failure
-    // if the phone cannot authenticate as an enrolled device.
+    this.relayChallengeReceived = false
+    // Install the first listener before opening the socket so a challenge
+    // replayed from the relay buffer cannot arrive before the phone is ready.
     this.relayDeviceAuth = this.beginRelayDeviceAuth()
     this.relayDeviceAuth.catch(() => {
       if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
         this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
       }
     })
+    let awaitingInitialConnection = true
     // The account-relay client owns reconnection (full-jitter backoff that
     // preserves its bounded queue across socket drops), so the store never
     // spawns a duplicate client per disconnect.
@@ -257,12 +260,23 @@ export class RemoteSessionStore {
         if (event.kind === 'connected' && this.accountRelayClient === client) {
           this.accountReconnectAttempt = 0
           this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
-          this.relayDeviceAuth = this.beginRelayDeviceAuth()
-          this.relayDeviceAuth.catch(() => {
-            if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-              this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-            }
-          })
+          if (awaitingInitialConnection) {
+            awaitingInitialConnection = false
+          } else {
+            this.relayChallengeReceived = false
+            this.relayDeviceAuth = this.beginRelayDeviceAuth()
+            this.relayDeviceAuth.catch(() => {
+              if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
+                this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+              }
+            })
+          }
+          // The desktop relay socket may outlive many mobile reconnects, so a
+          // new mobile connection explicitly requests its own one-time device
+          // challenge after its listener is installed.
+          if (!this.relayChallengeReceived) {
+            void this.sendRaw({ type: 'remote:device:challenge-request' })
+          }
           this.scheduleLanUpgrade()
           return
         }
