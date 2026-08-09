@@ -236,7 +236,7 @@ describe('account relay end-to-end protocol (real RelayHub)', () => {
     // routes the result back. No ACK is issued by the hub on acceptance.
     await sendMobileData(mobileWire.mobile, { rpc: 'invoke', id: 1, channel: 'chat', args: [] })
     await vi.waitFor(() => {
-      expect(desktopWire.onRpc).toHaveBeenCalledWith('chat', [])
+      expect(desktopWire.onRpc).toHaveBeenCalledWith('chat', [], undefined)
     })
     await vi.waitFor(() => {
       expect(mobileMessages).toHaveLength(1)

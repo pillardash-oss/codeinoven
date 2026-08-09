@@ -36,7 +36,7 @@ describe('simple-git spike against the system git binary', () => {
     const directory = await temporaryDirectory()
     const repo = simpleGit(directory)
 
-    await repo.init()
+    await repo.init({ '--initial-branch': 'main' })
 
     await writeFile(join(directory, 'hello.txt'), 'one\n', 'utf-8')
     const dirty = await repo.status()
@@ -55,13 +55,13 @@ describe('simple-git spike against the system git binary', () => {
     const bare = await temporaryDirectory('codeinoven-git-spike-bare')
     const repo = simpleGit(working)
 
-    await repo.init()
+    await repo.init({ '--initial-branch': 'main' })
     await writeFile(join(working, 'feature.txt'), 'feature\n', 'utf-8')
     await repo.add('.')
     await repo.commit('feature commit')
 
-    await repo.init()
-    await simpleGit(bare).init(true)
+    await repo.init({ '--initial-branch': 'main' })
+    await simpleGit(bare).init(true, { '--initial-branch': 'main' })
     await repo.addRemote('origin', bare)
     await repo.push(['--set-upstream', 'origin', 'HEAD'])
 
@@ -75,7 +75,7 @@ describe('simple-git spike against the system git binary', () => {
     const directory = await temporaryDirectory()
     const repo = simpleGit(directory)
 
-    await repo.init()
+    await repo.init({ '--initial-branch': 'main' })
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await commitEverything(repo, 'base')
 
@@ -105,7 +105,7 @@ describe('simple-git spike against the system git binary', () => {
     const directory = await temporaryDirectory()
     const repo = simpleGit(directory)
 
-    await repo.init()
+    await repo.init({ '--initial-branch': 'main' })
     await writeFile(join(directory, 'rebase.txt'), 'base\n', 'utf-8')
     await commitEverything(repo, 'base')
 

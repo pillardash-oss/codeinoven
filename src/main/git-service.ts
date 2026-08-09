@@ -239,7 +239,7 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).init()
+        await this.client(directory).init({ '--initial-branch': 'main' })
       })
       return this.readStatus(directory)
     })

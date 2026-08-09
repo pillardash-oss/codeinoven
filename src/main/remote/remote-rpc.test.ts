@@ -157,7 +157,7 @@ describe('RemoteRpcDispatcher', () => {
     const db = await createTestDb()
     try {
       const repo = simpleGit(gitDir)
-      await repo.init()
+      await repo.init({ '--initial-branch': 'main' })
       await writeFile(join(gitDir, 'file.txt'), 'hello\n', 'utf-8')
       await repo.add('.')
       await repo.commit('initial')
