@@ -1,4 +1,6 @@
 import type {
+  GitHubDeploymentDetail,
+  GitHubDeploymentJobLog,
   GitHubDeploymentOverview,
   GitRepositoryIdentity,
   PrDraft,
@@ -80,6 +82,18 @@ export interface GitProvider {
   getCommitFiles(input: { owner: string; repo: string }, sha: string): Promise<PullRequestFile[]>
   /** Recent workflow runs and deployments for read-only repository monitoring. */
   getDeploymentOverview(input: { owner: string; repo: string }): Promise<GitHubDeploymentOverview>
+  /** Rich in-app deployment detail: status history, linked run, jobs/steps. */
+  getDeploymentDetail(input: {
+    owner: string
+    repo: string
+    deploymentId: number
+  }): Promise<GitHubDeploymentDetail>
+  /** Capped raw log text for one workflow run job, for the in-app log viewer. */
+  getDeploymentJobLog(input: {
+    owner: string
+    repo: string
+    jobId: number
+  }): Promise<GitHubDeploymentJobLog>
   /**
    * Resolve `owner/repo` from a remote URL so PR calls can target the right
    * repository without asking the user for an extra identity.

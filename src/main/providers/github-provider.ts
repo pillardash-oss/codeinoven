@@ -1,5 +1,9 @@
 import type {
   GitHubDeployment,
+  GitHubDeploymentDetail,
+  GitHubDeploymentJob,
+  GitHubDeploymentJobLog,
+  GitHubDeploymentJobStep,
   GitHubDeploymentOverview,
   GitHubDeploymentStatus,
   GitRepositoryIdentity,
@@ -36,6 +40,9 @@ export const PROVIDER_API_BASE_URL_ENV = 'CODEINOVEN_GIT_PROVIDER_API_BASE_URL'
 
 /** Network timeout so a slow provider never hangs the UI. */
 const PROVIDER_FETCH_TIMEOUT_MS = 15_000
+
+/** Cap on the raw job log text streamed into the app (roughly 200 KB). */
+const MAX_JOB_LOG_BYTES = 200_000
 
 const GITHUB_API_ACCEPT = 'application/vnd.github+json'
 const GITHUB_API_VERSION = '2022-11-28'
@@ -363,6 +370,159 @@ export class GitHubProvider implements GitProvider {
     return { workflowRuns, deployments, fetchedAt: Date.now() }
   }
 
+  /**
+   * Everything the in-app deployment detail view needs: the deployment itself,
+   * its full status history, the Actions run that drove it, and that run's
+   * job/step breakdown. Each sub-request degrades gracefully so a partial
+   * picture still renders instead of failing the whole drill-down.
+   */
+  async getDeploymentDetail(input: {
+    owner: string
+    repo: string
+    deploymentId: number
+  }): Promise<GitHubDeploymentDetail> {
+    const base = this.repoPath(input)
+    const [deploymentPayload, statusesPayload] = await Promise.all([
+      this.request(`${base}/deployments/${input.deploymentId}`, { method: 'GET' }).catch(
+        () => null
+      ),
+      this.request(`${base}/deployments/${input.deploymentId}/statuses?per_page=50`, {
+        method: 'GET'
+      }).catch(() => null)
+    ])
+    const deploymentRecord =
+      !Array.isArray(deploymentPayload) && deploymentPayload !== null ? deploymentPayload : null
+    const deploymentBase = (deploymentRecord ? this.toDeployment(deploymentRecord) : null) ?? {
+      id: input.deploymentId,
+      environment: 'Deployment',
+      description: '',
+      ref: '',
+      sha: '',
+      createdAt: '',
+      updatedAt: '',
+      latestStatus: null
+    }
+    const statuses = Array.isArray(statusesPayload)
+      ? statusesPayload.flatMap((entry): GitHubDeploymentStatus[] => {
+          const mapped = this.toDeploymentStatus(entry)
+          return mapped ? [mapped] : []
+        })
+      : []
+    const deployment: GitHubDeployment = {
+      ...deploymentBase,
+      latestStatus: statuses[0] ?? deploymentBase.latestStatus
+    }
+    const workflowRun = await this.resolveDeploymentRun(input, deployment, statuses)
+    const jobs = workflowRun ? await this.getRunJobs(input, workflowRun.id) : []
+    return { deployment, statuses, workflowRun, jobs, fetchedAt: Date.now() }
+  }
+
+  /** Capped raw log text for one workflow run job, rendered in-app. */
+  async getDeploymentJobLog(input: {
+    owner: string
+    repo: string
+    jobId: number
+  }): Promise<GitHubDeploymentJobLog> {
+    const path = `${this.repoPath(input)}/actions/jobs/${input.jobId}/logs`
+    const text = await this.requestText(path)
+    const truncated = text.length > MAX_JOB_LOG_BYTES
+    return {
+      jobId: input.jobId,
+      log: truncated ? text.slice(0, MAX_JOB_LOG_BYTES) : text,
+      truncated
+    }
+  }
+
+  /** Resolve the Actions run behind a deployment: from a status URL first, then by head sha. */
+  private async resolveDeploymentRun(
+    input: { owner: string; repo: string },
+    deployment: GitHubDeployment,
+    statuses: GitHubDeploymentStatus[]
+  ): Promise<GitHubWorkflowRun | null> {
+    const linkedRunId = this.runIdFromDeploymentStatuses(statuses)
+    if (linkedRunId > 0) {
+      const runPayload = await this.request(`${this.repoPath(input)}/actions/runs/${linkedRunId}`, {
+        method: 'GET'
+      }).catch(() => null)
+      if (runPayload !== null && !Array.isArray(runPayload)) {
+        const mapped = this.toWorkflowRun(runPayload)
+        if (mapped) return mapped
+      }
+    }
+    if (!deployment.sha) return null
+    const runsPayload = await this.request(
+      `${this.repoPath(input)}/actions/runs?head_sha=${encodeURIComponent(deployment.sha)}&per_page=5`,
+      { method: 'GET' }
+    ).catch(() => null)
+    const record = Array.isArray(runsPayload) ? {} : (runsPayload ?? {})
+    const rawRuns = Array.isArray(record['workflow_runs']) ? record['workflow_runs'] : []
+    for (const entry of rawRuns) {
+      const mapped = this.toWorkflowRun(entry)
+      if (mapped) return mapped
+    }
+    return null
+  }
+
+  /** Deployment statuses created by Actions carry the run id in their log/env URLs. */
+  private runIdFromDeploymentStatuses(statuses: GitHubDeploymentStatus[]): number {
+    for (const status of statuses) {
+      for (const url of [status.logUrl, status.environmentUrl]) {
+        if (!url) continue
+        const match = /\/actions\/runs\/(\d+)/u.exec(url)
+        if (!match) continue
+        const id = Number.parseInt(match[1] ?? '', 10)
+        if (Number.isSafeInteger(id) && id > 0) return id
+      }
+    }
+    return 0
+  }
+
+  private async getRunJobs(
+    input: { owner: string; repo: string },
+    runId: number
+  ): Promise<GitHubDeploymentJob[]> {
+    const response = await this.request(
+      `${this.repoPath(input)}/actions/runs/${runId}/jobs?per_page=50`,
+      { method: 'GET' }
+    ).catch(() => null)
+    const record = Array.isArray(response) ? {} : (response ?? {})
+    const rawJobs = Array.isArray(record['jobs']) ? record['jobs'] : []
+    return rawJobs.flatMap((job): GitHubDeploymentJob[] => {
+      const mapped = this.toDeploymentJob(job)
+      return mapped ? [mapped] : []
+    })
+  }
+
+  /** Perform a text/plain fetch (e.g. raw job logs), mirroring `request` auth/refresh. */
+  private async requestText(path: string): Promise<string> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), PROVIDER_FETCH_TIMEOUT_MS)
+    const init: RequestInit = { method: 'GET', headers: { Accept: 'text/plain' } }
+    try {
+      let token = this.token
+      let response = await this.fetch(path, init, token, controller.signal)
+      if (response.status === 401 && this.refreshAccessToken) {
+        const refreshedToken = await this.refreshAccessToken()
+        if (refreshedToken && refreshedToken !== token) {
+          token = refreshedToken
+          response = await this.fetch(path, init, token, controller.signal)
+        }
+      }
+      if (!response.ok) {
+        const message = await this.readErrorMessage(response)
+        throw new Error(`Provider returned HTTP ${response.status}${message ? `: ${message}` : ''}`)
+      }
+      return await response.text()
+    } catch (failure) {
+      if (failure instanceof Error && failure.name === 'AbortError') {
+        throw new Error('Provider request timed out', { cause: failure })
+      }
+      throw failure
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   resolveRepositoryIdentity(remoteUrl: string): GitRepositoryIdentity | null {
     const url = remoteUrl.trim()
     if (!url) return null
@@ -528,6 +688,46 @@ export class GitHubProvider implements GitProvider {
       environmentUrl: this.readString(record, 'environment_url'),
       logUrl: this.readString(record, 'log_url'),
       createdAt: this.readString(record, 'created_at') ?? ''
+    }
+  }
+
+  private toDeploymentJob(payload: unknown): GitHubDeploymentJob | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const id = this.readNumber(record, 'id')
+    if (id <= 0) return null
+    const rawSteps = Array.isArray(record['steps']) ? record['steps'] : []
+    const steps = rawSteps.flatMap((step): GitHubDeploymentJobStep[] => {
+      const mapped = this.toDeploymentJobStep(step)
+      return mapped ? [mapped] : []
+    })
+    return {
+      id,
+      name: this.readString(record, 'name') ?? 'Job',
+      status: this.readString(record, 'status') ?? 'unknown',
+      conclusion: this.readString(record, 'conclusion'),
+      startedAt: this.readString(record, 'started_at') ?? '',
+      completedAt: this.readString(record, 'completed_at'),
+      url: this.readString(record, 'html_url') ?? '',
+      steps
+    }
+  }
+
+  private toDeploymentJobStep(payload: unknown): GitHubDeploymentJobStep | null {
+    if (typeof payload !== 'object' || payload === null) return null
+    const record = payload as Record<string, unknown>
+    const number = this.readNumber(record, 'number')
+    if (number <= 0) return null
+    const rawStatus = this.readString(record, 'status')
+    const status =
+      rawStatus === 'queued' || rawStatus === 'in_progress' || rawStatus === 'completed'
+        ? rawStatus
+        : 'unknown'
+    return {
+      number,
+      name: this.readString(record, 'name') ?? 'Step',
+      status,
+      conclusion: this.readString(record, 'conclusion')
     }
   }
 

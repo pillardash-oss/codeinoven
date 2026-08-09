@@ -3025,6 +3025,32 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
+    'deployment:detail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, deploymentId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to inspect deployments')
+      return provider.getDeploymentDetail({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        deploymentId: validateBoundedInteger(deploymentId, 'Deployment ID', 1, 2_147_483_647)
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:jobLog',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, jobId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to read job logs')
+      return provider.getDeploymentJobLog({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        jobId: validateBoundedInteger(jobId, 'Job ID', 1, 2_147_483_647)
+      })
+    }
+  )
+
+  ipcMain.handle(
     'pr:bundle',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
