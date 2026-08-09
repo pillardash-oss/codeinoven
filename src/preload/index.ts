@@ -349,6 +349,7 @@ const INVOKE_CHANNELS = [
   'remote:resetCloudEnrollment',
   'app:confirmClose',
   'app:requestClose',
+  'app:waitForFeatures',
   'app:rendererReady'
 ] as const satisfies readonly InvokeChannel[]
 
@@ -358,6 +359,7 @@ void allInvokeChannelsRegistered
 
 const SEND_CHANNELS = ['pty:resize', 'pty:write'] as const
 const EVENT_CHANNELS = [
+  'app:featuresReady',
   'agent:event',
   'agent:processesChanged',
   'agent:temporaryChatExpired',

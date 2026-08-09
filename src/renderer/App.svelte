@@ -711,23 +711,26 @@
       }
 
       // 4. Warm only the selected project's provider catalog (plus inbox for
-      //    chats). Other projects hydrate lazily when their model picker opens,
-      //    so startup never probes every harness across every project.
-      window.requestAnimationFrame(() => {
-        const targets = scopeState.activeProjectId
-          ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
-          : [INBOX_PROJECT_ID]
-        // Seed model pickers from local snapshots without triggering harness probes.
-        // Live discovery is deferred until the model picker opens or the user
-        // explicitly refreshes, so startup can focus on first paint.
-        void providerCatalog.init(targets, { refresh: false })
-        // Canonical-ordered harness list (registry order) — the model picker's
-        // harness filter sorts against this so its chip order never depends on
-        // catalog insertion order.
-        void providerStore.init()
-        if (scopeState.activeProjectId) {
-          void providerCatalog.refresh(scopeState.activeProjectId, true)
-        }
+      //    chats), after the post-paint feature IPC contract is available.
+      //    `app:waitForFeatures` is sticky, so this remains safe when the
+      //    feature-ready event arrived before the renderer mounted.
+      void invoke('app:waitForFeatures').then(() => {
+        window.requestAnimationFrame(() => {
+          const targets = scopeState.activeProjectId
+            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+            : [INBOX_PROJECT_ID]
+          // Seed model pickers from local snapshots without triggering harness probes.
+          // Live discovery is deferred until the model picker opens or the user
+          // explicitly refreshes, so startup can focus on first paint.
+          void providerCatalog.init(targets, { refresh: false })
+          // Canonical-ordered harness list (registry order) — the model picker's
+          // harness filter sorts against this so its chip order never depends on
+          // catalog insertion order.
+          void providerStore.init()
+          if (scopeState.activeProjectId) {
+            void providerCatalog.refresh(scopeState.activeProjectId, true)
+          }
+        })
       })
     } catch {
       scopeState.setScopesFromProjects([], new Map())

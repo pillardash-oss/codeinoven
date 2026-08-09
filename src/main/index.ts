@@ -197,6 +197,15 @@ ipcMain.handle('app:requestClose', () => {
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */
 let rendererReadyReported = false
+let featuresReady = false
+let resolveFeaturesReady: (() => void) | null = null
+const featuresReadyPromise = new Promise<void>((resolve) => {
+  resolveFeaturesReady = resolve
+})
+
+/** Sticky readiness query: unlike an event subscription, callers that mount
+ * after post-paint registration still observe feature availability. */
+ipcMain.handle('app:waitForFeatures', () => (featuresReady ? undefined : featuresReadyPromise))
 
 /**
  * The renderer reports when its initial hydration is done (visible projects,
@@ -351,9 +360,9 @@ function closeSplash(): void {
  * has painted. Dynamic imports keep the heavy modules (PTY, harness services,
  * provider connection, remote mode, notifications, …) out of the
  * module-evaluation path so first paint is never blocked by their construction.
- * Optional IPC is registered here — the essential data surface
- * (config/project/thread/scope/file handlers, `app:*`, session policy, file
- * preview, chat/agent catalog) is registered before the window is created.
+ * Hydration IPC (config/project/bounded-thread/scope reads plus `app:*`) is
+ * registered before navigation. Feature IPC, chat, provider catalog, file
+ * preview, and optional services are registered here after first paint.
  */
 async function bootPostPaintServices(): Promise<void> {
   if (updaterService) return
@@ -361,6 +370,9 @@ async function bootPostPaintServices(): Promise<void> {
     { registerIpcHandlers },
     { ProjectManager },
     { ProjectFilesService },
+    { ChatEngine },
+    { HarnessManifestService },
+    { ComputerUsePipService },
     { UpdaterService },
     { PowerWakeService },
     { RetrySchedulerService }
@@ -368,17 +380,20 @@ async function bootPostPaintServices(): Promise<void> {
     import('./ipc-handlers'),
     import('../lib/engines/project-manager'),
     import('./project-files-service'),
+    import('./chat-engine'),
+    import('./harness-manifest-service'),
+    import('./computer-use-pip-service'),
     import('./updater-service'),
     import('./power-wake-service'),
     import('./retry-scheduler-service')
   ])
 
-  if (!chatEngine || !harnessManifestService || !computerUsePipService) {
-    throw new Error('Hydration services were not initialized before feature startup')
-  }
   const projectManager = new ProjectManager(database)
   const projectFilesService = new ProjectFilesService(projectManager)
   installFilePreviewProtocol(projectFilesService)
+  computerUsePipService = new ComputerUsePipService(storage)
+  harnessManifestService = new HarnessManifestService(storage)
+  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
@@ -391,7 +406,15 @@ async function bootPostPaintServices(): Promise<void> {
     harnessManifestService,
     hydrationHandlersRegistered: true
   })
+  chatEngine.register()
+  harnessManifestService.register()
   chatEngine.attachRetryScheduler(retryScheduler)
+  featuresReady = true
+  resolveFeaturesReady?.()
+  resolveFeaturesReady = null
+  if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('app:featuresReady')
+  }
 
   void (async () => {
     const [
@@ -526,27 +549,6 @@ async function bootPostPaintServices(): Promise<void> {
       Logger.error('Update/notification startup failed (non-fatal):', error)
     }
   })()
-}
-
-/**
- * Initialize only the services whose IPC is used while the renderer document
- * evaluates. All feature engines remain dynamically imported after first
- * paint, but provider snapshots and canonical harness ordering are available
- * to the selected-project catalog warm-up from its first animation frame.
- */
-async function bootHydrationServices(): Promise<void> {
-  const [{ ChatEngine }, { HarnessManifestService }, { ComputerUsePipService }] = await Promise.all(
-    [
-      import('./chat-engine'),
-      import('./harness-manifest-service'),
-      import('./computer-use-pip-service')
-    ]
-  )
-  computerUsePipService = new ComputerUsePipService(storage)
-  harnessManifestService = new HarnessManifestService(storage)
-  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
-  chatEngine.register()
-  harnessManifestService.register()
 }
 
 /**
@@ -728,7 +730,6 @@ void app
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
     registerHydrationIpcHandlers(storage, database)
-    await bootHydrationServices()
 
     // Deny every permission request from the renderer (camera, microphone,
     // notifications, geolocation, fullscreen, etc.). No desktop feature relies
