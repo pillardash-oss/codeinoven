@@ -309,6 +309,8 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
 
 export function threadSortKey(t: Thread, draftThreadKeys?: ReadonlySet<string> | null): number {
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
+  // The empty "New Thread" placeholder stays pinned at the top until first use.
+  if (t.status === 'created') return 0
   if (
     t.status === 'planning' ||
     t.status === 'executing' ||
