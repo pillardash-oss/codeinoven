@@ -37,11 +37,12 @@ export interface CloudRelayClientOptions {
   credentials?: DeviceCredentialService
   /**
    * Called once when a NEW device completes relay enrollment (not on
-   * reconnects). The controller uses it to rotate the persisted peer secret,
-   * gateway secret, displayed QR, and registered five-minute bootstrap
-   * immediately — exactly like the LAN path.
+   * reconnects). The controller rotates the persisted peer secret, gateway
+   * secret, displayed QR, and registered five-minute bootstrap. The client
+   * awaits it before acknowledging enrollment; a rejection denies enrollment
+   * and surfaces a rotation failure.
    */
-  onDeviceEnrolled?: (deviceId: string) => void
+  onDeviceEnrolled?: (deviceId: string) => Promise<void>
   /** Abort the connection when the signal fires (shutdown / config change). */
   signal?: AbortSignal
   /** Deadlines in milliseconds. */
@@ -509,7 +510,10 @@ export class CloudRelayClient {
       this.credentials?.audit({
         decision: 'auth_failed',
         reasonCode:
-          reason === 'bootstrap_used' || reason === 'signature_invalid' || reason === 'mismatch'
+          reason === 'bootstrap_used' ||
+          reason === 'signature_invalid' ||
+          reason === 'mismatch' ||
+          reason === 'rotation_failed'
             ? reason
             : 'malformed',
         deviceId: deviceId || null,
@@ -566,7 +570,17 @@ export class CloudRelayClient {
         return
       }
       device = outcome.device
-      this.options.onDeviceEnrolled?.(device.deviceId)
+      // The controller rotates the persisted peer secret / QR / bootstrap
+      // before the phone is told its enrollment succeeded. If rotation fails,
+      // enrollment is denied and surfaced so the old bootstrap never lingers.
+      if (this.options.onDeviceEnrolled) {
+        try {
+          await this.options.onDeviceEnrolled(device.deviceId)
+        } catch {
+          fail('rotation_failed')
+          return
+        }
+      }
     } else if (deviceId && typeof authVersion === 'number') {
       const transcript = handshakeTranscript({
         nonce: presentedNonce,

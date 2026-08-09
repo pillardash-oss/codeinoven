@@ -267,6 +267,7 @@ export class RemoteRpcDispatcher {
         channel: invoke.channel,
         resourceId: this.resourceForChannel(invoke.channel, invoke.args),
         requiredScope: authMeta?.scope ?? null,
+        stepUpApprovalId,
         authVersion: invoke.device?.authVersion ?? null
       })
       return { ok: false, message }
