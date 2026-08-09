@@ -449,8 +449,7 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
     const user = database.findUserById(session.userId)
     return user
       ? json({
-          user: { id: user.id, email: user.email, displayName: user.display_name },
-          entitlement: database.entitlementForUser(user.id)
+          user: { id: user.id, email: user.email, displayName: user.display_name }
         })
       : json({ error: 'unauthorized' }, 401)
   }
