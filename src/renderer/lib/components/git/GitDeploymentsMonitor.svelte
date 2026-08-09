@@ -11,16 +11,11 @@
     RefreshCw,
     Rocket
   } from '@lucide/svelte'
-  import { onMount } from 'svelte'
-  import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
-  import type {
-    GitHubDeployment,
-    GitHubDeploymentOverviewResult,
-    GitHubWorkflowRun
-  } from '$shared/types'
+  import type { GitHubDeployment, GitHubWorkflowRun } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -31,11 +26,21 @@
 
   let { projectId, identity, githubConnected, onSignIn }: Props = $props()
 
-  let overview = $state<GitHubDeploymentOverviewResult | null>(null)
-  let loading = $state(false)
   let error = $state('')
   /** When set, the in-app deployment detail view replaces the list. */
   let selectedDeployment = $state<GitHubDeployment | null>(null)
+
+  /**
+   * The overview is cached in the store, so switching back to this tab renders
+   * the last-fetched content instantly and revalidates in the background.
+   */
+  const cached = $derived(
+    identity
+      ? gitState.deploymentOverviews[GitState.deploymentKey(identity.owner, identity.repo)]
+      : undefined
+  )
+  const overview = $derived(cached?.overview ?? null)
+  const loading = $derived(gitState.isBusy('deployments'))
 
   const permissionMissing = $derived(/HTTP 40[34]|Not Found|not accessible/iu.test(error))
 
@@ -46,18 +51,21 @@
       .replace(/^Error:\s*/u, '')
   }
 
-  async function load(): Promise<void> {
-    if (!identity || !githubConnected || loading) return
-    loading = true
+  async function load(force = false): Promise<void> {
+    if (!identity || !githubConnected) return
     error = ''
     try {
-      overview = await invoke('deployment:overview', projectId, identity.owner, identity.repo)
+      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, force)
     } catch (reason) {
       error = message(reason)
-    } finally {
-      loading = false
     }
   }
+
+  $effect(() => {
+    // Runs on mount and whenever the repo/identity changes; the store decides
+    // whether a network call is actually needed (TTL) or cached data suffices.
+    if (identity && githubConnected) void load()
+  })
 
   function runTone(run: GitHubWorkflowRun): string {
     if (run.status !== 'completed') return 'bg-warning/10 text-warning'
@@ -80,10 +88,6 @@
     if (run.status !== 'completed') return run.status.replace('_', ' ')
     return run.conclusion ?? 'completed'
   }
-
-  onMount(() => {
-    void load()
-  })
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -125,7 +129,7 @@
         title="Refresh deployments"
         aria-label="Refresh deployments"
         disabled={loading}
-        onclick={() => void load()}
+        onclick={() => void load(true)}
       >
         <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
       </button>
@@ -163,7 +167,7 @@
           <button
             type="button"
             class="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
-            onclick={() => void load()}
+            onclick={() => void load(true)}
           >
             Try again
           </button>

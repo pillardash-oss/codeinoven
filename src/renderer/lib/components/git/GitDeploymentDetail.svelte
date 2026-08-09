@@ -11,12 +11,11 @@
     Rocket,
     Terminal
   } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
+  import { gitState, GitState } from '$lib/stores/git.svelte'
   import type {
     GitHubDeployment,
-    GitHubDeploymentDetail,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
     GitHubDeploymentStatus
@@ -31,11 +30,8 @@
 
   let { projectId, identity, deployment, onBack }: Props = $props()
 
-  let detail = $state<GitHubDeploymentDetail | null>(null)
-  let loading = $state(false)
   let error = $state('')
   let expandedLog = $state<Record<number, boolean>>({})
-  let logs = $state<Record<number, GitHubDeploymentJobLog>>({})
   let loadingLog = $state<Record<number, boolean>>({})
   let logErrors = $state<Record<number, string>>({})
 
@@ -43,9 +39,36 @@
     `https://github.com/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.repo)}/deployments/${deployment.id}`
   )
 
+  /** Detail is served from the store cache so re-entering the view is instant. */
+  const cached = $derived(
+    gitState.deploymentDetails[
+      GitState.deploymentDetailKey(identity.owner, identity.repo, deployment.id)
+    ]
+  )
+  const detail = $derived(cached?.detail ?? null)
+  const loading = $derived(gitState.isBusy('deployment-detail'))
+
   const latestStatus = $derived(detail?.deployment.latestStatus ?? deployment.latestStatus)
   /** GitHub returns newest-first; the current status is the first entry. */
   const statusHistory = $derived(detail?.statuses ?? [])
+
+  function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
+    return (
+      gitState.deploymentLogs[GitState.deploymentLogKey(identity.owner, identity.repo, jobId)]
+        ?.log ?? null
+    )
+  }
+
+  /** Cached logs for the jobs currently expanded — non-null for markup safety. */
+  const logs = $derived.by(() => {
+    const result: Record<number, GitHubDeploymentJobLog> = {}
+    for (const key of Object.keys(expandedLog)) {
+      if (!expandedLog[Number(key)]) continue
+      const cached = cachedLog(Number(key))
+      if (cached) result[Number(key)] = cached
+    }
+    return result
+  })
 
   function message(reason: unknown): string {
     if (!(reason instanceof Error)) return 'Deployment details could not be loaded.'
@@ -54,38 +77,27 @@
       .replace(/^Error:\s*/u, '')
   }
 
-  async function loadDetail(): Promise<void> {
-    loading = true
+  async function loadDetail(force = false): Promise<void> {
     error = ''
     try {
-      detail = await invoke(
-        'deployment:detail',
+      await gitState.ensureDeploymentDetail(
         projectId,
         identity.owner,
         identity.repo,
-        deployment.id
+        deployment.id,
+        force
       )
     } catch (reason) {
-      detail = null
       error = message(reason)
-    } finally {
-      loading = false
     }
   }
 
-  async function loadJobLog(jobId: number): Promise<void> {
-    if (loadingLog[jobId] || logs[jobId]) return
+  async function loadJobLog(jobId: number, force = false): Promise<void> {
+    if (loadingLog[jobId]) return
     loadingLog = { ...loadingLog, [jobId]: true }
     logErrors = { ...logErrors, [jobId]: '' }
     try {
-      const result = await invoke(
-        'deployment:jobLog',
-        projectId,
-        identity.owner,
-        identity.repo,
-        jobId
-      )
-      logs = { ...logs, [jobId]: result }
+      await gitState.ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId, force)
     } catch (reason) {
       logErrors = {
         ...logErrors,
@@ -99,7 +111,7 @@
   function toggleJobLog(jobId: number): void {
     const open = !expandedLog[jobId]
     expandedLog = { ...expandedLog, [jobId]: open }
-    if (open && !logs[jobId] && !loadingLog[jobId]) void loadJobLog(jobId)
+    if (open && !cachedLog(jobId) && !loadingLog[jobId]) void loadJobLog(jobId)
   }
 
   $effect(() => {
@@ -214,7 +226,7 @@
         title="Refresh deployment"
         aria-label="Refresh deployment"
         disabled={loading}
-        onclick={() => void loadDetail()}
+        onclick={() => void loadDetail(true)}
       >
         <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
       </button>
@@ -252,7 +264,7 @@
       <button
         type="button"
         class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
-        onclick={() => void loadDetail()}
+        onclick={() => void loadDetail(true)}
       >
         Try again
       </button>
