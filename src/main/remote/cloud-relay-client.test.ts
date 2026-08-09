@@ -82,7 +82,7 @@ function makeHarness(overrides: Partial<CloudRelayClientOptions> = {}): Harness 
     socketFactory: () => {
       const socket = new FakeSocket()
       sockets.push(socket)
-      return socket
+      return socket as unknown as WebSocket
     },
     onAuthenticated: () => {
       authenticated += 1
@@ -230,7 +230,7 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
     const socket = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 2 })
-    let ids: number[] = []
+    let ids: string[] = []
     await vi.waitFor(() => {
       ids = dataFrameIds(socket)
       expect(ids).toHaveLength(2)
@@ -264,7 +264,7 @@ describe('CloudRelayClient outbound queue and acknowledgements', () => {
     harness.client.connect()
     const first = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
-    let firstIds: number[] = []
+    let firstIds: string[] = []
     await vi.waitFor(() => {
       firstIds = dataFrameIds(first)
       expect(firstIds).toHaveLength(1)
@@ -307,7 +307,7 @@ describe('CloudRelayClient self-reconnect preserving the queue', () => {
     harness.client.connect()
     const first = openAuthenticated(harness)
     await harness.client.send({ rpc: 'event', channel: 'a', payload: 1 })
-    let originalIds: number[] = []
+    let originalIds: string[] = []
     await vi.waitFor(() => {
       originalIds = dataFrameIds(first)
       expect(originalIds).toHaveLength(1)
@@ -508,7 +508,7 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
   })
 
   it('suppresses a duplicate invoke while the first is still processing', async () => {
-    let resolveRpc: ((value: { ok: boolean; result?: unknown }) => void) | null = null
+    let resolveRpc: (value: { ok: boolean; result?: unknown }) => void = () => undefined
     const onRpc = vi.fn(
       () =>
         new Promise<{ ok: boolean; result?: unknown }>((resolve) => {
@@ -523,7 +523,7 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     await vi.waitFor(() => {
       expect(onRpc).toHaveBeenCalledTimes(1)
     })
-    resolveRpc?.({ ok: true, result: 'done' })
+    resolveRpc({ ok: true, result: 'done' })
     await vi.waitFor(async () => {
       const bodies = await readBodies(socket)
       // The duplicate is either suppressed or replayed idempotently, but the
@@ -929,7 +929,9 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     const dispatcher = makeDispatcher(credentials, database)
     const harness = makeHarness({
       credentials,
-      onDeviceEnrolled: (deviceId) => enrolledIds.push(deviceId),
+      onDeviceEnrolled: async (deviceId) => {
+        enrolledIds.push(deviceId)
+      },
       onRpc: async (channel, args, device) => dispatcher.dispatch({ id: 0, channel, args, device })
     })
     harness.client.connect()

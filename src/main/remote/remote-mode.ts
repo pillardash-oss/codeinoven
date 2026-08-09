@@ -950,12 +950,11 @@ export class RemoteModeController {
       deviceToken,
       controlSecret,
       credentials: this.credentials ?? undefined,
-      onDeviceEnrolled: () => {
+      onDeviceEnrolled: () =>
         // A new device enrolled over the relay — rotate the persisted peer
         // secret, gateway secret, displayed QR, and five-minute bootstrap
-        // immediately, exactly like the LAN path.
-        void this.rotatePairingBootstrap()
-      },
+        // immediately (exactly like LAN). Rejections deny enrollment.
+        this.rotatePairingBootstrap(),
       signal,
       connectTimeoutMs: remoteEnvInt('RELAY_CONNECT_TIMEOUT_MS', 15_000),
       authTimeoutMs: remoteEnvInt('RELAY_AUTH_TIMEOUT_MS', 10_000),

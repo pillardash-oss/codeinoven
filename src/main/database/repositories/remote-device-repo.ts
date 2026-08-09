@@ -86,6 +86,7 @@ export type RemoteAuditReasonCode =
   | 'malformed'
   | 'denied_by_default'
   | 'execution_failed'
+  | 'rotation_failed'
 
 export interface RemoteAuditEvent {
   id: string

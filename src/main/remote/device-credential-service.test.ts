@@ -746,6 +746,54 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
     expect(allowed?.requestId).toBe('20')
   })
 
+  it('records the consumed stepUpApprovalId when an approved high-risk execution throws', async () => {
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db)
+    const chatEngine = makeMockChatEngine()
+    chatEngine.replyPermission = async () => {
+      throw new Error('approved-but-failed')
+    }
+    const dispatcher = new RemoteRpcDispatcher({
+      database: {} as Database,
+      chatEngine,
+      projectManager: mockProjectManager,
+      credentials: service
+    })
+    const device = await enrollContextDevice(service, ['permission.reply'])
+
+    const first = await dispatcher.dispatch({
+      id: 30,
+      channel: 'agent:replyPermission',
+      args: ['p', 't', 'approve'],
+      device: { ...device, requestId: '30' }
+    })
+    expect(first.ok).toBe(false)
+    if (first.ok) return
+    const payload = JSON.parse(first.message) as { code: string; approvalId: string }
+    expect(payload.code).toBe('step_up_required')
+    expect(dispatcher.approveStepUp(payload.approvalId, 'approved')).toBe(true)
+
+    // The approved retry is authorized but the underlying call throws.
+    const second = await dispatcher.dispatch({
+      id: 30,
+      channel: 'agent:replyPermission',
+      args: ['p', 't', 'approve'],
+      device: { ...device, requestId: '30' }
+    })
+    expect(second.ok).toBe(false)
+    if (!second.ok) expect(second.message).toBe('approved-but-failed')
+
+    const failed = dispatcher
+      .listAuditEvents(30)
+      .find((event) => event.decision === 'rpc_failed' && event.channel === 'agent:replyPermission')
+    expect(failed).toBeDefined()
+    expect(failed?.deviceId).toBe(device.deviceId)
+    expect(failed?.requiredScope).toBe('permission.reply')
+    expect(failed?.stepUpApprovalId).toBe(payload.approvalId)
+    expect(failed?.reasonCode).toBe('execution_failed')
+    expect(failed?.requestId).toBe('30')
+  })
+
   it('records an explicit failure audit when dispatch execution throws', async () => {
     const db = makeTestDb()
     const service = new DeviceCredentialService(db)

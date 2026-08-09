@@ -63,10 +63,12 @@
     return `This code expires in ${Math.ceil(seconds / 60)}m ${seconds % 60}s`
   })
 
-  async function copyPairingUrl(): Promise<void> {
-    if (!pairingUrl) return
+  async function copyPhoneUrl(): Promise<void> {
+    // Copy the bare phone client address shown next to this button — never the
+    // secret-bearing pairing URL.
+    if (!phoneUrl) return
     try {
-      await copyText(pairingUrl)
+      await copyText(phoneUrl)
       copied = true
       setTimeout(() => (copied = false), 1500)
     } catch {
@@ -159,7 +161,7 @@
           class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
           aria-label="Copy the phone client address"
           title="Copy the phone client address"
-          onclick={() => void copyPairingUrl()}
+          onclick={() => void copyPhoneUrl()}
         >
           {#if copied}
             <Check size={12} class="text-primary" />
