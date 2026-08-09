@@ -85,6 +85,34 @@ type ClaudeInputBlock =
       title?: string
     }
 
+/**
+ * Claude Code persists one rotating OAuth credential for the whole OS account.
+ * Gate app-owned process startup so a turn, catalog probe, or usage probe cannot
+ * all read and refresh the same token concurrently. The gate is released after
+ * the child produces its first output, which occurs after authentication, so
+ * normal Claude turns can still run concurrently once startup is complete.
+ */
+class ClaudeOAuthStartupGate {
+  private tail: Promise<void> = Promise.resolve()
+
+  async acquire(): Promise<() => void> {
+    const previous = this.tail
+    let unlock: () => void = () => undefined
+    this.tail = new Promise<void>((resolve) => {
+      unlock = resolve
+    })
+    await previous
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      unlock()
+    }
+  }
+}
+
+const claudeOAuthStartupGate = new ClaudeOAuthStartupGate()
+
 function fallbackClaudeModel(): ProviderModel {
   return {
     id: 'default',
@@ -134,31 +162,36 @@ function keepClaudeDiscoveryOpen(): AsyncIterable<SDKUserMessage> {
 }
 
 async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[]> {
-  const { query } = await import('@anthropic-ai/claude-agent-sdk')
-  const handle = query({
-    prompt: keepClaudeDiscoveryOpen(),
-    options: {
-      cwd: projectPath,
-      env: buildHarnessEnvironment(),
-      pathToClaudeCodeExecutable: 'claude',
-      tools: []
-    }
-  })
-  let timer: ReturnType<typeof setTimeout> | undefined
+  const releaseStartup = await claudeOAuthStartupGate.acquire()
   try {
-    const models = await Promise.race([
-      handle.supportedModels(),
-      new Promise<ModelInfo[]>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('Claude Code model discovery timed out')),
-          CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS
-        )
-      })
-    ])
-    return models.map(mapClaudeModel)
+    const { query } = await import('@anthropic-ai/claude-agent-sdk')
+    const handle = query({
+      prompt: keepClaudeDiscoveryOpen(),
+      options: {
+        cwd: projectPath,
+        env: buildHarnessEnvironment(),
+        pathToClaudeCodeExecutable: 'claude',
+        tools: []
+      }
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const models = await Promise.race([
+        handle.supportedModels(),
+        new Promise<ModelInfo[]>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('Claude Code model discovery timed out')),
+            CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS
+          )
+        })
+      ])
+      return models.map(mapClaudeModel)
+    } finally {
+      if (timer) clearTimeout(timer)
+      handle.close()
+    }
   } finally {
-    if (timer) clearTimeout(timer)
-    handle.close()
+    releaseStartup()
   }
 }
 
@@ -1137,13 +1170,19 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--permission-mode', 'dontAsk')
     else args.push('--permission-mode', 'dontAsk')
     const env = await this.customProviderEnv(options.settings.providerId)
+    const input = await claudeStreamInput(options.text, options.attachments)
+    const releaseStartup =
+      !options.settings.providerId || options.settings.providerId === 'anthropic'
+        ? await claudeOAuthStartupGate.acquire()
+        : undefined
     return {
       command: 'claude',
       args,
-      input: await claudeStreamInput(options.text, options.attachments),
+      input,
       keepInputOpen: true,
       env,
-      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal')
+      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
+      ...(releaseStartup ? { onStdoutActivity: releaseStartup, onProcessExit: releaseStartup } : {})
     }
   }
 
@@ -1179,6 +1218,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     contextWindow?: number
     contextUsed?: number
   } | null> {
+    const releaseStartup = await claudeOAuthStartupGate.acquire()
     try {
       const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
         const child = spawn(
@@ -1292,6 +1332,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
       return null
+    } finally {
+      releaseStartup()
     }
   }
 
