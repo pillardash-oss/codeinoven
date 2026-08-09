@@ -2005,6 +2005,7 @@
                       {thread}
                       selected={selectedThread?.id === thread.id}
                       compact
+                      hideScope
                       onOpen={openScopedThread}
                       onRename={handleRename}
                       onTogglePin={togglePin}
