@@ -10,6 +10,9 @@
   --color-elevated: #f0efea;
   --color-overlay: #e8e7e2;
   --color-raised: #edece7;
+  /* Active-thread highlight — brighter than elevated so it never blends with
+     hovered/working rows; the dark value is tuned to stand out in dark mode. */
+  --color-selected: #f0efea;
 
   /* Text tokens */
   --color-foreground: #081825;
@@ -83,6 +86,7 @@
   --color-elevated: #1c1c20;
   --color-overlay: #242429;
   --color-raised: #202025;
+  --color-selected: #2c2c33;
 
   --color-foreground: #f5f4f0;
   --color-muted: #9d9da6;
