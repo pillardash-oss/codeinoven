@@ -50,7 +50,9 @@ describe('pairing bootstrap ceremony (A-04)', () => {
     expect(expiresAt).not.toBeNull()
     if (expiresAt !== null) {
       expect(expiresAt).toBeGreaterThanOrEqual(before)
-      expect(expiresAt - before).toBeLessThanOrEqual(5 * 60 * 1_000)
+      // The expiry is stamped at write time, so it is the full TTL plus the
+      // milliseconds that elapsed between the `before` capture and the write.
+      expect(expiresAt - before).toBeLessThanOrEqual(5 * 60 * 1_000 + 5_000)
     }
   })
 
