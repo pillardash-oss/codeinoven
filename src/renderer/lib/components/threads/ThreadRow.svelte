@@ -773,13 +773,13 @@
       <!-- Bottom line: harnesses (left), scope (center), time (right) -->
       <span
         class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
-          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
-          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+          ? 'grid-cols-[minmax(3.2rem,1fr)_minmax(0,1fr)_auto]'
+          : 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]'}"
       >
         {#if harnessIds.length > 0}
           <span
             {@attach captureHarnessRowElement}
-            class="flex min-w-0 items-center gap-1 overflow-hidden"
+            class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
           >
             {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
@@ -794,7 +794,7 @@
 
         {#if scopeBucket && !hideScope}
           <span
-            class="relative flex min-w-0 max-w-[3.5rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            class="relative col-start-2 flex w-full min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
             title={scopeBucket.name}
             style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
           >
@@ -810,7 +810,7 @@
           </span>
         {/if}
 
-        <span class="flex min-w-0 justify-end">
+        <span class="col-start-3 flex min-w-0 justify-end">
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
