@@ -74,7 +74,7 @@ function grantContext(desktopId: string, mobileDeviceId: string): Uint8Array<Arr
 }
 
 export async function mobileGrantIdentity(): Promise<MobileGrantIdentity> {
-  const identity = loadDeviceIdentity()
+  const identity = await loadDeviceIdentity()
   const keys = await loadOrCreateKeys(identity.id)
   return {
     id: identity.id,
