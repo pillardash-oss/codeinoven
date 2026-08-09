@@ -73,6 +73,8 @@ export interface ThreadListOptions {
   limit?: number
   offset?: number
   includeArchived?: boolean
+  /** Row ordering: `default` (manual reorder) or `activity` (recent-first). */
+  order?: 'default' | 'activity'
 }
 
 /**

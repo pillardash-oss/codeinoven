@@ -204,6 +204,21 @@ export interface ThreadListOptions {
   offset?: number
   /** Exclude legacy rows pending startup deletion when false. */
   includeArchived?: boolean
+  /**
+   * Ordering for the returned rows.
+   * - `default`: pinned, then manual `sort_order`, then `last_activity`. Manual
+   *   reordering can push an active thread beyond a bounded `limit`, so a
+   *   "recent" hydration query must use `activity` instead.
+   * - `activity`: pinned, then `last_activity` descending — guarantees the most
+   *   recently active threads are always loaded regardless of `sort_order`.
+   */
+  order?: 'default' | 'activity'
+}
+
+function buildOrderBy(options: ThreadListOptions): string {
+  return options.order === 'activity'
+    ? 'ORDER BY pinned DESC, last_activity DESC'
+    : 'ORDER BY pinned DESC, sort_order ASC, last_activity DESC'
 }
 
 function buildListClauses(
@@ -355,7 +370,7 @@ export class ThreadRepo {
     const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
-       ORDER BY pinned DESC, sort_order ASC, last_activity DESC${limit}`,
+       ${buildOrderBy(options)}${limit}`,
       ...params
     )
     const threads = rows.map(rowToThread)
@@ -370,7 +385,7 @@ export class ThreadRepo {
     const { where, params, limit } = buildListClauses([], [], options)
     const rows = this.db.all<ThreadRow>(
       `SELECT * FROM threads ${where}
-       ORDER BY pinned DESC, sort_order ASC, last_activity DESC${limit}`,
+       ${buildOrderBy(options)}${limit}`,
       ...params
     )
     const threads = rows.map(rowToThread)
@@ -567,7 +582,11 @@ export function mergeThreadSearchResults(
     if (seen.has(threadRow.id)) continue
     if (results.length >= limit) break
     seen.add(threadRow.id)
-    const meta = row as { match_role?: unknown; snippet_text?: unknown; snippet_timestamp?: unknown }
+    const meta = row as {
+      match_role?: unknown
+      snippet_text?: unknown
+      snippet_timestamp?: unknown
+    }
     results.push({
       thread: rowToThread(threadRow),
       kind: 'message',
