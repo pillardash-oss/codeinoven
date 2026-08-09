@@ -212,6 +212,27 @@ function ifNoneMatchMatches(header: string | undefined, etag: string): boolean {
 
 const UNAUTHENTICATED_TIMEOUT_MS = 10_000
 const MAX_PEER_BUFFER_BYTES = 1024 * 1024
+
+function normalizeHostForComparison(host: string): string {
+  return host.trim().replace(/^\[|\]$/g, '').split('%')[0].toLowerCase()
+}
+
+function hostWithoutPort(hostHeaderValue: string | string[] | undefined): string {
+  const value = Array.isArray(hostHeaderValue) ? hostHeaderValue[0] ?? '' : hostHeaderValue ?? ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('[')) {
+    const end = trimmed.indexOf(']')
+    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end)
+  }
+  const lastColon = trimmed.lastIndexOf(':')
+  if (lastColon > -1) {
+    const candidatePort = trimmed.slice(lastColon + 1)
+    if (/^\d+$/.test(candidatePort)) return trimmed.slice(0, lastColon)
+  }
+  return trimmed
+}
+
 export class RemoteGateway {
   private httpsServer: HttpsServer | null = null
   private httpServer: Server | null = null
@@ -242,13 +263,15 @@ export class RemoteGateway {
   info() {
     const listening = this.httpsServer !== null && this.httpsServer.listening
     const secret = this.options.peerSecret
+    const host = this.advertisedHost()
+    const renderedHost = host.includes(':') ? `[${host}]` : host
     return {
       listening,
       port: this.port,
-      url: listening ? `https://${this.advertisedHost()}:${this.port}/remote.html` : null,
+      url: listening ? `https://${renderedHost}:${this.port}/remote.html` : null,
       pairingUrl:
         listening && secret
-          ? `https://${this.advertisedHost()}:${this.port}/remote.html#pair=${encodeURIComponent(secret)}`
+          ? `https://${renderedHost}:${this.port}/remote.html#pair=${encodeURIComponent(secret)}`
           : null
     }
   }
@@ -622,7 +645,9 @@ export class RemoteGateway {
       ) as {
         hosts?: string[]
       }
-      if (Array.isArray(meta.hosts) && meta.hosts.length > 0) return meta.hosts[0]
+      if (Array.isArray(meta.hosts) && meta.hosts.length > 0) {
+        return normalizeHostForComparison(meta.hosts[0] ?? '')
+      }
     } catch {
       // fall through to localhost
     }
@@ -750,13 +775,15 @@ export class RemoteGateway {
     if (!origin || origin === 'null') return true
     try {
       if (this.options.allowedOrigins?.includes(new URL(origin).origin)) return true
-      const stripPort = (host: string): string => host.split(':')[0]
-      const originHost = stripPort(new URL(origin).host)
+      const originHost = normalizeHostForComparison(new URL(origin).hostname)
       if (originPolicy === 'local') {
-        const localHosts = new Set(['', 'localhost', '127.0.0.1', '::1', '[::1]'])
-        if (localHosts.has(originHost)) return true
+        if (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1') {
+          return true
+        }
       }
-      const requestHost = stripPort(request.headers['host'] ?? '')
+      const requestHost = normalizeHostForComparison(
+        hostWithoutPort(request.headers.host)
+      )
       return originHost === requestHost
     } catch {
       return false

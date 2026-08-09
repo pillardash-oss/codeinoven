@@ -14,6 +14,7 @@ import { generate } from 'selfsigned'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { networkInterfaces } from 'node:os'
+import { isIP } from 'node:net'
 import { Logger } from '../logger'
 
 export interface SelfSignedCertificate {
@@ -22,19 +23,27 @@ export interface SelfSignedCertificate {
   hosts: string[]
 }
 
-function detectLanIps(): string[] {
+export function detectLanIps(): string[] {
   const ips = new Set<string>()
   for (const interfaces of Object.values(networkInterfaces())) {
     for (const info of interfaces ?? []) {
-      if (info.family === 'IPv4' && !info.internal) ips.add(info.address)
+      if (info.internal) continue
+      if (info.family !== 'IPv4' && info.family !== 'IPv6') continue
+      if (isIP(info.address) === 0) continue
+      const normalized = info.address.includes('%') ? info.address.split('%')[0] : info.address
+      ips.add(normalized)
     }
   }
   return [...ips].sort()
 }
 
+function normalizeHost(host: string): string {
+  return host.trim().replace(/(^\[|\]$)/g, '')
+}
+
 function sameHosts(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false
-  return a.every((host, index) => host === b[index])
+  return a.every((host, index) => normalizeHost(host) === normalizeHost(b[index]))
 }
 
 async function readStored(dir: string, hosts: string[]): Promise<SelfSignedCertificate | null> {
@@ -85,7 +94,9 @@ export async function loadOrCreateSelfSignedCertificate(
   await Promise.all([
     writeFile(join(directory, 'key.pem'), result.private, { encoding: 'utf8', mode: 0o600 }),
     writeFile(join(directory, 'cert.pem'), result.cert, { encoding: 'utf8' }),
-    writeFile(join(directory, 'meta.json'), JSON.stringify({ hosts }), { encoding: 'utf8' })
+    writeFile(join(directory, 'meta.json'), JSON.stringify({ hosts: hosts.map(normalizeHost) }), {
+      encoding: 'utf8'
+    })
   ])
   Logger.info('Generated self-signed certificate for the remote gateway', {
     hosts,
