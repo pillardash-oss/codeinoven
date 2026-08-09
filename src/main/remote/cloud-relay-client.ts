@@ -418,6 +418,14 @@ export class CloudRelayClient {
     } catch {
       return
     }
+    if (record['type'] === 'remote:device:challenge-request') {
+      // Mobile relay sockets can reconnect independently of this long-lived
+      // desktop socket. Issue a challenge for every mobile connection instead
+      // of only once when the desktop authenticates with the relay.
+      this.boundDevice = null
+      this.issueDeviceChallenge()
+      return
+    }
     if (record['type'] === 'remote:device:auth') {
       void this.handleDeviceAuth(record)
       return
