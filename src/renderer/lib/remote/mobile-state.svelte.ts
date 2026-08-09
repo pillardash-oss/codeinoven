@@ -48,10 +48,13 @@ function threadSortKey(thread: Thread): number {
 export function mobileThreadSort(a: Thread, b: Thread): number {
   const keyDiff = threadSortKey(a) - threadSortKey(b)
   if (keyDiff !== 0) return keyDiff
+  // Order by last modified time; manual reorder only breaks exact ties.
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
   const aOrder = a.sortOrder ?? -1
   const bOrder = b.sortOrder ?? -1
   if (aOrder !== bOrder) return aOrder - bOrder
-  return b.lastActivity - a.lastActivity
+  return a.id.localeCompare(b.id)
 }
 
 export interface MobileJumpTarget {

@@ -331,10 +331,14 @@ export function threadSort(
   const ka = threadSortKey(a, draftThreadKeys)
   const kb = threadSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
+  // Order by last modified time. A manual drag-reorder (sortOrder) only breaks
+  // exact lastActivity ties — it must never pin a thread out of recency order.
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
   const aOrder = a.sortOrder ?? -1
   const bOrder = b.sortOrder ?? -1
   if (aOrder !== bOrder) return aOrder - bOrder
-  return b.lastActivity - a.lastActivity
+  return a.id.localeCompare(b.id)
 }
 
 /** Sort modes for the Threads view. */
