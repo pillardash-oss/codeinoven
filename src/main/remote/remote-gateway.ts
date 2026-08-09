@@ -775,6 +775,10 @@ export class RemoteGateway {
     if (!origin || origin === 'null') return true
     try {
       if (this.options.allowedOrigins?.includes(new URL(origin).origin)) return true
+      // The production renderer is loaded via `loadFile`, so its WebSocket
+      // origin is the opaque `file://` (empty host). Only the loopback-only
+      // listener may accept it; the LAN-exposed listener stays strict.
+      if (originPolicy === 'local' && new URL(origin).protocol === 'file:') return true
       const originHost = normalizeHostForComparison(new URL(origin).hostname)
       if (originPolicy === 'local') {
         if (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1') {
