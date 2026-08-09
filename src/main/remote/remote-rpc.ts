@@ -212,6 +212,7 @@ export class RemoteRpcDispatcher {
       })
       return { ok: false, message: 'Device authentication required for remote RPC' }
     }
+    let stepUpApprovalId: string | null = null
     if (invoke.device) {
       const authorized = await this.authorizeDevice(invoke)
       if (!authorized.allowed) {
@@ -223,6 +224,7 @@ export class RemoteRpcDispatcher {
         }
         return { ok: false, message: `Access denied: ${authorized.denied.reason}` }
       }
+      stepUpApprovalId = authorized.stepUpApprovalId ?? null
     }
     try {
       // The remote bridge transports args as JSON, which cannot represent
@@ -231,6 +233,7 @@ export class RemoteRpcDispatcher {
       // behave exactly as they do on the desktop IPC path.
       const args = invoke.args.map((arg) => (arg === null ? undefined : arg))
       const result = await this.call(invoke.channel, args)
+      const authMeta = authorizationForChannel(invoke.channel)
       this.credentials?.audit({
         decision: 'rpc_allowed',
         deviceId: invoke.device?.deviceId ?? null,
@@ -241,12 +244,31 @@ export class RemoteRpcDispatcher {
         requestId: invoke.device?.requestId ?? null,
         channel: invoke.channel,
         resourceId: this.resourceForChannel(invoke.channel, invoke.args),
+        requiredScope: authMeta?.scope ?? null,
+        stepUpApprovalId,
         authVersion: invoke.device?.authVersion ?? null
       })
       return { ok: true, result }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       Logger.error(`Remote RPC ${invoke.channel} failed:`, error)
+      // An explicit failure outcome attributes the thrown execution failure to
+      // the device, capability, transport, session, and request.
+      const authMeta = authorizationForChannel(invoke.channel)
+      this.credentials?.audit({
+        decision: 'rpc_failed',
+        reasonCode: 'execution_failed',
+        deviceId: invoke.device?.deviceId ?? null,
+        deviceName: invoke.device?.name ?? null,
+        fingerprintPrefix: invoke.device?.fingerprint.slice(0, 8) ?? null,
+        transport: invoke.device?.transport ?? 'lan',
+        sessionId: invoke.device?.sessionId ?? null,
+        requestId: invoke.device?.requestId ?? null,
+        channel: invoke.channel,
+        resourceId: this.resourceForChannel(invoke.channel, invoke.args),
+        requiredScope: authMeta?.scope ?? null,
+        authVersion: invoke.device?.authVersion ?? null
+      })
       return { ok: false, message }
     }
   }
@@ -260,7 +282,8 @@ export class RemoteRpcDispatcher {
   private async authorizeDevice(
     invoke: RemoteInvoke
   ): Promise<
-    { allowed: true } | { allowed: false; denied: RemoteRpcDenied | RemoteRpcStepUpRequired }
+    | { allowed: true; stepUpApprovalId?: string | null }
+    | { allowed: false; denied: RemoteRpcDenied | RemoteRpcStepUpRequired }
   > {
     const device = invoke.device as RemoteRpcDeviceContext
     const resource = this.resourceForChannel(invoke.channel, invoke.args)
@@ -369,22 +392,21 @@ export class RemoteRpcDispatcher {
     const needsStepUp =
       auth.stepUp === 'always' || (auth.stepUp === 'conditional' && auth.requiresStepUp === true)
     if (!needsStepUp || !this.credentials) {
-      return { allowed: true }
+      return { allowed: true, stepUpApprovalId: null }
     }
 
     const argsDigest = await sha256Hex(JSON.stringify(invoke.args))
-    if (
-      this.credentials.hasApprovalFor({
-        deviceId: device.deviceId,
-        authVersion: device.authVersion,
-        sessionId: device.sessionId,
-        requestId: device.requestId,
-        channel: invoke.channel,
-        resource,
-        argsDigest
-      })
-    ) {
-      return { allowed: true }
+    const approvedId = this.credentials.hasApprovalFor({
+      deviceId: device.deviceId,
+      authVersion: device.authVersion,
+      sessionId: device.sessionId,
+      requestId: device.requestId,
+      channel: invoke.channel,
+      resource,
+      argsDigest
+    })
+    if (approvedId !== null) {
+      return { allowed: true, stepUpApprovalId: approvedId }
     }
 
     const created = this.credentials.createStepUpApproval({

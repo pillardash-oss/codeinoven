@@ -805,7 +805,10 @@ export class DeviceCredentialService {
     return true
   }
 
-  /** A valid, unexpired *approved* ticket for a request (consumes on success). */
+  /**
+   * A valid, unexpired *approved* ticket for a request (consumes on success).
+   * Returns the consumed approval id, or null when no ticket matched.
+   */
   hasApprovalFor(input: {
     deviceId: string
     authVersion: number
@@ -814,7 +817,7 @@ export class DeviceCredentialService {
     channel: string
     resource?: string | null
     argsDigest: string
-  }): boolean {
+  }): string | null {
     const now = this.now()
     for (const approval of this.pendingApprovals.values()) {
       if (approval.expiresAt <= now) {
@@ -832,10 +835,10 @@ export class DeviceCredentialService {
         (input.resource ?? null) === approval.resource
       ) {
         this.pendingApprovals.delete(approval.approvalId)
-        return true
+        return approval.approvalId
       }
     }
-    return false
+    return null
   }
 
   listPendingApprovals(): PendingStepUpApproval[] {

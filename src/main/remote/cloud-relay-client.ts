@@ -35,6 +35,13 @@ export interface CloudRelayClientOptions {
    * session; without it, invokes fail closed (no device-less cloud bypass).
    */
   credentials?: DeviceCredentialService
+  /**
+   * Called once when a NEW device completes relay enrollment (not on
+   * reconnects). The controller uses it to rotate the persisted peer secret,
+   * gateway secret, displayed QR, and registered five-minute bootstrap
+   * immediately — exactly like the LAN path.
+   */
+  onDeviceEnrolled?: (deviceId: string) => void
   /** Abort the connection when the signal fires (shutdown / config change). */
   signal?: AbortSignal
   /** Deadlines in milliseconds. */
@@ -306,7 +313,8 @@ export class CloudRelayClient {
       this.options.controlSecret,
       JSON.stringify(record.payload)
     )
-    if (this.socket.readyState === WebSocket.OPEN) {
+    // The socket may have closed (and been nulled) while encryption ran.
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.inFlight.set(record.id, record)
       this.socket.send(serializeRelayDataFrame(record.id, encrypted))
     }
@@ -558,6 +566,7 @@ export class CloudRelayClient {
         return
       }
       device = outcome.device
+      this.options.onDeviceEnrolled?.(device.deviceId)
     } else if (deviceId && typeof authVersion === 'number') {
       const transcript = handshakeTranscript({
         nonce: presentedNonce,
