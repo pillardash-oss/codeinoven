@@ -315,6 +315,7 @@ const INVOKE_CHANNELS = [
   'thread:list',
   'thread:listAll',
   'thread:listRecent',
+  'thread:listHistoryPage',
   'threads:search',
   'thread:loadMessages',
   'thread:loadMessagesAround',

@@ -9,9 +9,6 @@ import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { StorageEngine } from './storage-engine'
-import { registerIpcHandlers } from './ipc-handlers'
-import { ProjectManager } from '../lib/engines/project-manager'
-import { ProjectFilesService } from './project-files-service'
 import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
 import { WindowStateService } from './window-state'
 import { setNotificationService, setPowerWakeService } from './thread-events'
@@ -25,12 +22,12 @@ import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-
 import type { Thread } from '../lib/types'
 import { startupTelemetry } from './startup-telemetry'
 import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './lifecycle-diagnostics'
-import { ChatEngine } from './chat-engine'
-import { HarnessManifestService } from './harness-manifest-service'
-import { ComputerUsePipService } from './computer-use-pip-service'
-import { UpdaterService } from './updater-service'
-import { PowerWakeService } from './power-wake-service'
-import { RetrySchedulerService } from './retry-scheduler-service'
+import type { ChatEngine } from './chat-engine'
+import type { HarnessManifestService } from './harness-manifest-service'
+import type { ComputerUsePipService } from './computer-use-pip-service'
+import type { UpdaterService } from './updater-service'
+import type { PowerWakeService } from './power-wake-service'
+import type { RetrySchedulerService } from './retry-scheduler-service'
 import type { PtyService } from './pty-service'
 import type { ProviderConnectionService } from './provider-connection'
 import type { HarnessUpdateService } from './harness-update-service'
@@ -357,7 +354,51 @@ function closeSplash(): void {
  * (config/project/thread/scope/file handlers, `app:*`, session policy, file
  * preview, chat/agent catalog) is registered before the window is created.
  */
-function bootOptionalServices(): void {
+async function bootPostPaintServices(): Promise<void> {
+  if (chatEngine) return
+  const [
+    { registerIpcHandlers },
+    { ProjectManager },
+    { ProjectFilesService },
+    { ChatEngine },
+    { HarnessManifestService },
+    { ComputerUsePipService },
+    { UpdaterService },
+    { PowerWakeService },
+    { RetrySchedulerService }
+  ] = await Promise.all([
+    import('./ipc-handlers'),
+    import('../lib/engines/project-manager'),
+    import('./project-files-service'),
+    import('./chat-engine'),
+    import('./harness-manifest-service'),
+    import('./computer-use-pip-service'),
+    import('./updater-service'),
+    import('./power-wake-service'),
+    import('./retry-scheduler-service')
+  ])
+
+  const projectManager = new ProjectManager(database)
+  const projectFilesService = new ProjectFilesService(projectManager)
+  installFilePreviewProtocol(projectFilesService)
+  computerUsePipService = new ComputerUsePipService(storage)
+  harnessManifestService = new HarnessManifestService(storage)
+  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
+  updaterService = new UpdaterService(storage)
+  powerWakeService = new PowerWakeService(storage, database)
+  retryScheduler = new RetrySchedulerService(storage)
+  updaterService.setChatEngine(chatEngine)
+  registerIpcHandlers(storage, database, updaterService, chatEngine, {
+    projectManager,
+    projectFilesService,
+    powerWakeService,
+    retryScheduler,
+    harnessManifestService
+  })
+  chatEngine.register()
+  harnessManifestService.register()
+  chatEngine.attachRetryScheduler(retryScheduler)
+
   void (async () => {
     const [
       { PtyService },
@@ -668,34 +709,6 @@ void app
     await windowStateService.load()
     Logger.info(`${APP_NAME} main process initialized`)
 
-    // ── Essential services (needed by the essential IPC surface) ──────────
-    const projectManager = new ProjectManager(database)
-    const projectFilesService = new ProjectFilesService(projectManager)
-    installFilePreviewProtocol(projectFilesService)
-    // The chat engine is essential: the renderer's initial hydration calls
-    // `agent:listProviderSnapshot` / `agent:refreshProviderCatalog` for the
-    // selected project's catalog, so its IPC must exist before the window
-    // paints. Construct it up front with the lightweight helper services.
-    computerUsePipService = new ComputerUsePipService(storage)
-    harnessManifestService = new HarnessManifestService(storage)
-    chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
-    updaterService = new UpdaterService(storage)
-    powerWakeService = new PowerWakeService(storage, database)
-    retryScheduler = new RetrySchedulerService(storage)
-
-    updaterService.setChatEngine(chatEngine)
-    registerIpcHandlers(storage, database, updaterService, chatEngine, {
-      projectManager,
-      projectFilesService,
-      powerWakeService,
-      retryScheduler,
-      harnessManifestService
-    })
-    // Essential agent/chat catalog + harness manifest IPC surface.
-    chatEngine.register()
-    harnessManifestService.register()
-    chatEngine.attachRetryScheduler(retryScheduler)
-
     // Deny every permission request from the renderer (camera, microphone,
     // notifications, geolocation, fullscreen, etc.). No desktop feature relies
     // on web permission grants.
@@ -722,11 +735,20 @@ void app
       startupTelemetry.mark('window:firstPaint')
       clearTimeout(splashFailsafe)
       closeSplash()
-      // Optional services (PTY, provider connection, harness update/install,
-      // remote mode, notifications) are imported and constructed only after
-      // the primary window path so first paint is never blocked by their
-      // module evaluation or construction/disk/network work.
-      bootOptionalServices()
+      // All feature service graphs are imported and constructed only after
+      // the primary window paints. This includes the IPC graph, so History,
+      // Plan, Spec, Brainstorm, Audit, Assignment, Memory, Git/GitHub and
+      // diagnostics engines never compete with the visible workspace.
+      void bootPostPaintServices().catch((error) => {
+        void handleFatalStartupFailure({
+          error,
+          appName: APP_NAME,
+          resources: [{ name: 'database', close: () => database.close() }],
+          showErrorBox: dialog.showErrorBox,
+          quit: (code) => app.exit(code),
+          telemetry: startupTelemetry
+        })
+      })
     })
     window.once('closed', () => {
       clearTimeout(splashFailsafe)

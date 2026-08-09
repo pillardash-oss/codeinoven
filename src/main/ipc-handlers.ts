@@ -3233,6 +3233,19 @@ export function registerIpcHandlers(
     }
     return [...preferred, ...rest]
   })
+  // Full history is deliberately opt-in: it is paged for the archive/timeline
+  // controls and never participates in initial renderer hydration.
+  ipcMain.handle('thread:listHistoryPage', async (_, rawOptions: unknown) => {
+    const options = isRecord(rawOptions) ? rawOptions : {}
+    const projectId =
+      options.projectId === undefined
+        ? undefined
+        : validateEntityId(options.projectId, 'Project ID')
+    const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 100)
+    const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
+    const threads = await threadManager.listAllThreads({ includeArchived: true, limit, offset })
+    return projectId ? threads.filter((thread) => thread.projectId === projectId) : threads
+  })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
     const safeQuery = requireString(query, 'Search query')
     const safeOptions: { projectId?: string; limit?: number } = {}
