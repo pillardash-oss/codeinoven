@@ -9,7 +9,8 @@ import type {
   MemoryProposal,
   MemoryScope,
   MemorySource,
-  SpecContextReference
+  SpecContextReference,
+  Thread
 } from '../lib/types'
 import { StorageEngine } from './storage-engine'
 
@@ -888,6 +889,32 @@ export class MemoryService {
     } catch {
       // Directory may not exist
     }
+  }
+
+  /** Delete config task directories whose SQLite task row no longer exists. */
+  async deleteOrphanedThreadDirectories(threads: Thread[]): Promise<number> {
+    const validByProject = new Map<string, Set<string>>()
+    for (const thread of threads) {
+      const ids = validByProject.get(thread.projectId) ?? new Set<string>()
+      ids.add(thread.id)
+      validByProject.set(thread.projectId, ids)
+    }
+
+    let deleted = 0
+    const removeUnknown = async (projectId: string, base: string): Promise<void> => {
+      const valid = validByProject.get(projectId) ?? new Set<string>()
+      for (const threadId of await this.storage.listDirectories(base)) {
+        if (valid.has(threadId)) continue
+        await this.storage.remove(join(base, threadId))
+        deleted++
+      }
+    }
+
+    for (const projectId of await this.storage.listDirectories(PROJECTS_DIR)) {
+      await removeUnknown(projectId, join(PROJECTS_DIR, projectId, THREADS_DIR))
+    }
+    await removeUnknown('inbox', join(CHATS_CWD_DIR, THREADS_DIR))
+    return deleted
   }
 
   /** Generate a verification checklist from critical and high priority entries. */

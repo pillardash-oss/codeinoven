@@ -27,7 +27,11 @@ import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
 import type { PowerWakeService } from './power-wake-service'
 import type { RetrySchedulerService } from './retry-scheduler-service'
-import { broadcastThreadUpdate, dismissThreadNotifications } from './thread-events'
+import {
+  broadcastThreadDeleted,
+  broadcastThreadUpdate,
+  dismissThreadNotifications
+} from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
 import {
   validateBoundedInteger,
@@ -940,13 +944,24 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
-  const threadManager = new ThreadManager(database, broadcastThreadUpdate, async (thread) => {
-    if (chatEngine?.deleteThreadSession) {
-      await chatEngine.deleteThreadSession(thread.projectId, thread.id)
+  const checkpointManager = new CheckpointManager(database)
+  const threadManager = new ThreadManager(
+    database,
+    broadcastThreadUpdate,
+    async (thread) => {
+      if (chatEngine?.deleteThreadSession) {
+        await chatEngine.deleteThreadSession(thread.projectId, thread.id)
+      }
+      await memoryService.deleteThreadMemory(thread.projectId, thread.id)
+      dismissThreadNotifications(thread.projectId, thread.id)
+    },
+    async (threads) => {
+      for (const thread of threads) broadcastThreadDeleted(thread)
+      for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+        await checkpointManager.pruneUnusedBlobs(projectId)
+      }
     }
-    await memoryService.deleteThreadMemory(thread.projectId, thread.id)
-    dismissThreadNotifications(thread.projectId, thread.id)
-  })
+  )
   const scopeManager = new ScopeManager(database)
   const historyEngine = new HistoryEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -962,7 +977,6 @@ export function registerIpcHandlers(
   const gitService = new GitService()
   const vault = new SecretVault(storage)
   const githubAuthService = new GitHubAuthService(vault)
-  const checkpointManager = new CheckpointManager(database)
   const diagnosticsService = new DiagnosticsService(database, () =>
     memoryService.auxiliaryUsageByFeature()
   )
@@ -3225,8 +3239,8 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
   if (!options.hydrationHandlersRegistered) {
-    // Bounded active-only hydration query: archived threads never cross IPC and
-    // the payload is capped, with the selected project ordered first so the
+    // Bounded hydration query: legacy archived rows never cross IPC and the
+    // payload is capped, with the selected project ordered first so the
     // visible workspace renders before the rest of the workspace data.
     ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
       const options = isRecord(rawOptions) ? rawOptions : {}
@@ -3236,7 +3250,12 @@ export function registerIpcHandlers(
           : validateEntityId(options.projectId, 'Project ID')
       const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
       const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
-      const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
+      const threads = await threadManager.listAllThreads({
+        includeArchived: false,
+        limit,
+        offset,
+        order: 'activity'
+      })
       if (!projectId) return threads
       const preferred: Thread[] = []
       const rest: Thread[] = []
@@ -3246,8 +3265,8 @@ export function registerIpcHandlers(
       return [...preferred, ...rest]
     })
   }
-  // Full history is deliberately opt-in: it is paged for the archive/timeline
-  // controls and never participates in initial renderer hydration.
+  // Older active tasks are deliberately opt-in and never participate in
+  // initial renderer hydration.
   ipcMain.handle('thread:listHistoryPage', async (_, rawOptions: unknown) => {
     const options = isRecord(rawOptions) ? rawOptions : {}
     const projectId =
@@ -3256,7 +3275,7 @@ export function registerIpcHandlers(
         : validateEntityId(options.projectId, 'Project ID')
     const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 100)
     const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
-    const threads = await threadManager.listAllThreads({ includeArchived: true, limit, offset })
+    const threads = await threadManager.listAllThreads({ includeArchived: false, limit, offset })
     return projectId ? threads.filter((thread) => thread.projectId === projectId) : threads
   })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
@@ -3382,15 +3401,6 @@ export function registerIpcHandlers(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
-  )
-  ipcMain.handle(
-    'thread:setArchived',
-    (_, projectId: unknown, threadId: unknown, archived: unknown) =>
-      threadManager.setArchived(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateBoolean(archived, 'Archived')
-      )
   )
   ipcMain.handle('thread:markRead', (_, projectId: string, threadId: string) =>
     threadManager.markRead(projectId, threadId)

@@ -1144,8 +1144,8 @@ export interface IpcInvokeContract {
   'thread:list': Contract<[projectId: string], Thread[]>
   'thread:listAll': Contract<[], Thread[]>
   /**
-   * Bounded, active-only thread listing for startup hydration. Never returns
-   * archived threads and never crosses the full thread history over IPC.
+   * Bounded task listing for startup hydration. Never returns legacy rows
+   * pending deletion and never crosses the full task history over IPC.
    * `projectId` (when given) is ordered first so the selected project's recent
    * active threads render before anything else.
    */
@@ -1153,7 +1153,7 @@ export interface IpcInvokeContract {
     [options: { projectId?: string; limit?: number; offset?: number }],
     Thread[]
   >
-  /** Paged history for an explicit archive/all-history request. */
+  /** Paged history for an explicit older-task request. */
   'thread:listHistoryPage': Contract<
     [options: { projectId?: string; limit?: number; offset?: number }],
     Thread[]
@@ -1173,7 +1173,6 @@ export interface IpcInvokeContract {
   >
   'thread:loadUserMessages': Contract<[projectId: string, threadId: string], UserMessageSummary[]>
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
-  'thread:setArchived': Contract<[projectId: string, threadId: string, archived: boolean], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<
     [projectId: string, threadId: string, usage: ThreadContextUsage],
@@ -1383,6 +1382,7 @@ export interface IpcEventContract {
   'app:featuresReady': []
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
+  'thread:deleted': [projectId: string, threadId: string]
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]

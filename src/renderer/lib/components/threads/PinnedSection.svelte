@@ -5,7 +5,7 @@
   import type { Project, Thread } from '$shared/types'
 
   interface Props {
-    /** All pinned, non-archived threads. */
+    /** All pinned visible tasks. */
     threads: Thread[]
     /** Project lookup for grouping. */
     projects: Project[]

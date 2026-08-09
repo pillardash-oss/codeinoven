@@ -17,7 +17,7 @@ import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../project-files-service'
 import type { ChatEngine } from '../chat-engine'
-import { broadcastThreadUpdate } from '../thread-events'
+import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 import {
   authorizationForChannel,
@@ -166,12 +166,19 @@ export class RemoteRpcDispatcher {
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
     this.credentials = services.credentials ?? null
+    this.checkpointManager = new CheckpointManager(services.database)
     this.threadManager = new ThreadManager(
       services.database,
       broadcastThreadUpdate,
       async (thread) => {
         await services.chatEngine.deleteThreadSession(thread.projectId, thread.id)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
+      },
+      async (threads) => {
+        for (const thread of threads) broadcastThreadDeleted(thread)
+        for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+          await this.checkpointManager.pruneUnusedBlobs(projectId)
+        }
       }
     )
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
@@ -184,7 +191,6 @@ export class RemoteRpcDispatcher {
     this.auditEngine = new AuditEngine(this.storage, services.database)
     this.assignmentEngine = new AssignmentEngine(this.storage, services.database)
     this.specContextService = new SpecContextService(services.database, this.projectManager)
-    this.checkpointManager = new CheckpointManager(services.database)
     this.memoryService = new MemoryService(this.storage)
     this.repositoryService = new RepositoryService()
     this.gitService = new GitService()
@@ -523,12 +529,6 @@ export class RemoteRpcDispatcher {
         return this.threadManager.createThread(args[0] as CreateThreadInput)
       case 'thread:markRead':
         return this.threadManager.markRead(this.string(args[0]), this.string(args[1]))
-      case 'thread:setArchived':
-        return this.threadManager.setArchived(
-          this.string(args[0]),
-          this.string(args[1]),
-          Boolean(args[2])
-        )
       case 'thread:setPinned':
         return this.threadManager.setPinned(
           this.string(args[0]),

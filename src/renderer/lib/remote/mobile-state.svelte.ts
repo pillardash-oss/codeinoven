@@ -278,6 +278,15 @@ class MobileState {
     }
   }
 
+  applyThreadDeletion(threadId: string): void {
+    this.allThreads = this.allThreads.filter((thread) => thread.id !== threadId)
+    this.orchestrationThreads = this.orchestrationThreads.filter(
+      (thread) => thread.id !== threadId && thread.coordinatorThreadId !== threadId
+    )
+    if (this.selectedThread?.id === threadId) this.selectedThread = null
+    this.refreshAttention()
+  }
+
   isWorking(thread: Thread): boolean {
     return (
       thread.status === 'planning' ||
@@ -299,8 +308,15 @@ export function mobileHasProjectNameCollision(
 
 /** Live thread updates pushed from the desktop keep the mobile lists fresh. */
 export function subscribeMobileThreadUpdates(): () => void {
-  return subscribe('thread:updated', (...args: unknown[]) => {
+  const unsubscribeUpdated = subscribe('thread:updated', (...args: unknown[]) => {
     const updated = args[0] as Thread
     if (updated) mobileState.applyThreadUpdate(updated)
   })
+  const unsubscribeDeleted = subscribe('thread:deleted', (_projectId, threadId) => {
+    mobileState.applyThreadDeletion(threadId)
+  })
+  return () => {
+    unsubscribeUpdated()
+    unsubscribeDeleted()
+  }
 }

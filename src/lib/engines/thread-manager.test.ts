@@ -133,7 +133,7 @@ describe('ThreadManager', () => {
     expect(await restartedManager.loadMessages('project1', thread.id)).toEqual(messages)
   })
 
-  it('archives the oldest unpinned thread at the limit while preserving pinned threads', async () => {
+  it('permanently deletes the oldest unpinned thread at the limit while preserving pinned threads', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T11:00:00.000Z'))
     const { manager } = await createManager(2)
@@ -159,13 +159,9 @@ describe('ThreadManager', () => {
     })
     const listed = await manager.listThreads('project1')
 
-    // The evicted thread is archived, never silently deleted.
-    expect(await manager.getThread('project1', oldestUnpinned.id)).toMatchObject({
-      id: oldestUnpinned.id,
-      archived: true
-    })
+    expect(await manager.getThread('project1', oldestUnpinned.id)).toBeNull()
     expect(await manager.getThread('project1', pinned.id)).not.toBeNull()
-    expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id, oldestUnpinned.id])
+    expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id])
   })
 
   it('refuses to exceed the limit when every active thread is pinned', async () => {
@@ -194,7 +190,7 @@ describe('ThreadManager', () => {
     ).rejects.toThrow(AllThreadsPinnedError)
 
     const capacity = await manager.getThreadCapacity('project1')
-    expect(capacity).toMatchObject({ limit: 2, activeCount: 2, pinnedCount: 2, archivableCount: 0 })
+    expect(capacity).toMatchObject({ limit: 2, activeCount: 2, pinnedCount: 2, deletableCount: 0 })
   })
 
   it('keeps a stable feature slug across renames and forks', async () => {

@@ -58,7 +58,6 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:get',
   'thread:create',
   'thread:markRead',
-  'thread:setArchived',
   'thread:setPinned',
   'thread:setStatus',
   'thread:updateSettings',
@@ -335,7 +334,6 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   // workspace.write — default-No, no step-up
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
   'thread:markRead': { scope: 'workspace.write', stepUp: 'none' },
-  'thread:setArchived': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setPinned': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setStatus': { scope: 'workspace.write', stepUp: 'none' },
   'thread:updateSettings': { scope: 'workspace.write', stepUp: 'none' },

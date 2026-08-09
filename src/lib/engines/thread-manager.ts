@@ -54,7 +54,7 @@ export class AllThreadsPinnedError extends Error {
   ) {
     super(
       `Cannot create a thread: every active thread is pinned (${activeCount}/${limit}). ` +
-        'Unpin or archive an existing thread first.'
+        'Unpin or delete an existing thread first.'
     )
     this.name = 'AllThreadsPinnedError'
   }
@@ -65,8 +65,7 @@ export interface ThreadCapacity {
   limit: number
   activeCount: number
   pinnedCount: number
-  archivedCount: number
-  archivableCount: number
+  deletableCount: number
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -115,7 +114,8 @@ export class ThreadManager {
   constructor(
     private db: Database,
     private onChange?: (thread: Thread) => void,
-    private onDelete?: (thread: Thread) => void | Promise<void>
+    private onDelete?: (thread: Thread) => void | Promise<void>,
+    private onDeleted?: (threads: Thread[]) => void | Promise<void>
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.projectRepo = new ProjectRepo(db)
@@ -182,10 +182,9 @@ export class ThreadManager {
         .sort((a, b) => a.lastActivity - b.lastActivity)
       const toEvict = unpinned[0]
       if (toEvict) {
-        // Archive (never silently delete) the oldest unpinned thread so the
-        // public transcript stays recoverable behind the logical thread cap.
-        // Its private orchestration children have no independent lifecycle.
-        await this.evacuateThreadTree(input.projectId, toEvict)
+        // The bounded bucket is destructive by design: permanently delete the
+        // oldest unpinned logical task and every private orchestration child.
+        await this.deleteThread(input.projectId, toEvict.id)
       } else {
         // Every active thread is pinned — refuse deterministically instead of
         // silently exceeding the limit.
@@ -379,46 +378,90 @@ export class ThreadManager {
   }
   async deleteThread(projectId: string, threadId: string): Promise<void> {
     const thread = this.requireOwnedThread(projectId, threadId)
-    const deletionOrder = [...this.orchestrationChildren(projectId, threadId), thread]
+    const deletionOrder = [...this.orchestrationDescendants(projectId, threadId), thread]
+    const assignmentIds = this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
     }
     this.db.transaction(() => {
+      for (const assignmentId of assignmentIds) {
+        this.deleteAssignmentRows(assignmentId)
+      }
       for (const candidate of deletionOrder) {
-        this.deleteThreadRows(candidate.id)
+        this.deleteThreadRows(candidate)
       }
     })
+    await this.onDeleted?.(deletionOrder)
   }
 
-  private orchestrationChildren(projectId: string, coordinatorThreadId: string): Thread[] {
-    return this.threadRepo
-      .listByProject(projectId)
-      .filter((thread) => thread.coordinatorThreadId === coordinatorThreadId)
-      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+  private orchestrationDescendants(projectId: string, coordinatorThreadId: string): Thread[] {
+    const threads = this.threadRepo.listByProject(projectId)
+    const byCoordinator = new Map<string, Thread[]>()
+    for (const thread of threads) {
+      if (!thread.coordinatorThreadId) continue
+      const children = byCoordinator.get(thread.coordinatorThreadId) ?? []
+      children.push(thread)
+      byCoordinator.set(thread.coordinatorThreadId, children)
+    }
+    const descendants: Thread[] = []
+    const visit = (parentId: string): void => {
+      const children = (byCoordinator.get(parentId) ?? []).sort(
+        (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+      )
+      for (const child of children) {
+        visit(child.id)
+        descendants.push(child)
+      }
+    }
+    visit(coordinatorThreadId)
+    return descendants
   }
 
-  private deleteThreadRows(threadId: string): void {
+  private assignmentIdsFor(threads: Thread[]): Set<string> {
+    const assignmentIds = new Set(
+      threads.flatMap((thread) => (thread.assignmentId ? [thread.assignmentId] : []))
+    )
+    for (const thread of threads) {
+      const workflow = this.db.get<{ assignment_id: string }>(
+        'SELECT assignment_id FROM assignment_workflow WHERE project_id=? AND coordinator_thread_id=?',
+        thread.projectId,
+        thread.id
+      )
+      if (workflow) assignmentIds.add(workflow.assignment_id)
+      const versions = this.db.all<{ assignment_id: string }>(
+        'SELECT DISTINCT assignment_id FROM assignment_versions WHERE project_id=? AND coordinator_thread_id=?',
+        thread.projectId,
+        thread.id
+      )
+      for (const version of versions) assignmentIds.add(version.assignment_id)
+    }
+    return assignmentIds
+  }
+
+  private deleteAssignmentRows(assignmentId: string): void {
+    this.db.run('DELETE FROM assignment_operations WHERE assignment_id=?', assignmentId)
+    this.db.run('DELETE FROM assignment_coordinator_snapshots WHERE assignment_id=?', assignmentId)
+    this.db.run('DELETE FROM assignment_api_capabilities WHERE assignment_id=?', assignmentId)
+  }
+
+  private deleteThreadRows(thread: Thread): void {
+    const { projectId, id: threadId } = thread
+    this.db.run('DELETE FROM spec_workflow WHERE project_id=? AND thread_id=?', projectId, threadId)
+    this.db.run('DELETE FROM spec_versions WHERE project_id=? AND thread_id=?', projectId, threadId)
+    this.db.run('DELETE FROM plans WHERE thread_id=?', threadId)
+    this.db.run('DELETE FROM checklists WHERE thread_id=?', threadId)
+    this.db.run('DELETE FROM audit_reports WHERE project_id=? AND thread_id=?', projectId, threadId)
+    this.db.run(
+      'DELETE FROM turn_checkpoints WHERE project_id=? AND thread_id=?',
+      projectId,
+      threadId
+    )
+    this.db.run('DELETE FROM active_turns WHERE project_id=? AND thread_id=?', projectId, threadId)
+    this.db.run('DELETE FROM provider_sync_cursors WHERE thread_id=?', threadId)
+    this.db.run('DELETE FROM assignment_api_capabilities WHERE thread_id=?', threadId)
     this.agentMessageRepo.deleteByThread(threadId)
     this.harnessUsageRepo.deleteByThread(threadId)
     this.threadRepo.delete(threadId)
-  }
-
-  /** Archive one public root while atomically removing its private task tree. */
-  private async evacuateThreadTree(projectId: string, root: Thread): Promise<void> {
-    const children = this.orchestrationChildren(projectId, root.id)
-    for (const child of children) {
-      await this.onDelete?.(child)
-    }
-    this.db.transaction(() => {
-      for (const child of children) {
-        this.deleteThreadRows(child.id)
-      }
-      this.threadRepo.setArchived(root.id, true)
-    })
-    for (const child of children) {
-      this.onChange?.({ ...child, archived: true, updatedAt: Date.now() })
-    }
-    this.onChange?.({ ...root, archived: true, updatedAt: Date.now() })
   }
 
   async setStatus(
@@ -751,15 +794,6 @@ export class ThreadManager {
     return mapMessageRows(page.rows)
   }
 
-  async setArchived(projectId: string, threadId: string, archived: boolean): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-
-    this.threadRepo.setArchived(threadId, archived)
-    const updated: Thread = { ...existing, archived, updatedAt: Date.now() }
-    this.onChange?.(updated)
-    return updated
-  }
-
   /** List threads across all projects, sorted pinned-first then by last activity. */
   async listAllThreads(options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listAll(options)
@@ -767,8 +801,8 @@ export class ThreadManager {
 
   /**
    * Deterministic thread-capacity view for the current project. Exposes the
-   * limit, active/pinned/archived counts, and how many threads could be
-   * archived to make room — so the UI can explain an all-pinned refusal.
+   * limit, active/pinned counts, and how many threads could be deleted to make
+   * room — so the UI can explain an all-pinned refusal.
    */
   async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
     const project = this.projectRepo.get(projectId)
@@ -780,9 +814,66 @@ export class ThreadManager {
       limit: project.threadLimit,
       activeCount: active.length,
       pinnedCount: active.filter((t) => t.pinned).length,
-      archivedCount: logicalThreads.filter((thread) => thread.archived).length,
-      archivableCount: active.filter((t) => !t.pinned).length
+      deletableCount: active.filter((t) => !t.pinned).length
     }
+  }
+
+  /** Permanently remove every legacy archived row and its logical task tree. */
+  async purgeArchivedThreads(): Promise<number> {
+    const archived = (await this.listAllThreads({ includeArchived: true })).filter(
+      (thread) => thread.archived
+    )
+    const archivedIds = new Set(archived.map((thread) => thread.id))
+    let deleted = 0
+    for (const thread of archived) {
+      if (!archivedIds.has(thread.id)) continue
+      const root = thread.coordinatorThreadId
+        ? (archived.find((candidate) => candidate.id === thread.coordinatorThreadId) ?? thread)
+        : thread
+      const tree = [root, ...this.orchestrationDescendants(root.projectId, root.id)]
+      await this.deleteThread(root.projectId, root.id)
+      for (const candidate of tree) {
+        if (archivedIds.delete(candidate.id)) deleted++
+      }
+    }
+    return deleted
+  }
+
+  /** Permanently remove records left behind by deletion paths from older builds. */
+  purgeOrphanedThreadRows(): number {
+    const threadTables = [
+      'spec_workflow',
+      'spec_versions',
+      'plans',
+      'checklists',
+      'audit_reports',
+      'turn_checkpoints',
+      'active_turns',
+      'provider_sync_cursors',
+      'harness_usage',
+      'assignment_api_capabilities'
+    ] as const
+    let deleted = 0
+    this.db.transaction(() => {
+      for (const table of threadTables) {
+        const row = this.db.get<{ count: number }>(
+          `SELECT count(*) AS count FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM threads WHERE threads.id=${table}.thread_id)`
+        )
+        deleted += row?.count ?? 0
+        this.db.run(
+          `DELETE FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM threads WHERE threads.id=${table}.thread_id)`
+        )
+      }
+      for (const table of ['assignment_operations', 'assignment_coordinator_snapshots'] as const) {
+        const where = `NOT EXISTS (SELECT 1 FROM threads WHERE threads.assignment_id=${table}.assignment_id) AND NOT EXISTS (SELECT 1 FROM assignment_workflow WHERE assignment_workflow.assignment_id=${table}.assignment_id) AND NOT EXISTS (SELECT 1 FROM assignment_versions WHERE assignment_versions.assignment_id=${table}.assignment_id)`
+        const row = this.db.get<{ count: number }>(
+          `SELECT count(*) AS count FROM ${table} WHERE ${where}`
+        )
+        deleted += row?.count ?? 0
+        this.db.run(`DELETE FROM ${table} WHERE ${where}`)
+      }
+    })
+    return deleted
   }
 
   /**

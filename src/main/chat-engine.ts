@@ -21,6 +21,7 @@ import { CheckpointManager } from './checkpoint-manager'
 import { harnessLoadsAgentsMd, listHarnesses } from './harness-registry'
 import { CheckpointLimitError, type ProjectFingerprint } from './change-tracking-service'
 import {
+  broadcastThreadDeleted,
   broadcastThreadUpdate,
   markNotificationAborting,
   clearNotificationAborting,
@@ -1064,11 +1065,21 @@ export class ChatEngine {
   ) {
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
-    this.threadManager = new ThreadManager(database, broadcastThreadUpdate, async (thread) => {
-      await this.deleteThreadSession(thread.projectId, thread.id)
-      await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
-    })
     this.checkpointManager = new CheckpointManager(database)
+    this.threadManager = new ThreadManager(
+      database,
+      broadcastThreadUpdate,
+      async (thread) => {
+        await this.deleteThreadSession(thread.projectId, thread.id)
+        await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
+      },
+      async (threads) => {
+        for (const thread of threads) broadcastThreadDeleted(thread)
+        for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+          await this.checkpointManager.pruneUnusedBlobs(projectId)
+        }
+      }
+    )
     this.memoryService = new MemoryService(storage)
     this.promptAssembler = new PromptAssembler(this.memoryService)
     this.secretVault = new SecretVault(storage)
@@ -8471,6 +8482,7 @@ export class ChatEngine {
     try {
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
+        if (thread.archived) continue
         let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
         if (assignment?.status === 'draft') {
           continue
@@ -8515,6 +8527,22 @@ export class ChatEngine {
     } catch (error) {
       Logger.error('Achievement recovery failed:', error)
     }
+  }
+
+  /** Permanently erase legacy deleted-task residue from SQLite and config. */
+  async purgeArchivedThreads(): Promise<{
+    tasks: number
+    rows: number
+    directories: number
+  }> {
+    const tasks = await this.threadManager.purgeArchivedThreads()
+    const rows = this.threadManager.purgeOrphanedThreadRows()
+    const threads = await this.threadManager.listAllThreads({ includeArchived: false })
+    const directories = await this.memoryService.deleteOrphanedThreadDirectories(threads)
+    for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+      await this.checkpointManager.pruneUnusedBlobs(projectId)
+    }
+    return { tasks, rows, directories }
   }
 
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */

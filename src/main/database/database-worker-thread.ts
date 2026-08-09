@@ -38,9 +38,13 @@ import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history
 function executor(): ProviderDeltaSyncExecutor {
   return {
     all: <T>(sql: string, ...params: unknown[]) =>
-      connection().prepare(sql).all(...params) as T[],
+      connection()
+        .prepare(sql)
+        .all(...params) as T[],
     run: (sql, ...params) => {
-      connection().prepare(sql).run(...params)
+      connection()
+        .prepare(sql)
+        .run(...params)
     },
     transaction: <T>(fn: () => T) => connection().transaction(fn)()
   }
@@ -67,7 +71,12 @@ function connection(): DatabaseType {
   return db
 }
 
-function emit(message: { type: 'telemetry' | 'log'; level?: 'info' | 'warn' | 'error'; message?: string; telemetry?: WorkerSizeTelemetry }): void {
+function emit(message: {
+  type: 'telemetry' | 'log'
+  level?: 'info' | 'warn' | 'error'
+  message?: string
+  telemetry?: WorkerSizeTelemetry
+}): void {
   if (!port) return
   if (message.type === 'telemetry') {
     port.postMessage({ type: 'telemetry', telemetry: message.telemetry })
@@ -108,12 +117,16 @@ function enqueue<T>(fn: () => Promise<T> | T): Promise<T> {
 
 // ─── Operation handlers ───────────────────────────────────────────────────
 
-function checkpoint(request: Extract<DatabaseWorkerRequest, { kind: 'checkpoint' }>): DatabaseWorkerResult {
+function checkpoint(
+  request: Extract<DatabaseWorkerRequest, { kind: 'checkpoint' }>
+): DatabaseWorkerResult {
   try {
     const mode = request.mode.toUpperCase()
-    const row = connection()
-      .prepare(`PRAGMA wal_checkpoint(${mode})`)
-      .get() as { busy: number; log: number; checkpointed: number }
+    const row = connection().prepare(`PRAGMA wal_checkpoint(${mode})`).get() as {
+      busy: number
+      log: number
+      checkpointed: number
+    }
     return {
       kind: 'checkpoint',
       ok: true,
@@ -126,7 +139,9 @@ function checkpoint(request: Extract<DatabaseWorkerRequest, { kind: 'checkpoint'
   }
 }
 
-function integrity(request: Extract<DatabaseWorkerRequest, { kind: 'integrity' }>): DatabaseWorkerResult {
+function integrity(
+  request: Extract<DatabaseWorkerRequest, { kind: 'integrity' }>
+): DatabaseWorkerResult {
   try {
     const rows = connection()
       .prepare(request.quick ? 'PRAGMA quick_check' : 'PRAGMA integrity_check')
@@ -193,7 +208,9 @@ function quickCheckOf(path: string): string {
   }
 }
 
-function backup(request: Extract<DatabaseWorkerRequest, { kind: 'backup' }>): Promise<DatabaseWorkerResult> {
+function backup(
+  request: Extract<DatabaseWorkerRequest, { kind: 'backup' }>
+): Promise<DatabaseWorkerResult> {
   const targetPath = request.targetPath
   const tmp = `${targetPath}.tmp`
   return (async () => {
@@ -215,18 +232,30 @@ function backup(request: Extract<DatabaseWorkerRequest, { kind: 'backup' }>): Pr
   })()
 }
 
-function restore(request: Extract<DatabaseWorkerRequest, { kind: 'restore' }>): Promise<DatabaseWorkerResult> {
+function restore(
+  request: Extract<DatabaseWorkerRequest, { kind: 'restore' }>
+): Promise<DatabaseWorkerResult> {
   const livePath = config.dbPath
   const tmp = `${livePath}.restore-tmp`
   return (async () => {
     try {
       // 1. Validate and verify the source backup before touching the live file.
       if (!fileSizeBytes(request.sourcePath)) {
-        return { kind: 'restore', ok: false, reason: 'source_invalid', error: 'backup source does not exist' }
+        return {
+          kind: 'restore',
+          ok: false,
+          reason: 'source_invalid',
+          error: 'backup source does not exist'
+        }
       }
       const sourceText = quickCheckOf(request.sourcePath)
       if (sourceText !== 'ok') {
-        return { kind: 'restore', ok: false, reason: 'source_invalid', error: `source quick_check: ${sourceText}` }
+        return {
+          kind: 'restore',
+          ok: false,
+          reason: 'source_invalid',
+          error: `source quick_check: ${sourceText}`
+        }
       }
       // 2. Stream the source into the live path atomically via a temp file.
       rmSync(tmp, { force: true })
@@ -240,7 +269,12 @@ function restore(request: Extract<DatabaseWorkerRequest, { kind: 'restore' }>): 
       const restoredText = quickCheckOf(tmp)
       if (restoredText !== 'ok') {
         rmSync(tmp, { force: true })
-        return { kind: 'restore', ok: false, reason: 'verify_failed', error: `restored quick_check: ${restoredText}` }
+        return {
+          kind: 'restore',
+          ok: false,
+          reason: 'verify_failed',
+          error: `restored quick_check: ${restoredText}`
+        }
       }
       // 4. Swap: drop stale WAL/SHM sidecars and close this worker's own live
       //    connection so no handle survives onto the pre-restore inode, then
@@ -315,18 +349,14 @@ function fts(request: Extract<DatabaseWorkerRequest, { kind: 'fts' }>): Database
 }
 
 interface RetentionSourceSpec {
-  source: string
   table: string
-  idColumn: string
   timestampColumn: string
 }
 
 const RETENTION_SOURCES: RetentionSourceSpec[] = [
-  { source: 'history_entries', table: 'history_entries', idColumn: 'id', timestampColumn: 'timestamp' },
+  { table: 'history_entries', timestampColumn: 'timestamp' },
   {
-    source: 'assignment_operations',
     table: 'assignment_operations',
-    idColumn: 'operation_id',
     timestampColumn: 'created_at'
   }
 ]
@@ -335,52 +365,29 @@ function retention(): DatabaseWorkerResult {
   const cutoff = Date.now() - config.retentionDays * DAY_MS
   try {
     const conn = connection()
-    const outcome = conn.transaction((): { archived: number; pruned: number } => {
-      let archived = 0
-      const insert = conn.prepare(
-        'INSERT INTO retention_archive(source, source_id, created_at, payload) VALUES(?,?,?,?)'
-      )
+    const deleted = conn.transaction((): number => {
+      let count = 0
       for (const spec of RETENTION_SOURCES) {
-        const rows = conn
-          .prepare(`SELECT * FROM ${spec.table} WHERE ${spec.timestampColumn} < ?`)
-          .all(cutoff) as Array<Record<string, unknown>>
-        const del = conn.prepare(`DELETE FROM ${spec.table} WHERE ${spec.idColumn} = ?`)
-        for (const row of rows) {
-          insert.run(spec.source, String(row[spec.idColumn]), Number(row[spec.timestampColumn]), JSON.stringify(row))
-          del.run(String(row[spec.idColumn]))
-          archived++
-        }
+        const outcome = conn
+          .prepare(`DELETE FROM ${spec.table} WHERE ${spec.timestampColumn} < ?`)
+          .run(cutoff)
+        count += Number(outcome.changes)
       }
-      // Bound the archive: keep only the newest retentionArchiveCap rows.
-      let pruned = 0
-      const archiveCount = conn.prepare('SELECT count(*) AS c FROM retention_archive').get() as { c: number }
-      if (Number(archiveCount.c) > config.retentionArchiveCap) {
-        const excess = Number(archiveCount.c) - config.retentionArchiveCap
-        const oldest = conn
-          .prepare('SELECT id FROM retention_archive ORDER BY created_at ASC, id ASC LIMIT ?')
-          .all(excess) as Array<{ id: number }>
-        const del = conn.prepare('DELETE FROM retention_archive WHERE id = ?')
-        for (const row of oldest) {
-          del.run(row.id)
-          pruned++
-        }
-      }
-      return { archived, pruned }
+      return count
     })()
-    const archiveCount = conn.prepare('SELECT count(*) AS c FROM retention_archive').get() as { c: number }
     return {
       kind: 'retention',
       ok: true,
-      archived: outcome.archived,
-      pruned: outcome.pruned,
-      archiveRows: Number(archiveCount.c)
+      deleted
     }
   } catch (error) {
-    return { kind: 'retention', ok: false, archived: 0, pruned: 0, archiveRows: 0, error: String(error) }
+    return { kind: 'retention', ok: false, deleted: 0, error: String(error) }
   }
 }
 
-function recoverTo(request: Extract<DatabaseWorkerRequest, { kind: 'recover-to' }>): DatabaseWorkerResult {
+function recoverTo(
+  request: Extract<DatabaseWorkerRequest, { kind: 'recover-to' }>
+): DatabaseWorkerResult {
   const tmp = `${request.targetPath}.tmp`
   try {
     rmSync(tmp, { force: true })
@@ -450,7 +457,14 @@ function health(): DatabaseWorkerResult {
       message: `SQLite health probe failed: ${String(error)}`
     }
   }
-  return { kind: 'health', ok: true, status: 'ok', quickCheck, details: telemetry, message: 'SQLite database healthy' }
+  return {
+    kind: 'health',
+    ok: true,
+    status: 'ok',
+    quickCheck,
+    details: telemetry,
+    message: 'SQLite database healthy'
+  }
 }
 
 /**
@@ -466,7 +480,9 @@ function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): Data
       sql = `${sql} LIMIT ?`
       params.push(maxRows + 1)
     }
-    const rows = connection().prepare(sql).all(...params) as Record<string, unknown>[]
+    const rows = connection()
+      .prepare(sql)
+      .all(...params) as Record<string, unknown>[]
     const truncated = maxRows > 0 && rows.length > maxRows
     return { kind: 'query', ok: true, rows: truncated ? rows.slice(0, maxRows) : rows, truncated }
   } catch (error) {
@@ -474,9 +490,13 @@ function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): Data
   }
 }
 
-function execute(request: Extract<DatabaseWorkerRequest, { kind: 'execute' }>): DatabaseWorkerResult {
+function execute(
+  request: Extract<DatabaseWorkerRequest, { kind: 'execute' }>
+): DatabaseWorkerResult {
   try {
-    connection().prepare(request.sql).run(...request.params)
+    connection()
+      .prepare(request.sql)
+      .run(...request.params)
     return { kind: 'execute', ok: true }
   } catch (error) {
     return { kind: 'execute', ok: false, error: String(error) }
@@ -484,7 +504,9 @@ function execute(request: Extract<DatabaseWorkerRequest, { kind: 'execute' }>): 
 }
 
 /** Run a batch of statements atomically in one transaction (rolls back on error). */
-function transaction(request: Extract<DatabaseWorkerRequest, { kind: 'transaction' }>): DatabaseWorkerResult {
+function transaction(
+  request: Extract<DatabaseWorkerRequest, { kind: 'transaction' }>
+): DatabaseWorkerResult {
   try {
     const conn = connection()
     const run = conn.transaction(() => {
@@ -512,7 +534,9 @@ function stats(): DatabaseWorkerResult {
 
 // ─── Request dispatch ─────────────────────────────────────────────────────
 
-function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<DatabaseWorkerResult> {
+function handle(
+  request: DatabaseWorkerRequest
+): DatabaseWorkerResult | Promise<DatabaseWorkerResult> {
   switch (request.kind) {
     case 'checkpoint':
       return checkpoint(request)
@@ -563,7 +587,12 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
         return {
           kind: 'sync-provider-deltas',
           ok: true,
-          result: runProviderDeltaSync(executor(), request.threadId, request.sessionId, request.messages)
+          result: runProviderDeltaSync(
+            executor(),
+            request.threadId,
+            request.sessionId,
+            request.messages
+          )
         }
       } catch (error) {
         return { kind: 'sync-provider-deltas', ok: false, error: String(error) }
@@ -594,7 +623,11 @@ if (port) {
         result = await handle(message.request)
       } catch (error) {
         result = { kind: 'ping', ok: false }
-        emit({ type: 'log', level: 'error', message: `database worker request failed: ${String(error)}` })
+        emit({
+          type: 'log',
+          level: 'error',
+          message: `database worker request failed: ${String(error)}`
+        })
       }
       if (port) port.postMessage({ type: 'response', id: message.id, result })
       if (message.request.kind === 'shutdown' && port) {
@@ -635,7 +668,11 @@ function markRun(key: string, at: number): void {
       .prepare('INSERT OR REPLACE INTO maintenance_meta(key, value) VALUES(?, ?)')
       .run(key, String(at))
   } catch (error) {
-    emit({ type: 'log', level: 'error', message: `failed to record maintenance run ${key}: ${String(error)}` })
+    emit({
+      type: 'log',
+      level: 'error',
+      message: `failed to record maintenance run ${key}: ${String(error)}`
+    })
   }
 }
 
@@ -650,7 +687,11 @@ function runMaintenancePass(): void {
   if (now - lastRun('checkpoint_at') >= DAY_MS) {
     const result = checkpoint({ kind: 'checkpoint', mode: 'passive' })
     markRun('checkpoint_at', now)
-    emit({ type: 'log', level: 'info', message: `maintenance passive checkpoint: ${JSON.stringify(result)}` })
+    emit({
+      type: 'log',
+      level: 'info',
+      message: `maintenance passive checkpoint: ${JSON.stringify(result)}`
+    })
   }
   if (now - lastRun('integrity_at') >= DAY_MS) {
     const result = integrity({ kind: 'integrity', quick: true })
@@ -659,14 +700,22 @@ function runMaintenancePass(): void {
       result.kind === 'integrity'
         ? result.ok
           ? result.text
-          : result.error ?? 'failed'
+          : (result.error ?? 'failed')
         : 'unexpected result'
-    emit({ type: 'log', level: result.ok ? 'info' : 'warn', message: `maintenance quick_check: ${detail}` })
+    emit({
+      type: 'log',
+      level: result.ok ? 'info' : 'warn',
+      message: `maintenance quick_check: ${detail}`
+    })
   }
   if (now - lastRun('retention_at') >= DAY_MS) {
     const result = retention()
     markRun('retention_at', now)
-    emit({ type: 'log', level: 'info', message: `maintenance retention: ${JSON.stringify(result)}` })
+    emit({
+      type: 'log',
+      level: 'info',
+      message: `maintenance retention: ${JSON.stringify(result)}`
+    })
   }
   if (now - lastRun('fts_optimize_at') >= WEEK_MS) {
     const result = fts({ kind: 'fts', action: 'optimize' })
@@ -675,19 +724,26 @@ function runMaintenancePass(): void {
       result.kind === 'fts'
         ? result.ok
           ? result.details
-          : result.error ?? 'failed'
+          : (result.error ?? 'failed')
         : 'unexpected result'
-    emit({ type: 'log', level: result.ok ? 'info' : 'warn', message: `maintenance fts optimize: ${detail}` })
+    emit({
+      type: 'log',
+      level: result.ok ? 'info' : 'warn',
+      message: `maintenance fts optimize: ${detail}`
+    })
   }
 }
 
 function scheduleMaintenance(): void {
   clearMaintenanceTimer()
-  maintenanceTimer = setTimeout(() => {
-    void enqueue(runMaintenancePass).finally(() => {
-      if (!shuttingDown && config.maintenanceEnabled) scheduleMaintenance()
-    })
-  }, Math.max(60_000, config.maintenanceIntervalMs))
+  maintenanceTimer = setTimeout(
+    () => {
+      void enqueue(runMaintenancePass).finally(() => {
+        if (!shuttingDown && config.maintenanceEnabled) scheduleMaintenance()
+      })
+    },
+    Math.max(60_000, config.maintenanceIntervalMs)
+  )
   maintenanceTimer.unref?.()
 }
 
