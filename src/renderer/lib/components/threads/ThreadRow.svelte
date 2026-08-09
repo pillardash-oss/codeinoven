@@ -770,12 +770,16 @@
     </span>
 
     {#if showBottomRow}
-      <!-- Bottom line: harnesses (left), scope + time grouped (right) -->
-      <span class="grid w-full min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
+      <!-- Bottom line: harnesses (left), scope (center), time (right) -->
+      <span
+        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
+          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
+          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+      >
         {#if harnessIds.length > 0}
           <span
             {@attach captureHarnessRowElement}
-            class="col-start-1 flex min-w-0 max-w-[6rem] items-center gap-1 overflow-hidden"
+            class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
           >
             {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
               <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
@@ -788,27 +792,27 @@
           </span>
         {/if}
 
-        <span class="col-start-2 flex min-w-0 items-center justify-end gap-3">
-          {#if scopeBucket && !hideScope}
-            <span
-              class="relative flex min-w-0 max-w-[10rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
-              title={scopeBucket.name}
-              style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
-            >
-              {#if scopeIconUrl}
-                <img
-                  src={scopeIconUrl}
-                  alt=""
-                  class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
-                  draggable="false"
-                />
-              {/if}
-              <span class="truncate">{scopeBucket.name}</span>
-            </span>
-          {/if}
-
+        {#if scopeBucket && !hideScope}
           <span
-            class="shrink-0 whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            title={scopeBucket.name}
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
+          >
+            {#if scopeIconUrl}
+              <img
+                src={scopeIconUrl}
+                alt=""
+                class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
+                draggable="false"
+              />
+            {/if}
+            <span class="truncate">{scopeBucket.name}</span>
+          </span>
+        {/if}
+
+        <span class="col-start-3 flex min-w-0 justify-end">
+          <span
+            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
               : 'opacity-100'}"
             aria-hidden={hovered}
