@@ -33,6 +33,19 @@ class RemoteRpcBridge {
     remoteSession.onMessage((plaintext) => {
       this.handleFrame(plaintext)
     })
+    remoteSession.onStateChange((snapshot) => {
+      if (snapshot.route.kind !== 'LAN_CONNECTED' && snapshot.route.kind !== 'RELAY_CONNECTED') {
+        this.rejectPending('The desktop connection changed. Please retry the action.')
+      }
+    })
+  }
+
+  /** A response can never arrive on a transport that has already closed. */
+  private rejectPending(message: string): void {
+    if (this.pending.size === 0) return
+    const error = new Error(message)
+    for (const pending of this.pending.values()) pending.reject(error)
+    this.pending.clear()
   }
 
   private handleFrame(plaintext: string): void {

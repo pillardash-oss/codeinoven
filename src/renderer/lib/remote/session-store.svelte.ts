@@ -70,6 +70,7 @@ export class RemoteSessionStore {
   private accountReconnectTimer: number | null = null
   private accountReconnectAttempt = 0
   private messageListeners = new SvelteSet<(plaintext: string) => void>()
+  private stateListeners = new SvelteSet<(snapshot: SessionSnapshot) => void>()
   private keyMaterial: DeviceKeyMaterial | null = null
   /** Resolves once the phone has authenticated as a device over the relay. */
   private relayDeviceAuth: Promise<void> | null = null
@@ -194,12 +195,19 @@ export class RemoteSessionStore {
 
   dispatch(action: SessionAction): void {
     this.snapshot = applySessionAction(this.snapshot, action)
+    for (const listener of this.stateListeners) listener(this.snapshot)
   }
 
   /** Register a listener for every decrypted `remote:data` message received. */
   onMessage(listener: (plaintext: string) => void): () => void {
     this.messageListeners.add(listener)
     return () => this.messageListeners.delete(listener)
+  }
+
+  /** Register a listener for transport/session state changes. */
+  onStateChange(listener: (snapshot: SessionSnapshot) => void): () => void {
+    this.stateListeners.add(listener)
+    return () => this.stateListeners.delete(listener)
   }
 
   /** Send a plaintext JSON payload to the desktop, encrypted at the transport. */
