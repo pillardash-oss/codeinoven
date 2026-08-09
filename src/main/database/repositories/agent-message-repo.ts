@@ -159,8 +159,9 @@ export interface ProviderDeltaSyncResult {
   collisions: number
   /** Total mirrored conversation messages after this sync. */
   total: number
-  cursor: ProviderSyncCursor
-  /** True when the transcript already matched the cursor and no DB write ran. */
+  /** Cursor advanced by this sync; null on a true noop (nothing was written). */
+  cursor: ProviderSyncCursor | null
+  /** True when nothing changed and zero database writes were performed. */
   noop: boolean
 }
 
@@ -199,223 +200,307 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
   }
 }
 
-export class AgentMessageRepo {
-  constructor(private db: Database) {}
+/**
+ * Minimal SQL executor surface shared by the main-thread repo and the database
+ * maintenance worker so the delta-sync core has a single source of truth.
+ * `Database` and the worker's connection adapter both satisfy it.
+ */
+export interface ProviderDeltaSyncExecutor {
+  all<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[]
+  run(sql: string, ...params: unknown[]): void
+  transaction<T>(fn: () => T): T
+}
 
-  /**
-   * Encode a message into its persisted column values plus the content hash.
-   * Shared by the single-message upsert and the batched delta sync so both
-   * paths hash and serialize identically.
-   */
-  private encodeMessage(
-    message: AgentMessage,
-    threadId: string,
-    sessionId?: string
-  ): {
-    id: string
-    threadId: string
-    sessionId: string | null
-    role: string
-    origin: string
-    visibility: string
-    partsJson: string
-    searchText: string
-    contentHash: string
-    transportPartsJson: string | null
-    transportOrigin: string | null
-    modelId: string | null
-    providerId: string | null
-    harnessId: string | null
-    referencesJson: string | null
-    projectReferencesJson: string | null
-    createdAt: number
-    completedAt: number | null
-    cost: number | null
-    tokensJson: string | null
-    rateLimitsJson: string | null
-    creditsJson: string | null
-    contextWindow: number | null
-    contextUsed: number | null
-    error: string | null
-    structuredOutputJson: string | null
-  } {
-    const targetSessionId = sessionId ?? null
-    const origin = message.origin ?? (sessionId ? 'subagent' : 'legacy')
-    const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
-    const partsJson = JSON.stringify(message.parts)
-    const searchText = partsToSearchText(message.parts)
-    const transportPartsJson = message.transportParts
-      ? JSON.stringify(message.transportParts)
-      : null
-    const transportOrigin = message.transportOrigin ?? null
-    const modelId = message.modelId ?? null
-    const providerId = message.providerId ?? null
-    const harnessId = message.harnessId ?? null
-    const referencesJson = message.references ? JSON.stringify(message.references) : null
-    const projectReferencesJson = message.projectReferences
-      ? JSON.stringify(message.projectReferences)
-      : null
-    const createdAt = message.createdAt
-    const completedAt = message.completedAt ?? null
-    const cost = message.cost ?? null
-    const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
-    const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
-    const creditsJson = message.credits ? JSON.stringify(message.credits) : null
-    const contextWindow = message.contextWindow ?? null
-    const contextUsed = message.contextUsed ?? null
-    const error = message.error ?? null
-    const structuredOutputJson =
-      message.structuredOutput !== undefined ? JSON.stringify(message.structuredOutput) : null
-    const contentHash = hashPersistedRow({
-      role: message.role,
-      origin,
-      visibility,
-      parts: partsJson,
-      search_text: searchText,
-      transport_parts: transportPartsJson,
-      transport_origin: transportOrigin,
-      model_id: modelId,
-      provider_id: providerId,
-      harness_id: harnessId,
-      references_json: referencesJson,
-      project_references_json: projectReferencesJson,
-      created_at: createdAt,
-      completed_at: completedAt,
-      cost,
-      tokens_json: tokensJson,
-      rate_limits_json: rateLimitsJson,
-      usage_credits_json: creditsJson,
-      context_window: contextWindow,
-      context_used: contextUsed,
-      error,
-      structured_output: structuredOutputJson
-    })
+/** Persisted column values of one encoded agent message. */
+export interface EncodedAgentMessage {
+  id: string
+  threadId: string
+  sessionId: string | null
+  role: string
+  origin: string
+  visibility: string
+  partsJson: string
+  searchText: string
+  contentHash: string
+  transportPartsJson: string | null
+  transportOrigin: string | null
+  modelId: string | null
+  providerId: string | null
+  harnessId: string | null
+  referencesJson: string | null
+  projectReferencesJson: string | null
+  createdAt: number
+  completedAt: number | null
+  cost: number | null
+  tokensJson: string | null
+  rateLimitsJson: string | null
+  creditsJson: string | null
+  contextWindow: number | null
+  contextUsed: number | null
+  error: string | null
+  structuredOutputJson: string | null
+}
+
+/**
+ * Encode a message into its persisted column values plus the content hash.
+ * Shared by the single-message upsert, the batched delta sync, and the
+ * maintenance worker so every path hashes and serializes identically.
+ */
+export function encodeAgentMessage(
+  message: AgentMessage,
+  threadId: string,
+  sessionId?: string
+): EncodedAgentMessage {
+  const targetSessionId = sessionId ?? null
+  const origin = message.origin ?? (sessionId ? 'subagent' : 'legacy')
+  const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
+  const partsJson = JSON.stringify(message.parts)
+  const searchText = partsToSearchText(message.parts)
+  const transportPartsJson = message.transportParts
+    ? JSON.stringify(message.transportParts)
+    : null
+  const transportOrigin = message.transportOrigin ?? null
+  const modelId = message.modelId ?? null
+  const providerId = message.providerId ?? null
+  const harnessId = message.harnessId ?? null
+  const referencesJson = message.references ? JSON.stringify(message.references) : null
+  const projectReferencesJson = message.projectReferences
+    ? JSON.stringify(message.projectReferences)
+    : null
+  const createdAt = message.createdAt
+  const completedAt = message.completedAt ?? null
+  const cost = message.cost ?? null
+  const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
+  const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
+  const creditsJson = message.credits ? JSON.stringify(message.credits) : null
+  const contextWindow = message.contextWindow ?? null
+  const contextUsed = message.contextUsed ?? null
+  const error = message.error ?? null
+  const structuredOutputJson =
+    message.structuredOutput !== undefined ? JSON.stringify(message.structuredOutput) : null
+  const contentHash = hashPersistedRow({
+    role: message.role,
+    origin,
+    visibility,
+    parts: partsJson,
+    search_text: searchText,
+    transport_parts: transportPartsJson,
+    transport_origin: transportOrigin,
+    model_id: modelId,
+    provider_id: providerId,
+    harness_id: harnessId,
+    references_json: referencesJson,
+    project_references_json: projectReferencesJson,
+    created_at: createdAt,
+    completed_at: completedAt,
+    cost,
+    tokens_json: tokensJson,
+    rate_limits_json: rateLimitsJson,
+    usage_credits_json: creditsJson,
+    context_window: contextWindow,
+    context_used: contextUsed,
+    error,
+    structured_output: structuredOutputJson
+  })
+  return {
+    id: message.id,
+    threadId,
+    sessionId: targetSessionId,
+    role: message.role,
+    origin,
+    visibility,
+    partsJson,
+    searchText,
+    contentHash,
+    transportPartsJson,
+    transportOrigin,
+    modelId,
+    providerId,
+    harnessId,
+    referencesJson,
+    projectReferencesJson,
+    createdAt,
+    completedAt,
+    cost,
+    tokensJson,
+    rateLimitsJson,
+    creditsJson,
+    contextWindow,
+    contextUsed,
+    error,
+    structuredOutputJson
+  }
+}
+
+/** Persist one fully-encoded message (INSERT or UPDATE by id). */
+export function writeEncodedMessage(
+  executor: ProviderDeltaSyncExecutor,
+  encoded: EncodedAgentMessage
+): void {
+  executor.run(
+    `INSERT INTO agent_messages(
+      id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
+      transport_parts, transport_origin,
+      model_id, provider_id, harness_id,
+      references_json, project_references_json,
+      created_at, completed_at, cost,
+      tokens_json, rate_limits_json, usage_credits_json,
+      context_window, context_used, error, structured_output
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET
+      role = excluded.role,
+      origin = excluded.origin,
+      visibility = excluded.visibility,
+      parts = excluded.parts,
+      search_text = excluded.search_text,
+      content_hash = excluded.content_hash,
+      transport_parts = excluded.transport_parts,
+      transport_origin = excluded.transport_origin,
+      model_id = excluded.model_id,
+      provider_id = excluded.provider_id,
+      harness_id = excluded.harness_id,
+      references_json = excluded.references_json,
+      project_references_json = excluded.project_references_json,
+      created_at = excluded.created_at,
+      completed_at = excluded.completed_at,
+      cost = excluded.cost,
+      tokens_json = excluded.tokens_json,
+      rate_limits_json = excluded.rate_limits_json,
+      usage_credits_json = excluded.usage_credits_json,
+      context_window = excluded.context_window,
+      context_used = excluded.context_used,
+      error = excluded.error,
+      structured_output = excluded.structured_output`,
+    encoded.id,
+    encoded.threadId,
+    encoded.sessionId,
+    encoded.role,
+    encoded.origin,
+    encoded.visibility,
+    encoded.partsJson,
+    encoded.searchText,
+    encoded.contentHash,
+    encoded.transportPartsJson,
+    encoded.transportOrigin,
+    encoded.modelId,
+    encoded.providerId,
+    encoded.harnessId,
+    encoded.referencesJson,
+    encoded.projectReferencesJson,
+    encoded.createdAt,
+    encoded.completedAt,
+    encoded.cost,
+    encoded.tokensJson,
+    encoded.rateLimitsJson,
+    encoded.creditsJson,
+    encoded.contextWindow,
+    encoded.contextUsed,
+    encoded.error,
+    encoded.structuredOutputJson
+  )
+}
+
+/**
+ * Append-only, delta-only transcript synchronization.
+ *
+ * Same-length, same-final-id transcripts are still reconciled message by
+ * message against the persisted `content_hash`, so in-place edits to any
+ * message are detected and persisted. Only new or changed messages are written,
+ * and every write is batched inside a single transaction. When nothing changed
+ * (a true noop) the database is not written to at all — not even the cursor row.
+ *
+ * `sessionId` is the thread's current harness session and keys the cursor.
+ */
+export function runProviderDeltaSync(
+  executor: ProviderDeltaSyncExecutor,
+  threadId: string,
+  sessionId: string,
+  messages: AgentMessage[]
+): ProviderDeltaSyncResult {
+  const sorted = [...messages].sort(
+    (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
+  )
+  const last = sorted[sorted.length - 1]
+  const lastId = last?.id ?? ''
+
+  // Bulk-load existing identities so unchanged rows are never rewritten and a
+  // foreign id (belonging to another thread/session) is never clobbered.
+  const existing = new Map<
+    string,
+    { contentHash: string | null; threadId: string; sessionId: string | null }
+  >(
+    executor
+      .all<{ id: string; content_hash: string | null; thread_id: string; session_id: string | null }>(
+        'SELECT id, content_hash, thread_id, session_id FROM agent_messages WHERE thread_id = ?',
+        threadId
+      )
+      .map((row) => [
+        row.id,
+        { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
+      ] as const)
+  )
+
+  let skipped = 0
+  let collisions = 0
+  const writes: EncodedAgentMessage[] = []
+  for (const message of sorted) {
+    const existingRow = existing.get(message.id)
+    if (existingRow && (existingRow.threadId !== threadId || existingRow.sessionId !== null)) {
+      collisions++
+      continue
+    }
+    const encoded = encodeAgentMessage(message, threadId)
+    if (existingRow?.contentHash !== null && existingRow?.contentHash === encoded.contentHash) {
+      skipped++
+      continue
+    }
+    writes.push(encoded)
+  }
+
+  // True noop: nothing changed, so write nothing — not even the cursor row.
+  if (writes.length === 0 && collisions === 0) {
     return {
-      id: message.id,
-      threadId,
-      sessionId: targetSessionId,
-      role: message.role,
-      origin,
-      visibility,
-      partsJson,
-      searchText,
-      contentHash,
-      transportPartsJson,
-      transportOrigin,
-      modelId,
-      providerId,
-      harnessId,
-      referencesJson,
-      projectReferencesJson,
-      createdAt,
-      completedAt,
-      cost,
-      tokensJson,
-      rateLimitsJson,
-      creditsJson,
-      contextWindow,
-      contextUsed,
-      error,
-      structuredOutputJson
+      applied: 0,
+      skipped,
+      collisions,
+      total: existing.size,
+      cursor: null,
+      noop: true
     }
   }
 
-  /** Persist one fully-encoded message (INSERT or UPDATE by id). */
-  private writeMessage(encoded: ReturnType<AgentMessageRepo['encodeMessage']>): void {
-    this.db.run(
-      `INSERT INTO agent_messages(
-        id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
-        transport_parts, transport_origin,
-        model_id, provider_id, harness_id,
-        references_json, project_references_json,
-        created_at, completed_at, cost,
-        tokens_json, rate_limits_json, usage_credits_json,
-        context_window, context_used, error, structured_output
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET
-        role = excluded.role,
-        origin = excluded.origin,
-        visibility = excluded.visibility,
-        parts = excluded.parts,
-        search_text = excluded.search_text,
-        content_hash = excluded.content_hash,
-        transport_parts = excluded.transport_parts,
-        transport_origin = excluded.transport_origin,
-        model_id = excluded.model_id,
-        provider_id = excluded.provider_id,
-        harness_id = excluded.harness_id,
-        references_json = excluded.references_json,
-        project_references_json = excluded.project_references_json,
-        created_at = excluded.created_at,
-        completed_at = excluded.completed_at,
-        cost = excluded.cost,
-        tokens_json = excluded.tokens_json,
-        rate_limits_json = excluded.rate_limits_json,
-        usage_credits_json = excluded.usage_credits_json,
-        context_window = excluded.context_window,
-        context_used = excluded.context_used,
-        error = excluded.error,
-        structured_output = excluded.structured_output`,
-      encoded.id,
-      encoded.threadId,
-      encoded.sessionId,
-      encoded.role,
-      encoded.origin,
-      encoded.visibility,
-      encoded.partsJson,
-      encoded.searchText,
-      encoded.contentHash,
-      encoded.transportPartsJson,
-      encoded.transportOrigin,
-      encoded.modelId,
-      encoded.providerId,
-      encoded.harnessId,
-      encoded.referencesJson,
-      encoded.projectReferencesJson,
-      encoded.createdAt,
-      encoded.completedAt,
-      encoded.cost,
-      encoded.tokensJson,
-      encoded.rateLimitsJson,
-      encoded.creditsJson,
-      encoded.contextWindow,
-      encoded.contextUsed,
-      encoded.error,
-      encoded.structuredOutputJson
-    )
-  }
+  executor.transaction(() => {
+    for (const encoded of writes) {
+      writeEncodedMessage(executor, encoded)
+    }
+  })
 
-  /** Whether two encoded rows are identical (no rewrite needed). */
-  private static isUnchanged(
-    existing: AgentMessageRow,
-    encoded: ReturnType<AgentMessageRepo['encodeMessage']>
-  ): boolean {
-    return (
-      existing.content_hash === encoded.contentHash &&
-      existing.role === encoded.role &&
-      existing.origin === encoded.origin &&
-      existing.visibility === encoded.visibility &&
-      existing.parts === encoded.partsJson &&
-      existing.search_text === encoded.searchText &&
-      (existing.transport_parts ?? null) === encoded.transportPartsJson &&
-      (existing.transport_origin ?? null) === encoded.transportOrigin &&
-      (existing.model_id ?? null) === encoded.modelId &&
-      (existing.provider_id ?? null) === encoded.providerId &&
-      (existing.harness_id ?? null) === encoded.harnessId &&
-      (existing.references_json ?? null) === encoded.referencesJson &&
-      (existing.project_references_json ?? null) === encoded.projectReferencesJson &&
-      existing.created_at === encoded.createdAt &&
-      (existing.completed_at ?? null) === encoded.completedAt &&
-      (existing.cost ?? null) === encoded.cost &&
-      (existing.tokens_json ?? null) === encoded.tokensJson &&
-      (existing.rate_limits_json ?? null) === encoded.rateLimitsJson &&
-      (existing.usage_credits_json ?? null) === encoded.creditsJson &&
-      (existing.context_window ?? null) === encoded.contextWindow &&
-      (existing.context_used ?? null) === encoded.contextUsed &&
-      (existing.error ?? null) === encoded.error &&
-      (existing.structured_output ?? null) === encoded.structuredOutputJson
-    )
+  executor.run(
+    `INSERT INTO provider_sync_cursors(thread_id, session_id, message_count, last_message_id, synced_at)
+     VALUES(?,?,?,?,?)
+     ON CONFLICT(thread_id, session_id) DO UPDATE SET
+       message_count = excluded.message_count,
+       last_message_id = excluded.last_message_id,
+       synced_at = excluded.synced_at`,
+    threadId,
+    sessionId,
+    sorted.length,
+    lastId,
+    Date.now()
+  )
+
+  return {
+    applied: writes.length,
+    skipped,
+    collisions,
+    total: sorted.length,
+    cursor: { sessionId, messageCount: sorted.length, lastMessageId: lastId, syncedAt: Date.now() },
+    noop: false
   }
+}
+
+export class AgentMessageRepo {
+  constructor(private db: Database) {}
 
   upsert(message: AgentMessage, threadId: string, sessionId?: string): void {
     const existing = this.db.get<AgentMessageRow>(
@@ -430,7 +515,7 @@ export class AgentMessageRepo {
        FROM agent_messages WHERE id = ?`,
       message.id
     )
-    const encoded = this.encodeMessage(message, threadId, sessionId)
+    const encoded = encodeAgentMessage(message, threadId, sessionId)
     if (
       existing &&
       (existing.thread_id !== encoded.threadId || existing.session_id !== encoded.sessionId)
@@ -438,11 +523,14 @@ export class AgentMessageRepo {
       throw new Error(`Message ${message.id} already belongs to another thread or session`)
     }
 
-    if (existing && AgentMessageRepo.isUnchanged(existing, encoded)) {
+    // The content hash is a stable fingerprint of every persisted field, so a
+    // matching hash means no rewrite is needed (unchanged JSON/search text are
+    // never rewritten).
+    if (existing && existing.content_hash === encoded.contentHash) {
       return
     }
 
-    this.writeMessage(encoded)
+    writeEncodedMessage(this.db, encoded)
   }
 
   // ── Provider cursors and delta-only transcript sync ────────────────────
@@ -505,88 +593,16 @@ export class AgentMessageRepo {
   }
 
   /**
-   * Append-only transcript synchronization. Persists only the deltas of the
-   * provider transcript inside a single transaction:
-   *
-   * - When the transcript matches the persisted cursor (same length and last
-   *   message id) it short-circuits with `noop: true` and performs no DB work.
-   * - Otherwise existing message ids and content hashes are loaded in one bulk
-   *   query, and only new or changed messages are written. Unchanged JSON,
-   *   search text, and metadata are never re-serialized or rewritten.
-   *
-   * `sessionId` is the thread's current harness session and keys the cursor.
+   * Delta-only transcript synchronization (see `runProviderDeltaSync`). Runs on
+   * the caller's executor; `ThreadManager` routes this through the maintenance
+   * worker in production so the reconciliation never blocks the main process.
    */
   syncProviderDeltas(
     threadId: string,
     sessionId: string,
     messages: AgentMessage[]
   ): ProviderDeltaSyncResult {
-    const sorted = [...messages].sort(
-      (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
-    )
-    const last = sorted[sorted.length - 1]
-    const lastId = last?.id ?? ''
-
-    const cursor = this.getProviderCursor(threadId, sessionId)
-    if (cursor && cursor.messageCount === sorted.length && cursor.lastMessageId === lastId) {
-      this.saveProviderCursor(threadId, sessionId, sorted.length, lastId)
-      return {
-        applied: 0,
-        skipped: sorted.length,
-        collisions: 0,
-        total: this.countConversationByThread(threadId),
-        cursor: { ...cursor, syncedAt: Date.now() },
-        noop: true
-      }
-    }
-
-    // Bulk-load existing identities so unchanged rows are never rewritten and a
-    // foreign id (belonging to another thread/session) is never clobbered.
-    const existing = new Map<
-      string,
-      { contentHash: string | null; threadId: string; sessionId: string | null }
-    >(
-      this.db
-        .all<{ id: string; content_hash: string | null; thread_id: string; session_id: string | null }>(
-          'SELECT id, content_hash, thread_id, session_id FROM agent_messages WHERE thread_id = ?',
-          threadId
-        )
-        .map((row) => [
-          row.id,
-          { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
-        ] as const)
-    )
-
-    let applied = 0
-    let skipped = 0
-    let collisions = 0
-    this.db.transaction(() => {
-      for (const message of sorted) {
-        const existingRow = existing.get(message.id)
-        if (existingRow && (existingRow.threadId !== threadId || existingRow.sessionId !== null)) {
-          collisions++
-          continue
-        }
-        const encoded = this.encodeMessage(message, threadId)
-        if (existingRow?.contentHash !== null && existingRow?.contentHash === encoded.contentHash) {
-          skipped++
-          continue
-        }
-        this.writeMessage(encoded)
-        applied++
-      }
-    })
-
-    const total = this.countConversationByThread(threadId)
-    this.saveProviderCursor(threadId, sessionId, sorted.length, lastId)
-    return {
-      applied,
-      skipped,
-      collisions,
-      total,
-      cursor: { sessionId, messageCount: total, lastMessageId: lastId, syncedAt: Date.now() },
-      noop: false
-    }
+    return runProviderDeltaSync(this.db, threadId, sessionId, messages)
   }
 
   loadByThread(threadId: string): AgentMessage[] {

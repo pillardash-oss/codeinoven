@@ -25,6 +25,22 @@ import type {
   DatabaseWorkerResult,
   WorkerSizeTelemetry
 } from './database-worker'
+import {
+  runProviderDeltaSync,
+  type ProviderDeltaSyncExecutor
+} from './repositories/agent-message-repo'
+
+/** Executor adapter over this worker's own connection. */
+function executor(): ProviderDeltaSyncExecutor {
+  return {
+    all: <T>(sql: string, ...params: unknown[]) =>
+      connection().prepare(sql).all(...params) as T[],
+    run: (sql, ...params) => {
+      connection().prepare(sql).run(...params)
+    },
+    transaction: <T>(fn: () => T) => connection().transaction(fn)()
+  }
+}
 
 const config = (workerData ?? {}) as DatabaseWorkerConfig
 const port = parentPort
@@ -191,9 +207,18 @@ function restore(request: Extract<DatabaseWorkerRequest, { kind: 'restore' }>): 
         rmSync(tmp, { force: true })
         return { kind: 'restore', ok: false, reason: 'verify_failed', error: `restored quick_check: ${restoredText}` }
       }
-      // 4. Swap: drop stale WAL/SHM sidecars, then atomically promote. The
-      //    verified copy is already at tmp (rmSync(tmp) at the start handled
-      //    any stale leftover).
+      // 4. Swap: drop stale WAL/SHM sidecars and close this worker's own live
+      //    connection so no handle survives onto the pre-restore inode, then
+      //    atomically promote the verified copy. The next operation lazily
+      //    reopens against the restored file.
+      if (db) {
+        try {
+          db.close()
+        } catch {
+          // Best-effort close before the inode swap.
+        }
+        db = null
+      }
       rmSync(`${livePath}-wal`, { force: true })
       rmSync(`${livePath}-shm`, { force: true })
       renameSync(tmp, livePath)
@@ -417,6 +442,17 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
       return recoverTo(request)
     case 'health':
       return health()
+    case 'sync-provider-deltas': {
+      try {
+        return {
+          kind: 'sync-provider-deltas',
+          ok: true,
+          result: runProviderDeltaSync(executor(), request.threadId, request.sessionId, request.messages)
+        }
+      } catch (error) {
+        return { kind: 'sync-provider-deltas', ok: false, error: String(error) }
+      }
+    }
     case 'shutdown': {
       try {
         connection().close()
