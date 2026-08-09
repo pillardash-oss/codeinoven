@@ -102,6 +102,7 @@
           <ThreadRow
             {thread}
             selected={selectedThreadId === thread.id}
+            hideScope
             {onOpen}
             {onRename}
             {onTogglePin}
