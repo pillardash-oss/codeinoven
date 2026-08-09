@@ -881,7 +881,9 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   try {
-    database.close()
+    // Await the graceful database close (typed worker shutdown acknowledged +
+    // primary connection closed) so app.quit() never races the storage teardown.
+    await database.close()
   } catch (error) {
     Logger.error('Database close failed during shutdown:', error)
   }

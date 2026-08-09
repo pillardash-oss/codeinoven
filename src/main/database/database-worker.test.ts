@@ -10,6 +10,7 @@ import { DatabaseWorker, DATABASE_WORKER_DEFAULTS } from './database-worker'
 import { Logger } from '../logger'
 import { ProjectRepo } from './repositories/project-repo'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { HistoryEngine } from '../../lib/engines/history-engine'
 import type { AgentMessage } from '../../lib/types'
 
 const databaseDir = dirname(fileURLToPath(import.meta.url))
@@ -362,5 +363,108 @@ describe('DatabaseWorker production wrapper', () => {
     await db.close()
     expect(db.isOpen()).toBe(false)
     expect(db.hasMaintenanceWorker()).toBe(false)
+  })
+
+  it('production lifecycle: close awaits the worker shutdown before closing the primary', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    expect(db.isOpen()).toBe(true)
+
+    const closePromise = db.close()
+    // Synchronously after calling close(), the primary connection is still open
+    // — close() awaits the worker's typed shutdown acknowledgment (and clean
+    // exit) before closing the primary. A runShutdownPipeline awaiting
+    // database.close() therefore never app.quit()s ahead of the storage teardown.
+    expect(db.isOpen()).toBe(true)
+
+    await closePromise
+    expect(db.isOpen()).toBe(false)
+    expect(db.hasMaintenanceWorker()).toBe(false)
+  })
+
+  it('routes history CRUD and history FTS through the worker', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'History' })
+    const history = new HistoryEngine(db)
+
+    await history.append('p1', thread.id, 'user', 'alpha history note')
+    await history.append('p1', thread.id, 'assistant', 'bravo history note')
+
+    const loaded = await history.load('p1', thread.id)
+    expect(loaded.length).toBe(2)
+    expect(await history.count('p1', thread.id)).toBe(2)
+
+    const found = await history.search('bravo', 'p1')
+    expect(found.some((entry) => entry.content.includes('bravo'))).toBe(true)
+
+    await history.truncate('p1', thread.id, 2)
+    expect(await history.count('p1', thread.id)).toBe(1)
+
+    await db.close()
+  })
+
+  it('routes page-around, user messages, and subagent transcripts through the worker', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Routes' })
+
+    const messages: AgentMessage[] = []
+    for (let i = 0; i < 25; i++) {
+      messages.push({
+        id: `r-${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        parts: [{ type: 'text', id: `rp-${i}`, messageID: `r-${i}`, text: `message ${i}` }],
+        createdAt: 100 + i
+      })
+    }
+    await manager.upsertMessages('p1', thread.id, messages, 'sess')
+
+    const users = await manager.loadUserMessages('p1', thread.id)
+    expect(users.filter((user) => user.id.startsWith('r-'))).toHaveLength(13)
+
+    const around = await manager.loadMessagePageAround('p1', thread.id, 'r-15', 10)
+    expect(around.messages.some((m) => m.id === 'r-15')).toBe(true)
+    expect(around.messages.length).toBeGreaterThan(0)
+
+    await manager.saveSubagentMessages('p1', thread.id, 'sub-1', [
+      {
+        id: 's-1',
+        role: 'assistant',
+        parts: [{ type: 'text', id: 'sp-1', messageID: 's-1', text: 'sub note' }],
+        createdAt: 900
+      }
+    ])
+    const sub = await manager.loadSubagentMessages('p1', thread.id, 'sub-1')
+    expect(sub).toHaveLength(1)
+    expect(sub[0].id).toBe('s-1')
+
+    await db.close()
   })
 })

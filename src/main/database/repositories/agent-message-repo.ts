@@ -805,15 +805,100 @@ export function mapMessageRows(rows: unknown[], includeTransport = false): Agent
   return rows.map((row) => rowToMessage(row as AgentMessageRow, includeTransport))
 }
 
-/** SQL for the mirrored conversation (parent-session rows only), no LIMIT. */
-export function buildLoadByThreadSql(threadId: string): { sql: string; params: unknown[] } {
+/** Map raw `id/parts/created_at` rows to lightweight user-message summaries. */
+export function mapUserMessageRows(rows: unknown[]): UserMessageSummary[] {
+  return rows.map((row) => {
+    const r = row as { id: string; parts: string; created_at: number }
+    return { id: r.id, content: userMessageText(r.parts), createdAt: r.created_at }
+  })
+}
+
+/** ASC cursor condition: strictly after (created_at, id) — for paged loops. */
+function afterCursor(after: ThreadMessageCursor | undefined): string {
+  return after ? ` AND (created_at > ? OR (created_at = ? AND id > ?))` : ''
+}
+
+/**
+ * SQL for one bounded page of the mirrored conversation (parent-session rows),
+ * ascending, cursor-paged. The worker's `query` command applies the LIMIT.
+ */
+export function buildLoadByThreadPageSql(
+  threadId: string,
+  after: ThreadMessageCursor | undefined
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId]
+  const cursor = afterCursor(after)
+  if (after) params.push(after.createdAt, after.createdAt, after.id)
   return {
     sql: `SELECT * FROM agent_messages
       WHERE thread_id = ? AND session_id IS NULL
-        AND visibility IN ('conversation', 'working_trace')
-      ORDER BY created_at ASC`,
-    params: [threadId]
+        AND visibility IN ('conversation', 'working_trace')${cursor}
+      ORDER BY created_at ASC, id ASC`,
+    params
   }
+}
+
+/** SQL for one bounded page of parent-session records (incl. transport prompts). */
+export function buildLoadAllPageSql(
+  threadId: string,
+  after: ThreadMessageCursor | undefined
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId]
+  const cursor = afterCursor(after)
+  if (after) params.push(after.createdAt, after.createdAt, after.id)
+  return {
+    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id IS NULL${cursor}
+      ORDER BY created_at ASC, id ASC`,
+    params
+  }
+}
+
+/** SQL for one bounded page of user-authored conversation messages. */
+export function buildLoadUserMessagesPageSql(
+  threadId: string,
+  after: ThreadMessageCursor | undefined
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId]
+  const cursor = afterCursor(after)
+  if (after) params.push(after.createdAt, after.createdAt, after.id)
+  return {
+    sql: `SELECT id, parts, created_at FROM agent_messages
+      WHERE thread_id = ? AND session_id IS NULL AND role = 'user'
+        AND visibility IN ('conversation', 'working_trace')${cursor}
+      ORDER BY created_at ASC, id ASC`,
+    params
+  }
+}
+
+/** SQL for one bounded page of a child-agent (subagent) transcript. */
+export function buildLoadSessionPageSql(
+  threadId: string,
+  sessionId: string,
+  after: ThreadMessageCursor | undefined
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId, sessionId]
+  const cursor = afterCursor(after)
+  if (after) params.push(after.createdAt, after.createdAt, after.id)
+  return {
+    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id = ?${cursor}
+      ORDER BY created_at ASC, id ASC`,
+    params
+  }
+}
+
+/** Atomic replace of a child-agent transcript: delete session + upsert all. */
+export function buildSaveSubagentStatements(
+  threadId: string,
+  sessionId: string,
+  messages: AgentMessage[]
+): Array<{ sql: string; params: unknown[] }> {
+  const statements: Array<{ sql: string; params: unknown[] }> = [
+    { sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id = ?', params: [threadId, sessionId] }
+  ]
+  for (const message of messages) {
+    statements.push(encodeWriteStatement(encodeAgentMessage(message, threadId, sessionId)))
+  }
+  return statements
 }
 
 /** SQL for one bounded page (newest first, cursor-based), no LIMIT. */
@@ -834,13 +919,5 @@ export function buildLoadPageSql(
         AND visibility IN ('conversation', 'working_trace')${cursor}
       ORDER BY created_at DESC, id DESC`,
     params
-  }
-}
-
-/** SQL for every parent-session record, including transport-only prompts. */
-export function buildLoadAllSql(threadId: string): { sql: string; params: unknown[] } {
-  return {
-    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id IS NULL ORDER BY created_at ASC`,
-    params: [threadId]
   }
 }
