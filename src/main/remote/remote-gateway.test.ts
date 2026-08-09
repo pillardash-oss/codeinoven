@@ -8,7 +8,7 @@ import { request as httpsRequest } from 'node:https'
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
-import { loadOrCreateDeviceKeyMaterial } from '../../renderer/lib/remote/device-identity'
+import { createMemoryDeviceKeyStore, loadOrCreateDeviceKeyMaterial } from '../../renderer/lib/remote/device-identity'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database } from '../database/database'
@@ -48,27 +48,12 @@ function deviceInfo(device: EnrolledDevice): RemoteDeviceInfo {
     expiresAt: device.expiresAt,
     credentialExpiresAt: device.credentialExpiresAt,
     revokedAt: device.revokedAt,
-    authVersion: device.authVersion
+    authVersion: device.authVersion,
+    allProjects: device.allProjects,
+    projectIds: device.projectIds
   }
 }
 
-function memoryStorage(): Storage {
-  const store = new Map<string, string>()
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      store.set(key, value)
-    },
-    removeItem: (key: string) => {
-      store.delete(key)
-    },
-    clear: () => store.clear(),
-    key: (index: number) => [...store.keys()][index] ?? null,
-    get length() {
-      return store.size
-    }
-  }
-}
 
 async function makeGateway(
   secret: string | null = SECRET,
@@ -972,8 +957,7 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
 
       // First connection: the phone presents its public keys + bootstrap + a
       // signature proving it owns the signing key. The desktop assigns the id.
-      const storage = memoryStorage()
-      const keyMaterial = await loadOrCreateDeviceKeyMaterial(storage)
+      const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
       let assignedId = ''
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
@@ -984,7 +968,7 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
           deviceId: keyMaterial.deviceId,
           deviceName: keyMaterial.deviceName,
           authVersion: keyMaterial.authVersion,
-          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingKey: keyMaterial.signingKey,
           signingPublicJwk: keyMaterial.signingPublicJwk,
           agreementPublicJwk: keyMaterial.agreementPublicJwk
         },
@@ -1008,7 +992,7 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
           deviceId: keyMaterial.deviceId,
           deviceName: keyMaterial.deviceName,
           authVersion: keyMaterial.authVersion,
-          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingKey: keyMaterial.signingKey,
           signingPublicJwk: keyMaterial.signingPublicJwk,
           agreementPublicJwk: keyMaterial.agreementPublicJwk
         },
@@ -1027,7 +1011,7 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
           deviceId: assignedId,
           deviceName: keyMaterial.deviceName,
           authVersion: 1,
-          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingKey: keyMaterial.signingKey,
           signingPublicJwk: keyMaterial.signingPublicJwk,
           agreementPublicJwk: keyMaterial.agreementPublicJwk
         },

@@ -81,13 +81,13 @@ export class RemoteSessionStore {
   }
 
   /** Persist the desktop-assigned device id from the enrollment handshake. */
-  private applyAssignedDevice(deviceId: string, authVersion?: number): void {
-    saveAssignedDeviceId(deviceId)
+  private async applyAssignedDevice(deviceId: string, authVersion?: number): Promise<void> {
+    await saveAssignedDeviceId(deviceId)
     if (this.keyMaterial) {
       this.keyMaterial.deviceId = deviceId
       if (typeof authVersion === 'number') {
         this.keyMaterial.authVersion = authVersion
-        saveDeviceAuthVersion(authVersion)
+        await saveDeviceAuthVersion(authVersion)
       }
     }
   }
@@ -127,7 +127,7 @@ export class RemoteSessionStore {
         if (record['type'] === 'remote:device:ok') {
           const assigned = record['device'] as { id?: unknown; authVersion?: unknown } | undefined
           if (assigned && typeof assigned.id === 'string') {
-            this.applyAssignedDevice(
+            void this.applyAssignedDevice(
               assigned.id,
               typeof assigned.authVersion === 'number' ? assigned.authVersion : undefined
             )
@@ -156,7 +156,7 @@ export class RemoteSessionStore {
       bootstrap: this.secret || null,
       context: 'relay'
     })
-    const signature = await signTranscript(keyMaterial.signingPrivateJwk, transcript)
+    const signature = await signTranscript(keyMaterial.signingKey, transcript)
     const authFrame: Record<string, unknown> = {
       type: 'remote:device:auth',
       nonce,
@@ -323,7 +323,7 @@ export class RemoteSessionStore {
           deviceId: keyMaterial.deviceId,
           deviceName: keyMaterial.deviceName,
           authVersion: keyMaterial.authVersion,
-          signingPrivateJwk: keyMaterial.signingPrivateJwk,
+          signingKey: keyMaterial.signingKey,
           signingPublicJwk: keyMaterial.signingPublicJwk,
           agreementPublicJwk: keyMaterial.agreementPublicJwk
         }
@@ -497,7 +497,7 @@ export class RemoteSessionStore {
         deviceId: keyMaterial.deviceId,
         deviceName: keyMaterial.deviceName,
         authVersion: keyMaterial.authVersion,
-        signingPrivateJwk: keyMaterial.signingPrivateJwk,
+        signingKey: keyMaterial.signingKey,
         signingPublicJwk: keyMaterial.signingPublicJwk,
         agreementPublicJwk: keyMaterial.agreementPublicJwk
       },

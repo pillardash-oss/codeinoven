@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createLanTransport, type TransportEvent, type TransportSocket } from './transport'
 import { createHandshakeToken, decryptPayload, generateNonce } from './session-security'
-import { loadOrCreateDeviceKeyMaterial } from './device-identity'
+import { createMemoryDeviceKeyStore, loadOrCreateDeviceKeyMaterial } from './device-identity'
 
 class FakeSocket implements TransportSocket {
   sent: string[] = []
@@ -178,28 +178,10 @@ describe('browser WebSocket default', () => {
 })
 
 describe('createLanTransport — proof of possession (A-04)', () => {
-  function memoryStorage(): Storage {
-    const store = new Map<string, string>()
-    return {
-      getItem: (key: string) => store.get(key) ?? null,
-      setItem: (key: string, value: string) => {
-        store.set(key, value)
-      },
-      removeItem: (key: string) => {
-        store.delete(key)
-      },
-      clear: () => store.clear(),
-      key: (index: number) => [...store.keys()][index] ?? null,
-      get length() {
-        return store.size
-      }
-    }
-  }
-
   it('signs the challenge instead of deriving a shared-secret token on first enrollment', async () => {
     const socket = new FakeSocket()
     const events: TransportEvent[] = []
-    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
     const transport = createLanTransport({
       peer,
       authSecret: 'bootstrap',
@@ -209,7 +191,7 @@ describe('createLanTransport — proof of possession (A-04)', () => {
         deviceId: keyMaterial.deviceId,
         deviceName: keyMaterial.deviceName,
         authVersion: keyMaterial.authVersion,
-        signingPrivateJwk: keyMaterial.signingPrivateJwk,
+        signingKey: keyMaterial.signingKey,
         signingPublicJwk: keyMaterial.signingPublicJwk,
         agreementPublicJwk: keyMaterial.agreementPublicJwk
       },
@@ -249,7 +231,7 @@ describe('createLanTransport — proof of possession (A-04)', () => {
 
   it('reports the desktop-assigned device id from a successful enrollment reply', async () => {
     const socket = new FakeSocket()
-    const keyMaterial = await loadOrCreateDeviceKeyMaterial(memoryStorage())
+    const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
     let assigned = ''
     const transport = createLanTransport({
       peer,
@@ -260,7 +242,7 @@ describe('createLanTransport — proof of possession (A-04)', () => {
         deviceId: keyMaterial.deviceId,
         deviceName: keyMaterial.deviceName,
         authVersion: keyMaterial.authVersion,
-        signingPrivateJwk: keyMaterial.signingPrivateJwk,
+        signingKey: keyMaterial.signingKey,
         signingPublicJwk: keyMaterial.signingPublicJwk,
         agreementPublicJwk: keyMaterial.agreementPublicJwk
       },
@@ -294,10 +276,14 @@ describe('createLanTransport — proof of possession (A-04)', () => {
         deviceId: 'device-abc',
         deviceName: 'iPhone',
         authVersion: 2,
-        signingPrivateJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage())).signingPrivateJwk,
-        signingPublicJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage())).signingPublicJwk,
-        agreementPublicJwk: (await loadOrCreateDeviceKeyMaterial(memoryStorage()))
-          .agreementPublicJwk
+        signingKey: (await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() }))
+          .signingKey,
+        signingPublicJwk: (
+          await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
+        ).signingPublicJwk,
+        agreementPublicJwk: (
+          await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
+        ).agreementPublicJwk
       },
       onEvent: () => undefined
     })

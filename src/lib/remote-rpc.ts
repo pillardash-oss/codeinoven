@@ -286,6 +286,11 @@ export interface RemoteRpcDeviceContext {
   sessionId: string
   requestId: string
   scopes: RemoteScope[]
+  transport: 'lan' | 'relay'
+  /** Whether the device may reach every project (local explicit choice). */
+  allProjects: boolean
+  /** Project ids allowed when `allProjects` is false (enforced server-side). */
+  projectIds: string[]
 }
 
 /**

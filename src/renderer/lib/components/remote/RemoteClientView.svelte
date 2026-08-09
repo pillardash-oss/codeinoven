@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { ArrowLeft, Globe2, RefreshCw, ShieldCheck } from '@lucide/svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import RemoteStatus from '$lib/components/remote/RemoteStatus.svelte'
@@ -170,63 +171,55 @@
     }
   }
 
-  $effect(() => {
-    if (!desktop) return
-    setRemoteLogger(createRingBufferLogger())
-    // Start the LAN gateway (if not already listening) so the QR pairing code
-    // is immediately scannable — no manual "remote mode" toggle required.
-    void invoke('remote:ensureGateway')
-      .then((status) => {
+  // The phone client reads `#pair=<secret>` from the QR code and connects
+  // automatically — the human never types anything.
+  let pwaPair = $state('')
+
+  onMount(() => {
+    if (desktop) {
+      setRemoteLogger(createRingBufferLogger())
+      // Start the LAN gateway (if not already listening) so the QR pairing
+      // code is immediately scannable — no manual "remote mode" toggle.
+      void invoke('remote:ensureGateway')
+        .then((status) => {
+          remoteStatus = status
+          remoteSession.setKeepAlive(status.phase)
+        })
+        .catch(() => void syncRemoteStatus())
+      refreshDiagnostics()
+      const unsubStatus = subscribe('remote:status', (status) => {
         remoteStatus = status
         remoteSession.setKeepAlive(status.phase)
       })
-      .catch(() => void syncRemoteStatus())
-    refreshDiagnostics()
-    const unsubscribe = subscribe('remote:status', (status) => {
-      remoteStatus = status
-      remoteSession.setKeepAlive(status.phase)
-    })
-    const unsubscribeStepUp = subscribe('remote:stepUpPending', (approvals) => {
-      pendingApprovals = approvals
-    })
-    return () => {
-      unsubscribe()
-      unsubscribeStepUp()
+      const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
+        pendingApprovals = approvals
+      })
+      return () => {
+        unsubStatus()
+        unsubStepUp()
+      }
     }
+    return undefined
   })
 
-  // The phone client reads `#pair=<secret>` from the QR code and connects
-  // automatically — the human never types anything. If the first attempt fails
-  // (e.g. the desktop was mid-restart), retry in the background so returning to
-  // the page eventually connects without a manual tap.
-  let pwaPair = $state('')
-  let pwaRetryTimer: number | null = null
-  $effect(() => {
+  onMount(() => {
     if (!pwa || typeof window === 'undefined') return
     const queryParams = new URLSearchParams(window.location.search)
     const fragmentParams = new URLSearchParams(window.location.hash.slice(1))
     const pair = fragmentParams.get('pair') ?? queryParams.get('pair')
-    if (pair && pair.length > 0 && pwaPair.length === 0) {
+    if (pair && pair.length > 0) {
       pwaPair = pair
       secret = pair
     }
-  })
-
-  $effect(() => {
-    if (!pwa || pwaPair.length === 0 || connected || busy) return
-    // Retry the auto-connect until it lands, so a desktop restart mid-session
-    // heals on its own once the gateway is back up.
-    pwaRetryTimer = window.setTimeout(() => {
+    if (pwaPair.length === 0) return
+    // Connect immediately, then retry in the background until it lands so a
+    // desktop restart mid-session heals on its own.
+    void handleConnect(pwaPair)
+    const retry = setInterval(() => {
+      if (pwaPair.length === 0 || connected || busy) return
       void handleConnect(pwaPair)
     }, 1500)
-    return () => {
-      if (pwaRetryTimer !== null) window.clearTimeout(pwaRetryTimer)
-    }
-  })
-
-  $effect(() => {
-    if (!pwa || pwaPair.length === 0) return
-    void handleConnect(pwaPair)
+    return () => clearInterval(retry)
   })
 </script>
 
@@ -235,7 +228,7 @@
     <header class="flex h-12 shrink-0 items-center gap-2 border-b bg-surface px-4">
       <button
         type="button"
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
         aria-label="Back to the app"
         title="Back to the app"
         onclick={onBack}
@@ -369,7 +362,7 @@
         <div class="mt-3 flex gap-2">
           <button
             type="button"
-            class="h-9 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
+            class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
             disabled={busy || !remoteStatus?.cloud.configured}
             onclick={() => void beginCloudEnrollment()}
           >
@@ -378,7 +371,7 @@
           {#if remoteStatus?.cloud.desktopId}
             <button
               type="button"
-              class="h-9 rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              class="h-9 cursor-pointer rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
               disabled={busy}
               onclick={() => void resetCloudEnrollment()}
             >
@@ -420,7 +413,7 @@
           <h3 class="text-xs font-semibold text-muted">Recent diagnostics</h3>
           <button
             type="button"
-            class="flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
             aria-label={diagnosticsOpen ? 'Collapse diagnostics' : 'Expand diagnostics'}
             title="Refresh diagnostics"
             onclick={() => {
