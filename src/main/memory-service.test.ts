@@ -10,7 +10,6 @@ import {
   MemoryService,
   detectMemoryCandidates,
   estimateTokens,
-  modelTitlesEnabled,
   validateMemoryConfig
 } from './memory-service'
 
@@ -330,20 +329,6 @@ describe('auxiliary usage accounting', () => {
 })
 
 describe('model titles and token estimation', () => {
-  it('keeps heuristic titles the default and honours the opt-in', () => {
-    const original = process.env['CODEINOVEN_MODEL_TITLES']
-    try {
-      delete process.env['CODEINOVEN_MODEL_TITLES']
-      delete process.env['MODEL_TITLES']
-      expect(modelTitlesEnabled()).toBe(false)
-      process.env['CODEINOVEN_MODEL_TITLES'] = 'true'
-      expect(modelTitlesEnabled()).toBe(true)
-    } finally {
-      if (original === undefined) delete process.env['CODEINOVEN_MODEL_TITLES']
-      else process.env['CODEINOVEN_MODEL_TITLES'] = original
-    }
-  })
-
   it('estimates tokens from characters', () => {
     expect(estimateTokens('')).toBe(0)
     expect(estimateTokens('abcd')).toBe(1)

@@ -202,15 +202,6 @@ function readPositiveIntEnv(name: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
-/**
- * Whether model-generated thread titles are enabled. Heuristic titles are the
- * default; model titles are opt-in via the deployment environment.
- */
-export function modelTitlesEnabled(): boolean {
-  const value = process.env['CODEINOVEN_MODEL_TITLES'] ?? process.env['MODEL_TITLES']
-  return value === 'true' || value === '1'
-}
-
 export type AuxiliaryFeature = 'memory' | 'title'
 
 export interface AuxiliaryUsageEntry {
