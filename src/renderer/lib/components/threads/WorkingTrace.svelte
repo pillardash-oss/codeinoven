@@ -149,14 +149,14 @@
         isOpen = true
         notify()
       }
-    } else if (wasLatest && !latest && isOpen && !userOpened) {
+    } else if (!busy && wasLatest && !latest && isOpen && !userOpened) {
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
       }
       isOpen = false
       notify()
-    } else if (wasBusy && !busy && isOpen && !userOpened) {
+    } else if (!busy && wasBusy && !busy && isOpen && !userOpened) {
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
