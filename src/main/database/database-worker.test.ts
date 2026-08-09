@@ -467,4 +467,88 @@ describe('DatabaseWorker production wrapper', () => {
 
     await db.close()
   })
+
+  it('allocates distinct ordered history sequences under concurrent appends', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Concurrent history' })
+    const history = new HistoryEngine(db)
+
+    const appends = Array.from({ length: 40 }, (_, i) =>
+      history.append('p1', thread.id, 'user', `concurrent entry ${i}`)
+    )
+    await Promise.all(appends)
+
+    const sequences = db.all<{ sequence: number }>('SELECT "sequence" FROM history_entries ORDER BY "sequence" ASC')
+    expect(sequences).toHaveLength(40)
+    // Distinct, contiguous, ordered sequences — no two concurrent appends ever
+    // allocated the same sequence.
+    expect(sequences.map((row) => row.sequence)).toEqual(
+      Array.from({ length: 40 }, (_, i) => i + 1)
+    )
+
+    const loaded = await history.load('p1', thread.id)
+    expect(loaded).toHaveLength(40)
+    expect(loaded.map((entry) => entry.content)).toEqual(
+      Array.from({ length: 40 }, (_, i) => `concurrent entry ${i}`)
+    )
+
+    await db.close()
+  })
+
+  it('returns the full history beyond one page without omission (bounded worker reads)', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Large history' })
+    const history = new HistoryEngine(db)
+
+    const total = 1250
+    const appends: Promise<unknown>[] = []
+    for (let i = 0; i < total; i++) {
+      appends.push(history.append('p1', thread.id, 'user', `large entry ${i}`))
+    }
+    // Chunked concurrency so the client still serializes but the load is exercised.
+    for (let i = 0; i < appends.length; i += 50) {
+      await Promise.all(appends.slice(i, i + 50))
+    }
+
+    expect(await history.count('p1', thread.id)).toBe(total)
+
+    // Full-load API returns every row — no silent 1000-row truncation — while
+    // each worker query stays bounded (cursor-paged in chunks).
+    const loaded = await history.load('p1', thread.id)
+    expect(loaded).toHaveLength(total)
+    const contents = new Set(loaded.map((entry) => entry.content))
+    expect(contents.size).toBe(total)
+    expect(loaded[0].content).toBe('large entry 0')
+    expect(loaded[total - 1].content).toBe(`large entry ${total - 1}`)
+
+    await db.close()
+  })
 })

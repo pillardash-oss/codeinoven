@@ -1,5 +1,16 @@
 import type { Database } from '../database'
 import type { HistoryEntry, HistoryRole } from '../../../lib/types'
+import type { ProviderDeltaSyncExecutor } from './agent-message-repo'
+
+/** Inputs for an atomic history append (sequence allocated inside the transaction). */
+export interface HistoryAppendArgs {
+  id: string
+  threadId: string
+  role: HistoryRole
+  content: string
+  metadata: Record<string, unknown> | undefined
+  timestamp: number
+}
 
 interface HistoryRow {
   id: string
@@ -162,25 +173,64 @@ export function truncateHistoryStatement(threadId: string, sequence: number): { 
   }
 }
 
-/** Bounded history load (ascending sequence). */
+/** Bounded history load (ascending sequence) for an explicit caller limit. */
 export function buildHistoryLoadSql(
   threadId: string,
-  limit?: number
+  limit: number
 ): { sql: string; params: unknown[]; maxRows: number } {
   return {
     sql: `SELECT * FROM history_entries WHERE thread_id = ? ORDER BY "sequence" ASC`,
     params: [threadId],
-    maxRows: limit !== undefined && limit > 0 ? Math.min(limit, 5000) : 1000
+    maxRows: Math.max(1, Math.floor(limit))
   }
 }
 
-/** Bounded recent-history load (descending sequence). */
+/** SQL for one bounded history page (ascending sequence), cursor-paged. */
+export function buildHistoryLoadPageSql(
+  threadId: string,
+  afterSequence?: number
+): { sql: string; params: unknown[] } {
+  const params: unknown[] = [threadId]
+  const cursor = afterSequence !== undefined ? ' AND "sequence" > ?' : ''
+  if (afterSequence !== undefined) params.push(afterSequence)
+  return {
+    sql: `SELECT * FROM history_entries WHERE thread_id = ?${cursor} ORDER BY "sequence" ASC, id ASC`,
+    params
+  }
+}
+
+/** Bounded recent-history load (descending sequence) for an explicit count. */
 export function buildHistoryRecentSql(threadId: string, count: number): { sql: string; params: unknown[]; maxRows: number } {
   return {
     sql: `SELECT * FROM history_entries WHERE thread_id = ? ORDER BY "sequence" DESC`,
     params: [threadId],
-    maxRows: Math.max(1, Math.min(count, 5000))
+    maxRows: Math.max(1, Math.floor(count))
   }
+}
+
+/** Atomic history append: allocates the next sequence and inserts in one transaction. */
+export function runHistoryAppend(
+  executor: ProviderDeltaSyncExecutor,
+  args: HistoryAppendArgs
+): { sequence: number } {
+  return executor.transaction(() => {
+    const rows = executor.all<{ next: number }>(
+      'SELECT COALESCE(MAX("sequence"), 0) + 1 AS next FROM history_entries WHERE thread_id = ?',
+      args.threadId
+    )
+    const sequence = Number(rows[0]?.next ?? 1)
+    const statement = insertHistoryStatement(
+      args.id,
+      args.threadId,
+      args.role,
+      args.content,
+      args.metadata,
+      sequence,
+      args.timestamp
+    )
+    executor.run(statement.sql, ...statement.params)
+    return { sequence }
+  })
 }
 
 /** Bounded history FTS search. */
