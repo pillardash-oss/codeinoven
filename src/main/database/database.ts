@@ -84,6 +84,7 @@ export class Database {
     this.applySchema()
     this.ensureThreadWorkflowSchema()
     this.backfillAssignmentThreadLineage()
+    this.restoreLegacyOrchestrationEvictions()
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
     this.ensureHarnessUsageSchema()
@@ -599,6 +600,37 @@ export class Database {
       .run()
     if (result && result.changes > 0) {
       Logger.info('Backfilled Assignment worker coordinator lineage', {
+        count: result.changes
+      })
+    }
+  }
+
+  /**
+   * Before orchestration children were exempt from project capacity, creating
+   * one archived an unrelated public thread at the same timestamp. Restore
+   * only rows carrying that exact deterministic legacy-eviction signature.
+   */
+  private restoreLegacyOrchestrationEvictions(): void {
+    const now = Date.now()
+    const result = this.db
+      ?.prepare(
+        `UPDATE threads AS public_thread
+        SET archived = 0, updated_at = ?
+        WHERE public_thread.archived = 1
+          AND public_thread.coordinator_thread_id IS NULL
+          AND COALESCE(public_thread.assignment_role, '') != 'worker'
+          AND COALESCE(public_thread.achievement_role, '') != 'auditor'
+          AND EXISTS (
+            SELECT 1
+            FROM threads AS orchestration_child
+            WHERE orchestration_child.project_id = public_thread.project_id
+              AND orchestration_child.coordinator_thread_id IS NOT NULL
+              AND ABS(orchestration_child.created_at - public_thread.updated_at) <= 10
+          )`
+      )
+      .run(now)
+    if (result && result.changes > 0) {
+      Logger.info('Restored threads evicted by legacy orchestration capacity counting', {
         count: result.changes
       })
     }

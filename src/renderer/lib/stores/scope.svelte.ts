@@ -614,7 +614,12 @@ class ScopeState {
   }
 
   removeThread(threadId: string): void {
-    this.allScopeThreads = this.allScopeThreads.filter((thread) => thread.id !== threadId)
+    const removedIds = new Set(
+      this.allScopeThreads
+        .filter((thread) => thread.id === threadId || thread.coordinatorThreadId === threadId)
+        .map((thread) => thread.id)
+    )
+    this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
   }
 }
 

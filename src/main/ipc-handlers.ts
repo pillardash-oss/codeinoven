@@ -944,6 +944,7 @@ export function registerIpcHandlers(
     if (chatEngine?.deleteThreadSession) {
       await chatEngine.deleteThreadSession(thread.projectId, thread.id)
     }
+    await memoryService.deleteThreadMemory(thread.projectId, thread.id)
     dismissThreadNotifications(thread.projectId, thread.id)
   })
   const scopeManager = new ScopeManager(database)
@@ -3327,7 +3328,6 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     await threadManager.deleteThread(validProjectId, validThreadId)
-    await memoryService.deleteThreadMemory(validProjectId, validThreadId)
   })
   ipcMain.handle(
     'thread:dismissSpecReview',

@@ -166,9 +166,14 @@ export class RemoteRpcDispatcher {
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
     this.credentials = services.credentials ?? null
-    this.threadManager = new ThreadManager(services.database, broadcastThreadUpdate, (thread) => {
-      void services.chatEngine.deleteThreadSession(thread.projectId, thread.id)
-    })
+    this.threadManager = new ThreadManager(
+      services.database,
+      broadcastThreadUpdate,
+      async (thread) => {
+        await services.chatEngine.deleteThreadSession(thread.projectId, thread.id)
+        await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
+      }
+    )
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
@@ -574,7 +579,6 @@ export class RemoteRpcDispatcher {
         )
       case 'thread:delete':
         await this.threadManager.deleteThread(this.string(args[0]), this.string(args[1]))
-        await this.memoryService.deleteThreadMemory(this.string(args[0]), this.string(args[1]))
         return undefined
       case 'thread:fork': {
         await chatEngine.loadMessages(this.string(args[0]), this.string(args[1]))

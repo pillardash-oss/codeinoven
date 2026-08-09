@@ -37,7 +37,8 @@ import {
   type AgentPart,
   type ThreadMessageCursor,
   type ThreadMessagePage,
-  type UserMessageSummary
+  type UserMessageSummary,
+  isOrchestrationChildThread
 } from '../types'
 
 /**
@@ -168,16 +169,23 @@ export class ThreadManager {
     const threadLimit = project.threadLimit
 
     const existing = this.threadRepo.listByProject(input.projectId)
-    const active = existing.filter((t) => !t.archived)
-    if (active.length >= threadLimit) {
+    const active = existing.filter(
+      (thread) => !thread.archived && !isOrchestrationChildThread(thread)
+    )
+    const creatingOrchestrationChild =
+      input.assignmentRole === 'worker' ||
+      input.achievementRole === 'auditor' ||
+      input.coordinatorThreadId !== undefined
+    if (!creatingOrchestrationChild && active.length >= threadLimit) {
       const unpinned = active
         .filter((t) => !t.pinned)
         .sort((a, b) => a.lastActivity - b.lastActivity)
       const toEvict = unpinned[0]
       if (toEvict) {
         // Archive (never silently delete) the oldest unpinned thread so the
-        // transcript stays recoverable behind the thread cap.
-        await this.setArchived(input.projectId, toEvict.id, true)
+        // public transcript stays recoverable behind the logical thread cap.
+        // Its private orchestration children have no independent lifecycle.
+        await this.evacuateThreadTree(input.projectId, toEvict)
       } else {
         // Every active thread is pinned — refuse deterministically instead of
         // silently exceeding the limit.
@@ -371,12 +379,46 @@ export class ThreadManager {
   }
   async deleteThread(projectId: string, threadId: string): Promise<void> {
     const thread = this.requireOwnedThread(projectId, threadId)
-    await this.onDelete?.(thread)
+    const deletionOrder = [...this.orchestrationChildren(projectId, threadId), thread]
+    for (const candidate of deletionOrder) {
+      await this.onDelete?.(candidate)
+    }
     this.db.transaction(() => {
-      this.agentMessageRepo.deleteByThread(threadId)
-      this.harnessUsageRepo.deleteByThread(threadId)
-      this.threadRepo.delete(threadId)
+      for (const candidate of deletionOrder) {
+        this.deleteThreadRows(candidate.id)
+      }
     })
+  }
+
+  private orchestrationChildren(projectId: string, coordinatorThreadId: string): Thread[] {
+    return this.threadRepo
+      .listByProject(projectId)
+      .filter((thread) => thread.coordinatorThreadId === coordinatorThreadId)
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+  }
+
+  private deleteThreadRows(threadId: string): void {
+    this.agentMessageRepo.deleteByThread(threadId)
+    this.harnessUsageRepo.deleteByThread(threadId)
+    this.threadRepo.delete(threadId)
+  }
+
+  /** Archive one public root while atomically removing its private task tree. */
+  private async evacuateThreadTree(projectId: string, root: Thread): Promise<void> {
+    const children = this.orchestrationChildren(projectId, root.id)
+    for (const child of children) {
+      await this.onDelete?.(child)
+    }
+    this.db.transaction(() => {
+      for (const child of children) {
+        this.deleteThreadRows(child.id)
+      }
+      this.threadRepo.setArchived(root.id, true)
+    })
+    for (const child of children) {
+      this.onChange?.({ ...child, archived: true, updatedAt: Date.now() })
+    }
+    this.onChange?.({ ...root, archived: true, updatedAt: Date.now() })
   }
 
   async setStatus(
@@ -732,12 +774,13 @@ export class ThreadManager {
     const project = this.projectRepo.get(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
     const threads = this.threadRepo.listByProject(projectId)
-    const active = threads.filter((t) => !t.archived)
+    const logicalThreads = threads.filter((thread) => !isOrchestrationChildThread(thread))
+    const active = logicalThreads.filter((thread) => !thread.archived)
     return {
       limit: project.threadLimit,
       activeCount: active.length,
       pinnedCount: active.filter((t) => t.pinned).length,
-      archivedCount: threads.filter((t) => t.archived).length,
+      archivedCount: logicalThreads.filter((thread) => thread.archived).length,
       archivableCount: active.filter((t) => !t.pinned).length
     }
   }
