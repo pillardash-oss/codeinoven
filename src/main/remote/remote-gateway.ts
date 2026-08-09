@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 /**
  * LAN gateway for remote connection.
  *
@@ -125,6 +127,10 @@ interface CachedAsset {
   compressed: Partial<Record<'br' | 'gzip', Buffer>>
 }
 
+/** Raw plus compressed PWA assets retained by the gateway process. */
+export const MAX_ASSET_CACHE_ENTRIES = 256
+export const MAX_ASSET_CACHE_BYTES = 128 * 1024 * 1024
+
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -214,11 +220,17 @@ const UNAUTHENTICATED_TIMEOUT_MS = 10_000
 const MAX_PEER_BUFFER_BYTES = 1024 * 1024
 
 function normalizeHostForComparison(host: string): string {
-  return host.trim().replace(/^\[|\]$/g, '').split('%')[0].toLowerCase()
+  return host
+    .trim()
+    .replace(/^\[|\]$/g, '')
+    .split('%')[0]
+    .toLowerCase()
 }
 
 function hostWithoutPort(hostHeaderValue: string | string[] | undefined): string {
-  const value = Array.isArray(hostHeaderValue) ? hostHeaderValue[0] ?? '' : hostHeaderValue ?? ''
+  const value = Array.isArray(hostHeaderValue)
+    ? (hostHeaderValue[0] ?? '')
+    : (hostHeaderValue ?? '')
   const trimmed = value.trim()
   if (!trimmed) return ''
   if (trimmed.startsWith('[')) {
@@ -332,6 +344,7 @@ export class RemoteGateway {
     }
     this.peers.clear()
     this.livePeers.clear()
+    this.assetCache.clear()
 
     await this.closeServers()
     Logger.info('Remote gateway stopped')
@@ -395,6 +408,9 @@ export class RemoteGateway {
     }
     if (stamp === this.closureStamp) return
     const graph = await computePwaAssetGraph(this.options.staticRoot)
+    // Hashed assets change as one generation. Discard the previous generation
+    // atomically instead of retaining obsolete raw/gzip/Brotli variants.
+    this.assetCache.clear()
     this.allowedAssets = new Set(graph.closure)
     this.immutableAssets = new Set(graph.immutable)
     this.mutableAssets = new Set(graph.mutable)
@@ -480,6 +496,7 @@ export class RemoteGateway {
     } else {
       body = asset.raw
     }
+    this.enforceAssetCacheBounds()
     const etag = asset.etag
 
     const common: Record<string, string> = {
@@ -561,7 +578,12 @@ export class RemoteGateway {
     const cached = this.assetCache.get(filePath)
     if (cached) {
       const current = await this.fileStamp(filePath)
-      if (current === cached.stamp) return cached
+      if (current === cached.stamp) {
+        this.assetCache.delete(filePath)
+        this.assetCache.set(filePath, cached)
+        return cached
+      }
+      this.assetCache.delete(filePath)
     }
     try {
       const data = await readFile(filePath)
@@ -574,9 +596,30 @@ export class RemoteGateway {
         compressed: {}
       }
       this.assetCache.set(filePath, asset)
+      this.enforceAssetCacheBounds()
       return asset
     } catch {
       return null
+    }
+  }
+
+  private cachedAssetBytes(asset: CachedAsset): number {
+    return (
+      asset.raw.byteLength +
+      (asset.compressed.br?.byteLength ?? 0) +
+      (asset.compressed.gzip?.byteLength ?? 0)
+    )
+  }
+
+  /** LRU eviction bounded by both cardinality and retained byte size. */
+  private enforceAssetCacheBounds(): void {
+    let bytes = 0
+    for (const asset of this.assetCache.values()) bytes += this.cachedAssetBytes(asset)
+    while (this.assetCache.size > MAX_ASSET_CACHE_ENTRIES || bytes > MAX_ASSET_CACHE_BYTES) {
+      const oldest = this.assetCache.entries().next().value as [string, CachedAsset] | undefined
+      if (!oldest) break
+      this.assetCache.delete(oldest[0])
+      bytes -= this.cachedAssetBytes(oldest[1])
     }
   }
 
@@ -785,9 +828,7 @@ export class RemoteGateway {
           return true
         }
       }
-      const requestHost = normalizeHostForComparison(
-        hostWithoutPort(request.headers.host)
-      )
+      const requestHost = normalizeHostForComparison(hostWithoutPort(request.headers.host))
       return originHost === requestHost
     } catch {
       return false
