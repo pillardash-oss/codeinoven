@@ -732,6 +732,16 @@ export class RemoteModeController {
     if (!this.vault.isAvailable()) throw new Error('OS credential encryption is unavailable')
     if (!(await this.resolvePeerSecret())) throw new Error('Remote control secret is unavailable')
 
+    // A hosted enrollment must never issue a control grant from an expired or
+    // already-consumed LAN bootstrap. Generate and register a fresh one before
+    // the one-time account code is created. A fixed operator-provided secret
+    // cannot be rotated, so re-register it with a fresh enrollment window.
+    if (this.peerSecret) {
+      await this.syncPairingState()
+    } else {
+      await this.rotatePairingBootstrap()
+    }
+
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
     const existingToken = previous?.tokenRef ? await this.vault.resolve(previous.tokenRef) : null
@@ -950,11 +960,6 @@ export class RemoteModeController {
       deviceToken,
       controlSecret,
       credentials: this.credentials ?? undefined,
-      onDeviceEnrolled: () =>
-        // A new device enrolled over the relay — rotate the persisted peer
-        // secret, gateway secret, displayed QR, and five-minute bootstrap
-        // immediately (exactly like LAN). Rejections deny enrollment.
-        this.rotatePairingBootstrap(),
       signal,
       connectTimeoutMs: remoteEnvInt('RELAY_CONNECT_TIMEOUT_MS', 15_000),
       authTimeoutMs: remoteEnvInt('RELAY_AUTH_TIMEOUT_MS', 10_000),
