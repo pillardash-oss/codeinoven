@@ -37,6 +37,8 @@ export interface Project {
   iconType?: string
   /** Optional while loading projects persisted before change tracking was introduced. */
   changeTrackingMode?: ChangeTrackingMode
+  /** Whether the repo is known to have GitHub deployments; gates the Deployments tab. */
+  hasDeployments?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -53,6 +55,7 @@ export interface CreateProjectInput {
   color?: string
   iconType?: string
   changeTrackingMode?: ChangeTrackingMode
+  hasDeployments?: boolean
 }
 
 // ─── Scope board ─────────────────────────────────────────────────────────────
@@ -2935,6 +2938,14 @@ export interface GitHubDeploymentOverview {
   workflowRuns: GitHubWorkflowRun[]
   deployments: GitHubDeployment[]
   fetchedAt: number
+}
+
+/**
+ * `deployment:overview` IPC result. `hasDeployments` is derived from the
+ * snapshot and drives whether the Deployments tab is shown at all.
+ */
+export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview {
+  hasDeployments: boolean
 }
 
 /** One entry from `git stash list`, e.g. `stash@{0}`. */

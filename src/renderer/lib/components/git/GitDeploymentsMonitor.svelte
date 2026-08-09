@@ -15,7 +15,11 @@
   import { invoke } from '$lib/ipc.svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
-  import type { GitHubDeployment, GitHubDeploymentOverview, GitHubWorkflowRun } from '$shared/types'
+  import type {
+    GitHubDeployment,
+    GitHubDeploymentOverviewResult,
+    GitHubWorkflowRun
+  } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -26,7 +30,7 @@
 
   let { projectId, identity, githubConnected, onSignIn }: Props = $props()
 
-  let overview = $state<GitHubDeploymentOverview | null>(null)
+  let overview = $state<GitHubDeploymentOverviewResult | null>(null)
   let loading = $state(false)
   let error = $state('')
 

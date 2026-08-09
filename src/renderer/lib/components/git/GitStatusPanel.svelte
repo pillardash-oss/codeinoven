@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { gitState } from '$lib/stores/git.svelte'
+  import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import type {
     GitCommitInfo,
     GitDiff,
@@ -103,6 +104,10 @@
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
+  /** Whether the repo is known to have GitHub deployments — gates the Deployments tab. */
+  let hasDeployments = $state(false)
+  /** Re-entrancy guard for the background deployment probe (not rendered). */
+  let detectingDeployments = false
   let loadingCommitDiff = $state(false)
   let commitDiffs = $state<Record<string, GitDiff>>({})
   let commitExpanded = $state<Record<string, boolean>>({})
@@ -156,6 +161,11 @@
     repoState = 'loading'
     try {
       const project = await invoke('project:get', projectId)
+      if (project?.hasDeployments !== undefined) {
+        // Authoritative database value; reconcile the fast-render cache with it.
+        hasDeployments = project.hasDeployments
+        cacheHasDeployments(projectId, project.hasDeployments)
+      }
       if (!project?.path) {
         repoState = 'not_git'
         return
@@ -241,6 +251,27 @@
     githubConnected = status.connected
     githubConfigured = status.configured
     githubUser = status.user ?? null
+  }
+
+  /**
+   * Discover whether the repo has GitHub deployment activity so the Deployments
+   * tab can appear on its own. Only meaningful while signed in with a GitHub
+   * origin remote. The main process persists the DB flag; we mirror it into
+   * localStorage here for fast rendering on the next panel open.
+   */
+  async function detectDeployments(): Promise<void> {
+    const identity = githubIdentity
+    if (!githubConnected || !identity || detectingDeployments) return
+    detectingDeployments = true
+    try {
+      const overview = await invoke('deployment:overview', projectId, identity.owner, identity.repo)
+      hasDeployments = overview.hasDeployments
+      cacheHasDeployments(projectId, overview.hasDeployments)
+    } catch {
+      // Sign-in or network failure — keep the current flag and try again later.
+    } finally {
+      detectingDeployments = false
+    }
   }
 
   /**
@@ -524,6 +555,9 @@
     // Claim this project before reading/writing shared state so a previous
     // project's data can never be shown or overwrite the current view.
     gitState.activate(projectId)
+    // Fast-render: show/hide the Deployments tab from the cache immediately,
+    // long before the authoritative value comes back from the database.
+    hasDeployments = cachedHasDeployments(projectId) ?? false
     void loadRepoState()
   })
 
@@ -537,6 +571,20 @@
 
   $effect(() => {
     void loadGitHubAuth()
+  })
+
+  $effect(() => {
+    // When the user is signed in and the repo points at GitHub, probe for
+    // deployment activity in the background and surface the tab if found.
+    if (repoState === 'git' && githubConnected && !hasDeployments && githubIdentity) {
+      void detectDeployments()
+    }
+  })
+
+  $effect(() => {
+    // The Deployments tab only exists while the flag does — fall back to
+    // Changes when it goes (e.g. after switching to a project without them).
+    if (activeTab === 'deployments' && !hasDeployments) activeTab = 'changes'
   })
 
   $effect(() => {
@@ -795,8 +843,7 @@
         },
         { id: 'history', label: 'History', icon: RotateCcwClock, count: null },
         { id: 'branches', label: 'Branches', icon: NetworkIcon, count: null },
-        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null },
-        { id: 'deployments', label: 'Deployments', icon: Rocket, count: null }
+        { id: 'pulls', label: 'Pull requests', icon: GitPullRequest, count: null }
       ]
       // Stash is just shelved work — it earns a tab only once something is shelved.
       if (gitState.stashes.length > 0) {
@@ -806,6 +853,11 @@
           icon: Archive,
           count: gitState.stashes.length
         })
+      }
+      // Deployments earn a tab only when the repo actually has deployment
+      // activity (the flag is persisted in the DB and cached in localStorage).
+      if (hasDeployments) {
+        list.push({ id: 'deployments', label: 'Deployments', icon: Rocket, count: null })
       }
       return list
     })

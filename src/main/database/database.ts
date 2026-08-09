@@ -88,6 +88,7 @@ export class Database {
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
     this.ensureHarnessUsageSchema()
+    this.ensureProjectDeploymentsSchema()
     this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
 
     this.startMaintenanceWorker()
@@ -773,6 +774,18 @@ export class Database {
   private ensureHarnessUsageSchema(): void {
     if (!this.tableExists('harness_usage')) {
       this.db?.exec(HARNESS_USAGE_SQL)
+    }
+  }
+
+  /**
+   * Idempotent guard for the `projects.has_deployments` flag introduced after
+   * the base schema shipped. New columns are non-null with a default so the
+   * flag can be written independently of a full project upsert.
+   */
+  private ensureProjectDeploymentsSchema(): void {
+    const columns = this.all<{ name: string }>('PRAGMA table_info(projects)')
+    if (!columns.some((column) => column.name === 'has_deployments')) {
+      this.db?.exec('ALTER TABLE projects ADD COLUMN has_deployments INTEGER NOT NULL DEFAULT 0')
     }
   }
 

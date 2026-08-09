@@ -61,7 +61,7 @@ import type {
   GitFileChange,
   GitHubAuthStatus,
   GitHubDeviceCode,
-  GitHubDeploymentOverview,
+  GitHubDeploymentOverviewResult,
   GitHubPollResult,
   GitIdentity,
   GitIdentityInput,
@@ -745,7 +745,7 @@ export interface IpcInvokeContract {
   >
   'deployment:overview': Contract<
     [projectId: string, owner: string, repo: string],
-    GitHubDeploymentOverview
+    GitHubDeploymentOverviewResult
   >
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': Contract<
