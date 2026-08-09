@@ -3,10 +3,11 @@ import type { HistoryEntry, HistoryRole } from '../types'
 import type { Database } from '../../main/database/database'
 import {
   HistoryRepo,
+  buildHistoryLoadPageSql,
   buildHistoryLoadSql,
   buildHistorySearchSql,
-  insertHistoryStatement,
   mapHistoryRows,
+  runHistoryAppend,
   truncateHistoryStatement
 } from '../../main/database/repositories/history-repo'
 
@@ -14,9 +15,19 @@ import {
  * History engine. All reads (including the history FTS search) and writes are
  * routed through the typed serialized worker API with bounded responses; the
  * `HistoryRepo` on the primary connection is the fallback.
+ *
+ * - `append` allocates the next sequence and inserts in ONE atomic worker
+ *   transaction (`history-append`), so concurrent appends can never allocate
+ *   the same sequence.
+ * - `load` without an explicit limit cursor-pages through the worker in
+ *   bounded chunks, so the full-load API never silently truncates.
  */
 export class HistoryEngine {
   private repo: HistoryRepo
+
+  /** Bounded page size for cursor-paged history reads. */
+  private static readonly HISTORY_PAGE_SIZE = 1000
+  private static readonly MAX_HISTORY_PAGES = 100_000
 
   constructor(private readonly db: Database) {
     this.repo = new HistoryRepo(db)
@@ -29,7 +40,6 @@ export class HistoryEngine {
     content: string,
     metadata?: HistoryEntry['metadata']
   ): Promise<HistoryEntry> {
-    const sequence = (await this.maxSequence(projectId, threadId)) + 1
     const entry: HistoryEntry = {
       id: generateId(),
       role,
@@ -37,27 +47,40 @@ export class HistoryEngine {
       metadata,
       timestamp: Date.now()
     }
-    const statement = insertHistoryStatement(
+    const outcome = await this.db.appendHistoryViaWorker(
       entry.id,
       threadId,
       role,
       content,
       metadata,
-      sequence,
       entry.timestamp
     )
-    const outcome = await this.db.executeViaWorker(statement.sql, statement.params)
     if (!outcome.ok) {
-      this.repo.insert(entry.id, threadId, role, content, metadata, sequence, entry.timestamp)
+      // Atomic fallback on the primary connection (still one transaction).
+      runHistoryAppend(this.db, {
+        id: entry.id,
+        threadId,
+        role,
+        content,
+        metadata,
+        timestamp: entry.timestamp
+      })
     }
     return entry
   }
 
   async load(projectId: string, threadId: string, limit?: number): Promise<HistoryEntry[]> {
-    const built = buildHistoryLoadSql(threadId, limit)
-    const result = await this.db.queryViaWorker(built.sql, built.params, built.maxRows)
-    if (result.ok) return mapHistoryRows(result.rows)
-    return this.repo.load(threadId, limit)
+    if (limit !== undefined && limit > 0) {
+      const built = buildHistoryLoadSql(threadId, limit)
+      const result = await this.db.queryViaWorker(built.sql, built.params, built.maxRows)
+      if (result.ok) return mapHistoryRows(result.rows)
+      return this.repo.load(threadId, limit)
+    }
+    // Full load: cursor-page through the worker in bounded chunks so the
+    // response is complete while each worker query stays bounded.
+    const page = await this.pagedHistoryRows(threadId)
+    if (!page.ok) return this.repo.load(threadId)
+    return mapHistoryRows(page.rows)
   }
 
   async count(projectId: string, threadId: string): Promise<number> {
@@ -85,16 +108,26 @@ export class HistoryEngine {
     return this.repo.search(query, projectId, limit)
   }
 
-  private async maxSequence(projectId: string, threadId: string): Promise<number> {
-    const result = await this.db.queryViaWorker(
-      'SELECT max("sequence") AS seq FROM history_entries WHERE thread_id = ?',
-      [threadId],
-      1
-    )
-    if (result.ok && result.rows.length > 0) {
-      const seq = result.rows[0].seq
-      return seq === null || seq === undefined ? 0 : Number(seq)
+  /**
+   * Read the full history by cursor-paging through the worker in bounded
+   * chunks (ascending sequence). Returns `ok: false` when the worker path is
+   * unavailable so the caller can fall back to the repo.
+   */
+  private async pagedHistoryRows(
+    threadId: string
+  ): Promise<{ ok: true; rows: unknown[] } | { ok: false }> {
+    const rows: unknown[] = []
+    let afterSequence: number | undefined
+    for (let page = 0; page < HistoryEngine.MAX_HISTORY_PAGES; page++) {
+      const built = buildHistoryLoadPageSql(threadId, afterSequence)
+      const result = await this.db.queryViaWorker(built.sql, built.params, HistoryEngine.HISTORY_PAGE_SIZE)
+      if (!result.ok) return { ok: false }
+      rows.push(...result.rows)
+      if (!result.truncated || result.rows.length === 0) break
+      if (result.rows.length < HistoryEngine.HISTORY_PAGE_SIZE) break
+      const last = result.rows[result.rows.length - 1] as { sequence: number }
+      afterSequence = Number(last.sequence)
     }
-    return this.repo.maxSequence(threadId)
+    return { ok: true, rows }
   }
 }

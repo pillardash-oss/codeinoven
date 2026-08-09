@@ -63,6 +63,15 @@ export type DatabaseWorkerRequest =
   | { kind: 'query'; sql: string; params: unknown[]; maxRows: number }
   | { kind: 'execute'; sql: string; params: unknown[] }
   | { kind: 'transaction'; statements: Array<{ sql: string; params: unknown[] }> }
+  | {
+      kind: 'history-append'
+      id: string
+      threadId: string
+      role: string
+      content: string
+      metadata?: Record<string, unknown> | null
+      timestamp: number
+    }
   | { kind: 'stats' }
   | { kind: 'sync-provider-deltas'; threadId: string; sessionId: string; messages: AgentMessage[] }
   | { kind: 'shutdown' }
@@ -163,6 +172,7 @@ export type DatabaseWorkerResult =
   | ({ kind: 'query'; ok: boolean; rows?: Record<string, unknown>[]; truncated?: boolean; error?: string })
   | ({ kind: 'execute'; ok: boolean; error?: string })
   | ({ kind: 'transaction'; ok: boolean; error?: string })
+  | ({ kind: 'history-append'; ok: boolean; sequence?: number; error?: string })
   | ({
       kind: 'stats'
       ok: boolean
@@ -360,6 +370,30 @@ export class DatabaseWorker {
   /** Atomic batch: all statements run in one transaction (serialized). */
   async transaction(statements: Array<{ sql: string; params: unknown[] }>): Promise<ResultForRequest<'transaction'>> {
     return this.request({ kind: 'transaction', statements })
+  }
+
+  /**
+   * Atomic history append: the next sequence is allocated and the row inserted
+   * in one serialized worker transaction, so concurrent appends can never
+   * allocate the same sequence.
+   */
+  async appendHistory(
+    id: string,
+    threadId: string,
+    role: string,
+    content: string,
+    metadata: Record<string, unknown> | undefined,
+    timestamp: number
+  ): Promise<ResultForRequest<'history-append'>> {
+    return this.request({
+      kind: 'history-append',
+      id,
+      threadId,
+      role,
+      content,
+      metadata: metadata ?? null,
+      timestamp
+    })
   }
 
   /** Worker-side serialization counters (for the concurrency proof). */

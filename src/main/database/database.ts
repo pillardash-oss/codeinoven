@@ -38,6 +38,7 @@ import {
   hashPersistedRow,
   type ProviderDeltaSyncResult
 } from './repositories/agent-message-repo'
+import { runHistoryAppend } from './repositories/history-repo'
 import type { AgentMessage } from '../../lib/types'
 
 const SCHEMA_VERSION_KEY = 'schema_version'
@@ -414,6 +415,36 @@ export class Database {
         }
       })
       return { ok: true }
+    } catch (error) {
+      return { ok: false, error: String(error) }
+    }
+  }
+
+  /**
+   * Atomic history append: allocates the next sequence and inserts the row in
+   * one serialized worker transaction, so concurrent appends can never
+   * allocate the same sequence. Falls back to an equivalent atomic transaction
+   * on the primary connection when no worker is available.
+   */
+  async appendHistoryViaWorker(
+    id: string,
+    threadId: string,
+    role: import('../../lib/types').HistoryRole,
+    content: string,
+    metadata: Record<string, unknown> | undefined,
+    timestamp: number
+  ): Promise<{ ok: boolean; sequence?: number; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (worker?.isRunning()) {
+      const response = await worker.appendHistory(id, threadId, role, content, metadata, timestamp)
+      if (response.ok) return { ok: true, sequence: response.sequence }
+      if (response.error) {
+        Logger.error('Database worker history append failed; falling back to primary connection', response.error)
+      }
+    }
+    try {
+      const { sequence } = runHistoryAppend(this, { id, threadId, role, content, metadata, timestamp })
+      return { ok: true, sequence }
     } catch (error) {
       return { ok: false, error: String(error) }
     }

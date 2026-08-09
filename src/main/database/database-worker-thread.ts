@@ -32,6 +32,7 @@ import {
   runProviderDeltaSync,
   type ProviderDeltaSyncExecutor
 } from './repositories/agent-message-repo'
+import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history-repo'
 
 /** Executor adapter over this worker's own connection. */
 function executor(): ProviderDeltaSyncExecutor {
@@ -539,6 +540,22 @@ function handle(request: DatabaseWorkerRequest): DatabaseWorkerResult | Promise<
       return execute(request)
     case 'transaction':
       return transaction(request)
+    case 'history-append': {
+      try {
+        const args: HistoryAppendArgs = {
+          id: request.id,
+          threadId: request.threadId,
+          role: request.role as HistoryAppendArgs['role'],
+          content: request.content,
+          metadata: request.metadata ?? undefined,
+          timestamp: request.timestamp
+        }
+        const { sequence } = runHistoryAppend(executor(), args)
+        return { kind: 'history-append', ok: true, sequence }
+      } catch (error) {
+        return { kind: 'history-append', ok: false, error: String(error) }
+      }
+    }
     case 'stats':
       return stats()
     case 'sync-provider-deltas': {
