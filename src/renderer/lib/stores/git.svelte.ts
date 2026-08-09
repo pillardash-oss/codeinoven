@@ -90,6 +90,14 @@ export class GitState {
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
 
+  /**
+   * The project whose data currently lives in the shared fields above. The
+   * panel activates a project before reading, and async refreshes only write
+   * their result when it still matches — so a slow response from the previous
+   * project can never bleed into the one the user is actually viewing.
+   */
+  activeProjectId: string | null = $state(null)
+
   // Not reactive rendered data — a plain dedup registry for agent-event
   // subscriptions, so SvelteSet is the wrong tool here.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -109,6 +117,20 @@ export class GitState {
 
   get branch(): string | null {
     return this.status?.branch ?? null
+  }
+
+  /** Switch the panel to a project, dropping any leftover state from the
+   *  previous one so stale data is never shown. */
+  activate(projectId: string): void {
+    if (this.activeProjectId === projectId) return
+    this.activeProjectId = projectId
+    this.status = null
+    this.branches = []
+    this.remotes = []
+    this.identity = null
+    this.credentialStatus = null
+    this.stashes = []
+    this.error = null
   }
 
   isBusy(operation: GitOperation | GitOperation[]): boolean {
@@ -138,6 +160,10 @@ export class GitState {
 
   async refresh(projectId: string): Promise<void> {
     this.markBusy('refresh', true)
+    // The refresh targets whichever project is active right now; if the panel
+    // has already switched to another project, the result is stale and must
+    // never be written.
+    const targetProject = this.activeProjectId
     this.error = null
     try {
       const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
@@ -150,6 +176,7 @@ export class GitState {
         ),
         invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
+      if (targetProject !== this.activeProjectId) return
       this.status = status
       this.branches = branches
       this.identity = identity
@@ -157,6 +184,7 @@ export class GitState {
       this.credentialStatus = credentialStatus
       this.stashes = stashes
     } catch (reason) {
+      if (targetProject !== this.activeProjectId) return
       this.error = errorMessage(reason, 'Git status could not be loaded')
       this.status = null
     } finally {

@@ -521,6 +521,9 @@
   }
 
   $effect(() => {
+    // Claim this project before reading/writing shared state so a previous
+    // project's data can never be shown or overwrite the current view.
+    gitState.activate(projectId)
     void loadRepoState()
   })
 
@@ -947,7 +950,7 @@
 
     {#if repoState === 'git'}
       <!-- Tab row — never wraps; scrolls horizontally when the tabs overflow -->
-      <div class="flex items-center gap-4 overflow-x-auto px-3 [scrollbar-width:thin]">
+      <div class="flex items-center gap-4 overflow-x-auto px-3">
         {#each tabs as tab (tab.id)}
           {@const TabIcon = tab.icon}
           <button
