@@ -83,6 +83,7 @@ export class Database {
     // DDL is applied idempotently on a fresh database.
     this.applySchema()
     this.ensureThreadWorkflowSchema()
+    this.backfillAssignmentThreadLineage()
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
     this.ensureHarnessUsageSchema()
@@ -558,6 +559,48 @@ export class Database {
     }
     if (!names.has('context_usage')) {
       this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
+    }
+  }
+
+  /**
+   * Older Assignment retries cleared every orchestration field from retired
+   * workers, which made those children indistinguishable from public threads.
+   * Successful assign-task operations retain the authoritative worker and
+   * coordinator IDs, so restore only that durable lineage. Current workers
+   * and coordinator threads are left untouched.
+   */
+  private backfillAssignmentThreadLineage(): void {
+    const result = this.db
+      ?.prepare(
+        `WITH worker_lineage AS (
+          SELECT
+            json_extract(result, '$.thread.id') AS thread_id,
+            json_extract(result, '$.assignment.coordinatorThreadId') AS coordinator_thread_id
+          FROM assignment_operations
+          WHERE tool_name = 'assign_task'
+            AND result != 'null'
+            AND json_extract(result, '$.task.owner') = 'worker'
+        )
+        UPDATE threads
+        SET coordinator_thread_id = (
+          SELECT worker_lineage.coordinator_thread_id
+          FROM worker_lineage
+          WHERE worker_lineage.thread_id = threads.id
+          LIMIT 1
+        )
+        WHERE coordinator_thread_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM worker_lineage
+            WHERE worker_lineage.thread_id = threads.id
+              AND worker_lineage.coordinator_thread_id IS NOT NULL
+          )`
+      )
+      .run()
+    if (result && result.changes > 0) {
+      Logger.info('Backfilled Assignment worker coordinator lineage', {
+        count: result.changes
+      })
     }
   }
 
