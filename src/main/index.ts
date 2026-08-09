@@ -12,7 +12,11 @@ import { StorageEngine } from './storage-engine'
 import { registerHydrationIpcHandlers } from './hydration-ipc'
 import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
 import { WindowStateService } from './window-state'
-import { setNotificationService, setPowerWakeService } from './thread-events'
+import {
+  setNotificationService,
+  setPowerWakeService,
+  broadcastThreadUpdate
+} from './thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -529,6 +533,15 @@ async function bootPostPaintServices(): Promise<void> {
             threadId: thread.id
           }))
         })
+        // The renderer's thread list was hydrated before recovery ran, so its
+        // in-memory rows still hold the stale planning/executing status. Push
+        // the corrected snapshots so sidebar indicators flip to "interrupted"
+        // immediately instead of lingering on "working" until the thread is
+        // reopened. `interrupted` is not a notifiable status, so this cannot
+        // fire spurious OS notifications.
+        for (const thread of recovery.recovered) {
+          broadcastThreadUpdate(thread)
+        }
       }
       if (recovery.failures.length > 0) {
         Logger.error('Restart recovery completed with failures', recovery.failures)
