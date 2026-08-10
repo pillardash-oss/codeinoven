@@ -13,6 +13,7 @@ import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
 import { Logger } from '../logger'
+import { sendToRenderer } from '../renderer-delivery'
 import { SecretVault } from '../secret-vault'
 import { CloudRelayClient } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
@@ -1111,7 +1112,7 @@ export class RemoteModeController {
     const status = this.status
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('remote:status', status)
+        sendToRenderer(window.webContents, 'remote:status', status)
       }
     }
   }
@@ -1121,7 +1122,7 @@ export class RemoteModeController {
     const approvals = this.listPendingApprovals()
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('remote:stepUpPending', approvals)
+        sendToRenderer(window.webContents, 'remote:stepUpPending', approvals)
       }
     }
   }

@@ -5,6 +5,7 @@ import type { ProviderConnectionInfo } from '../lib/types'
 import { buildHarnessEnvironment } from './drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from './harness-registry'
 import { forwardRemoteEvent } from './remote/remote-event-forwarder'
+import { sendToRenderer } from './renderer-delivery'
 
 /** Probe timeout — harnesses that hang longer than this are marked as error. */
 const PROBE_TIMEOUT_MS = 8000
@@ -92,7 +93,7 @@ export class ProviderConnectionService {
   private broadcast(): void {
     const payload = this.getAll()
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('providers:status', payload)
+      sendToRenderer(win.webContents, 'providers:status', payload)
     }
     forwardRemoteEvent('providers:status', payload)
   }

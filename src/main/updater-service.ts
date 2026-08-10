@@ -3,6 +3,7 @@ import { BrowserWindow, app } from 'electron'
 import { Logger } from './logger'
 import type { UpdaterStatus } from '../lib/ipc-contract'
 import type { StorageEngine } from './storage-engine'
+import { sendToRenderer } from './renderer-delivery'
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
@@ -119,7 +120,7 @@ export class UpdaterService {
     const status = this.status
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('updater:status', status)
+        sendToRenderer(win.webContents, 'updater:status', status)
       }
     }
   }
@@ -307,7 +308,7 @@ export class UpdaterService {
   private broadcastWaitingForThreads(count: number): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('updater:waiting-for-threads', count)
+        sendToRenderer(win.webContents, 'updater:waiting-for-threads', count)
       }
     }
   }
