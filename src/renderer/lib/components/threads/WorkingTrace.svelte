@@ -28,6 +28,9 @@
     open?: boolean
     busy?: boolean
     latest?: boolean
+    /** True once this trace's turn produced a completed assistant message — the
+     *  only condition under which the trace may fold itself. */
+    done?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -52,6 +55,7 @@
     open = false,
     busy = false,
     latest = false,
+    done = false,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -74,8 +78,6 @@
   let isOpen = $state(open || initialOpen)
   // svelte-ignore state_referenced_locally
   let userOpened = $state(initialUserOpened)
-  // svelte-ignore state_referenced_locally
-  let wasBusy = $state(busy)
   // svelte-ignore state_referenced_locally
   let wasLatest = $state(latest)
   let closeTimer: ReturnType<typeof setTimeout> | null = null
@@ -149,14 +151,17 @@
         isOpen = true
         notify()
       }
-    } else if (!busy && wasLatest && !latest && isOpen && !userOpened) {
+    } else if (done && !busy && wasLatest && !latest && isOpen && !userOpened) {
+      // Turn finished and a newer turn superseded it — fold immediately.
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
       }
       isOpen = false
       notify()
-    } else if (!busy && wasBusy && !busy && isOpen && !userOpened) {
+    } else if (done && !busy && isOpen && !userOpened) {
+      // Turn finished — fold after a short grace so the completed work stays
+      // visible before the final answer is revealed.
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
@@ -167,7 +172,8 @@
         notify()
       }, 2000)
     }
-    wasBusy = busy
+    // A turn still in progress (done === false) never folds itself: a transient
+    // busy=false from a harness activity blip must never hide the live trace.
     wasLatest = latest
   })
 
