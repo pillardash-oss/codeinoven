@@ -77,6 +77,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     threadSort,
+    pinnedThreadSort,
     threadStatusSort,
     findEmptyNewThread,
     threadVisitKey
@@ -163,6 +164,9 @@
   }
 
   function revealThreadInSidebar(threadId: string): void {
+    // The scope-board project view has its own per-stage lists and scrolling;
+    // leave it alone and only reveal for the regular Projects/Threads/Chats.
+    if (isScopeBoardView) return
     // In Projects mode the target thread may sit in a collapsed folder and/or
     // past the per-folder "show more" cutoff. Expand its folder and raise the
     // row budget so the row actually renders, then scroll once the re-layout
@@ -728,7 +732,7 @@
   let pinnedThreads = $derived(
     allThreads
       .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
   /** User-facing projects only — hidden ones (e.g. the chats inbox) stay out of the tree. */
