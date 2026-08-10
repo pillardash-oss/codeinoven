@@ -1,7 +1,6 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
-  import { remoteLog } from '../../remote/logger'
   import {
     Plus,
     Folder,
@@ -171,9 +170,6 @@
   function scrollThreadRowIntoView(threadId: string): void {
     const scroller = sidebarScroller
     const row = findThreadRow(threadId)
-    remoteLog.dev(
-      `[sidebar-reveal] scroll ${threadId}: row=${Boolean(row)} scroller=${Boolean(scroller)}`
-    )
     if (!row) return
     if (!scroller) {
       row.scrollIntoView({ block: 'nearest' })
@@ -185,28 +181,15 @@
     // move when the row is actually clipped.
     const rowRect = row.getBoundingClientRect()
     const scrollerRect = scroller.getBoundingClientRect()
-    const before = scroller.scrollTop
     if (rowRect.top < scrollerRect.top) {
       scroller.scrollTop -= scrollerRect.top - rowRect.top
     } else if (rowRect.bottom > scrollerRect.bottom) {
       scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
     }
-    remoteLog.dev(
-      `[sidebar-reveal] scroll ${threadId}: before=${before} after=${scroller.scrollTop} rowTop=${Math.round(
-        rowRect.top
-      )} rowBottom=${Math.round(rowRect.bottom)} scrTop=${Math.round(
-        scrollerRect.top
-      )} scrBottom=${Math.round(scrollerRect.bottom)}`
-    )
   }
 
   async function revealThreadInSidebar(threadId: string): Promise<void> {
     const active = selectedThread
-    remoteLog.dev(
-      `[sidebar-reveal] reveal ${threadId} mode=${mode} scopeBoard=${isScopeBoardView} active=${
-        active?.projectId ?? 'none'
-      }`
-    )
     // In Projects mode the target thread may sit in a collapsed folder and/or
     // past the per-folder "show more" cutoff. Expand its folder and raise the
     // row budget so the row actually renders. We intentionally don't gate this
