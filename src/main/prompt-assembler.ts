@@ -160,7 +160,7 @@ export function layerSize(content: string): LayerSizeReport {
 }
 
 export class PromptAssembler {
-  constructor(private readonly memoryService: MemoryService) {}
+  constructor(private readonly memoryService: MemoryService) { }
 
   async getLayers(
     projectId: string,
@@ -333,7 +333,7 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     'AGENT SCRATCH SPACE — where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
     '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents the agent or the user should read, plans, progress, walkthroughs, reports, test output, and temporary work.',
-    '3. Keep it organized for a human: feature work (plan*.md, progress*.md, walkthroughs, reports, test output) goes in `.cio/uncategorized/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. Name files so a human can read them at a glance.',
+    '3. Keep it organized for a human: feature work (plan*.md, progress*.md, walkthroughs, reports, test output) goes in `.cio/work/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. Name files so a human can read them at a glance.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. The platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite files there.'
   ].join('\n')
