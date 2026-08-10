@@ -3,6 +3,8 @@ import type { CloudUser } from './cloud-api'
 
 const authClient = createAuthClient()
 
+export type CloudAuthProvider = 'google' | 'apple'
+
 export async function currentCloudUser(): Promise<CloudUser> {
   const result = await authClient.getSession()
   if (result.error || !result.data?.user) throw new Error('unauthorized')
@@ -14,13 +16,13 @@ export async function currentCloudUser(): Promise<CloudUser> {
   }
 }
 
-export async function signInWithGitHub(): Promise<void> {
+export async function signInWithCloudProvider(provider: CloudAuthProvider): Promise<void> {
   const result = await authClient.signIn.social({
-    provider: 'github',
+    provider,
     callbackURL: '/remote.html',
-    errorCallbackURL: '/remote.html?authError=github'
+    errorCallbackURL: `/remote.html?authError=${provider}`
   })
-  if (result.error) throw new Error(result.error.message ?? 'github-sign-in-failed')
+  if (result.error) throw new Error(result.error.message ?? `${provider}-sign-in-failed`)
 }
 
 export async function logoutCloudAccount(): Promise<void> {

@@ -1,7 +1,12 @@
 <script lang="ts">
   import { Laptop, LogOut, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import { currentCloudUser, logoutCloudAccount, signInWithGitHub } from '$lib/remote/cloud-auth'
+  import {
+    currentCloudUser,
+    logoutCloudAccount,
+    signInWithCloudProvider,
+    type CloudAuthProvider
+  } from '$lib/remote/cloud-auth'
   import {
     claimCloudDesktop,
     cloudDesktopConnection,
@@ -74,12 +79,14 @@
   let errorMessage = $state('')
   let claimCode = $state(enrollmentCodeFromLink)
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
+  let activeSignInProvider = $state<CloudAuthProvider | null>(null)
   let revokeCandidate = $state<CloudDesktop | null>(null)
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
     const messages: Record<string, string> = {
-      'github-sign-in-failed': 'GitHub sign-in could not be started.',
+      'google-sign-in-failed': 'Google sign-in could not be started.',
+      'apple-sign-in-failed': 'Apple sign-in could not be started.',
       'invalid-enrollment-code': 'That desktop code is invalid or has expired.',
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
@@ -103,15 +110,17 @@
     }
   }
 
-  async function beginGitHubSignIn(): Promise<void> {
+  async function beginAccountSignIn(provider: CloudAuthProvider): Promise<void> {
     if (busy) return
     busy = true
+    activeSignInProvider = provider
     errorMessage = ''
     try {
-      await signInWithGitHub()
+      await signInWithCloudProvider(provider)
     } catch (error) {
       errorMessage = readableError(error)
       busy = false
+      activeSignInProvider = null
     }
   }
 
@@ -271,8 +280,8 @@
         <h2 class="text-sm font-semibold">Create or sign in to your CodeInOven account</h2>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           {claimFromLink
-            ? 'Continue with GitHub first. The one-time desktop code will be ready when you return.'
-            : 'Your GitHub account is your CodeInOven identity for the GitHub sidebar and remote access.'}
+            ? 'Continue with Google or Apple first. The one-time desktop code will be ready when you return.'
+            : 'Use Google or Apple to create your account automatically or return to an existing account.'}
         </p>
       </div>
 
@@ -282,17 +291,28 @@
         </p>
       {/if}
 
-      <button
-        class="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-        type="button"
-        disabled={busy}
-        onclick={() => void beginGitHubSignIn()}
-      >
-        <VendorIcon name="GitHub" size={16} />
-        {busy ? 'Opening GitHub…' : 'Continue with GitHub'}
-      </button>
+      <div class="space-y-2">
+        <button
+          class="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          type="button"
+          disabled={busy}
+          onclick={() => void beginAccountSignIn('google')}
+        >
+          <VendorIcon name="Google" size={16} />
+          {activeSignInProvider === 'google' ? 'Opening Google…' : 'Continue with Google'}
+        </button>
+        <button
+          class="flex h-10 w-full items-center justify-center gap-2 rounded-lg border bg-surface px-4 text-sm font-semibold text-foreground hover:bg-elevated disabled:opacity-50"
+          type="button"
+          disabled={busy}
+          onclick={() => void beginAccountSignIn('apple')}
+        >
+          <VendorIcon name="Apple" size={16} />
+          {activeSignInProvider === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
+        </button>
+      </div>
       <p class="text-center text-[11px] leading-relaxed text-dimmed">
-        Use the same GitHub account you want connected to the GitHub sidebar.
+        Your GitHub sidebar connection remains separate from this account.
       </p>
     </section>
   {:else}

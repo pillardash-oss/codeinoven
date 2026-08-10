@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { Database } from 'bun:sqlite'
 import { betterAuth } from 'better-auth'
+import { importPKCS8, SignJWT } from 'jose'
 
 const production = process.env['NODE_ENV'] === 'production'
 
@@ -18,6 +19,13 @@ export const authDatabasePath = resolve(
 
 const baseURL = environmentValue('BETTER_AUTH_URL', 'http://localhost:8877')
 const baseOrigin = new URL(baseURL).origin
+const appleClientId = environmentValue('APPLE_OAUTH_CLIENT_ID', 'development-apple-client-id')
+const appleTeamId = environmentValue('APPLE_TEAM_ID', 'development-apple-team-id')
+const appleKeyId = environmentValue('APPLE_KEY_ID', 'development-apple-key-id')
+const applePrivateKey = environmentValue(
+  'APPLE_PRIVATE_KEY',
+  'development-apple-private-key'
+).replaceAll('\\n', '\n')
 mkdirSync(dirname(authDatabasePath), { recursive: true })
 const authDatabase = new Database(authDatabasePath)
 authDatabase.exec(`
@@ -32,6 +40,19 @@ authDatabase.exec(`
   PRAGMA journal_size_limit = 33554432;
 `)
 
+async function generateAppleClientSecret(): Promise<string> {
+  const key = await importPKCS8(applePrivateKey, 'ES256')
+  const now = Math.floor(Date.now() / 1000)
+  return new SignJWT({})
+    .setProtectedHeader({ alg: 'ES256', kid: appleKeyId })
+    .setIssuer(appleTeamId)
+    .setSubject(appleClientId)
+    .setAudience('https://appleid.apple.com')
+    .setIssuedAt(now)
+    .setExpirationTime(now + 180 * 24 * 60 * 60)
+    .sign(key)
+}
+
 export const auth = betterAuth({
   appName: 'CodeInOven',
   baseURL,
@@ -40,16 +61,21 @@ export const auth = betterAuth({
     'development-only-codeinoven-auth-secret-change-me'
   ),
   database: authDatabase,
-  trustedOrigins: [baseOrigin],
+  trustedOrigins: [baseOrigin, 'https://appleid.apple.com'],
   emailAndPassword: { enabled: false },
   socialProviders: {
-    github: {
-      clientId: environmentValue('CODEINOVEN_GITHUB_CLIENT_ID', 'development-github-client-id'),
+    google: {
+      clientId: environmentValue('GOOGLE_OAUTH_CLIENT_ID', 'development-google-client-id'),
       clientSecret: environmentValue(
-        'GITHUB_OAUTH_CLIENT_SECRET',
-        'development-github-client-secret'
-      ),
-      scope: ['read:user', 'user:email']
+        'GOOGLE_OAUTH_CLIENT_SECRET',
+        'development-google-client-secret'
+      )
+    },
+    apple: async () => {
+      return {
+        clientId: appleClientId,
+        clientSecret: await generateAppleClientSecret()
+      }
     }
   },
   account: {

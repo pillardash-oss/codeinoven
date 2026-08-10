@@ -154,11 +154,11 @@
       <div class="mt-4">
         <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
           <p class="text-xs font-semibold text-foreground">
-            First, create your CodeInOven account with GitHub.
+            First, create or sign in to your CodeInOven account.
           </p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Use the same GitHub account you want connected to the GitHub sidebar. That single
-            identity also secures remote access to your desktops.
+            Continue with Google or Apple. A new account is created automatically when one does not
+            already exist.
           </p>
         </div>
 
@@ -187,7 +187,8 @@
                 >2</span
               >
               <span>
-                Choose <strong>Continue with GitHub</strong> to create your account or sign in.
+                Choose <strong>Continue with Google</strong> or
+                <strong>Continue with Apple</strong>.
               </span>
             </li>
             <li class="flex gap-2.5">
@@ -261,7 +262,8 @@
             You need a CodeInOven account before enrolling this desktop.
           </p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Create it with the same GitHub account you want connected to the GitHub sidebar.
+            Create it automatically by continuing with Google or Apple. GitHub sidebar access is
+            connected separately.
           </p>
         </div>
       {/if}

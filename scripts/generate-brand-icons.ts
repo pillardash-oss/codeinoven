@@ -37,6 +37,7 @@ const vendorOutDir = join(root, 'src/renderer/lib/vendor-icons/icons')
 const vendorSlugs = [
   'ai21',
   'anthropic',
+  'apple',
   'aws',
   'claudecode',
   'codex',
