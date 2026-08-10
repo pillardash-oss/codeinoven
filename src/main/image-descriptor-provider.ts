@@ -58,6 +58,29 @@ export type ImageDescriptorExecutor = (
 ) => Promise<ImageDescriptorResult[]>
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024
+/** Baseline inactivity window for image upload plus the first provider response. */
+const BASE_INACTIVITY_TIMEOUT_MS = 180_000
+/** Conservative upload floor used to scale the window for embedded image payloads. */
+const UPLOAD_BYTES_PER_SECOND = 64 * 1024
+/** Prevent a malformed/oversized payload from creating an unbounded timer. */
+const MAX_INACTIVITY_TIMEOUT_MS = 30 * 60_000
+
+/**
+ * Scale the no-activity window to the embedded upload size. Each retry doubles
+ * the whole window; streamed provider activity resets it in the chat engine.
+ */
+export function imageDescriptorInactivityTimeoutMs(
+  attachment: PromptAttachment,
+  attempt: number
+): number {
+  const embeddedBytes = attachment.url.startsWith('data:') ? attachment.url.length : 0
+  const uploadMs = Math.ceil((embeddedBytes / UPLOAD_BYTES_PER_SECOND) * 1_000)
+  const attemptMultiplier = 2 ** attempt
+  return Math.min(
+    MAX_INACTIVITY_TIMEOUT_MS,
+    (BASE_INACTIVITY_TIMEOUT_MS + uploadMs) * attemptMultiplier
+  )
+}
 
 /**
  * Validate the model-provided image entries and resolve each source into a
