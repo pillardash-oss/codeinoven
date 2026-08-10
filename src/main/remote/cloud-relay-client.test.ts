@@ -415,14 +415,14 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     })
   })
 
-  it('does not mark an inbound id seen until decryption succeeds (failed-decrypt replay)', async () => {
+  it('fails closed on inbound payload authentication failure without reconnecting', async () => {
     const harness = makeHarness({
       reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
     })
     harness.client.connect()
     const first = openAuthenticated(harness)
-    // A frame that fails to decrypt must NOT mark its id as seen, so the relay
-    // can re-deliver the same id and it is processed instead of suppressed.
+    // A frame that fails to decrypt indicates a stale key or tampering. It is
+    // terminal for this client rather than a retryable network interruption.
     first.receive(
       JSON.stringify({
         type: 'relay:data',
@@ -430,17 +430,10 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
         payload: 'not-encrypted'
       })
     )
-    await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
-    // Reconnect on the same client, then deliver a valid frame with the SAME id.
+    await vi.waitFor(() => expect(harness.disconnected).toContain('payload-authentication-failed'))
     await new Promise((resolve) => setTimeout(resolve, 12))
-    const second = openAuthenticated(harness, 1)
-    await receivedDataWithId(second, '12345678-1234-1234-1234-123456789abc:1', {
-      rpc: 'invoke',
-      id: 9,
-      channel: 'chat',
-      args: []
-    })
-    await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
+    expect(harness.sockets).toHaveLength(1)
+    expect(harness.onRpc).not.toHaveBeenCalled()
   })
 
   it('dispatches exactly once for concurrent duplicates of the same inbound id', async () => {
@@ -478,7 +471,7 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     })
   })
 
-  it('emits no ACK when concurrent duplicates fail to decrypt, then replays successfully', async () => {
+  it('coalesces concurrent decrypt failures into one terminal disconnect', async () => {
     const harness = makeHarness({
       reconnect: { initialDelayMs: 5, maxDelayMs: 10, random: () => 0.5 }
     })
@@ -486,25 +479,17 @@ describe('CloudRelayClient duplicate suppression and idempotent replay', () => {
     const first = openAuthenticated(harness)
     const wireId = '12345678-1234-1234-1234-123456789abc:1'
     // Two concurrent frames with the SAME valid UUID wire id both fail to
-    // decrypt: coalesced, zero ACKs, pending removed so a replay remains.
+    // Decrypt failures are coalesced: zero ACKs and one terminal disconnect.
     first.receive(JSON.stringify({ type: 'relay:data', id: wireId, payload: 'bad-1' }))
     first.receive(JSON.stringify({ type: 'relay:data', id: wireId, payload: 'bad-2' }))
-    await vi.waitFor(() => expect(harness.disconnected).toContain('decrypt-failed'))
+    await vi.waitFor(() => expect(harness.disconnected).toContain('payload-authentication-failed'))
     expect(first.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(0)
-    // Reconnect and replay the SAME wire id with a VALID payload: one decrypt,
-    // one dispatch, one ACK.
     await new Promise((resolve) => setTimeout(resolve, 12))
-    const second = openAuthenticated(harness, 1)
-    await receivedDataWithId(second, wireId, {
-      rpc: 'invoke',
-      id: 9,
-      channel: 'chat',
-      args: []
-    })
-    await vi.waitFor(() => expect(harness.onRpc).toHaveBeenCalledTimes(1))
-    await vi.waitFor(() => {
-      expect(second.sent.filter((frame) => frame.includes('relay:ack'))).toHaveLength(1)
-    })
+    expect(harness.sockets).toHaveLength(1)
+    expect(
+      harness.disconnected.filter((reason) => reason === 'payload-authentication-failed')
+    ).toHaveLength(1)
+    expect(harness.onRpc).not.toHaveBeenCalled()
   })
 
   it('suppresses a duplicate invoke while the first is still processing', async () => {
