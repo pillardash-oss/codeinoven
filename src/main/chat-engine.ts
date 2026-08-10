@@ -1,6 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
-import { isAbsolute, join, relative, resolve } from 'path'
+import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from './logger'
@@ -230,7 +230,10 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_PIPELINE_VERSION = 7
+const SPEC_GENERATION_PIPELINE_VERSION = 8
+const SPEC_GENERATION_MAX_ATTEMPTS = 2
+/** Total wall-clock budget for the complete specification workflow, including retries. */
+const SPEC_GENERATION_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -735,6 +738,16 @@ interface ActiveBrainstormSession {
   isolated?: IsolatedHandle
 }
 
+interface ActiveInitialSpecSession {
+  sessionId: string
+  threadSessionId: string
+  driver: HarnessDriver
+  projectPath: string
+  isolated?: IsolatedHandle
+  startedAt: number
+  attempt: number
+}
+
 interface ActiveBrainstormConversationTurn {
   id: string
   userMessage: AgentMessage
@@ -822,6 +835,7 @@ interface SessionCompletionWaiter {
   resolve: (structuredOutput: unknown | undefined) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  absoluteTimer?: ReturnType<typeof setTimeout>
   /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
   refresh: () => void
 }
@@ -918,6 +932,8 @@ export class ChatEngine {
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
+  private activeInitialSpecSessions = new Map<string, ActiveInitialSpecSession>()
+  private userAbortedInitialSpecOperations = new Set<string>()
   /** Threads currently running the independent audit half of Achievement. */
   private activeLoopRuns = new Set<string>()
   /** One durable auditor run per Assignment; concurrent callers join the same result. */
@@ -1587,6 +1603,7 @@ export class ChatEngine {
     )
     this.idleReaperTimer.unref?.()
     void this.recoverInterruptedBrainstormEntries()
+    void this.recoverExpiredInitialSpecEntries()
     void this.resumePendingWork()
     void this.materializeAuditReportArtifacts()
   }
@@ -1816,12 +1833,15 @@ export class ChatEngine {
     this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
       clearTimeout(waiter.timer)
+      if (waiter.absoluteTimer) clearTimeout(waiter.absoluteTimer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
     }
     this.completionWaiters.clear()
     this.pendingMemoryDecisions.clear()
     this.pendingAutoTitles.clear()
     this.initialSpecTasks.clear()
+    this.activeInitialSpecSessions.clear()
+    this.userAbortedInitialSpecOperations.clear()
     this.activeAssignmentDraftRuns.clear()
     this.activeAchievementAuditorEnsures.clear()
     this.activeAchievementAuditRuns.clear()
@@ -2978,6 +2998,41 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return null
+    const pendingSpec = await this.readPendingInitialSpec(projectId, threadId)
+    if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
+      const elapsedMs = Date.now() - pendingSpec.createdAt
+      if (elapsedMs >= SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) {
+        const message = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
+        return {
+          state: 'error',
+          issue: {
+            kind: 'unknown',
+            message,
+            rawError: pendingSpec.error ?? message,
+            harnessId: pendingSpec.settings.harnessId,
+            retryable: true,
+            attempt: pendingSpec.attempts
+          }
+        }
+      }
+      const liveActivity = this.sessionStatuses.get(thread.sessionId)
+      return liveActivity?.state === 'working' && liveActivity.activity
+        ? liveActivity
+        : this.initialSpecWorkingStatus(pendingSpec)
+    }
+    if (pendingSpec?.state === 'failed' && pendingSpec.error) {
+      return {
+        state: 'error',
+        issue: {
+          kind: 'unknown',
+          message: `Specification generation failed: ${pendingSpec.error}`,
+          rawError: pendingSpec.error,
+          harnessId: pendingSpec.settings.harnessId,
+          retryable: true,
+          attempt: pendingSpec.attempts
+        }
+      }
+    }
     const live = this.sessionStatuses.get(thread.sessionId)
     if (live) return live
     // After an app restart the in-memory status is gone, but a persisted
@@ -4994,6 +5049,29 @@ export class ChatEngine {
       await this.cleanupTurnUtilities(activeBrainstorm.sessionId)
       this.sessionStatuses.set(activeBrainstorm.sessionId, { state: 'idle' })
       this.clearSessionWatchdog(activeBrainstorm.sessionId)
+      await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      clearNotificationAborting(projectId, threadId)
+      return
+    }
+    const activeInitialSpec = this.activeInitialSpecSessions.get(brainstormKey)
+    if (activeInitialSpec) {
+      markNotificationAborting(projectId, threadId)
+      this.userAbortedInitialSpecOperations.add(brainstormKey)
+      this.userAbortedSessions.add(activeInitialSpec.sessionId)
+      if (activeInitialSpec.isolated && activeInitialSpec.driver instanceof OpenCodeDriver) {
+        await activeInitialSpec.driver.abort(
+          activeInitialSpec.projectPath,
+          activeInitialSpec.sessionId,
+          activeInitialSpec.isolated
+        )
+      } else {
+        await activeInitialSpec.driver.abort(
+          activeInitialSpec.projectPath,
+          activeInitialSpec.sessionId
+        )
+      }
+      this.sessionStatuses.set(activeInitialSpec.threadSessionId, { state: 'idle' })
+      this.clearSessionWatchdog(activeInitialSpec.sessionId)
       await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
       clearNotificationAborting(projectId, threadId)
       return
@@ -7293,6 +7371,11 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const settings = validateThreadSettings(request.settings)
     const assignmentRequired = settings.assignmentMode === true
+    const workflowKey = this.initialSpecKey(projectId, threadId)
+    const pendingWorkflow = await this.readPendingInitialSpec(projectId, threadId)
+    const workflowThread = pendingWorkflow
+      ? await this.threadManager.getThread(projectId, threadId)
+      : null
     const memoryPrompt = await this.memoryService.formatCurrent(projectId, threadId)
     const generationSystemPrompt = [
       SPEC_GENERATION_SYSTEM_PROMPT,
@@ -7363,6 +7446,9 @@ export class ChatEngine {
     let lastError: Error | null = null
 
     for (const useStructuredOutput of formatModes) {
+      if (request.deadlineAt !== undefined && Date.now() >= request.deadlineAt) {
+        throw new Error('Specification generation exceeded its total workflow deadline')
+      }
       const isolated =
         driver instanceof OpenCodeDriver
           ? await driver.createIsolatedSession(
@@ -7383,10 +7469,29 @@ export class ChatEngine {
         undefined,
         true
       )
+      if (pendingWorkflow && workflowThread?.sessionId) {
+        this.activeInitialSpecSessions.set(workflowKey, {
+          sessionId,
+          threadSessionId: workflowThread.sessionId,
+          driver,
+          projectPath,
+          isolated,
+          startedAt: pendingWorkflow.createdAt,
+          attempt: Math.max(1, pendingWorkflow.attempts)
+        })
+        const status = this.initialSpecWorkingStatus(
+          pendingWorkflow,
+          `Formulating specification · attempt ${Math.max(1, pendingWorkflow.attempts)}/${SPEC_GENERATION_MAX_ATTEMPTS}`
+        )
+        this.sessionStatuses.set(workflowThread.sessionId, status)
+        this.broadcast({ type: 'session.status', sessionId: workflowThread.sessionId, status })
+      }
       const completion = this.waitForSessionCompletion(
         sessionId,
         SPEC_GENERATION_TIMEOUT_MS,
-        'Specification generation'
+        'Specification generation',
+        undefined,
+        request.deadlineAt
       )
 
       try {
@@ -7441,6 +7546,14 @@ export class ChatEngine {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
         }
         lastError = error instanceof Error ? error : new Error('The specification agent failed.')
+        if (this.userAbortedInitialSpecOperations.has(workflowKey)) throw lastError
+        Logger.error('Specification generation session rejected', {
+          projectId,
+          threadId,
+          sessionId,
+          structuredOutput: useStructuredOutput,
+          error: lastError.message
+        })
         if (useStructuredOutput) {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
           Logger.info(
@@ -7460,6 +7573,9 @@ export class ChatEngine {
         this.toolTimes.delete(sessionId)
         if (isolated && driver instanceof OpenCodeDriver) {
           driver.disposeIsolatedSession(isolated)
+        }
+        if (this.activeInitialSpecSessions.get(workflowKey)?.sessionId === sessionId) {
+          this.activeInitialSpecSessions.delete(workflowKey)
         }
       }
     }
@@ -8883,6 +8999,37 @@ export class ChatEngine {
     return { tasks, rows, directories }
   }
 
+  /** Convert expired or orphaned persisted spec work into a visible terminal failure. */
+  private async recoverExpiredInitialSpecEntries(): Promise<void> {
+    try {
+      const threads = await this.threadManager.listAllThreads()
+      for (const thread of threads) {
+        const pending = await this.readPendingInitialSpec(thread.projectId, thread.id)
+        if (!pending || (pending.state !== 'pending' && pending.state !== 'generating')) continue
+        const elapsedMs = Date.now() - pending.createdAt
+        if (elapsedMs < SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) continue
+        const error = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
+        await this.writePendingInitialSpec({
+          ...pending,
+          generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
+          state: 'failed',
+          error,
+          updatedAt: Date.now()
+        })
+        await this.threadManager.setStatus(thread.projectId, thread.id, 'failed', { read: false })
+        Logger.error('Expired specification workflow recovered as failed', {
+          projectId: thread.projectId,
+          threadId: thread.id,
+          attempts: pending.attempts,
+          elapsedMs,
+          error
+        })
+      }
+    } catch (error) {
+      Logger.error('Expired specification workflow recovery failed:', error)
+    }
+  }
+
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */
   private async recoverInterruptedBrainstormEntries(): Promise<void> {
     try {
@@ -8956,13 +9103,15 @@ export class ChatEngine {
       }
       await this.writePendingInitialSpec(pending)
     } else if (pending.state === 'failed') {
+      const now = Date.now()
       pending = {
         ...pending,
         generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
         state: 'pending',
         attempts: 0,
         error: undefined,
-        updatedAt: Date.now()
+        createdAt: now,
+        updatedAt: now
       }
       await this.writePendingInitialSpec(pending)
     }
@@ -8985,6 +9134,25 @@ export class ChatEngine {
 
   private initialSpecKey(projectId: string, threadId: string): string {
     return `${projectId}:${threadId}`
+  }
+
+  private initialSpecWorkingStatus(
+    pending: PendingInitialSpecGeneration,
+    label?: string
+  ): AgentSessionStatus {
+    const attempt = Math.max(1, pending.attempts)
+    return {
+      state: 'working',
+      startedAt: pending.createdAt,
+      activity: {
+        kind: 'spec_generation',
+        label:
+          label ?? `Formulating specification · attempt ${attempt}/${SPEC_GENERATION_MAX_ATTEMPTS}`,
+        attempt,
+        maxAttempts: SPEC_GENERATION_MAX_ATTEMPTS,
+        updatedAt: pending.updatedAt
+      }
+    }
   }
 
   private readPendingInitialSpec(
@@ -9018,6 +9186,7 @@ export class ChatEngine {
             state: 'pending',
             attempts: 0,
             error: undefined,
+            createdAt: now,
             brainstormId: input.brainstorm?.id,
             brainstormVersion: input.brainstorm?.version,
             brainstormInputHash: input.brainstorm?.finalizedInputHash,
@@ -9116,6 +9285,7 @@ export class ChatEngine {
     projectId: string,
     threadId: string
   ): Promise<EngineeringSpec | null> {
+    const operationKey = this.initialSpecKey(projectId, threadId)
     const active = await this.getActiveSpec(projectId, threadId)
     if (active) {
       await this.clearPendingInitialSpec(projectId, threadId)
@@ -9124,7 +9294,7 @@ export class ChatEngine {
 
     let pending = await this.readPendingInitialSpec(projectId, threadId)
     if (!pending) return null
-    if (pending.state === 'failed' && pending.attempts >= 2) {
+    if (pending.state === 'failed' && pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS) {
       if (pending.generationVersion === SPEC_GENERATION_PIPELINE_VERSION) return null
       pending = {
         ...pending,
@@ -9155,7 +9325,11 @@ export class ChatEngine {
 
     await this.threadManager.setStatus(projectId, threadId, 'planning')
     let lastError = ''
-    while (pending.attempts < 2) {
+    while (pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS) {
+      if (Date.now() >= pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) {
+        lastError = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
+        break
+      }
       pending = {
         ...pending,
         state: 'generating',
@@ -9164,6 +9338,13 @@ export class ChatEngine {
         updatedAt: Date.now()
       }
       await this.writePendingInitialSpec(pending)
+      Logger.info('Specification generation attempt started', {
+        projectId,
+        threadId,
+        attempt: pending.attempts,
+        maxAttempts: SPEC_GENERATION_MAX_ATTEMPTS,
+        startedAt: pending.createdAt
+      })
       try {
         const submittedContent = pending.skipSubmittedRead
           ? null
@@ -9175,7 +9356,8 @@ export class ChatEngine {
             instructions: lastError
               ? `${pending.source}\n\nThe previous draft was rejected: ${lastError}. Return only a valid JSON object matching the required schema.`
               : pending.source,
-            settings: pending.settings
+            settings: pending.settings,
+            deadlineAt: pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
           }))
         const context = await this.memoryService.snapshotCurrent(projectId, threadId)
         const spec = await this.specEngine.createDraft({
@@ -9198,9 +9380,34 @@ export class ChatEngine {
         const created = await this.getActiveSpec(projectId, threadId)
         if (created) return this.finalizeInitialSpec(created, pending)
         lastError = error instanceof Error ? error.message : 'The specification agent failed.'
+        if (this.userAbortedInitialSpecOperations.delete(operationKey)) {
+          await this.clearPendingInitialSpec(projectId, threadId)
+          await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+          Logger.info('Specification generation interrupted by user', {
+            projectId,
+            threadId,
+            attempt: pending.attempts
+          })
+          return null
+        }
+        const willRetry =
+          pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS &&
+          Date.now() < pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
+        Logger.error('Specification generation attempt rejected', {
+          projectId,
+          threadId,
+          attempt: pending.attempts,
+          maxAttempts: SPEC_GENERATION_MAX_ATTEMPTS,
+          willRetry,
+          error: lastError
+        })
         pending = {
           ...pending,
-          state: pending.attempts >= 2 ? 'failed' : 'pending',
+          state:
+            pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS ||
+            Date.now() >= pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
+              ? 'failed'
+              : 'pending',
           error: lastError,
           updatedAt: Date.now()
         }
@@ -9211,6 +9418,34 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, threadId, 'failed', {
       read: false
     })
+    pending = {
+      ...pending,
+      state: 'failed',
+      error: lastError || 'The specification could not be generated.',
+      updatedAt: Date.now()
+    }
+    await this.writePendingInitialSpec(pending)
+    Logger.error('Specification generation failed', {
+      projectId,
+      threadId,
+      attempts: pending.attempts,
+      elapsedMs: Date.now() - pending.createdAt,
+      error: pending.error
+    })
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    await this.broadcastThreadSessionError(
+      projectId,
+      threadId,
+      thread?.sessionId ?? pending.sessionId,
+      {
+        kind: 'unknown',
+        message: `Specification generation failed: ${pending.error}`,
+        rawError: pending.error,
+        harnessId: pending.settings.harnessId,
+        retryable: true,
+        attempt: pending.attempts
+      }
+    )
     this.broadcastToast(`Specification generation failed: ${lastError}`)
     throw new Error(lastError || 'The specification could not be generated.')
   }
@@ -9871,6 +10106,7 @@ export class ChatEngine {
       this.projectIdleSince.delete(eventOwner.projectId)
       this.releasedProjects.delete(eventOwner.projectId)
       this.forwardBrainstormTrace(eventOwner, event)
+      this.forwardInitialSpecActivity(eventOwner, event)
     }
     const streamedMessageId =
       event.type === 'message.part.updated'
@@ -9885,6 +10121,41 @@ export class ChatEngine {
       return
     }
     void this.recordDriverEvent(driverId, event)
+    const coordinatorSpecSession = eventOwner
+      ? this.activeInitialSpecSessions.get(
+          this.initialSpecKey(eventOwner.projectId, eventOwner.threadId)
+        )
+      : undefined
+    const coordinatorIdleSignal =
+      event.type === 'session.idle' ||
+      (event.type === 'session.status' && event.status.state === 'idle')
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      coordinatorIdleSignal &&
+      coordinatorSpecSession?.threadSessionId === event.sessionId &&
+      !this.userAbortedInitialSpecOperations.has(
+        this.initialSpecKey(eventOwner.projectId, eventOwner.threadId)
+      )
+    ) {
+      const status: AgentSessionStatus = {
+        state: 'working',
+        startedAt: coordinatorSpecSession.startedAt,
+        activity: {
+          kind: 'spec_generation',
+          label: `Formulating specification · attempt ${coordinatorSpecSession.attempt}/${SPEC_GENERATION_MAX_ATTEMPTS}`,
+          attempt: coordinatorSpecSession.attempt,
+          maxAttempts: SPEC_GENERATION_MAX_ATTEMPTS,
+          updatedAt: Date.now()
+        }
+      }
+      this.sessionStatuses.set(event.sessionId, status)
+      void this.threadManager
+        .setStatus(eventOwner.projectId, eventOwner.threadId, 'planning')
+        .catch((error) => Logger.error('Specification coordinator status repair failed:', error))
+      this.broadcast({ type: 'session.status', sessionId: event.sessionId, status })
+      return
+    }
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
     this.updateOwningParentWatchdog(event)
@@ -10124,6 +10395,58 @@ export class ChatEngine {
         }
       })
     }
+  }
+
+  /** Expose safe, concise progress from the isolated spec worker on its coordinator session. */
+  private forwardInitialSpecActivity(owner: SessionInfo, event: AgentEvent): void {
+    if (!owner.ephemeral || !('sessionId' in event)) return
+    const key = this.initialSpecKey(owner.projectId, owner.threadId)
+    const active = this.activeInitialSpecSessions.get(key)
+    if (!active || active.sessionId !== event.sessionId) return
+
+    let label: string | null = null
+    if (event.type === 'message.part.updated') {
+      const part = event.part
+      if (part.type === 'reasoning') {
+        label = 'Reasoning through the engineering specification'
+      } else if (part.type === 'subagent') {
+        label = 'Coordinating specification research'
+      } else if (part.type === 'tool') {
+        const input = isRecord(part.state.input) ? part.state.input : null
+        const path =
+          input && typeof input.filePath === 'string'
+            ? input.filePath
+            : input && typeof input.path === 'string'
+              ? input.path
+              : null
+        const tool = normalizedToolName(part.tool)
+        label =
+          tool === 'read'
+            ? `Inspecting ${path ? basename(path) : 'project files'}`
+            : tool === 'grep' || tool === 'glob' || tool === 'list'
+              ? 'Searching project context'
+              : part.state.title?.trim() || `Using ${part.tool}`
+      }
+    } else if (event.type === 'message.completed') {
+      label = event.error
+        ? 'Specification worker reported an error'
+        : 'Validating specification output'
+    }
+    if (!label) return
+
+    const status: AgentSessionStatus = {
+      state: 'working',
+      startedAt: active.startedAt,
+      activity: {
+        kind: 'spec_generation',
+        label,
+        attempt: active.attempt,
+        maxAttempts: SPEC_GENERATION_MAX_ATTEMPTS,
+        updatedAt: Date.now()
+      }
+    }
+    this.sessionStatuses.set(active.threadSessionId, status)
+    this.broadcast({ type: 'session.status', sessionId: active.threadSessionId, status })
   }
 
   private observeChildSession(driverId: string, event: SessionAgentEvent): void {
@@ -11472,7 +11795,8 @@ export class ChatEngine {
     sessionId: string,
     timeoutMs = 180_000,
     label = 'Agent session',
-    timeoutError?: () => Error
+    timeoutError?: () => Error,
+    absoluteDeadlineAt?: number
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
@@ -11492,6 +11816,16 @@ export class ChatEngine {
           clearTimeout(waiter.timer)
           waiter.timer = armTimer()
         }
+      }
+      if (absoluteDeadlineAt !== undefined) {
+        waiter.absoluteTimer = setTimeout(
+          () => {
+            this.completionWaiters.delete(sessionId)
+            clearTimeout(waiter.timer)
+            waiter.reject(new Error(`${labelForMessage} exceeded its total workflow deadline`))
+          },
+          Math.max(0, absoluteDeadlineAt - Date.now())
+        )
       }
       this.completionWaiters.set(sessionId, waiter)
     })
@@ -11535,6 +11869,7 @@ export class ChatEngine {
     const waiter = this.completionWaiters.get(sessionId)
     if (!waiter) return
     clearTimeout(waiter.timer)
+    if (waiter.absoluteTimer) clearTimeout(waiter.absoluteTimer)
     this.completionWaiters.delete(sessionId)
   }
 

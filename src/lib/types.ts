@@ -1693,7 +1693,19 @@ export interface AgentProviderIssue {
  * retry so consumers never have to infer a stalled run from missing output.
  */
 export type AgentSessionStatus =
-  | { state: 'working' }
+  | {
+      state: 'working'
+      /** Authoritative start of the owning workflow, preserved across renderer reloads. */
+      startedAt?: number
+      /** Human-readable progress from an internal coordinator-owned worker. */
+      activity?: {
+        kind: 'spec_generation'
+        label: string
+        attempt: number
+        maxAttempts: number
+        updatedAt: number
+      }
+    }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }
   | { state: 'error'; issue: AgentProviderIssue }
@@ -2081,6 +2093,8 @@ export interface SpecGenerationRequest {
   mode: 'problem' | 'conversation'
   instructions: string
   settings: ThreadSettings
+  /** Optional absolute wall-clock deadline for coordinator-owned generation. */
+  deadlineAt?: number
 }
 
 export type SpecActionIntent = 'request' | 'review' | 'implement'
