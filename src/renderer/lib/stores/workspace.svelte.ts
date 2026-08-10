@@ -345,6 +345,33 @@ export function threadSort(
   return a.id.localeCompare(b.id)
 }
 
+/**
+ * Sort for pinned threads: a manual drag-reorder is authoritative within a
+ * project, unlike `threadSort` where recency wins. sortOrder is project-scoped
+ * (assigned across the whole project's list on reorder), so it is only compared
+ * for threads in the same project; threads without a manual order fall back to
+ * recency. Drafts (unsent composer content) always float to the top.
+ */
+export function pinnedThreadSort(
+  a: Thread,
+  b: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  const ka = threadSortKey(a, draftThreadKeys)
+  const kb = threadSortKey(b, draftThreadKeys)
+  if (ka !== kb) return ka - kb
+  if (a.projectId === b.projectId) {
+    const aOrder = a.sortOrder
+    const bOrder = b.sortOrder
+    if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) {
+      return aOrder - bOrder
+    }
+  }
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
+  return a.id.localeCompare(b.id)
+}
+
 /** Sort modes for the Threads view. */
 export type ThreadSortMode = 'default' | 'status' | 'time'
 
