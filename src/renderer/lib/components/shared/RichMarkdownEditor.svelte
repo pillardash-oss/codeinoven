@@ -74,11 +74,21 @@
   let lastHistoryInputType: string | null = null
   let lastHistoryAt = 0
 
+  /** Length a non-editable inline token occupies in serialized markdown — inline
+   *  badges keep their stored value, footnote superscripts their `[^label]`. */
+  function inlineTokenLength(node: HTMLElement): number | null {
+    if (node.dataset.editorInlineBadge === 'true') return node.dataset.editorValue?.length ?? 0
+    const footnote = node.dataset.editorFootnoteRef
+    if (footnote !== undefined) return footnote.length + 3
+    return null
+  }
+
   function nodeLength(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0
     if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
-      return node.dataset.editorValue?.length ?? 0
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
     }
     return Array.from(node.childNodes).reduce((total, child) => total + nodeLength(child), 0)
   }
@@ -133,10 +143,10 @@
         remaining = Math.max(0, remaining - 1)
         return null
       }
-      if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
+      if (node instanceof HTMLElement && inlineTokenLength(node) !== null) {
         const parent = node.parentNode
         const index = parent ? Array.from(parent.childNodes).indexOf(node) : -1
-        const length = node.dataset.editorValue?.length ?? 0
+        const length = inlineTokenLength(node) ?? 0
         if (parent && index >= 0 && remaining <= length) {
           return { node: parent, offset: index + (remaining === 0 ? 0 : 1) }
         }
@@ -198,8 +208,9 @@
   function nodeVisibleLength(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return visibleTextLength(node.textContent)
     if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
-      return node.dataset.editorValue?.length ?? 0
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
     }
     return Array.from(node.childNodes).reduce((total, child) => total + nodeVisibleLength(child), 0)
   }
@@ -376,7 +387,7 @@
         ? selection.anchorNode
         : selection.anchorNode.parentElement
     const supportsCommands = !anchorElement?.closest(
-      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-special], table, pre, code'
+      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-footnote-ref], [data-editor-special], table, pre, code'
     )
     const range = document.createRange()
     range.selectNodeContents(editor)
@@ -735,15 +746,21 @@
     if (!editor) return
     const target = event.target as HTMLElement | null
     const deleteButton = target?.closest<HTMLElement>('[data-editor-codeblock-delete]')
-    if (!deleteButton) {
+    if (deleteButton) {
+      event.preventDefault()
+      event.stopPropagation()
+      const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
+      if (!codeBlock || !editor.contains(codeBlock)) return
+      deleteCodeBlock(codeBlock)
       publishCaretText()
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
-    const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
-    if (!codeBlock || !editor.contains(codeBlock)) return
-    deleteCodeBlock(codeBlock)
+    // Links render for recognition but must never navigate while editing.
+    if (target?.closest('a[data-editor-link]')) {
+      event.preventDefault()
+      publishCaretText()
+      return
+    }
     publishCaretText()
   }
 

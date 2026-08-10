@@ -32,12 +32,110 @@ export interface RichInlineBadge {
   value: string
 }
 
-function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]): string {
+interface EditorLinkReference {
+  url: string
+  title?: string
+}
+
+/** Document-scoped state shared by every `renderInline` call: reference-link
+ *  definitions, footnote definitions, and footnote numbering in reference order. */
+interface EditorRenderContext {
+  linkRefs: Map<string, EditorLinkReference>
+  footnoteLabels: Set<string>
+  footnoteNumbers: Map<string, number>
+  nextFootnoteNumber: number
+}
+
+interface EditorDefinitions {
+  context: EditorRenderContext
+  /** Line indexes that are `[label]: url` or `[^label]: text` definitions. They
+   *  render as escaped literal text so their own `[label]`/`[^label]` never
+   *  becomes a link or footnote reference. */
+  definitionLines: Set<number>
+}
+
+const FOOTNOTE_REF_PATTERN = /\[\^([^\]]+)\]/gu
+const INLINE_LINK_PATTERN = /(?<![!])\[([^\]]+)\]\(([^)\n]+)\)/gu
+const REFERENCE_LINK_PATTERN = /\[([^\]]+)\]\[([^\]]*)\]/gu
+// A shortcut reference `[text]` is only valid when not followed by `(` (inline
+// link) or `[` (an explicit reference label) — otherwise it is plain prose.
+const SHORTCUT_LINK_PATTERN = /\[([^\]]+)\](?!\(|\[)/gu
+
+function normalizeReferenceLabel(label: string): string {
+  return label.trim().toLowerCase()
+}
+
+/** Reject `javascript:`/`data:`-style schemes; allow http(s), mailto, fragment
+ *  links and scheme-less relative targets. */
+function safeLinkUrl(url: string): boolean {
+  const trimmed = url.trim()
+  if (!trimmed) return false
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) {
+    return /^(https?|mailto):/iu.test(trimmed)
+  }
+  return true
+}
+
+/** Parse an inline link target `url "title"` into its parts. */
+function parseLinkTarget(target: string): { url: string; title?: string } {
+  const trimmed = target.trim()
+  const match = /^(?:<([^>\n]+)>|(\S+))(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?$/u.exec(trimmed)
+  if (!match) return { url: trimmed }
+  return {
+    url: (match[1] ?? match[2] ?? trimmed).trim(),
+    title: match[3] ?? match[4] ?? match[5]
+  }
+}
+
+function collectEditorDefinitions(lines: string[]): EditorDefinitions {
+  const linkRefs = new Map<string, EditorLinkReference>()
+  const footnoteLabels = new Set<string>()
+  const definitionLines = new Set<number>()
+  const referencePattern = /^\[([^\]]+)\]:\s*(.+)$/u
+  const footnotePattern = /^\[\^([^\]]+)\]:\s*(.+)$/u
+
+  lines.forEach((line, index) => {
+    const footnote = footnotePattern.exec(line)
+    if (footnote) {
+      footnoteLabels.add((footnote[1] ?? '').trim())
+      definitionLines.add(index)
+      return
+    }
+    const reference = referencePattern.exec(line)
+    if (!reference) return
+    const label = (reference[1] ?? '').trim()
+    const parsed = parseLinkTarget(reference[2] ?? '')
+    if (!parsed.url) return
+    linkRefs.set(normalizeReferenceLabel(label), { url: parsed.url, title: parsed.title })
+    definitionLines.add(index)
+  })
+
+  return {
+    context: {
+      linkRefs,
+      footnoteLabels,
+      footnoteNumbers: new Map(),
+      nextFootnoteNumber: 0
+    },
+    definitionLines
+  }
+}
+
+function renderInline(
+  source: string,
+  inlineBadges: readonly RichInlineBadge[],
+  context: EditorRenderContext
+): string {
   const code: string[] = []
   const badges: string[] = []
+  const tokens: string[] = []
   const stashCode = (_match: string, content: string): string => {
     const index = code.push(`<code class="${INLINE_CODE_CLASS}">${escapeHtml(content)}</code>`)
     return `\uE000${index - 1}\uE001`
+  }
+  const stashToken = (html: string): string => {
+    const index = tokens.push(html)
+    return `\uE004${index - 1}\uE005`
   }
 
   let prepared = source.replace(/`([^`\n]+)`/g, stashCode)
@@ -55,6 +153,47 @@ function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]):
     })
   }
 
+  // Footnote references become numbered superscripts; only defined labels count.
+  prepared = prepared.replace(FOOTNOTE_REF_PATTERN, (match, label: string) => {
+    const normalized = label.trim()
+    if (!context.footnoteLabels.has(normalized)) return match
+    let number = context.footnoteNumbers.get(normalized)
+    if (number === undefined) {
+      number = context.nextFootnoteNumber + 1
+      context.nextFootnoteNumber = number
+      context.footnoteNumbers.set(normalized, number)
+    }
+    // Zero-width anchors keep the caret out of the non-editable superscript.
+    const html = `<sup contenteditable="false" data-editor-footnote-ref="${escapeHtml(normalized)}">${String(number)}</sup>`
+    return `\u200b${stashToken(html)}\u200b`
+  })
+
+  // Inline links `[text](url)` (never `![alt](url)` images).
+  prepared = prepared.replace(INLINE_LINK_PATTERN, (match, text: string, target: string) => {
+    const parsed = parseLinkTarget(target)
+    if (!safeLinkUrl(parsed.url)) return match
+    const titleAttr = parsed.title ? ` title="${escapeHtml(parsed.title)}"` : ''
+    const html = `<a data-editor-link="true" data-editor-link-title="${escapeHtml(parsed.title ?? '')}" href="${escapeHtml(parsed.url)}"${titleAttr}>${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
+  // Reference links `[text][label]` and collapsed `[text][]`.
+  prepared = prepared.replace(REFERENCE_LINK_PATTERN, (match, text: string, rawLabel: string) => {
+    const label = rawLabel.trim()
+    const reference = context.linkRefs.get(normalizeReferenceLabel(label || text))
+    if (!reference) return match
+    const html = `<a data-editor-link="true" data-editor-link-label="${escapeHtml(label || text)}" data-editor-link-text="${escapeHtml(text.trim())}" data-editor-link-raw="${escapeHtml(match)}" href="${escapeHtml(reference.url)}">${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
+  // Shortcut references `[text]` — only when a matching definition exists.
+  prepared = prepared.replace(SHORTCUT_LINK_PATTERN, (match, text: string) => {
+    const reference = context.linkRefs.get(normalizeReferenceLabel(text))
+    if (!reference) return match
+    const html = `<a data-editor-link="true" data-editor-link-label="${escapeHtml(text.trim())}" data-editor-link-text="${escapeHtml(text.trim())}" data-editor-link-raw="${escapeHtml(match)}" href="${escapeHtml(reference.url)}">${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
   let html = escapeHtml(prepared)
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
   html = html.replace(
@@ -70,6 +209,7 @@ function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]):
   return html
     .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => code[Number(index)] ?? '')
     .replace(/\uE002(\d+)\uE003/g, (_match, index: string) => badges[Number(index)] ?? '')
+    .replace(/\uE004(\d+)\uE005/g, (_match, index: string) => tokens[Number(index)] ?? '')
 }
 
 function renderCodeBlockHTML(language: string, content: string): string {
@@ -84,6 +224,7 @@ export function renderRichMarkdown(
   if (!markdown.trim()) return '<p><br></p>'
 
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+  const { context, definitionLines } = collectEditorDefinitions(lines)
   const blocks: string[] = []
   let index = 0
 
@@ -117,7 +258,7 @@ export function renderRichMarkdown(
     if (heading) {
       const level = heading[1]?.length ?? 1
       blocks.push(
-        `<h${level} class="${headingClass(level)}">${renderInline(heading[2] ?? '', inlineBadges)}</h${level}>`
+        `<h${level} class="${headingClass(level)}">${renderInline(heading[2] ?? '', inlineBadges, context)}</h${level}>`
       )
       index += 1
       continue
@@ -129,7 +270,7 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*[-+*]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges)}</li>`)
+        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
         index += 1
       }
       blocks.push(`<ul class="${LIST_CLASS} list-disc">${items.join('')}</ul>`)
@@ -142,7 +283,7 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*\d+[.)]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges)}</li>`)
+        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
         index += 1
       }
       blocks.push(`<ol class="${LIST_CLASS} list-decimal">${items.join('')}</ol>`)
@@ -150,6 +291,7 @@ export function renderRichMarkdown(
     }
 
     const paragraph: string[] = []
+    const paragraphLineIndexes: number[] = []
     while (index < lines.length) {
       const candidate = lines[index] ?? ''
       if (
@@ -161,10 +303,17 @@ export function renderRichMarkdown(
         break
       }
       paragraph.push(candidate)
+      paragraphLineIndexes.push(index)
       index += 1
     }
     blocks.push(
-      `<p class="mb-1 last:mb-0">${paragraph.map((line) => renderInline(line, inlineBadges)).join('<br>')}</p>`
+      `<p class="mb-1 last:mb-0">${paragraph
+        .map((line, lineIndex) =>
+          definitionLines.has(paragraphLineIndexes[lineIndex] ?? 0)
+            ? escapeHtml(line)
+            : renderInline(line, inlineBadges, context)
+        )
+        .join('<br>')}</p>`
     )
   }
 
@@ -206,6 +355,25 @@ function serializeInline(node: Node): string {
       return `~~${content}~~`
     case 'CODE':
       return node.parentElement?.tagName === 'PRE' ? (node.textContent ?? '') : `\`${content}\``
+    case 'A': {
+      const linkLabel = node.dataset.editorLinkLabel
+      if (linkLabel) {
+        const raw = node.dataset.editorLinkRaw
+        const originalText = node.dataset.editorLinkText
+        // Preserve the author's exact `[text][label]` / `[text][]` / `[text]`
+        // spelling while the link text is untouched; otherwise re-emit with the
+        // edited text against the resolved label.
+        if (raw && originalText !== undefined && content === originalText) return raw
+        return `[${content}][${linkLabel}]`
+      }
+      const title = node.dataset.editorLinkTitle
+      const href = node.getAttribute('href') ?? ''
+      return title ? `[${content}](${href} "${title}")` : `[${content}](${href})`
+    }
+    case 'SUP': {
+      const footnote = node.dataset.editorFootnoteRef
+      return footnote !== undefined ? `[^${footnote}]` : content
+    }
     default:
       return content
   }

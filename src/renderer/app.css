@@ -577,6 +577,28 @@ body {
   color: inherit;
 }
 
+/* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
+/* Links render for recognition (GitHub reference-style + inline) but clicks
+   are intercepted in the editor so composing never navigates. Footnote
+   references render as superscript numbers like GitHub. */
+.rich-markdown-editor a[data-editor-link] {
+  color: var(--color-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rich-markdown-editor a[data-editor-link]:hover {
+  opacity: 0.85;
+}
+
+.rich-markdown-editor sup[data-editor-footnote-ref] {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+  font-weight: 600;
+  color: var(--color-info);
+}
+
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`
