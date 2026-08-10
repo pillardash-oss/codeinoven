@@ -1439,6 +1439,49 @@ export interface AccountUsageSummary {
   generatedAt: number
 }
 
+/** Inclusive/exclusive local analytics window supplied by the Profile page. */
+export interface LocalProfileAnalyticsRange {
+  startAt: number
+  endAt: number
+}
+
+/** Date-range usage row with enough identity to render harness and provider marks. */
+export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
+  harnessId?: string
+  providerId?: string
+  durationMs: number
+}
+
+/** Date-range project activity shown on the local Profile page. */
+export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
+  name: string
+  color?: string
+  iconType?: string
+  hasCustomIcon: boolean
+  durationMs: number
+  threadCount: number
+  activeDays: number
+  lastActiveAt: number
+}
+
+/** Fully local, range-aware analytics. This is never required for account authentication. */
+export interface LocalProfileAnalytics {
+  range: LocalProfileAnalyticsRange
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  topHarnessId: string | null
+  topProviderId: string | null
+  topModelId: string | null
+  harnesses: LocalProfileUsageBreakdown[]
+  providers: LocalProfileUsageBreakdown[]
+  models: LocalProfileUsageBreakdown[]
+  projects: LocalProfileProjectBreakdown[]
+  activityDays: AccountActivityDay[]
+  generatedAt: number
+}
+
 /** Account identity plus the cloud-backed workstation profile data. */
 export interface AccountProfile {
   id: string

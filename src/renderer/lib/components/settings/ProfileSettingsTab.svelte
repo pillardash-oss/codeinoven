@@ -1,21 +1,25 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Check, LogIn, RefreshCw } from '@lucide/svelte'
+  import { Check, ChevronLeft, ChevronRight, LogIn, RefreshCw } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
     AccountProfileState,
     AccountUsageBreakdown,
-    AccountUsageSummary
+    LocalProfileAnalytics,
+    LocalProfileAnalyticsRange,
+    LocalProfileProjectBreakdown
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
   interface CalendarDay {
     date: string
     count: number
-    future: boolean
+    outsideRange: boolean
   }
 
   interface CalendarWeek {
@@ -23,20 +27,35 @@
     monthLabel: string
   }
 
-  const EMPTY_USAGE: AccountUsageSummary = {
+  const PROFILE_RANGE_DAYS = 365
+
+  function analyticsRange(offset: number): LocalProfileAnalyticsRange {
+    const end = new SvelteDate()
+    end.setHours(0, 0, 0, 0)
+    end.setDate(end.getDate() + 1 + offset * PROFILE_RANGE_DAYS)
+    const start = new SvelteDate(end)
+    start.setDate(end.getDate() - PROFILE_RANGE_DAYS)
+    return { startAt: start.getTime(), endAt: end.getTime() }
+  }
+
+  const EMPTY_USAGE: LocalProfileAnalytics = {
+    range: analyticsRange(0),
     messageCount: 0,
     costUsd: 0,
     tokens: 0,
     durationMs: 0,
     topHarnessId: null,
+    topProviderId: null,
     topModelId: null,
     harnesses: [],
+    providers: [],
     models: [],
+    projects: [],
     activityDays: [],
     generatedAt: 0
   }
 
-  let usage = $state<AccountUsageSummary>(EMPTY_USAGE)
+  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE)
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')
@@ -44,8 +63,13 @@
   let accountBusy = $state(false)
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
+  let rangeOffset = $state(0)
+  let projectIconUrls = $state<Record<string, string>>({})
+  let usageRequestGeneration = 0
 
   const accountProfile = $derived(accountState.profile)
+  const selectedRange = $derived(analyticsRange(rangeOffset))
+  const rangeLabel = $derived(formatDateRange(selectedRange))
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -63,17 +87,22 @@
     usage.activityDays.reduce((maximum, day) => Math.max(maximum, day.messageCount), 0)
   )
   const calendarWeeks = $derived.by(() => {
-    const today = new SvelteDate()
-    today.setHours(12, 0, 0, 0)
-    const start = new SvelteDate(today)
-    start.setDate(today.getDate() - today.getDay() - 51 * 7)
+    const rangeStart = new SvelteDate(usage.range.startAt)
+    const rangeEndDay = new SvelteDate(usage.range.endAt - 1)
+    const start = new SvelteDate(rangeStart)
+    start.setDate(rangeStart.getDate() - rangeStart.getDay())
+    start.setHours(12, 0, 0, 0)
+    const end = new SvelteDate(rangeEndDay)
+    end.setDate(rangeEndDay.getDate() + (6 - rangeEndDay.getDay()))
+    end.setHours(12, 0, 0, 0)
 
     const weeks: CalendarWeek[] = []
     let previousMonth = -1
-    for (let weekIndex = 0; weekIndex < 52; weekIndex += 1) {
+    for (let weekIndex = 0; weekIndex < 54; weekIndex += 1) {
       const days: CalendarDay[] = []
       const firstDay = new SvelteDate(start)
       firstDay.setDate(start.getDate() + weekIndex * 7)
+      if (firstDay.getTime() > end.getTime()) break
       const month = firstDay.getMonth()
       const monthLabel =
         month !== previousMonth ? firstDay.toLocaleDateString(undefined, { month: 'short' }) : ''
@@ -86,7 +115,7 @@
         days.push({
           date: key,
           count: activityByDate.get(key) ?? 0,
-          future: date.getTime() > today.getTime()
+          outsideRange: date.getTime() < usage.range.startAt || date.getTime() >= usage.range.endAt
         })
       }
       weeks.push({ days, monthLabel })
@@ -96,7 +125,8 @@
   const calendarResponseCount = $derived(
     calendarWeeks.reduce(
       (total, week) =>
-        total + week.days.reduce((weekTotal, day) => weekTotal + (day.future ? 0 : day.count), 0),
+        total +
+        week.days.reduce((weekTotal, day) => weekTotal + (day.outsideRange ? 0 : day.count), 0),
       0
     )
   )
@@ -105,6 +135,9 @@
   )
   const maxModelTokens = $derived(
     usage.models.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const maxProviderTokens = $derived(
+    usage.providers.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
 
   function localDateKey(date: Date): string {
@@ -138,8 +171,33 @@
     return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
   }
 
+  function formatDateRange(range: LocalProfileAnalyticsRange): string {
+    const format = new Intl.DateTimeFormat(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    })
+    return `${format.format(range.startAt)} – ${format.format(range.endAt - 1)}`
+  }
+
+  function formatDate(value: number): string {
+    return new Intl.DateTimeFormat(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    }).format(value)
+  }
+
+  function formatIdentifier(value: string): string {
+    return value
+      .split(/[-_]/u)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  }
+
   function activityClass(day: CalendarDay): string {
-    if (day.future) return 'bg-transparent'
+    if (day.outsideRange) return 'bg-transparent'
     if (day.count <= 0 || maxActivity <= 0) return 'bg-raised'
     const ratio = day.count / maxActivity
     if (ratio <= 0.25) return 'bg-primary/25'
@@ -153,16 +211,45 @@
     return `${Math.max(4, (item.tokens / maximum) * 100)}%`
   }
 
-  async function loadUsage(): Promise<void> {
+  async function loadProjectIconUrls(projects: LocalProfileProjectBreakdown[]): Promise<void> {
+    const pairs = await Promise.all(
+      projects
+        .filter((project) => project.hasCustomIcon)
+        .map(async (project): Promise<readonly [string, string] | null> => {
+          try {
+            const icon = await invoke('project:getIcon', project.id)
+            return icon ? ([project.id, icon] as const) : null
+          } catch {
+            return null
+          }
+        })
+    )
+    projectIconUrls = Object.fromEntries(
+      pairs.filter((pair): pair is readonly [string, string] => pair !== null)
+    )
+  }
+
+  async function loadUsage(range: LocalProfileAnalyticsRange = selectedRange): Promise<void> {
+    const generation = ++usageRequestGeneration
     loading = true
     errorMessage = ''
     try {
-      usage = await invoke('account:getLocalUsage')
+      const result = await invoke('account:getLocalUsage', range)
+      if (generation !== usageRequestGeneration) return
+      usage = result
+      void loadProjectIconUrls(result.projects)
     } catch {
       errorMessage = 'Local activity could not be loaded. Your usage data has not been changed.'
     } finally {
-      loading = false
+      if (generation === usageRequestGeneration) loading = false
     }
+  }
+
+  function navigateRange(direction: -1 | 1): void {
+    const nextOffset = Math.min(0, rangeOffset + direction)
+    if (nextOffset === rangeOffset) return
+    rangeOffset = nextOffset
+    void loadUsage(analyticsRange(nextOffset))
   }
 
   async function refreshAccount(showError = false): Promise<void> {
@@ -360,7 +447,7 @@
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Agent responses</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.messageCount)}</p>
-      <p class="mt-1 text-xs text-dimmed">Across every local project</p>
+      <p class="mt-1 text-xs text-dimmed">Across projects in this period</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Tokens</p>
@@ -383,18 +470,46 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 id="activity-heading" class="text-sm font-semibold">Activity</h2>
-        <p class="mt-0.5 text-xs text-muted">Agent responses recorded over the last 52 weeks.</p>
+        <p class="mt-0.5 text-xs text-muted">
+          {formatNumber(calendarResponseCount)} responses during the selected year.
+        </p>
       </div>
-      <span class="text-xs tabular-nums text-dimmed">
-        {formatNumber(calendarResponseCount)} responses this period
-      </span>
+      <div class="flex items-center rounded-lg border bg-surface p-0.5">
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
+          title="Show previous 12 months"
+          aria-label="Show previous 12 months"
+          disabled={loading}
+          onclick={() => navigateRange(-1)}
+        >
+          <ChevronLeft size={14} />
+        </button>
+        <span class="min-w-48 px-2 text-center text-[11px] font-medium tabular-nums text-muted">
+          {rangeLabel}
+        </span>
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground disabled:opacity-30"
+          title="Show next 12 months"
+          aria-label="Show next 12 months"
+          disabled={loading || rangeOffset === 0}
+          onclick={() => navigateRange(1)}
+        >
+          <ChevronRight size={14} />
+        </button>
+      </div>
     </div>
 
     <div class="mt-5 overflow-x-auto pb-2">
       <div class="min-w-[46rem]">
         <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
           <span aria-hidden="true"></span>
-          <div class="grid grid-cols-[repeat(52,minmax(0,1fr))] gap-1" aria-hidden="true">
+          <div
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
+            aria-hidden="true"
+          >
             {#each calendarWeeks as week, index (`month-${index}`)}
               <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
                 {week.monthLabel}
@@ -409,7 +524,8 @@
             ><span></span>
           </div>
           <div
-            class="grid grid-cols-[repeat(52,minmax(0,1fr))] gap-1"
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
             aria-label="Local activity calendar"
           >
             {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
@@ -441,7 +557,65 @@
     </div>
   </section>
 
-  <div class="mt-4 grid gap-4 lg:grid-cols-2">
+  <section class="mt-4 rounded-xl border" aria-labelledby="project-usage-heading">
+    <div class="flex items-center justify-between border-b px-4 py-3">
+      <div>
+        <h2 id="project-usage-heading" class="text-sm font-semibold">Projects</h2>
+        <p class="mt-0.5 text-xs text-muted">Where your agent work happened in this period.</p>
+      </div>
+      <span class="text-xs tabular-nums text-dimmed">{usage.projects.length} active</span>
+    </div>
+    <div class="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0 xl:grid-cols-3">
+      {#each usage.projects.slice(0, 6) as project (project.id)}
+        {@const iconUrl = getProjectIcon(project, projectIconUrls[project.id])}
+        <article class="min-w-0 p-4">
+          <div class="flex items-start gap-3">
+            {#if iconUrl}
+              <img
+                class="h-9 w-9 shrink-0 rounded-lg object-contain"
+                src={iconUrl}
+                alt=""
+                onerror={projectIconOnError(project)}
+              />
+            {/if}
+            <div class="min-w-0 flex-1">
+              <h3 class="truncate text-sm font-semibold">{project.name}</h3>
+              <p class="mt-0.5 text-[11px] text-dimmed">
+                Last active {formatDate(project.lastActiveAt)}
+              </p>
+            </div>
+          </div>
+          <dl class="mt-4 grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <dt class="text-dimmed">Responses</dt>
+              <dd class="mt-0.5 font-semibold tabular-nums">
+                {formatNumber(project.messageCount)}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-dimmed">Threads</dt>
+              <dd class="mt-0.5 font-semibold tabular-nums">{project.threadCount}</dd>
+            </div>
+            <div>
+              <dt class="text-dimmed">Active days</dt>
+              <dd class="mt-0.5 font-semibold tabular-nums">{project.activeDays}</dd>
+            </div>
+          </dl>
+          <p class="mt-3 truncate text-[11px] tabular-nums text-muted">
+            {formatNumber(project.tokens)} tokens · {formatCost(project.costUsd)} · {formatDuration(
+              project.durationMs
+            )}
+          </p>
+        </article>
+      {:else}
+        <p class="px-4 py-8 text-center text-xs text-muted lg:col-span-2 xl:col-span-3">
+          No project activity was recorded during this period.
+        </p>
+      {/each}
+    </div>
+  </section>
+
+  <div class="mt-4 grid gap-4 xl:grid-cols-3">
     <section class="rounded-xl border" aria-labelledby="harness-usage-heading">
       <div class="border-b px-4 py-3">
         <h2 id="harness-usage-heading" class="text-sm font-semibold">Harnesses</h2>
@@ -451,7 +625,20 @@
         {#each usage.harnesses.slice(0, 8) as harness (harness.id)}
           <div class="px-4 py-3">
             <div class="flex items-center justify-between gap-4 text-xs">
-              <span class="truncate font-semibold">{harness.id}</span>
+              <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
+                {#if getAgentIcon(harness.id)}
+                  <img
+                    class="h-4 w-4 shrink-0 object-contain"
+                    src={getAgentIcon(harness.id)?.iconUrl}
+                    alt=""
+                  />
+                {:else}
+                  <VendorIcon name={harness.id} size={16} />
+                {/if}
+                <span class="truncate"
+                  >{getAgentIcon(harness.id)?.name ?? formatIdentifier(harness.id)}</span
+                >
+              </span>
               <span class="shrink-0 tabular-nums text-muted">
                 {formatNumber(harness.tokens)} tokens · {formatCost(harness.costUsd)}
               </span>
@@ -474,16 +661,63 @@
       </div>
     </section>
 
+    <section class="rounded-xl border" aria-labelledby="provider-usage-heading">
+      <div class="border-b px-4 py-3">
+        <h2 id="provider-usage-heading" class="text-sm font-semibold">Providers</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          Most used: {usage.topProviderId ? formatIdentifier(usage.topProviderId) : 'No usage yet'}
+        </p>
+      </div>
+      <div class="divide-y">
+        {#each usage.providers.slice(0, 8) as provider (provider.id)}
+          <div class="px-4 py-3">
+            <div class="flex items-center justify-between gap-4 text-xs">
+              <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
+                <VendorIcon name={provider.id} size={16} />
+                <span class="truncate">{formatIdentifier(provider.id)}</span>
+              </span>
+              <span class="shrink-0 tabular-nums text-muted">
+                {formatNumber(provider.tokens)} tokens · {formatCost(provider.costUsd)}
+              </span>
+            </div>
+            <div class="mt-2 h-1 overflow-hidden rounded-full bg-raised">
+              <div
+                class="h-full rounded-full bg-primary"
+                style:width={usageWidth(provider, maxProviderTokens)}
+              ></div>
+            </div>
+            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+              {formatNumber(provider.messageCount)} responses
+            </p>
+          </div>
+        {:else}
+          <p class="px-4 py-8 text-center text-xs text-muted">
+            Provider usage appears after a harness reports it.
+          </p>
+        {/each}
+      </div>
+    </section>
+
     <section class="rounded-xl border" aria-labelledby="model-usage-heading">
       <div class="border-b px-4 py-3">
         <h2 id="model-usage-heading" class="text-sm font-semibold">Models</h2>
         <p class="mt-0.5 text-xs text-muted">Most used: {usage.topModelId ?? 'No usage yet'}</p>
       </div>
       <div class="divide-y">
-        {#each usage.models.slice(0, 8) as model (model.id)}
+        {#each usage.models.slice(0, 8) as model (`${model.harnessId}:${model.providerId}:${model.id}`)}
           <div class="px-4 py-3">
             <div class="flex items-center justify-between gap-4 text-xs">
-              <span class="truncate font-semibold">{model.id}</span>
+              <span class="flex min-w-0 items-center gap-1.5 truncate font-semibold">
+                {#if getAgentIcon(model.harnessId)}
+                  <img
+                    class="h-4 w-4 shrink-0 object-contain"
+                    src={getAgentIcon(model.harnessId)?.iconUrl}
+                    alt=""
+                  />
+                {/if}
+                <VendorIcon name={model.providerId ?? model.id} size={15} />
+                <span class="truncate">{model.id}</span>
+              </span>
               <span class="shrink-0 tabular-nums text-muted">
                 {formatNumber(model.tokens)} tokens · {formatCost(model.costUsd)}
               </span>
@@ -507,3 +741,10 @@
     </section>
   </div>
 </div>
+
+<style>
+  .activity-columns {
+    display: grid;
+    grid-template-columns: repeat(var(--calendar-weeks), minmax(0, 1fr));
+  }
+</style>

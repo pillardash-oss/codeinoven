@@ -131,6 +131,7 @@ import type {
   AuditSectionId,
   HistoryEntry,
   EditorId,
+  LocalProfileAnalyticsRange,
   MemoryEntry,
   SpecContextReference,
   SpecSectionId,
@@ -164,6 +165,28 @@ const EDITOR_IDS = new Set<EditorId>([
   'webstorm',
   'idea'
 ])
+const MAX_PROFILE_ANALYTICS_RANGE_MS = 371 * 24 * 60 * 60 * 1_000
+
+function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyticsRange {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Profile analytics range must be an object')
+  }
+  const range = value as Record<string, unknown>
+  const startAt = range['startAt']
+  const endAt = range['endAt']
+  if (
+    typeof startAt !== 'number' ||
+    !Number.isSafeInteger(startAt) ||
+    startAt < 0 ||
+    typeof endAt !== 'number' ||
+    !Number.isSafeInteger(endAt) ||
+    endAt <= startAt ||
+    endAt - startAt > MAX_PROFILE_ANALYTICS_RANGE_MS
+  ) {
+    throw new TypeError('Profile analytics range is invalid')
+  }
+  return { startAt, endAt }
+}
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'threadLimit',
@@ -1065,7 +1088,9 @@ export function registerIpcHandlers(
   })
 
   // ─── Application config ────────────────────────────────────────────────
-  ipcMain.handle('account:getLocalUsage', () => harnessUsageRepo.profileSummary())
+  ipcMain.handle('account:getLocalUsage', (_, input: unknown) =>
+    harnessUsageRepo.profileAnalytics(validateLocalProfileAnalyticsRange(input))
+  )
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
   }
