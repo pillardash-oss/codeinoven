@@ -142,7 +142,7 @@ import {
   parseGeneratedBrainstormContent
 } from '../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
-import { shouldDeferAutoTitleUntilIdle } from './title-generation-policy'
+import { createAutoTitleLauncher } from './title-generation-policy'
 import { classifyProviderIssue } from '../lib/provider-issue'
 import { generateId } from '../lib/utils'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../lib/project-artifacts'
@@ -868,14 +868,6 @@ interface PendingMemoryDecision {
   settings: ThreadSettings
 }
 
-interface PendingAutoTitle {
-  projectId: string
-  threadId: string
-  driverId: string
-  settings: ThreadSettings
-  text: string
-}
-
 interface PendingInitialSpecGeneration {
   schemaVersion: 1
   generationVersion: number
@@ -1013,9 +1005,6 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
-  /** Claude titles wait for the main turn to become idle so concurrent Claude
-   * processes cannot race OAuth refresh. Other harnesses title independently. */
-  private pendingAutoTitles = new Map<string, PendingAutoTitle>()
   /**
    * Whether `ensureSession` confirmed the harness session natively holds the
    * conversation (non-empty provider history). `buildHistoryRecap` uses this to
@@ -1849,7 +1838,6 @@ export class ChatEngine {
     }
     this.completionWaiters.clear()
     this.pendingMemoryDecisions.clear()
-    this.pendingAutoTitles.clear()
     this.initialSpecTasks.clear()
     this.activeInitialSpecSessions.clear()
     this.userAbortedInitialSpecOperations.clear()
@@ -2623,7 +2611,6 @@ export class ChatEngine {
     this.handledIdleSessions.delete(sessionId)
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
-    this.pendingAutoTitles.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
@@ -3503,8 +3490,7 @@ export class ChatEngine {
     // First prompt of a fresh thread (forks carry a mirror) — auto-title it
     // in the background so the sidebar never fills with "New Thread" rows.
     // The fallback is applied immediately. The model-generated title uses a
-    // disposable session. Only Claude waits for main-turn idle because its
-    // processes share credential refresh; every other harness starts now.
+    // disposable session that starts independently from the main turn.
     if (shouldAutoTitle) {
       const fallback = deriveTitleFromText(text)
       if (fallback) {
@@ -3531,18 +3517,15 @@ export class ChatEngine {
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
     }
-    // Claude Code background processes must remain serialized because its
-    // OAuth refresh is shared. Other harnesses own isolated title transports,
-    // so their title must not depend on the main turn reaching a successful
-    // terminal state.
-    const deferAutoTitleUntilIdle = shouldAutoTitle && shouldDeferAutoTitleUntilIdle(driverId)
-    let autoTitleScheduled = false
-    const scheduleAutoTitle = (): Promise<void> => {
-      if (!shouldAutoTitle || autoTitleScheduled) return Promise.resolve()
-      autoTitleScheduled = true
-      return this.autoTitleThread(projectId, threadId, driverId, settings, text)
-    }
-    if (!deferAutoTitleUntilIdle) void scheduleAutoTitle()
+    // TITLE-GENERATION INVARIANT: launch the disposable title session now and
+    // never couple it to the main session's idle/success lifecycle. The thread
+    // ID is sufficient for the later database/UI update. Provider-specific
+    // startup serialization belongs inside its driver; ClaudeCodeDriver gates
+    // only OAuth startup and releases that gate on the process's first output.
+    const scheduleAutoTitle = createAutoTitleLauncher(shouldAutoTitle, () =>
+      this.autoTitleThread(projectId, threadId, driverId, settings, text)
+    )
+    void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
     const planningSpecTurn = settings.engineeringMode && specAction !== 'implement'
@@ -3606,9 +3589,6 @@ export class ChatEngine {
     if (origin === 'user') {
       this.mermaidRepairAttempts.delete(sessionId)
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
-    }
-    if (deferAutoTitleUntilIdle) {
-      this.pendingAutoTitles.set(sessionId, { projectId, threadId, driverId, settings, text })
     }
     // A new turn resolves any pending auto-resume for this session — the user
     // (or a previous scheduled retry) is driving it again.
@@ -3799,33 +3779,16 @@ export class ChatEngine {
           if (!generated) throw new Error('The specification agent did not submit a valid draft.')
           const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
           this.pendingMemoryDecisions.delete(sessionId)
-          const pendingTitle = this.pendingAutoTitles.get(sessionId)
-          this.pendingAutoTitles.delete(sessionId)
-          const titleTask = pendingTitle
-            ? this.autoTitleThread(
-                pendingTitle.projectId,
-                pendingTitle.threadId,
-                pendingTitle.driverId,
-                pendingTitle.settings,
-                pendingTitle.text
-              )
-            : Promise.resolve()
           if (pendingMemory) {
-            void titleTask
-              .then(() =>
-                this.proposeMemoryFromCompletedTurn(
-                  pendingMemory.userMessage,
-                  JSON.stringify(generated.content),
-                  projectId,
-                  threadId,
-                  driver,
-                  projectPath,
-                  pendingMemory.settings
-                )
-              )
-              .catch((error) => Logger.error('Memory signal processing failed:', error))
-          } else {
-            void titleTask
+            void this.proposeMemoryFromCompletedTurn(
+              pendingMemory.userMessage,
+              JSON.stringify(generated.content),
+              projectId,
+              threadId,
+              driver,
+              projectPath,
+              pendingMemory.settings
+            ).catch((error) => Logger.error('Memory signal processing failed:', error))
           }
           return publicUserMessage
         }
@@ -3887,7 +3850,6 @@ export class ChatEngine {
         promptDispatched = true
         this.startSessionWatchdog(sessionId)
       } catch (error) {
-        this.pendingAutoTitles.delete(sessionId)
         this.pendingMemoryDecisions.delete(sessionId)
         await this.cleanupTurnUtilities(sessionId)
         this.clearCompletionWaiter(sessionId)
@@ -3963,7 +3925,6 @@ export class ChatEngine {
       // thread load reads it from disk instead of relying on a live sync.
       this.loadMessages(projectId, threadId).catch(() => {})
     } catch (error) {
-      this.pendingAutoTitles.delete(sessionId)
       this.pendingMemoryDecisions.delete(sessionId)
       await this.cleanupTurnUtilities(sessionId)
       this.preparedImplementationSessions.delete(sessionId)
@@ -10948,10 +10909,7 @@ export class ChatEngine {
     if (info.ephemeral) return
     const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
     this.pendingMemoryDecisions.delete(sessionId)
-    const pendingTitle = this.pendingAutoTitles.get(sessionId)
-    this.pendingAutoTitles.delete(sessionId)
     let assistantResponse = ''
-    let completedSuccessfully = false
     let turnUtilitiesCleaned = false
     let assignmentContinuation: {
       assignment: AssignmentPlan
@@ -11061,7 +11019,6 @@ export class ChatEngine {
         await this.cleanupTurnUtilities(sessionId)
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
-        if (pendingTitle) this.pendingAutoTitles.set(sessionId, pendingTitle)
         try {
           await this.sendPrompt(
             info.projectId,
@@ -11078,7 +11035,6 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          this.pendingAutoTitles.delete(sessionId)
           const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
@@ -11091,7 +11047,6 @@ export class ChatEngine {
         await this.cleanupTurnUtilities(sessionId)
         turnUtilitiesCleaned = true
         if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
-        if (pendingTitle) this.pendingAutoTitles.set(sessionId, pendingTitle)
         try {
           await this.sendPrompt(
             info.projectId,
@@ -11108,7 +11063,6 @@ export class ChatEngine {
           )
         } catch (error) {
           this.pendingMemoryDecisions.delete(sessionId)
-          this.pendingAutoTitles.delete(sessionId)
           const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
           await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
@@ -11271,7 +11225,6 @@ export class ChatEngine {
       if (!failure && turnAssistant) {
         assistantResponse = assistantMemoryDecisionContext(turnAssistant)
       }
-      completedSuccessfully = !failure && !awaitingUser
     } catch (error) {
       Logger.error('history mirror failed:', error)
       if (this.userAbortedSessions.has(sessionId)) return
@@ -11306,35 +11259,19 @@ export class ChatEngine {
         })
       }
     }
-    const titleTask =
-      pendingTitle && completedSuccessfully
-        ? this.autoTitleThread(
-            pendingTitle.projectId,
-            pendingTitle.threadId,
-            pendingTitle.driverId,
-            pendingTitle.settings,
-            pendingTitle.text
-          )
-        : Promise.resolve()
     if (pendingMemory && assistantResponse) {
       const driver = this.drivers.get(info.driverId)
       if (driver) {
-        void titleTask
-          .then(() =>
-            this.proposeMemoryFromCompletedTurn(
-              pendingMemory.userMessage,
-              assistantResponse,
-              info.projectId,
-              info.threadId,
-              driver,
-              info.projectPath,
-              pendingMemory.settings
-            )
-          )
-          .catch((error) => Logger.error('Memory signal processing failed:', error))
+        void this.proposeMemoryFromCompletedTurn(
+          pendingMemory.userMessage,
+          assistantResponse,
+          info.projectId,
+          info.threadId,
+          driver,
+          info.projectPath,
+          pendingMemory.settings
+        ).catch((error) => Logger.error('Memory signal processing failed:', error))
       }
-    } else {
-      void titleTask
     }
   }
 
@@ -11437,7 +11374,6 @@ export class ChatEngine {
     if (!info) return
     if (info.ephemeral) return
     this.pendingMemoryDecisions.delete(sessionId)
-    this.pendingAutoTitles.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)

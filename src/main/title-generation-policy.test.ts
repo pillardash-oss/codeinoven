@@ -1,15 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { shouldDeferAutoTitleUntilIdle } from './title-generation-policy'
+import { createAutoTitleLauncher } from './title-generation-policy'
 
 describe('thread title generation scheduling', () => {
-  it('defers only Claude Code to avoid its shared OAuth refresh race', () => {
-    expect(shouldDeferAutoTitleUntilIdle('claude-code')).toBe(true)
+  it('launches independently and exactly once', async () => {
+    let calls = 0
+    const launch = createAutoTitleLauncher(true, async () => {
+      calls += 1
+    })
+
+    await Promise.all([launch(), launch(), launch()])
+
+    expect(calls).toBe(1)
   })
 
-  it.each(['opencode', 'codex', 'cline', 'antigravity', 'pi'])(
-    'keeps %s title generation independent from main-turn completion',
-    (driverId) => {
-      expect(shouldDeferAutoTitleUntilIdle(driverId)).toBe(false)
-    }
-  )
+  it('does not launch when the thread already has a title', async () => {
+    let calls = 0
+    const launch = createAutoTitleLauncher(false, async () => {
+      calls += 1
+    })
+
+    await launch()
+
+    expect(calls).toBe(0)
+  })
 })

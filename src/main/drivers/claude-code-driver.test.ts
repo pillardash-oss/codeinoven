@@ -128,6 +128,53 @@ describe('ClaudeCodeDriver', () => {
     next.emit('exit', 0, null)
   })
 
+  it('serializes OAuth startup but allows a title process before the main turn is idle', async () => {
+    const mainChild = new FakeChild()
+    const titleChild = new FakeChild()
+    spawnMock
+      .mockReturnValueOnce(mainChild as unknown as ChildProcess)
+      .mockReturnValueOnce(titleChild as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const mainSessionId = await driver.createSession('/project', 'Main thread')
+    const titleSessionId = await driver.createSession('/project', 'Thread title')
+    const settings = {
+      harnessId: 'claude-code',
+      providerId: 'anthropic',
+      modelId: 'haiku',
+      thinkingLevel: 'minimal',
+      permissionLevel: 'auto_review',
+      engineeringMode: false
+    } as const
+
+    await driver.sendPrompt('/project', {
+      sessionId: mainSessionId,
+      text: 'Main request',
+      attachments: [],
+      settings
+    })
+    const titleStart = driver.sendPrompt('/project', {
+      sessionId: titleSessionId,
+      text: 'Generate title',
+      attachments: [],
+      settings
+    })
+
+    await Promise.resolve()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+
+    mainChild.stdout.emit(
+      'data',
+      Buffer.from('{"type":"system","subtype":"init","session_id":"native-main"}\n')
+    )
+    await titleStart
+
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+    expect(mainChild.killed).toBe(false)
+
+    mainChild.emit('exit', 0, null)
+    titleChild.emit('exit', 0, null)
+  })
+
   it('maps tool use, results, and quota failures into events', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
