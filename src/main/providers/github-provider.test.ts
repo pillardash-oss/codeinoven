@@ -184,6 +184,51 @@ describe('GitHubProvider', () => {
     })
   })
 
+  it('maps a workflow run and its jobs into the run detail model', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        id: 91,
+        name: 'Release',
+        display_title: 'Publish desktop build',
+        run_number: 14,
+        event: 'push',
+        status: 'completed',
+        conclusion: 'success',
+        head_branch: 'main',
+        head_sha: 'abcdef123456',
+        html_url: 'https://github.com/acme/app/actions/runs/91',
+        actor: { login: 'octocat' },
+        created_at: '2026-08-08T10:00:00Z',
+        updated_at: '2026-08-08T10:05:00Z'
+      })
+    )
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        total_count: 1,
+        jobs: [
+          {
+            id: 77,
+            name: 'build',
+            status: 'completed',
+            conclusion: 'success',
+            started_at: '2026-08-08T10:01:00Z',
+            completed_at: '2026-08-08T10:02:00Z',
+            html_url: 'https://github.com/acme/app/actions/runs/91/job/77',
+            steps: [{ number: 1, name: 'Checkout', status: 'completed', conclusion: 'success' }]
+          }
+        ]
+      })
+    )
+
+    const provider = new GitHubProvider('ghp_secret_token')
+    const detail = await provider.getWorkflowRunDetail({ owner: 'acme', repo: 'app', runId: 91 })
+
+    expect(detail.run).toMatchObject({ id: 91, displayTitle: 'Publish desktop build' })
+    expect(detail.jobs).toHaveLength(1)
+    expect(detail.jobs[0]).toMatchObject({ id: 77, name: 'build', conclusion: 'success' })
+    expect(detail.jobs[0]?.steps[0]).toMatchObject({ name: 'Checkout', conclusion: 'success' })
+  })
+
   it('resolves repository identity from HTTPS, SSH, and scp-like remote URLs', () => {
     const provider = new GitHubProvider('ghp_secret_token')
     expect(provider.resolveRepositoryIdentity('https://github.com/acme/app.git')?.owner).toBe(
