@@ -9,11 +9,7 @@ import type {
   ThreadMessagePage,
   UserMessageSummary
 } from '../../../lib/types'
-import {
-  attachmentGrantStatements,
-  ensureAttachmentGrantSchema,
-  syncAttachmentGrants
-} from './attachment-grant-repo'
+import { attachmentGrantStatements, syncAttachmentGrants } from './attachment-grant-repo'
 
 /** Plain-text content of a user-authored agent message (mirrors the renderer). */
 function userMessageText(partsJson: string): string {
@@ -455,7 +451,6 @@ export function runProviderDeltaSync(
   sessionId: string,
   messages: AgentMessage[]
 ): ProviderDeltaSyncResult {
-  ensureAttachmentGrantSchema(executor)
   const sorted = [...messages].sort(
     (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
   )
@@ -547,9 +542,7 @@ export function runProviderDeltaSync(
 }
 
 export class AgentMessageRepo {
-  constructor(private db: Database) {
-    ensureAttachmentGrantSchema(db)
-  }
+  constructor(private db: Database) {}
 
   upsert(message: AgentMessage, threadId: string, sessionId?: string): void {
     const existing = this.db.get<AgentMessageRow>(

@@ -65,8 +65,14 @@ function connection(): DatabaseType {
   if (!db) {
     db = new DatabaseConstructor(config.dbPath)
     db.pragma('journal_mode = WAL')
-    db.pragma('busy_timeout = 5000')
+    db.pragma('synchronous = NORMAL')
     db.pragma('foreign_keys = ON')
+    db.pragma('busy_timeout = 5000')
+    db.pragma('temp_store = MEMORY')
+    db.pragma('cache_size = -32768')
+    db.pragma('mmap_size = 268435456')
+    db.pragma('wal_autocheckpoint = 1000')
+    db.pragma('journal_size_limit = 67108864')
   }
   return db
 }

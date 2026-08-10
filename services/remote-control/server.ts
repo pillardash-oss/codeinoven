@@ -1,12 +1,6 @@
 import { serve, type Server, type ServerWebSocket } from 'bun'
 import { isIP } from 'node:net'
-import {
-  auth,
-  authDatabasePath,
-  closeAuthDatabase,
-  migrateAuthSchema,
-  remoteAuthSession
-} from './auth'
+import { auth, authDatabasePath, closeAuthDatabase, remoteAuthSession } from './auth'
 import { RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import { RelayHub } from './relay-hub'
@@ -27,7 +21,6 @@ const allowedOrigins = new Set(
     .filter(Boolean)
 )
 
-await migrateAuthSchema()
 const database = new RemoteControlDatabase(authDatabasePath)
 const relayHub = new RelayHub({
   bufferLimit: positiveInteger(process.env['RELAY_BUFFER_LIMIT'], 256),

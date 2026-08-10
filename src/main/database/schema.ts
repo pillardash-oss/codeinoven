@@ -10,7 +10,7 @@
  *   agent_messages  — Mirrored agent conversation messages
  *   agent_messages_fts — FTS5 virtual table on agent_messages.search_text
  *   settings        — Global app config (key/value)
- *   db_meta         — Internal metadata (migration version, etc.)
+ *   db_meta         — Internal database metadata
  */
 
 export const SCHEMA_SQL = `
@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS db_meta (
   key   TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
 );
+
+INSERT OR IGNORE INTO db_meta(key, value) VALUES('schema_version', '1');
 
 -- ─── Settings (app config) ──────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS settings (
@@ -46,7 +48,10 @@ CREATE TABLE IF NOT EXISTS projects (
   has_deployments    INTEGER NOT NULL DEFAULT 0,
   created_at         INTEGER NOT NULL,
   updated_at         INTEGER NOT NULL
-);`
+);
+
+CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path);
+CREATE INDEX IF NOT EXISTS idx_projects_listing ON projects(pinned DESC, sort_order, updated_at DESC);`
 
 export const PROJECT_FTS_SQL = `
 -- ─── Project FTS5 ───────────────────────────────────────────────────────
@@ -113,10 +118,13 @@ CREATE TABLE IF NOT EXISTS threads (
   working_directory    TEXT NOT NULL DEFAULT ''
 );
 
-CREATE INDEX IF NOT EXISTS idx_threads_project_id ON threads(project_id);
 CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
-CREATE INDEX IF NOT EXISTS idx_threads_last_activity ON threads(last_activity);
-CREATE INDEX IF NOT EXISTS idx_threads_pinned ON threads(pinned);`
+CREATE INDEX IF NOT EXISTS idx_threads_project_listing
+  ON threads(project_id, archived, pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_activity_listing
+  ON threads(pinned DESC, pinned_at DESC, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_default_listing
+  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
@@ -189,8 +197,21 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   structured_output TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_id ON agent_messages(thread_id);
-CREATE INDEX IF NOT EXISTS idx_agent_messages_session_id ON agent_messages(session_id);`
+CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_timeline
+  ON agent_messages(thread_id, session_id, created_at, id);`
+
+export const ATTACHMENT_GRANTS_SQL = `
+-- ─── Durable attachment grants ──────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS attachment_grants (
+  message_id      TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
+  thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  canonical_path  TEXT NOT NULL,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (message_id, canonical_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_grants_canonical_path
+  ON attachment_grants(canonical_path);`
 
 export const AGENT_MESSAGES_FTS_SQL = `
 -- ─── Agent Messages FTS5 ────────────────────────────────────────────────
@@ -198,8 +219,8 @@ export const AGENT_MESSAGES_FTS_SQL = `
 -- extracted from conversation parts in the main process). Only conversation
 -- rows (session_id IS NULL, visibility='conversation') are surfaced by the
 -- search query so user messages and the agent's final output match threads.
--- The sync triggers live in AGENT_MESSAGES_FTS_TRIGGERS_SQL so a legacy
--- database can backfill + rebuild before the triggers exist.
+-- The sync triggers live in AGENT_MESSAGES_FTS_TRIGGERS_SQL so schema creation
+-- stays ordered: table first, triggers second.
 CREATE VIRTUAL TABLE IF NOT EXISTS agent_messages_fts USING fts5(
   search_text,
   content='agent_messages',
@@ -358,6 +379,9 @@ CREATE TABLE IF NOT EXISTS spec_versions (
   PRIMARY KEY (spec_id, version)
 );
 
+CREATE INDEX IF NOT EXISTS idx_spec_versions_thread
+  ON spec_versions(project_id, thread_id);
+
 -- ─── Scope Boards ────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS scope_boards (
   project_id TEXT PRIMARY KEY NOT NULL,
@@ -394,6 +418,9 @@ CREATE TABLE IF NOT EXISTS audit_reports (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (report_id, version)
 );
+
+CREATE INDEX IF NOT EXISTS idx_audit_reports_thread
+  ON audit_reports(project_id, thread_id, version DESC);
 
 -- ─── Turn Checkpoints ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS turn_checkpoints (
@@ -451,6 +478,9 @@ CREATE TABLE IF NOT EXISTS assignment_operations (
   created_at    INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_assignment_operations_assignment
+  ON assignment_operations(assignment_id);
+
 CREATE TABLE IF NOT EXISTS assignment_coordinator_snapshots (
   assignment_id TEXT NOT NULL,
   snapshot_hash TEXT NOT NULL,
@@ -470,7 +500,12 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
   thread_id     TEXT NOT NULL,
   task_id       TEXT,
   created_at    INTEGER NOT NULL
-);` + REMOTE_DEVICE_SQL
+);
+
+CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_assignment
+  ON assignment_api_capabilities(assignment_id);
+CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_thread
+  ON assignment_api_capabilities(thread_id);` + REMOTE_DEVICE_SQL
 
 export const PERSISTENCE_SQL = `
 -- ─── Provider sync cursors ────────────────────────────────────────────────
@@ -492,11 +527,7 @@ CREATE TABLE IF NOT EXISTS provider_sync_cursors (
 CREATE TABLE IF NOT EXISTS maintenance_meta (
   key   TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
-);
-
--- Archive is not a product state. Remove legacy retained copies; bounded
--- maintenance permanently deletes expired rows instead.
-DROP TABLE IF EXISTS retention_archive;`
+);`
 
 export const HARNESS_USAGE_SQL = `
 -- ─── Harness Usage Analytics ────────────────────────────────────────────
@@ -524,7 +555,7 @@ CREATE TABLE IF NOT EXISTS harness_usage (
 );
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_thread
-  ON harness_usage(project_id, thread_id);
+  ON harness_usage(thread_id, last_used_at DESC, harness_id);
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_harness
   ON harness_usage(harness_id);
@@ -569,3 +600,19 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
   ON harness_usage_models(harness_id);`
+
+/** Canonical fresh-install schema. There are no historical migrations. */
+export const DATABASE_SCHEMA_SQL = [
+  SCHEMA_SQL,
+  PROJECT_FTS_SQL,
+  THREADS_SQL,
+  HISTORY_SQL,
+  HISTORY_FTS_SQL,
+  AGENT_MESSAGES_SQL,
+  ATTACHMENT_GRANTS_SQL,
+  AGENT_MESSAGES_FTS_SQL,
+  AGENT_MESSAGES_FTS_TRIGGERS_SQL,
+  MISC_TABLES_SQL,
+  PERSISTENCE_SQL,
+  HARNESS_USAGE_SQL
+].join('\n')
