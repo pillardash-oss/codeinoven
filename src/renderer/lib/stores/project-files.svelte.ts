@@ -7,6 +7,7 @@ import type {
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
 export type ProjectFileView = 'diff' | 'preview' | 'source'
@@ -54,17 +55,18 @@ export interface ProjectFileClipboard {
   mode: ProjectFileTransferMode
 }
 
-export function createProjectFilesState(): ProjectFilesState {
+export function createProjectFilesState(projectId: string): ProjectFilesState {
+  const explorer = fileExplorerStore.project(projectId)
   return {
     entriesByDirectory: {},
     loadingDirectories: {},
     directoryErrors: {},
-    expandedDirectories: {},
+    expandedDirectories: { ...explorer.expandedDirectories },
     tabs: [],
     activeTabId: null,
-    explorerVisible: true,
-    revealedPath: null,
-    selectedPaths: [],
+    explorerVisible: explorer.explorerVisible,
+    revealedPath: explorer.revealedPath,
+    selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
     sessions: {}
@@ -81,10 +83,17 @@ function errorMessage(error: unknown): string {
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
   private directoryLoads = new Map<string, Promise<void>>()
+  /** Fresh project states whose persisted expansion still needs to be populated. */
+  private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
 
   ensureState(projectId: string): ProjectFilesState {
-    return (this.projects[projectId] ??= createProjectFilesState())
+    const existing = this.projects[projectId]
+    if (existing) return existing
+    const state = createProjectFilesState(projectId)
+    this.projects[projectId] = state
+    this.pendingRestores.add(projectId)
+    return state
   }
 
   getState(projectId: string): ProjectFilesState {
@@ -109,6 +118,13 @@ class ProjectFilesWorkspace {
           projectId,
           directory
         )
+        // The first time the root is listed for a freshly hydrated project,
+        // populate the previously expanded directories so the restored tree is
+        // actually visible (and the reveal/scroll logic can land on the path).
+        if (directory === '' && this.pendingRestores.has(projectId)) {
+          this.pendingRestores.delete(projectId)
+          await this.restoreExpandedDirectories(projectId, state)
+        }
       } catch (error) {
         state.directoryErrors[directory] = errorMessage(error)
       } finally {
@@ -123,13 +139,40 @@ class ProjectFilesWorkspace {
     }
   }
 
+  /** Load the persisted expanded directories so the restored tree is populated. */
+  private async restoreExpandedDirectories(
+    projectId: string,
+    state: ProjectFilesState
+  ): Promise<void> {
+    const expanded = Object.keys(state.expandedDirectories)
+      .filter((candidate) => candidate && !state.entriesByDirectory[candidate])
+      .sort((left, right) => left.split('/').length - right.split('/').length)
+    for (const directory of expanded) {
+      await this.loadDirectory(projectId, directory)
+    }
+  }
+
+  /** Persist a project's file-explorer position through the single explorer store. */
+  private persistExplorer(projectId: string): void {
+    const state = this.projects[projectId]
+    if (!state) return
+    fileExplorerStore.update(projectId, {
+      expandedDirectories: { ...state.expandedDirectories },
+      revealedPath: state.revealedPath,
+      selectedPaths: [...state.selectedPaths],
+      explorerVisible: state.explorerVisible
+    })
+  }
+
   async toggleDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
     if (state.expandedDirectories[directory]) {
       delete state.expandedDirectories[directory]
+      this.persistExplorer(projectId)
       return
     }
     state.expandedDirectories[directory] = true
+    this.persistExplorer(projectId)
     await this.loadDirectory(projectId, directory)
   }
 
@@ -139,12 +182,14 @@ class ProjectFilesWorkspace {
 
   setSelection(projectId: string, paths: string[]): void {
     this.ensureState(projectId).selectedPaths = paths
+    this.persistExplorer(projectId)
   }
 
   clearSelection(projectId: string): void {
     const state = this.ensureState(projectId)
     state.selectedPaths = []
     state.selectionAnchor = null
+    this.persistExplorer(projectId)
   }
 
   toggleSelection(projectId: string, path: string): void {
@@ -152,6 +197,7 @@ class ProjectFilesWorkspace {
     state.selectedPaths = state.selectedPaths.includes(path)
       ? state.selectedPaths.filter((candidate) => candidate !== path)
       : [...state.selectedPaths, path]
+    this.persistExplorer(projectId)
   }
 
   setSelectionAnchor(projectId: string, path: string | null): void {
@@ -193,7 +239,9 @@ class ProjectFilesWorkspace {
     }
     this.removePathsFromState(state, projectId, ordered)
     const parents = new Set(ordered.map((path) => this.parentDirectory(path)))
-    await Promise.all([...parents].map((directory) => this.loadDirectory(projectId, directory, true)))
+    await Promise.all(
+      [...parents].map((directory) => this.loadDirectory(projectId, directory, true))
+    )
   }
 
   async pasteFile(projectId: string, destinationDirectory: string): Promise<void> {
@@ -443,6 +491,7 @@ class ProjectFilesWorkspace {
   toggleExplorer(projectId: string): void {
     const state = this.ensureState(projectId)
     state.explorerVisible = !state.explorerVisible
+    this.persistExplorer(projectId)
   }
 
   async revealDirectory(projectId: string, directory: string): Promise<void> {
@@ -455,6 +504,7 @@ class ProjectFilesWorkspace {
       state.expandedDirectories[ancestor] = true
       await this.loadDirectory(projectId, ancestor)
     }
+    this.persistExplorer(projectId)
   }
 
   async revealFile(projectId: string, path: string): Promise<void> {
@@ -464,16 +514,19 @@ class ProjectFilesWorkspace {
     await this.revealDirectory(projectId, this.parentDirectory(path))
     state.revealedPath = path
     state.selectedPaths = [path]
+    this.persistExplorer(projectId)
   }
 
   setRevealedPath(projectId: string, path: string | null): void {
     const state = this.ensureState(projectId)
     state.revealedPath = path
+    this.persistExplorer(projectId)
   }
 
   markDirectoryExpanded(projectId: string, directory: string): void {
     const state = this.ensureState(projectId)
     state.expandedDirectories[directory] = true
+    this.persistExplorer(projectId)
   }
 
   setView(projectId: string, tabId: string, view: ProjectFileView): void {
@@ -677,11 +730,7 @@ class ProjectFilesWorkspace {
 
   /** Clear all explorer state for the given paths (files or folders) and their
    *  subtrees: sessions, tabs, expansion, cache, reveal, and selection. */
-  private removePathsFromState(
-    state: ProjectFilesState,
-    projectId: string,
-    paths: string[]
-  ): void {
+  private removePathsFromState(state: ProjectFilesState, projectId: string, paths: string[]): void {
     const isWithin = (candidate: string): boolean =>
       paths.some((path) => candidate === path || candidate.startsWith(`${path}/`))
     for (const candidate of Object.keys(state.sessions)) {
@@ -704,6 +753,7 @@ class ProjectFilesWorkspace {
     }
     if (state.revealedPath && isWithin(state.revealedPath)) state.revealedPath = null
     state.selectedPaths = state.selectedPaths.filter((candidate) => !isWithin(candidate))
+    this.persistExplorer(projectId)
   }
 
   private remapMovedFile(projectId: string, previousPath: string, nextPath: string): void {
@@ -769,6 +819,7 @@ class ProjectFilesWorkspace {
     if (state.revealedPath && isWithin(state.revealedPath)) {
       state.revealedPath = translate(state.revealedPath)
     }
+    this.persistExplorer(projectId)
   }
 
   private async runFileOperation<T>(operation: () => Promise<T>): Promise<T> {
