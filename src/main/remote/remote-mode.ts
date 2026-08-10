@@ -121,6 +121,21 @@ export function remoteEnvInt(name: string, fallback: number): number {
 }
 
 const CLOUD_REQUEST_TIMEOUT_MS = 15_000
+const CLOUD_ENROLLMENT_RETRY_INITIAL_MS = 5_000
+const CLOUD_ENROLLMENT_RETRY_MAX_MS = 5 * 60_000
+
+function cloudResponseIsTerminal(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
+}
+
+function cloudRetryAfterMs(response: Response): number | null {
+  const retryAfter = response.headers.get('retry-after')
+  if (!retryAfter) return null
+  const seconds = Number(retryAfter)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000
+  const retryAt = Date.parse(retryAfter)
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null
+}
 
 class CloudRequestCancelledError extends Error {
   constructor() {
@@ -385,6 +400,7 @@ export class RemoteModeController {
   private cloudAbortController: AbortController | null = null
   private cloudPollGeneration = 0
   private cloudPollRunningGeneration: number | null = null
+  private cloudPollFailureCount = 0
   private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
@@ -1165,6 +1181,48 @@ export class RemoteModeController {
     }, delayMs)
   }
 
+  private nextEnrollmentRetryDelay(serverDelayMs: number | null): number {
+    const exponent = Math.min(this.cloudPollFailureCount, 6)
+    const exponentialDelay = Math.min(
+      CLOUD_ENROLLMENT_RETRY_INITIAL_MS * 2 ** exponent,
+      CLOUD_ENROLLMENT_RETRY_MAX_MS
+    )
+    this.cloudPollFailureCount += 1
+    return Math.min(Math.max(exponentialDelay, serverDelayMs ?? 0), CLOUD_ENROLLMENT_RETRY_MAX_MS)
+  }
+
+  private async discardCloudEnrollment(lastError: string): Promise<void> {
+    const config = this.cloudConfig
+    this.stopCloudAccess()
+    this.cloudConfig = null
+
+    if (this.storage) {
+      try {
+        await this.storage.remove(CLOUD_CONFIG_PATH)
+      } catch (error) {
+        Logger.error('Could not remove rejected remote cloud enrollment:', error)
+      }
+    }
+    if (config?.tokenRef && this.vault) {
+      try {
+        await this.vault.remove(config.tokenRef)
+      } catch (error) {
+        Logger.error('Could not remove rejected remote cloud credential:', error)
+      }
+    }
+
+    this.cloudStatus = {
+      configured: this.cloudApiOrigin !== null,
+      state: 'error',
+      apiOrigin: this.cloudApiOrigin,
+      desktopId: null,
+      enrollmentCode: null,
+      enrollmentExpiresAt: null,
+      lastError
+    }
+    this.broadcast()
+  }
+
   private async checkEnrollmentStatus(): Promise<void> {
     const config = this.cloudConfig
     if (!config || !this.vault || !this.remoteModeActive) return
@@ -1178,6 +1236,7 @@ export class RemoteModeController {
       controller === this.cloudAbortController &&
       config === this.cloudConfig &&
       this.remoteModeActive
+    let serverRetryDelay: number | null = null
     try {
       const token = await this.vault.resolve(config.tokenRef)
       if (!isCurrentPoll()) return
@@ -1191,11 +1250,19 @@ export class RemoteModeController {
         controller.signal
       )
       if (!isCurrentPoll()) return
-      if (!response.ok) throw new Error('Enrollment status rejected')
+      if (!response.ok) {
+        if (cloudResponseIsTerminal(response.status)) {
+          Logger.info(`Remote cloud enrollment rejected (${response.status}); local state cleared`)
+          await this.discardCloudEnrollment('Enrollment rejected. Sign in again.')
+          return
+        }
+        serverRetryDelay = cloudRetryAfterMs(response)
+        throw new Error(`Enrollment status unavailable (${response.status})`)
+      }
+      this.cloudPollFailureCount = 0
       const payload = (await response.json()) as Record<string, unknown>
       if (payload['revoked'] === true) {
-        this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Desktop revoked' }
-        this.broadcast()
+        await this.discardCloudEnrollment('Desktop revoked. Sign in again.')
         return
       }
       if (payload['claimed'] === true) {
@@ -1248,13 +1315,22 @@ export class RemoteModeController {
           controller.signal
         )
         if (!isCurrentPoll()) return
-        if (!grantResponse.ok) throw new Error('Control grant upload failed')
+        if (!grantResponse.ok) {
+          if (cloudResponseIsTerminal(grantResponse.status)) {
+            Logger.info(
+              `Remote cloud control grant rejected (${grantResponse.status}); local state cleared`
+            )
+            await this.discardCloudEnrollment('Connection authorization rejected. Sign in again.')
+            return
+          }
+          serverRetryDelay = cloudRetryAfterMs(grantResponse)
+          throw new Error(`Control grant upload unavailable (${grantResponse.status})`)
+        }
         this.connectCloudRelay(token)
         return
       }
       if (Date.now() >= config.enrollmentExpiresAt) {
-        this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment expired' }
-        this.broadcast()
+        await this.discardCloudEnrollment('Enrollment expired. Sign in again.')
         return
       }
       this.cloudStatus = { ...this.cloudStatus, state: 'enrollment-pending' }
@@ -1262,10 +1338,20 @@ export class RemoteModeController {
       this.scheduleEnrollmentPoll(2_000)
     } catch (error) {
       if (error instanceof CloudRequestCancelledError || !isCurrentPoll()) return
-      Logger.error('Remote cloud enrollment status failed:', error)
-      this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'Service unreachable' }
+      const retryDelay = this.nextEnrollmentRetryDelay(serverRetryDelay)
+      const retrySeconds = Math.ceil(retryDelay / 1_000)
+      if (this.cloudPollFailureCount === 1) {
+        Logger.error('Remote cloud enrollment status unavailable:', error)
+      } else {
+        Logger.dev(`Remote cloud enrollment still unavailable; retrying in ${retrySeconds}s`)
+      }
+      this.cloudStatus = {
+        ...this.cloudStatus,
+        state: 'offline',
+        lastError: `Service unreachable. Retrying in ${retrySeconds}s.`
+      }
       this.broadcast()
-      this.scheduleEnrollmentPoll(5_000)
+      this.scheduleEnrollmentPoll(retryDelay)
     } finally {
       if (this.cloudPollRunningGeneration === generation) {
         this.cloudPollRunningGeneration = null
@@ -1323,6 +1409,7 @@ export class RemoteModeController {
   private stopCloudAccess(): void {
     this.cloudPollGeneration += 1
     this.cloudPollRunningGeneration = null
+    this.cloudPollFailureCount = 0
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudPollTimer = null
     if (this.cloudProfileSyncTimer) clearTimeout(this.cloudProfileSyncTimer)
