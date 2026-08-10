@@ -1,23 +1,20 @@
 import { mkdirSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname } from 'node:path'
 import { Database } from 'bun:sqlite'
 import { betterAuth } from 'better-auth'
 import { importPKCS8, SignJWT } from 'jose'
-
-const production = process.env['NODE_ENV'] === 'production'
+import { remoteDatabasePath, remoteProduction, remotePublicOrigin } from './runtime-config'
 
 function environmentValue(name: string, developmentFallback: string): string {
   const value = process.env[name]?.trim()
   if (value) return value
-  if (production) throw new Error(`${name} is required in production`)
+  if (remoteProduction) throw new Error(`${name} is required in production`)
   return developmentFallback
 }
 
-export const authDatabasePath = resolve(
-  process.env['REMOTE_DATABASE_PATH'] ?? 'data/remote-control.sqlite'
-)
+export const authDatabasePath = remoteDatabasePath
 
-const baseURL = environmentValue('BETTER_AUTH_URL', 'http://localhost:8877')
+const baseURL = remotePublicOrigin
 const baseOrigin = new URL(baseURL).origin
 const appleClientId = environmentValue('APPLE_OAUTH_CLIENT_ID', 'development-apple-client-id')
 const appleTeamId = environmentValue('APPLE_TEAM_ID', 'development-apple-team-id')
@@ -93,7 +90,7 @@ export const auth = betterAuth({
   },
   advanced: {
     cookiePrefix: 'codeinoven',
-    useSecureCookies: production,
+    useSecureCookies: remoteProduction,
     ipAddress: {
       ipAddressHeaders: ['x-client-ip']
     }

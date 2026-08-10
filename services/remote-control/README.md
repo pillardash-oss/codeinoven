@@ -6,11 +6,15 @@ need an inbound public port and continues to work behind NAT and normal firewall
 
 ## Run locally
 
-Set the variables in `.env.example`, then run:
+No environment variables are required to boot the development service. Run:
 
 ```sh
 bun services/remote-control/server.ts
 ```
+
+To exercise Google or Apple sign-in locally, supply the matching provider credentials from
+`.env.example`. Development-only placeholders are otherwise used so the rest of the service can
+start without production secrets.
 
 Back up the SQLite database using a WAL-aware snapshot. The service deliberately never receives
 the desktop control secret: the desktop encrypts a device-bound grant directly to the PWA's
@@ -59,26 +63,24 @@ client-secret JWT at runtime, with a 180-day expiry, whenever an Apple authoriza
 
 Required production variables:
 
-- `REMOTE_PUBLIC_HOST=mobile.codeinoven.com` — Compose uses this to derive `BETTER_AUTH_URL` and
-  `REMOTE_ALLOWED_ORIGINS`.
 - `BETTER_AUTH_SECRET` — generate with `openssl rand -base64 32`.
 - `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` — Google Cloud OAuth web client.
 - `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` — Apple Service
   ID and Sign in with Apple key credentials.
-- `REMOTE_TRUST_PROXY=true` — trust Caddy's validated client-IP forwarding inside Compose.
 
-The service container also receives `BETTER_AUTH_URL=https://mobile.codeinoven.com`,
-`REMOTE_ALLOWED_ORIGINS=https://mobile.codeinoven.com`, and
-`REMOTE_DATABASE_PATH=/var/lib/codeinoven/remote-control.sqlite` from the Compose file. Do not put
+The production service has one canonical public origin: `https://mobile.codeinoven.com`. Better
+Auth callbacks, browser-origin validation, secure cookies, and proxy trust are derived from the
+production deployment mode. SQLite is stored at `/data/remote-control.sqlite` on the named
+`remote-data` volume. None of those fixed deployment details are operator variables. Do not put
 OAuth client secrets, the Better Auth secret, or the Apple private key in the PWA container.
 
 - Deploy `compose.example.yml` as a Docker Compose resource.
 - Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
   the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
   `/healthz` over the private Compose network. Coolify terminates public TLS.
-- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`,
-  `GOOGLE_OAUTH_CLIENT_SECRET`, `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and
-  `APPLE_PRIVATE_KEY` in Coolify. Generate `BETTER_AUTH_SECRET` with `openssl rand -base64 32`.
+- Set `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
+  `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` in Coolify.
+  Generate `BETTER_AUTH_SECRET` with `openssl rand -base64 32`.
 - Keep one replica of the SQLite service. The named `remote-data` volume persists the database;
   configure WAL-aware backups for that volume before launch.
 - SQLite is supported for a single service instance. Use a durable volume, WAL-aware backups, and
@@ -93,15 +95,13 @@ and WebSocket proxying; it does not bind host ports 80/443.
 
 ## Desktop release variables
 
-Create these GitHub Actions repository variables:
+Create this GitHub Actions repository variable:
 
-- `REMOTE_API_ORIGIN=https://mobile.codeinoven.com`
 - `CODEINOVEN_GITHUB_CLIENT_ID=<public GitHub App or OAuth App client ID>`
 
-The release and production-build workflows pass the GitHub client ID through unchanged and map the
-remote origin to `MAIN_VITE_REMOTE_API_ORIGIN`. The remote origin has a checked-in production
-default, while the desktop still accepts `REMOTE_API_ORIGIN` as a runtime override for development
-or self-hosting.
+The release and production-build workflows use the checked-in
+`https://mobile.codeinoven.com` remote origin. The desktop accepts `REMOTE_API_ORIGIN` only as a
+runtime override for development or self-hosting; it is not a production setup variable.
 
 ## Enrollment and relay protocol
 
