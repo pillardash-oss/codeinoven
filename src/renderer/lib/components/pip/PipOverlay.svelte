@@ -12,6 +12,7 @@
   let dragOrigin = $state({ x: 0, y: 0 })
   let windowSize = $state({ width: 0, height: 0 })
   let overlayElement = $state<HTMLDivElement | undefined>()
+  let userMoved = $state(false)
 
   const isThreadView = $derived(
     rendererRecovery.activeView === 'projects' ||
@@ -26,6 +27,23 @@
       pipState.threadId !== null &&
       pipState.threadId === workspaceState.selectedThread?.id
   )
+
+  /** Anchor the overlay to the bottom-right corner on first appearance. */
+  function anchorOverlay(node: HTMLDivElement): { destroy(): void } {
+    overlayElement = node
+    if (!userMoved) {
+      const rect = node.getBoundingClientRect()
+      position = {
+        x: Math.max(0, window.innerWidth - rect.width - 24),
+        y: Math.max(0, window.innerHeight - rect.height - 24)
+      }
+    }
+    return {
+      destroy() {
+        if (overlayElement === node) overlayElement = undefined
+      }
+    }
+  }
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return
@@ -43,6 +61,7 @@
 
   function onPointerMove(event: PointerEvent): void {
     if (!dragging) return
+    userMoved = true
     const dx = event.clientX - dragStart.x
     const dy = event.clientY - dragStart.y
     const maxX = Math.max(0, window.innerWidth - windowSize.width)
@@ -70,7 +89,7 @@
 
 {#if visible}
   <div
-    bind:this={overlayElement}
+    use:anchorOverlay
     class="fixed z-50 select-none rounded-xl border bg-surface shadow-2xl"
     style="left: {position.x}px; top: {position.y}px;"
     role="group"
