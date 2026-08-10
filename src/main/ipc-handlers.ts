@@ -3597,6 +3597,12 @@ export function registerIpcHandlers(
       validateStringArray(orderedIds, 'Ordered IDs')
     )
   )
+  ipcMain.handle('thread:reorderPinned', (_, projectId: unknown, orderedPinnedIds: unknown) =>
+    threadManager.reorderPinnedThreads(
+      validateEntityId(projectId, 'Project ID'),
+      validateStringArray(orderedPinnedIds, 'Ordered pinned IDs')
+    )
+  )
   ipcMain.handle(
     'thread:reorderScope',
     (_, projectId: unknown, bucketId: unknown, slice: unknown, orderedIds: unknown) =>
