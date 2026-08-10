@@ -20,6 +20,16 @@ import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
+import type {
+  AccountAuthProvider,
+  AccountProfile,
+  AccountProfileState,
+  AccountProfileSyncPayload,
+  AccountSignInStart,
+  AccountUsageBreakdown,
+  AccountUsageSummary,
+  MemoryEntry
+} from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
@@ -77,6 +87,10 @@ export interface RemoteModeOptions {
    * disconnects). Lets the host keep the device awake while a session is live.
    */
   onSessionActiveChange?: (active: boolean) => void
+  /** Supplies local usage and global memory for authenticated profile sync. */
+  loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
+  /** Applies the merged cloud memory snapshot to local global memory. */
+  applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
 }
 
 export const DEFAULT_LAN_PORT = 4455
@@ -200,6 +214,152 @@ function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
   }
 }
 
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function parseUsageBreakdown(value: unknown): AccountUsageBreakdown[] | null {
+  if (!Array.isArray(value)) return null
+  const rows: AccountUsageBreakdown[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const row = item as Record<string, unknown>
+    const messageCount = finiteNumber(row['messageCount'])
+    const costUsd = finiteNumber(row['costUsd'])
+    const tokens = finiteNumber(row['tokens'])
+    if (
+      typeof row['id'] !== 'string' ||
+      messageCount === null ||
+      costUsd === null ||
+      tokens === null
+    ) {
+      return null
+    }
+    rows.push({ id: row['id'], messageCount, costUsd, tokens })
+  }
+  return rows
+}
+
+function parseAccountUsage(value: unknown): AccountUsageSummary | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const messageCount = finiteNumber(record['messageCount'])
+  const costUsd = finiteNumber(record['costUsd'])
+  const tokens = finiteNumber(record['tokens'])
+  const durationMs = finiteNumber(record['durationMs'])
+  const generatedAt = finiteNumber(record['generatedAt'])
+  const harnesses = parseUsageBreakdown(record['harnesses'])
+  const models = parseUsageBreakdown(record['models'])
+  if (
+    messageCount === null ||
+    costUsd === null ||
+    tokens === null ||
+    durationMs === null ||
+    generatedAt === null ||
+    !harnesses ||
+    !models ||
+    !Array.isArray(record['activityDays'])
+  ) {
+    return null
+  }
+  const activityDays = record['activityDays'].flatMap((item) => {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
+    const day = item as Record<string, unknown>
+    const dayCount = finiteNumber(day['messageCount'])
+    return typeof day['date'] === 'string' && dayCount !== null
+      ? [{ date: day['date'], messageCount: dayCount }]
+      : []
+  })
+  return {
+    messageCount,
+    costUsd,
+    tokens,
+    durationMs,
+    topHarnessId: typeof record['topHarnessId'] === 'string' ? record['topHarnessId'] : null,
+    topModelId: typeof record['topModelId'] === 'string' ? record['topModelId'] : null,
+    harnesses,
+    models,
+    activityDays,
+    generatedAt
+  }
+}
+
+function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
+  if (!Array.isArray(value)) return null
+  const entries: MemoryEntry[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const entry = item as Record<string, unknown>
+    const categories: MemoryEntry['category'][] = [
+      'behavioral',
+      'project-rule',
+      'identity',
+      'preference'
+    ]
+    const priorities: MemoryEntry['priority'][] = ['critical', 'high', 'medium', 'low']
+    const sources: MemoryEntry['source'][] = ['manual', 'auto-detected']
+    if (
+      typeof entry['id'] !== 'string' ||
+      typeof entry['label'] !== 'string' ||
+      typeof entry['content'] !== 'string' ||
+      typeof entry['enabled'] !== 'boolean' ||
+      typeof entry['updatedAt'] !== 'number' ||
+      !categories.includes(entry['category'] as MemoryEntry['category']) ||
+      !priorities.includes(entry['priority'] as MemoryEntry['priority']) ||
+      entry['scope'] !== 'global' ||
+      !sources.includes(entry['source'] as MemoryEntry['source']) ||
+      typeof entry['frequency'] !== 'number' ||
+      typeof entry['lastReinforced'] !== 'number'
+    ) {
+      return null
+    }
+    entries.push({
+      id: entry['id'],
+      label: entry['label'],
+      content: entry['content'],
+      enabled: entry['enabled'],
+      updatedAt: entry['updatedAt'],
+      category: entry['category'] as MemoryEntry['category'],
+      priority: entry['priority'] as MemoryEntry['priority'],
+      scope: 'global',
+      source: entry['source'] as MemoryEntry['source'],
+      frequency: entry['frequency'],
+      lastReinforced: entry['lastReinforced']
+    })
+  }
+  return entries
+}
+
+function parseAccountProfile(value: unknown): AccountProfile | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const wrapper = value as Record<string, unknown>
+  const raw = wrapper['profile']
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const profile = raw as Record<string, unknown>
+  const usage = parseAccountUsage(profile['usage'])
+  const globalMemories = parseGlobalMemories(profile['globalMemories'])
+  if (
+    typeof profile['id'] !== 'string' ||
+    typeof profile['email'] !== 'string' ||
+    typeof profile['displayName'] !== 'string' ||
+    (profile['image'] !== null && typeof profile['image'] !== 'string') ||
+    typeof profile['updatedAt'] !== 'number' ||
+    !usage ||
+    !globalMemories
+  ) {
+    return null
+  }
+  return {
+    id: profile['id'],
+    email: profile['email'],
+    displayName: profile['displayName'],
+    image: profile['image'],
+    usage,
+    globalMemories,
+    updatedAt: profile['updatedAt']
+  }
+}
+
 export class RemoteModeController {
   private readonly keepAlive: KeepAliveSession = createKeepAliveSession()
   private gateway: RemoteGateway | null = null
@@ -214,11 +374,14 @@ export class RemoteModeController {
   private readonly storage: import('../storage-engine').StorageEngine | null
   private readonly credentials: DeviceCredentialService | null
   private readonly onSessionActiveChange?: (active: boolean) => void
+  private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
+  private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
   private readonly vault: SecretVault | null
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
+  private cloudProfileSyncTimer: ReturnType<typeof setTimeout> | null = null
   private cloudAbortController: AbortController | null = null
   private cloudPollGeneration = 0
   private cloudPollRunningGeneration: number | null = null
@@ -239,6 +402,8 @@ export class RemoteModeController {
     this.credentials = options.credentials ?? null
     this.vault = this.storage ? new SecretVault(this.storage) : null
     this.onSessionActiveChange = options.onSessionActiveChange
+    this.loadAccountProfileData = options.loadAccountProfileData
+    this.applyGlobalMemories = options.applyGlobalMemories
     this.cloudStatus = {
       configured: this.cloudApiOrigin !== null,
       state: 'disabled',
@@ -747,6 +912,116 @@ export class RemoteModeController {
     ipcMain.handle('remote:resetCloudEnrollment', (): Promise<RemoteModeStatus> => {
       return this.resetCloudEnrollment()
     })
+    ipcMain.handle('account:getProfile', (): Promise<AccountProfileState> => this.accountProfile())
+    ipcMain.handle(
+      'account:beginSignIn',
+      (_event: IpcMainInvokeEvent, provider: AccountAuthProvider): Promise<AccountSignInStart> =>
+        this.beginAccountSignIn(provider)
+    )
+    ipcMain.handle('account:syncProfile', (): Promise<AccountProfileState> =>
+      this.syncAccountProfile()
+    )
+  }
+
+  private async accountRequest(init?: RequestInit): Promise<Response | null> {
+    const config =
+      this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
+    if (!config || !this.vault) return null
+    const token = await this.vault.resolve(config.tokenRef)
+    return fetchWithDeadline(
+      new URL('/v1/profile', config.apiOrigin),
+      {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+          ...init?.headers
+        }
+      },
+      CLOUD_REQUEST_TIMEOUT_MS,
+      this.cloudAbortController?.signal
+    )
+  }
+
+  private async loadProfileImage(profile: AccountProfile): Promise<AccountProfile> {
+    if (!profile.image || profile.image.startsWith('data:')) return profile
+    try {
+      const url = new URL(profile.image)
+      if (url.protocol !== 'https:') return { ...profile, image: null }
+      const response = await fetchWithDeadline(url, {}, 5_000)
+      const contentType = response.headers.get('content-type') ?? ''
+      const contentLength = Number(response.headers.get('content-length') ?? 0)
+      const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+      if (!response.ok || !allowedTypes.has(contentType) || contentLength > 2 * 1_024 * 1_024) {
+        return { ...profile, image: null }
+      }
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.byteLength > 2 * 1_024 * 1_024) return { ...profile, image: null }
+      return {
+        ...profile,
+        image: `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`
+      }
+    } catch {
+      return { ...profile, image: null }
+    }
+  }
+
+  async accountProfile(): Promise<AccountProfileState> {
+    const response = await this.accountRequest()
+    if (!response || response.status === 401) {
+      return {
+        status: this.cloudStatus.state === 'enrollment-pending' ? 'pending' : 'signed-out',
+        profile: null
+      }
+    }
+    if (!response.ok) throw new Error('Account profile is unavailable')
+    const profile = parseAccountProfile(await response.json())
+    if (!profile) throw new Error('Account profile response is invalid')
+    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+  }
+
+  async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
+    if (provider !== 'google' && provider !== 'apple') throw new Error('Invalid account provider')
+    const status = await this.beginCloudEnrollment()
+    const code = status.cloud.enrollmentCode
+    const expiresAt = status.cloud.enrollmentExpiresAt
+    const origin = status.cloud.apiOrigin
+    if (!code || !expiresAt || !origin) throw new Error('Account enrollment could not be started')
+    const url = new URL('/', origin)
+    url.hash = new URLSearchParams({ enroll: code, provider }).toString()
+    return { url: url.toString(), expiresAt }
+  }
+
+  async syncAccountProfile(): Promise<AccountProfileState> {
+    if (!this.loadAccountProfileData) return this.accountProfile()
+    const local = await this.loadAccountProfileData()
+    const response = await this.accountRequest({
+      method: 'PUT',
+      body: JSON.stringify(local)
+    })
+    if (!response || response.status === 401) return { status: 'signed-out', profile: null }
+    if (!response.ok) throw new Error('Account profile sync failed')
+    const profile = parseAccountProfile(await response.json())
+    if (!profile) throw new Error('Account profile response is invalid')
+    await this.applyGlobalMemories?.(profile.globalMemories)
+    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+  }
+
+  private scheduleAccountProfileSync(delayMs: number): void {
+    if (!this.loadAccountProfileData) return
+    if (this.cloudProfileSyncTimer) clearTimeout(this.cloudProfileSyncTimer)
+    const generation = this.cloudPollGeneration
+    this.cloudProfileSyncTimer = setTimeout(() => {
+      this.cloudProfileSyncTimer = null
+      if (generation !== this.cloudPollGeneration) return
+      void this.syncAccountProfile()
+        .catch((error) => Logger.dev('Account profile background sync unavailable:', error))
+        .finally(() => {
+          if (generation === this.cloudPollGeneration) {
+            this.scheduleAccountProfileSync(5 * 60 * 1_000)
+          }
+        })
+    }, delayMs)
   }
 
   async beginCloudEnrollment(): Promise<RemoteModeStatus> {
@@ -1024,6 +1299,7 @@ export class RemoteModeController {
       onAuthenticated: () => {
         this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
         this.installEventForwarder()
+        this.scheduleAccountProfileSync(0)
         this.broadcast()
       },
       onDisconnected: (reason) => {
@@ -1049,6 +1325,8 @@ export class RemoteModeController {
     this.cloudPollRunningGeneration = null
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudPollTimer = null
+    if (this.cloudProfileSyncTimer) clearTimeout(this.cloudProfileSyncTimer)
+    this.cloudProfileSyncTimer = null
     // Cancel any in-flight enrollment/status request and abort the relay
     // connection so nothing survives a remote-mode toggle or app shutdown.
     this.cloudAbortController?.abort()

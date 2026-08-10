@@ -57,6 +57,21 @@ client-secret JWT at runtime, with a 180-day expiry, whenever an Apple authoriza
 
 ## Coolify deployment
 
+Required production variables:
+
+- `REMOTE_PUBLIC_HOST=mobile.codeinoven.com` — Compose uses this to derive `BETTER_AUTH_URL` and
+  `REMOTE_ALLOWED_ORIGINS`.
+- `BETTER_AUTH_SECRET` — generate with `openssl rand -base64 32`.
+- `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` — Google Cloud OAuth web client.
+- `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` — Apple Service
+  ID and Sign in with Apple key credentials.
+- `REMOTE_TRUST_PROXY=true` — trust Caddy's validated client-IP forwarding inside Compose.
+
+The service container also receives `BETTER_AUTH_URL=https://mobile.codeinoven.com`,
+`REMOTE_ALLOWED_ORIGINS=https://mobile.codeinoven.com`, and
+`REMOTE_DATABASE_PATH=/var/lib/codeinoven/remote-control.sqlite` from the Compose file. Do not put
+OAuth client secrets, the Better Auth secret, or the Apple private key in the PWA container.
+
 - Deploy `compose.example.yml` as a Docker Compose resource.
 - Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
   the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and

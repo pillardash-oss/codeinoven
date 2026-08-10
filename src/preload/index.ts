@@ -17,6 +17,9 @@ import type {
 export type { InvokeArgs, InvokeChannel, InvokeResult } from '../lib/ipc-contract'
 
 const INVOKE_CHANNELS = [
+  'account:getProfile',
+  'account:beginSignIn',
+  'account:syncProfile',
   'brainstorm:ensureWorkflow',
   'brainstorm:getWorkflow',
   'brainstorm:chooseEntry',

@@ -3,6 +3,7 @@
 import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
+  AccountProfileRecord,
   DesktopRecord,
   EnrollmentRecord,
   MobileDeviceRecord,
@@ -81,8 +82,16 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   display_name TEXT NOT NULL,
+  image_url TEXT,
   password_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS account_profiles (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  usage_json TEXT NOT NULL DEFAULT '{}',
+  global_memories_json TEXT NOT NULL DEFAULT '[]',
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -164,7 +173,15 @@ export class RemoteControlDatabase {
       PRAGMA journal_size_limit = 33554432;
     `)
     this.db.transaction(() => this.db.exec(SCHEMA))()
+    this.ensureUserImageColumn()
     this.db.exec('PRAGMA optimize = 0x10002;')
+  }
+
+  private ensureUserImageColumn(): void {
+    const columns = this.db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'image_url')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN image_url TEXT')
+    }
   }
 
   close(): void {
@@ -178,17 +195,45 @@ export class RemoteControlDatabase {
     )
   }
 
-  upsertOAuthUser(input: { id: string; email: string; displayName: string }): void {
+  upsertOAuthUser(input: {
+    id: string
+    email: string
+    displayName: string
+    image: string | null
+  }): void {
     const now = Date.now()
     this.db
       .prepare(
-        `INSERT INTO users(id, email, display_name, password_hash, created_at)
-         VALUES(?, ?, ?, 'oauth:social', ?)
+        `INSERT INTO users(id, email, display_name, image_url, password_hash, created_at)
+         VALUES(?, ?, ?, ?, 'oauth:social', ?)
          ON CONFLICT(id) DO UPDATE SET
            email = excluded.email,
-           display_name = excluded.display_name`
+           display_name = excluded.display_name,
+           image_url = excluded.image_url`
       )
-      .run(input.id, input.email, input.displayName, now)
+      .run(input.id, input.email, input.displayName, input.image, now)
+  }
+
+  accountProfile(userId: string): AccountProfileRecord | null {
+    return (
+      (this.db.prepare('SELECT * FROM account_profiles WHERE user_id = ?').get(userId) as
+        AccountProfileRecord | undefined) ?? null
+    )
+  }
+
+  saveAccountProfile(userId: string, usageJson: string, globalMemoriesJson: string): number {
+    const updatedAt = Date.now()
+    this.db
+      .prepare(
+        `INSERT INTO account_profiles(user_id, usage_json, global_memories_json, updated_at)
+         VALUES(?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           usage_json = excluded.usage_json,
+           global_memories_json = excluded.global_memories_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(userId, usageJson, globalMemoriesJson, updatedAt)
+    return updatedAt
   }
 
   rememberOAuthSession(session: AuthenticatedSession): void {

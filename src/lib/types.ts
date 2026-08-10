@@ -1411,6 +1411,62 @@ export interface HarnessModelUsage {
   lastUsedAt: number
 }
 
+/** One aggregate row shown on the account profile. */
+export interface AccountUsageBreakdown {
+  id: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+}
+
+/** One calendar day containing completed assistant work. */
+export interface AccountActivityDay {
+  date: string
+  messageCount: number
+}
+
+/** App-wide local usage rolled up for cloud persistence and profile display. */
+export interface AccountUsageSummary {
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  topHarnessId: string | null
+  topModelId: string | null
+  harnesses: AccountUsageBreakdown[]
+  models: AccountUsageBreakdown[]
+  activityDays: AccountActivityDay[]
+  generatedAt: number
+}
+
+/** Account identity plus the cloud-backed workstation profile data. */
+export interface AccountProfile {
+  id: string
+  email: string
+  displayName: string
+  image: string | null
+  usage: AccountUsageSummary
+  globalMemories: MemoryEntry[]
+  updatedAt: number
+}
+
+export type AccountProfileState =
+  | { status: 'signed-out'; profile: null }
+  | { status: 'pending'; profile: null }
+  | { status: 'signed-in'; profile: AccountProfile }
+
+export type AccountAuthProvider = 'google' | 'apple'
+
+export interface AccountSignInStart {
+  url: string
+  expiresAt: number
+}
+
+export interface AccountProfileSyncPayload {
+  usage: AccountUsageSummary
+  globalMemories: MemoryEntry[]
+}
+
 /** A selectable option within an agent question. */
 export interface AgentQuestionOption {
   label: string

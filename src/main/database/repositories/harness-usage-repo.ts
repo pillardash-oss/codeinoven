@@ -1,5 +1,8 @@
 import type { Database } from '../database'
 import type {
+  AccountActivityDay,
+  AccountUsageBreakdown,
+  AccountUsageSummary,
   AgentMessage,
   AgentTokenUsage,
   HarnessModelUsage,
@@ -41,6 +44,14 @@ interface HarnessModelUsageRow {
   duration_ms: number
   first_used_at: number
   last_used_at: number
+}
+
+interface UsageAggregateRow {
+  id: string
+  message_count: number
+  cost_usd: number
+  tokens_total: number
+  duration_ms: number
 }
 
 function tokensFromRow(
@@ -164,6 +175,62 @@ export class HarnessUsageRepo {
       'SELECT * FROM harness_usage ORDER BY last_used_at DESC'
     )
     return rows.map(rowToHarnessUsage)
+  }
+
+  /** App-wide totals and ranked breakdowns for the signed-in profile. */
+  profileSummary(): AccountUsageSummary {
+    const harnessRows = this.db.all<UsageAggregateRow>(
+      `SELECT harness_id AS id,
+              SUM(message_count) AS message_count,
+              SUM(cost_usd) AS cost_usd,
+              SUM(tokens_total) AS tokens_total,
+              SUM(duration_ms) AS duration_ms
+       FROM harness_usage
+       GROUP BY harness_id
+       ORDER BY message_count DESC, MAX(last_used_at) DESC`
+    )
+    const modelRows = this.db.all<UsageAggregateRow>(
+      `SELECT model_id AS id,
+              SUM(message_count) AS message_count,
+              SUM(cost_usd) AS cost_usd,
+              SUM(tokens_total) AS tokens_total,
+              SUM(duration_ms) AS duration_ms
+       FROM harness_usage_models
+       GROUP BY model_id
+       ORDER BY message_count DESC, MAX(last_used_at) DESC`
+    )
+    const activityDays = this.db.all<{ date: string; message_count: number }>(
+      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+              COUNT(*) AS message_count
+       FROM agent_messages
+       WHERE role = 'assistant' AND harness_id IS NOT NULL
+       GROUP BY date
+       ORDER BY date ASC`
+    )
+    const toBreakdown = (row: UsageAggregateRow): AccountUsageBreakdown => ({
+      id: row.id,
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total
+    })
+    const harnesses = harnessRows.map(toBreakdown)
+    const models = modelRows.map(toBreakdown)
+    const activity: AccountActivityDay[] = activityDays.map((row) => ({
+      date: row.date,
+      messageCount: row.message_count
+    }))
+    return {
+      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      costUsd: harnessRows.reduce((sum, row) => sum + row.cost_usd, 0),
+      tokens: harnessRows.reduce((sum, row) => sum + row.tokens_total, 0),
+      durationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
+      topHarnessId: harnesses[0]?.id ?? null,
+      topModelId: models[0]?.id ?? null,
+      harnesses,
+      models,
+      activityDays: activity,
+      generatedAt: Date.now()
+    }
   }
 
   /**

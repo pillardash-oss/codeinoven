@@ -514,6 +514,8 @@ async function bootPostPaintServices(): Promise<void> {
       { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
       { RemoteRpcDispatcher },
       { DeviceCredentialService },
+      { HarnessUsageRepo },
+      { MemoryService },
       { NotificationService },
       { RestartRecoveryService }
     ] = await Promise.all([
@@ -524,6 +526,8 @@ async function bootPostPaintServices(): Promise<void> {
       import('./remote/remote-mode'),
       import('./remote/remote-rpc'),
       import('./remote/device-credential-service'),
+      import('./database/repositories/harness-usage-repo'),
+      import('./memory-service'),
       import('./notification-service'),
       import('./restart-recovery-service')
     ])
@@ -539,6 +543,8 @@ async function bootPostPaintServices(): Promise<void> {
     // Bound the security audit log and tombstone tables; unref'd so it never
     // holds the app open.
     remoteCredentials.startPeriodicMaintenance()
+    const accountUsage = new HarnessUsageRepo(database)
+    const accountMemory = new MemoryService(storage)
     remoteMode = new RemoteModeController({
       lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
       localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
@@ -553,6 +559,15 @@ async function bootPostPaintServices(): Promise<void> {
       }),
       storage,
       credentials: remoteCredentials,
+      loadAccountProfileData: async () => ({
+        usage: accountUsage.profileSummary(),
+        globalMemories: (await accountMemory.getEntries()).filter(
+          (entry) => entry.scope === 'global'
+        )
+      }),
+      applyGlobalMemories: async (entries) => {
+        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
+      },
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
 

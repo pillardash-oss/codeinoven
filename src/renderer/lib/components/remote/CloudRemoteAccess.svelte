@@ -72,6 +72,13 @@
     return normalizeEnrollmentCode(readPersistedEnrollmentCode())
   }
 
+  function initialSignInProvider(): CloudAuthProvider | null {
+    if (typeof window === 'undefined') return null
+    const provider = new URLSearchParams(window.location.hash.slice(1)).get('provider')
+    return provider === 'google' || provider === 'apple' ? provider : null
+  }
+
+  const signInProviderFromLink = initialSignInProvider()
   const enrollmentCodeFromLink = initialEnrollmentCode()
 
   let user = $state<CloudUser | null>(null)
@@ -83,6 +90,7 @@
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
   let revokeCandidate = $state<CloudDesktop | null>(null)
+  let automaticSignInStarted = false
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
@@ -109,6 +117,12 @@
       desktops = []
     } finally {
       loading = false
+    }
+    if (!user && signInProviderFromLink && !automaticSignInStarted) {
+      automaticSignInStarted = true
+      void beginAccountSignIn(signInProviderFromLink)
+    } else if (user && claimFromLink) {
+      void claimDesktopCode()
     }
   }
 
@@ -139,8 +153,7 @@
     }
   }
 
-  async function claimDesktop(event: SubmitEvent): Promise<void> {
-    event.preventDefault()
+  async function claimDesktopCode(): Promise<void> {
     if (busy || claimCode.trim().length === 0) return
     busy = true
     errorMessage = ''
@@ -155,6 +168,11 @@
     } finally {
       busy = false
     }
+  }
+
+  function claimDesktop(event: SubmitEvent): void {
+    event.preventDefault()
+    void claimDesktopCode()
   }
 
   async function connectDesktop(desktopId: string): Promise<void> {
