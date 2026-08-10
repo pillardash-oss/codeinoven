@@ -163,24 +163,40 @@
   }
 
   function revealThreadInSidebar(threadId: string): void {
-    const scroller = sidebarScroller
-    const row = findThreadRow(threadId)
-    if (!row) return
-    if (!scroller) {
-      row.scrollIntoView({ block: 'nearest' })
-      return
+    // In Projects mode the target thread may sit in a collapsed folder and/or
+    // past the per-folder "show more" cutoff. Expand its folder and raise the
+    // row budget so the row actually renders, then scroll once the re-layout
+    // has settled. In Threads mode the flat list always renders every row, so
+    // only the scroll step applies.
+    const active = selectedThread
+    if (active && active.projectId !== INBOX_PROJECT_ID && mode === 'projects') {
+      expandedFolders.add(active.projectId)
+      const folderThreads = threadsByProject.get(active.projectId) ?? []
+      const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
+      if (threadIndex >= 0) {
+        const needed = threadIndex + 1
+        const current = threadShowCount.get(active.projectId) ?? THREADS_PER_PAGE
+        if (needed > current) threadShowCount.set(active.projectId, needed)
+      }
     }
-    // Scroll the sidebar scroller directly so the row is fully inside its
-    // visible area. scrollIntoView can be defeated by intervening containers
-    // (folders, padding wrappers), so compute the offset ourselves and only
-    // move when the row is actually clipped.
-    const rowRect = row.getBoundingClientRect()
-    const scrollerRect = scroller.getBoundingClientRect()
-    if (rowRect.top < scrollerRect.top) {
-      scroller.scrollTop -= scrollerRect.top - rowRect.top
-    } else if (rowRect.bottom > scrollerRect.bottom) {
-      scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
-    }
+    // Defer one frame so the folder expansion / re-sort has produced final
+    // layout, then bring the row fully into view inside the sidebar scroller.
+    requestAnimationFrame(() => {
+      const scroller = sidebarScroller
+      const row = findThreadRow(threadId)
+      if (!row) return
+      if (!scroller) {
+        row.scrollIntoView({ block: 'nearest' })
+        return
+      }
+      const rowRect = row.getBoundingClientRect()
+      const scrollerRect = scroller.getBoundingClientRect()
+      if (rowRect.top < scrollerRect.top) {
+        scroller.scrollTop -= scrollerRect.top - rowRect.top
+      } else if (rowRect.bottom > scrollerRect.bottom) {
+        scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
+      }
+    })
   }
 
   function handleSidebarUserScroll(): void {
@@ -1577,6 +1593,10 @@
     upsertThreadInList(updated)
     workspaceState.updateThread(updated)
     scopeState.updateThread(updated)
+    // Every thread-open path funnels through here (clicking a row, Ctrl+Tab,
+    // search results, notifications), so this is the reliable hook to scroll
+    // the active thread into view in the left sidebar.
+    revealThreadInSidebar(thread.id)
   }
 
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
