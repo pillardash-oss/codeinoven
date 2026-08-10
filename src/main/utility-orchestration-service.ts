@@ -99,7 +99,7 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<string, { server: Server; state: TurnState }>()
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
-  private cuaActivityListener: ((pid: number) => void) | null = null
+  private cuaActivityListener: ((pid: number, threadId: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
@@ -151,10 +151,10 @@ export class UtilityOrchestrationService {
 
   /**
    * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid — used by the PiP monitor to latch onto the app an agent is
-   * driving.
+   * a target pid — used by the PiP monitor to latch onto the app a thread's
+   * agent is driving.
    */
-  onCuaActivity(listener: (pid: number) => void): void {
+  onCuaActivity(listener: (pid: number, threadId: string) => void): void {
     this.cuaActivityListener = listener
   }
 
@@ -371,7 +371,7 @@ export class UtilityOrchestrationService {
       result = await client.callTool(operation, operationInput)
       if (this.isComputerUseUtility(resolved) && Number.isInteger(operationInput['pid'])) {
         const pid = Number(operationInput['pid'])
-        if (pid > 0) this.cuaActivityListener?.(pid)
+        if (pid > 0) this.cuaActivityListener?.(pid, state.request.threadId)
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(resolved.utility, operationInput)

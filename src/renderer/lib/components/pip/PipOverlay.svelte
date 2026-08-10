@@ -8,6 +8,8 @@
   let dragging = $state(false)
   let dragStart = $state({ x: 0, y: 0 })
   let dragOrigin = $state({ x: 0, y: 0 })
+  let windowSize = $state({ width: 0, height: 0 })
+  let overlayElement = $state<HTMLDivElement | undefined>()
 
   const visible = $derived(pipState.active && pipState.frameDataUrl !== null)
 
@@ -16,6 +18,10 @@
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
     dragOrigin = { ...position }
+    if (overlayElement) {
+      const rect = overlayElement.getBoundingClientRect()
+      windowSize = { width: rect.width, height: rect.height }
+    }
     const target = event.currentTarget
     if (target instanceof HTMLElement) target.setPointerCapture(event.pointerId)
     event.preventDefault()
@@ -25,11 +31,11 @@
     if (!dragging) return
     const dx = event.clientX - dragStart.x
     const dy = event.clientY - dragStart.y
-    const maxX = window.innerWidth - 340
-    const maxY = window.innerHeight - 240
+    const maxX = Math.max(0, window.innerWidth - windowSize.width)
+    const maxY = Math.max(0, window.innerHeight - windowSize.height)
     position = {
-      x: Math.min(Math.max(8, dragOrigin.x + dx), maxX),
-      y: Math.min(Math.max(8, dragOrigin.y + dy), maxY)
+      x: Math.min(Math.max(0, dragOrigin.x + dx), maxX),
+      y: Math.min(Math.max(0, dragOrigin.y + dy), maxY)
     }
   }
 
@@ -50,6 +56,7 @@
 
 {#if visible}
   <div
+    bind:this={overlayElement}
     class="fixed z-50 select-none rounded-xl border bg-surface shadow-2xl"
     style="left: {position.x}px; top: {position.y}px;"
     role="group"

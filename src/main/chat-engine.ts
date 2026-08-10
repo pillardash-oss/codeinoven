@@ -1062,6 +1062,7 @@ export class ChatEngine {
       projectPath: string
       runtime: PreparedUtilityRuntime
       gateway: UtilityTurnGateway
+      threadId: string
     }
   >()
 
@@ -1100,8 +1101,8 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     if (this.computerUsePip) {
-      this.utilityOrchestration.onCuaActivity((pid) => {
-        void this.computerUsePip?.track(pid)
+      this.utilityOrchestration.onCuaActivity((pid, threadId) => {
+        void this.computerUsePip?.track(pid, threadId)
       })
     }
     this.specEngine = new SpecEngine(storage, database, {
@@ -1875,7 +1876,8 @@ export class ChatEngine {
         driver,
         projectPath,
         runtime,
-        gateway
+        gateway,
+        threadId
       })
       const skillInstructions = resolvedUtilities.flatMap(({ utility }) =>
         utility.kind === 'skill'
@@ -1901,6 +1903,7 @@ export class ChatEngine {
     const turn = this.utilityTurns.get(sessionId)
     if (!turn) return
     this.utilityTurns.delete(sessionId)
+    this.computerUsePip?.notifyTurnEnded(turn.threadId)
     try {
       await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
     } catch (error) {
