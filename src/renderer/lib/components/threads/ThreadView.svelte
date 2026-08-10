@@ -248,12 +248,18 @@
    *  turn carries no visible reasoning/tool/sub-agent parts), the bottom
    *  working placeholder must keep showing so the user never stares at a blank
    *  conversation. Uses the raw busy flag — delegated work is covered by the
-   *  placeholder's `delegatedWorkBusy` term instead of a forward reference. */
-  let latestTurnRenderableParts = $derived(
-    latestTurnInfo.startIndex === -1
-      ? []
-      : getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
-  )
+   *  placeholder's `delegatedWorkBusy` term instead of a forward reference.
+   *
+   *  An unanswered follow-up/steer is the key empty window: the thread is busy
+   *  working on that trailing user message, but `lastTurnStartIndex` still
+   *  points at the previous (already rendered) assistant turn — whose parts
+   *  must not be mistaken for the current work. Count nothing in that window
+   *  so the bottom working placeholder keeps showing instead of a blank tail. */
+  let latestTurnRenderableParts = $derived.by(() => {
+    if (busy && messages[messages.length - 1]?.role === 'user') return []
+    if (latestTurnInfo.startIndex === -1) return []
+    return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
+  })
   // A persisted in-flight status means the turn is genuinely still running
   // (main finalizes planning/executing to completed/awaiting/failed/interrupted
   // the moment the session idles, and restart recovery marks leftovers
