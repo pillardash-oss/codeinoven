@@ -232,6 +232,7 @@ const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_MAX_ATTEMPTS = 2
+const CURRENT_SPEC_GENERATION_VERSION = 1
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -877,7 +878,7 @@ interface PendingAutoTitle {
 
 interface PendingInitialSpecGeneration {
   schemaVersion: 1
-  generationVersion: 1
+  generationVersion: number
   projectId: string
   threadId: string
   sessionId: string
@@ -9081,7 +9082,7 @@ export class ChatEngine {
       )
       pending = {
         schemaVersion: 1,
-        generationVersion: 1,
+        generationVersion: CURRENT_SPEC_GENERATION_VERSION,
         projectId,
         threadId,
         sessionId: thread.sessionId ?? '',
@@ -9151,7 +9152,9 @@ export class ChatEngine {
   ): Promise<PendingInitialSpecGeneration | null> {
     return this.storage
       .read<PendingInitialSpecGeneration>(this.initialSpecPath(projectId, threadId))
-      .then((persisted) => (persisted ? { ...persisted, generationVersion: 1 } : null))
+      .then((persisted) =>
+        persisted ? { ...persisted, generationVersion: CURRENT_SPEC_GENERATION_VERSION } : null
+      )
   }
 
   private async queuePendingInitialSpec(input: {
@@ -9169,7 +9172,7 @@ export class ChatEngine {
       existing
         ? {
             ...existing,
-            generationVersion: 1,
+            generationVersion: CURRENT_SPEC_GENERATION_VERSION,
             sessionId: input.sessionId,
             source: input.source,
             settings: structuredClone(input.settings),
@@ -9185,7 +9188,7 @@ export class ChatEngine {
           }
         : {
             schemaVersion: 1,
-            generationVersion: 1,
+            generationVersion: CURRENT_SPEC_GENERATION_VERSION,
             projectId: input.projectId,
             threadId: input.threadId,
             sessionId: input.sessionId,
