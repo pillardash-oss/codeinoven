@@ -28,7 +28,8 @@ import type {
   PullRequestCompare,
   PullRequestFile,
   PullRequestPage,
-  PullRequestReference
+  PullRequestReference,
+  PullRequestReviewResult
 } from '$shared/types'
 
 /** One in-flight git operation, tracked per project for busy/disabled UI. */
@@ -116,6 +117,8 @@ export class GitState {
   stashes: GitStashEntry[] = $state([])
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
+  reviewPermission: Extract<PullRequestReviewResult, { status: 'permission_required' }> | null =
+    $state(null)
 
   /**
    * The project whose data currently lives in the shared fields above. The
@@ -1009,8 +1012,13 @@ export class GitState {
   ): Promise<boolean> {
     this.markBusy('pr-review', true)
     this.error = null
+    this.reviewPermission = null
     try {
-      await invoke('pr:review', projectId, owner, repo, pullNumber, event, body)
+      const result = await invoke('pr:review', projectId, owner, repo, pullNumber, event, body)
+      if (result.status === 'permission_required') {
+        this.reviewPermission = result
+        return false
+      }
       return true
     } catch (reason) {
       this.error = errorMessage(reason, 'The review could not be submitted')

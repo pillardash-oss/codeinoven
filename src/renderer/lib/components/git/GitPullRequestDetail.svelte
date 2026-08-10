@@ -76,6 +76,7 @@
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
   const reviewing = $derived(gitState.isBusy('pr-review'))
+  const reviewPermission = $derived(gitState.reviewPermission)
   const merging = $derived(gitState.isBusy('pr-merge'))
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const prState = $derived(detail?.state ?? summary.state)
@@ -726,6 +727,24 @@
         Request changes
       </button>
     </div>
+
+    {#if reviewPermission}
+      <div
+        class="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
+      >
+        <TriangleAlert size={13} class="shrink-0 text-warning" />
+        <p class="min-w-0 flex-1 text-[10px] leading-relaxed text-muted">
+          {reviewPermission.message}
+        </p>
+        <button
+          type="button"
+          class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
+          onclick={() => void openInBrowser(reviewPermission.settingsUrl)}
+        >
+          Update GitHub access
+        </button>
+      </div>
+    {/if}
 
     {#if open && !hasBody}
       <p class="px-3 pb-2 text-[9px] leading-relaxed text-dimmed">
