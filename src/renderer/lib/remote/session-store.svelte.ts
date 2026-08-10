@@ -1,10 +1,9 @@
 /**
  * Reactive remote-session store.
  *
- * Wraps the pure `session-state.ts` reducer in Svelte 5 reactivity and wires
- * the shared connection modules (config, discovery, transport, relay) into an
- * end-to-end connect flow: LAN first, relay fallback. The reducer itself is
- * unit-tested via `session-state` (see `session-store.test.ts`).
+ * Wraps the pure `session-state.ts` reducer in Svelte 5 reactivity and owns one
+ * account-backed connection flow: try the account-provided LAN endpoint first,
+ * then use the account relay and periodically upgrade back to LAN.
  */
 
 import {
@@ -14,12 +13,10 @@ import {
   type SessionAction,
   type SessionSnapshot
 } from './session-state'
-import { loadRemoteConfig } from './config'
-import { discoverPeers, type DiscoveredPeer } from './discovery'
 import { createLanTransport, type LanTransport } from './transport'
-import { createRelayClient, type RelayClient } from './relay'
 import { createAccountRelayClient, type AccountRelayClient } from './account-relay'
 import { remoteLog } from './logger'
+import type { PeerRef } from './routes'
 import {
   handshakeTranscript,
   loadOrCreateDeviceKeyMaterial,
@@ -31,23 +28,12 @@ import {
 import { SvelteSet } from 'svelte/reactivity'
 
 const LAN_HANDSHAKE_TIMEOUT_MS = 3_000
-const RELAY_HANDSHAKE_TIMEOUT_MS = 3_000
 
 /** An explicit endpoint to connect to (the LAN gateway, LAN-first). */
 export interface RemoteConnectionTarget {
   host: string
   port: number
   scheme: 'ws' | 'wss'
-}
-
-/** Options controlling which transport authenticates the phone session. */
-export interface RemoteConnectOptions {
-  /**
-   * True for the phone PWA: the LAN handshake proves possession of the
-   * device's signing key (and presents the pairing bootstrap on first use).
-   * The desktop renderer's own loopback session keeps the legacy secret path.
-   */
-  deviceCredentials?: boolean
 }
 
 interface AccountDesktopRoute {
@@ -63,7 +49,6 @@ export class RemoteSessionStore {
 
   private secret = ''
   private lanTransport: LanTransport | null = null
-  private relayClient: RelayClient | null = null
   private accountRelayClient: AccountRelayClient | null = null
   private accountRoute: AccountDesktopRoute | null = null
   private lanUpgradeTimer: number | null = null
@@ -182,10 +167,6 @@ export class RemoteSessionStore {
     const data = JSON.stringify(payload)
     if (this.accountRelayClient) {
       await this.accountRelayClient.send(data)
-      return
-    }
-    if (this.relayClient) {
-      await this.relayClient.send(data)
       return
     }
     if (this.lanTransport) {
@@ -313,12 +294,12 @@ export class RemoteSessionStore {
     })
   }
 
-  /** Prefer an authenticated direct LAN route, then use the account relay. */
+  /** Prefer the authenticated account LAN route, then use the account relay. */
   async connectAccountDesktop(input: AccountDesktopRoute): Promise<void> {
     this.accountRoute = input
     if (input.lanTarget) {
       try {
-        await this.connect(input.controlSecret, input.lanTarget, { deviceCredentials: true })
+        await this.connectLan(input.controlSecret, input.lanTarget)
         this.accountRoute = input
         if (this.snapshot.route.kind === 'LAN_CONNECTED') return
       } catch (error) {
@@ -334,120 +315,40 @@ export class RemoteSessionStore {
     }
   }
 
-  /** Connect through the shared modules: LAN first, relay fallback. */
-  async connect(
-    secret: string,
-    target?: RemoteConnectionTarget,
-    options: RemoteConnectOptions = {}
-  ): Promise<void> {
+  /** Try the exact LAN endpoint supplied by the account connection response. */
+  private async connectLan(secret: string, target: RemoteConnectionTarget): Promise<void> {
     this.secret = secret
     this.closeChannels()
-    const config = loadRemoteConfig()
-    const keyMaterial = options.deviceCredentials ? await this.ensureKeyMaterial() : null
-    const device = keyMaterial
-      ? {
-          deviceId: keyMaterial.deviceId,
-          deviceName: keyMaterial.deviceName,
-          authVersion: keyMaterial.authVersion,
-          signingKey: keyMaterial.signingKey,
-          signingPublicJwk: keyMaterial.signingPublicJwk,
-          agreementPublicJwk: keyMaterial.agreementPublicJwk
-        }
-      : undefined
-    this.dispatch({ type: 'lanProbeStart' })
-
-    const port = target?.port ?? config.lan.localPort
-    const scheme = target?.scheme ?? 'ws'
-    const manualHosts = target && target.host.length > 0 ? [target.host] : config.lan.hosts
-
-    // Account discovery already supplies one exact LAN endpoint. Do not probe
-    // it with device credentials: first-use authentication consumes the
-    // one-time bootstrap, so a successful probe would enroll the phone and
-    // then immediately discard the only authenticated socket. The kept session
-    // below is both the reachability check and the single enrollment attempt.
-    const peers: DiscoveredPeer[] =
-      target && keyMaterial
-        ? [{ host: target.host, port, source: 'manual' }]
-        : await discoverPeers({
-            port,
-            manualHosts,
-            useMdns: config.lan.useMdns,
-            timeoutMs: 0,
-            reachable: async (peer) => {
-              const probe = createLanTransport({
-                peer,
-                authSecret: secret,
-                scheme,
-                handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
-                device,
-                pairingBootstrap: null,
-                onEvent: () => undefined
-              })
-              const outcome = await probe.connect()
-              probe.close()
-              return outcome === 'open'
-            }
-          })
-
-    const peer = peers[0]
-    if (peer) {
-      const accepted = await this.openLanSession(
-        peer,
-        secret,
-        scheme,
-        device,
-        keyMaterial ? secret : null
-      )
-      if (accepted) {
-        remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
-        this.dispatch({ type: 'lanConnected', peer: { host: peer.host, port: peer.port } })
-        this.dispatch({ type: 'peerReachableChanged', reachable: true })
-        return
-      }
+    const keyMaterial = await this.ensureKeyMaterial()
+    const device = {
+      deviceId: keyMaterial.deviceId,
+      deviceName: keyMaterial.deviceName,
+      authVersion: keyMaterial.authVersion,
+      signingKey: keyMaterial.signingKey,
+      signingPublicJwk: keyMaterial.signingPublicJwk,
+      agreementPublicJwk: keyMaterial.agreementPublicJwk
     }
-
-    if (!config.relay.enabled) {
-      this.dispatch({ type: 'disconnected', reason: 'no-lan-peer' })
+    this.dispatch({ type: 'lanProbeStart' })
+    const peer: PeerRef = { host: target.host, port: target.port }
+    const accepted = await this.openLanSession(
+      peer,
+      secret,
+      target.scheme,
+      device,
+      keyMaterial.deviceId ? null : secret
+    )
+    if (accepted) {
+      remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
+      this.dispatch({ type: 'lanConnected', peer })
+      this.dispatch({ type: 'peerReachableChanged', reachable: true })
       return
     }
-
-    this.dispatch({ type: 'relayProbeStart' })
-    this.relayDeviceAuth = this.beginRelayDeviceAuth()
-    this.relayDeviceAuth.catch(() => {
-      if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-        this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-      }
-    })
-    const relayClient = createRelayClient({
-      url: config.relay.url,
-      token: config.relay.token,
-      authSecret: secret,
-      mqtt: config.relay.mqtt,
-      handshakeTimeoutMs: RELAY_HANDSHAKE_TIMEOUT_MS,
-      onEvent: (event) => {
-        if (event.kind === 'message') {
-          this.routeMessage(event.data)
-          return
-        }
-        if (event.kind === 'handshake:ok') {
-          remoteLog.info('Remote session connected through the cloud relay')
-        }
-      }
-    })
-    this.relayClient = relayClient
-    const outcome = await relayClient.connect()
-    if (outcome === 'open') {
-      this.dispatch({ type: 'relayConnected', relay: { url: config.relay.url } })
-    } else if (outcome === 'rejected') {
-      this.dispatch({ type: 'disconnected', reason: 'relay-auth-failed' })
-    } else {
-      this.dispatch({ type: 'disconnected', reason: 'unreachable' })
-    }
+    this.dispatch({ type: 'disconnected', reason: 'no-lan-peer' })
   }
 
   /** Open the kept LAN session channel against the first reachable peer. */
   private async openLanSession(
-    peer: DiscoveredPeer,
+    peer: PeerRef,
     secret: string,
     scheme: 'ws' | 'wss',
     device?: import('./transport').LanDeviceCredentials,
@@ -500,8 +401,6 @@ export class RemoteSessionStore {
     this.accountReconnectTimer = null
     this.lanTransport?.close()
     this.lanTransport = null
-    this.relayClient?.close()
-    this.relayClient = null
     this.accountRelayClient?.close()
     this.accountRelayClient = null
   }
@@ -519,7 +418,7 @@ export class RemoteSessionStore {
     const target = route?.lanTarget
     if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
     const keyMaterial = await this.ensureKeyMaterial()
-    const peer: DiscoveredPeer = { host: target.host, port: target.port, source: 'manual' }
+    const peer: PeerRef = { host: target.host, port: target.port }
     const device = {
       deviceId: keyMaterial.deviceId,
       deviceName: keyMaterial.deviceName,

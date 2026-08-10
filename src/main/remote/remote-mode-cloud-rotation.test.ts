@@ -83,22 +83,19 @@ describe('RemoteModeController — cloud enrollment rotates the pairing bootstra
       rpc: null
     })
 
-    // Start the gateway so the pairing QR is live; syncPairingState registers
-    // the current secret as a five-minute bootstrap.
+    // Start the gateway so syncPairingState registers the current secret as a
+    // five-minute account enrollment bootstrap.
     await controller.ensureGateway()
 
     const secretFile = join(userData, 'remote-gateway', 'peer-secret')
     const originalSecret = (await readFile(secretFile, 'utf8')).trim()
     expect(originalSecret.length).toBeGreaterThanOrEqual(16)
-    // The pre-rotation QR value is a usable bootstrap.
+    // The pre-rotation control value is a usable bootstrap.
     const originalBootstrap = await credentials.consumePairingBootstrap(originalSecret)
     // Re-register it so the rotation contract can be asserted below.
     if (!originalBootstrap.ok) {
       await credentials.registerPairingValue(originalSecret)
     }
-    const originalUrl = controller.status.gateway.pairingUrl
-    expect(originalUrl).toContain(encodeURIComponent(originalSecret))
-
     // Relay enrollment succeeds -> controller rotates immediately.
     await (
       controller as unknown as { rotatePairingBootstrap(): Promise<void> }
@@ -108,16 +105,11 @@ describe('RemoteModeController — cloud enrollment rotates the pairing bootstra
     const rotatedSecret = (await readFile(secretFile, 'utf8')).trim()
     expect(rotatedSecret).not.toBe(originalSecret)
 
-    // 2) The gateway secret + visible pairing URL refresh to the new value.
-    const rotatedUrl = controller.status.gateway.pairingUrl
-    expect(rotatedUrl).toContain(encodeURIComponent(rotatedSecret))
-    expect(rotatedUrl).not.toBe(originalUrl)
-
-    // 3) The old value can no longer enroll.
+    // 2) The old value can no longer enroll.
     const stale = await credentials.consumePairingBootstrap(originalSecret)
     expect(stale.ok).toBe(false)
 
-    // 4) A fresh <=5-minute bootstrap exists for the new value.
+    // 3) A fresh <=5-minute bootstrap exists for the new value.
     const fresh = await credentials.consumePairingBootstrap(rotatedSecret)
     expect(fresh.ok).toBe(true)
     const expiry = await readPairingExpiry(join(userData, 'remote-gateway'))

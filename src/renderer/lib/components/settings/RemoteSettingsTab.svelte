@@ -10,5 +10,5 @@
     </p>
   </div>
 
-  <RemoteClientView embedded />
+  <RemoteClientView />
 </div>

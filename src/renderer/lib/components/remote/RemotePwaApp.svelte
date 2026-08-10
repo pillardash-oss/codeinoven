@@ -1,22 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import RemoteClientView from '$lib/components/remote/RemoteClientView.svelte'
   import CloudRemoteAccess from '$lib/components/remote/CloudRemoteAccess.svelte'
   import { remoteSession } from '$lib/remote/session-store.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
 
-  let { onBack = () => undefined }: { onBack?: () => void } = $props()
-
   let connected = $derived(
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
       remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
-  )
-
-  let hasLanPairing = $derived(
-    typeof window !== 'undefined' &&
-      (new URLSearchParams(window.location.search).has('pair') ||
-        new URLSearchParams(window.location.hash.slice(1)).has('pair'))
   )
 
   // The desktop shell applies the theme from its own root component, which the
@@ -66,9 +57,5 @@
     </div>
   {/await}
 {:else}
-  {#if hasLanPairing}
-    <RemoteClientView pwa {onBack} />
-  {:else}
-    <CloudRemoteAccess />
-  {/if}
+  <CloudRemoteAccess />
 {/if}
