@@ -26,7 +26,8 @@
     RefreshCw,
     SlidersHorizontal,
     Sun,
-    UsersRound
+    UsersRound,
+    UserRound
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -36,6 +37,7 @@
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
+  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -84,8 +86,8 @@
     label: string
     icon: typeof SlidersHorizontal
   }> = [
+    { id: 'profile', label: 'Profile', icon: UserRound },
     { id: 'general', label: 'General', icon: SlidersHorizontal },
-
     { id: 'memory', label: 'Memory', icon: BrainCircuit },
     { id: 'audits', label: 'Agents', icon: UsersRound },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
@@ -278,7 +280,9 @@
 
   <!-- Tab content -->
   <div class="min-w-0 flex-1 overflow-y-auto">
-    {#if section === 'general'}
+    {#if section === 'profile'}
+      <ProfileSettingsTab />
+    {:else if section === 'general'}
       <div class="mx-auto max-w-2xl p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">General</h1>
