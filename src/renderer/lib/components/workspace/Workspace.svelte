@@ -981,6 +981,11 @@
     if (thread.id !== lastFocusedThreadId) {
       lastFocusedThreadId = thread.id
       sidebarFocusSuppressed = false
+      // A deliberate selection of a new thread overrides the mode-switch
+      // suppression window so the chosen thread is always revealed, even right
+      // after navigating across sidebar modes.
+      sidebarRevealSuppressed = false
+      clearTimeout(sidebarRevealSuppressTimer)
       if (thread.projectId !== INBOX_PROJECT_ID) {
         expandedFolders.add(thread.projectId)
         // Ensure the folder shows enough rows for the focused thread so its
@@ -1562,6 +1567,15 @@
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
     await openThread(thread)
+    // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
+    // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
+    // window and restores the incoming mode's saved scroll, which would keep the
+    // chosen thread out of view. Cancel that suppression and reveal the row once
+    // the restore + folder expansion have settled.
+    sidebarRevealSuppressed = false
+    clearTimeout(sidebarRevealSuppressTimer)
+    if (thread.projectId !== INBOX_PROJECT_ID) expandedFolders.add(thread.projectId)
+    void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
   async function openProjectFileFromCommand(projectId: string, path: string): Promise<void> {
