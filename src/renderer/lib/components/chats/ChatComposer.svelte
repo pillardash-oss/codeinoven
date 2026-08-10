@@ -113,6 +113,12 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
+    /** App-config location for pasted/ephemeral attachment files. */
+    attachmentStorage?: {
+      kind: 'project' | 'chat'
+      projectId: string
+      threadId: string
+    }
     /** Called when the user selects a different project from the switcher. */
     onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
@@ -205,6 +211,7 @@
     harnessId = 'opencode',
     projectContext,
     projectId = null,
+    attachmentStorage,
     onSwitchProject,
     fileTagProjectId,
     assignmentId,
@@ -1155,9 +1162,9 @@
         const file = item.getAsFile()
         if (file) {
           try {
-            const filePath = window.api.getPathForFile(file)
+            const filePath = await window.api.registerFileSelection(file)
             if (filePath) {
-              addFileAttachment(filePath, file)
+              await addFileAttachment(filePath, file)
               hasFileAttachment = true
             }
           } catch {
@@ -1176,7 +1183,9 @@
       }
       if (hasFileAttachment) {
         try {
-          const path = await invoke('clipboard:saveImage')
+          const path = attachmentStorage
+            ? await invoke('clipboard:saveImage', attachmentStorage)
+            : null
           if (path) await addFileAttachment(path)
           else hasFileAttachment = false
         } catch {

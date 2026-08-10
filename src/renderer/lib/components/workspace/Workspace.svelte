@@ -2831,6 +2831,11 @@
                     onSettingsChange={(settings) => chatSettings.commit(settings)}
                     providers={chatProviders}
                     projectId={chatInboxId}
+                    attachmentStorage={{
+                      kind: 'chat',
+                      projectId: INBOX_PROJECT_ID,
+                      threadId: 'new-chat'
+                    }}
                     harnessId={chatComposerSettings.harnessId}
                     favoriteModels={rendererRecovery.chatFavoriteModels}
                     onToggleFavorite={(providerId, modelId) =>

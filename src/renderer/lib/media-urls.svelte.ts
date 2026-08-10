@@ -1,5 +1,6 @@
 import { fileUrlToPath } from './mime'
 import type { AppBridge } from '../../preload/index'
+import { SvelteSet } from 'svelte/reactivity'
 
 declare global {
   interface Window {
@@ -25,16 +26,26 @@ declare global {
 export class FileBlobUrlManager {
   urls = $state<Record<string, string>>({})
   #pending: Record<string, true> = {}
+  #unavailable = new SvelteSet<string>()
 
-  /** Best-effort conversion. Fails are marked retryable, never permanent. */
+  /** Best-effort conversion. Failed sources are ignored for this manager's lifetime. */
   async load(url: string, mime: string): Promise<void> {
-    if (!url.startsWith('file://') || this.urls[url] || this.#pending[url]) return
+    if (
+      !url.startsWith('file://') ||
+      this.urls[url] ||
+      this.#pending[url] ||
+      this.#unavailable.has(url)
+    )
+      return
     this.#pending[url] = true
     try {
       const objectUrl = await this.#toObjectUrl(url, mime)
       this.urls = { ...this.urls, [url]: objectUrl }
     } catch {
-      // Blob URL failed; fall back to file:// URL and allow a later retry.
+      // Missing or unapproved sources stay unavailable until this manager is
+      // recreated with a changed attachment source; reactive updates do not retry.
+      this.#unavailable.add(url)
+    } finally {
       delete this.#pending[url]
     }
   }
@@ -57,7 +68,7 @@ export class FileBlobUrlManager {
    * itself is corrupt, `onerror` fires again and the guard below stops retrying.
    */
   async bindImage(url: string, mime: string, img: HTMLImageElement): Promise<void> {
-    if (!img) return
+    if (!img || this.#pending[url] || this.#unavailable.has(url)) return
     const resolved = this.urls[url]
     if (img.src === resolved) return
     try {
@@ -65,7 +76,7 @@ export class FileBlobUrlManager {
       this.urls = { ...this.urls, [url]: objectUrl }
       img.src = objectUrl
     } catch {
-      // The original src stays in place; nothing else we can do.
+      this.#unavailable.add(url)
     }
   }
 
@@ -74,7 +85,7 @@ export class FileBlobUrlManager {
    * mounted inside a preview modal that opened before the blob load finished.
    */
   async bindMedia(url: string, mime: string, el: HTMLMediaElement): Promise<void> {
-    if (!el) return
+    if (!el || this.#pending[url] || this.#unavailable.has(url)) return
     const resolved = this.urls[url]
     if (el.currentSrc === resolved) return
     try {
@@ -82,7 +93,7 @@ export class FileBlobUrlManager {
       this.urls = { ...this.urls, [url]: objectUrl }
       el.src = objectUrl
     } catch {
-      // The original src stays in place; nothing else we can do.
+      this.#unavailable.add(url)
     }
   }
 
@@ -96,5 +107,6 @@ export class FileBlobUrlManager {
     for (const objectUrl of Object.values(this.urls)) {
       URL.revokeObjectURL(objectUrl)
     }
+    this.#unavailable.clear()
   }
 }

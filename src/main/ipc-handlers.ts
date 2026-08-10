@@ -1,8 +1,9 @@
 import { app, dialog, shell, clipboard, BrowserWindow } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
-import { readFile, writeFile, mkdtemp, mkdir, stat } from 'fs/promises'
-import { tmpdir, release } from 'os'
+import { readFile, writeFile, mkdir, stat } from 'fs/promises'
+import { release } from 'os'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'path'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import type { Database } from './database/database'
@@ -33,6 +34,7 @@ import {
   dismissThreadNotifications
 } from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
+import { AttachmentGrantRepo } from './database/repositories/attachment-grant-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -68,7 +70,8 @@ import {
   validateThreadSettings,
   validateThreadStatus,
   validateThreadUpdateInput,
-  PrivilegedIpcValidator
+  PrivilegedIpcValidator,
+  isMissingScopedPathError
 } from './ipc-validation'
 import { ProjectManager } from '../lib/engines/project-manager'
 import { ThreadManager } from '../lib/engines/thread-manager'
@@ -217,6 +220,31 @@ const AGENT_DEFAULT_FIELDS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+interface AttachmentStorageScope {
+  kind: 'project' | 'chat'
+  projectId: string
+  threadId: string
+}
+
+function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
+  if (!isRecord(value) || (value.kind !== 'project' && value.kind !== 'chat')) {
+    throw new TypeError('Attachment storage scope is invalid')
+  }
+  return {
+    kind: value.kind,
+    projectId: validateEntityId(value.projectId, 'Project ID'),
+    threadId: validateEntityId(value.threadId, 'Thread ID')
+  }
+}
+
+function isMissingFilesystemError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+  )
 }
 
 function requireString(value: unknown, label: string, allowEmpty = false): string {
@@ -981,6 +1009,7 @@ export function registerIpcHandlers(
     memoryService.auxiliaryUsageByFeature()
   )
   const memoryService = new MemoryService(storage)
+  const attachmentGrantRepo = new AttachmentGrantRepo(database)
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
@@ -995,10 +1024,15 @@ export function registerIpcHandlers(
           .filter((path): path is string => typeof path === 'string' && path.length > 0),
       appArtifactRoots: async () => {
         const projects = await projectManager.listProjects()
-        return projects.map((project) =>
-          join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments')
-        )
-      }
+        return [
+          join(getConfigRoot(), 'chats'),
+          ...projects.flatMap((project) => [
+            join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
+            join(getConfigRoot(), 'projects', project.id, 'threads')
+          ])
+        ]
+      },
+      isApprovedFile: (canonicalPath) => attachmentGrantRepo.isApproved(canonicalPath)
     }
   })
 
@@ -1012,6 +1046,15 @@ export function registerIpcHandlers(
       return handler(event, ...(args as TArgs))
     })
   }
+
+  // A native File supplied by Electron's webUtils represents an explicit user
+  // drop/paste gesture. The preload keeps this channel private so renderer code
+  // cannot grant an arbitrary string path.
+  privileged('file:registerSelection', async (_event, path: unknown) => {
+    if (typeof path !== 'string' || path.length === 0) return null
+    await privilegedIpc.registerUserSelectedFile(path)
+    return path
+  })
 
   // ─── Application config ────────────────────────────────────────────────
   if (!options.hydrationHandlersRegistered) {
@@ -2208,13 +2251,18 @@ export function registerIpcHandlers(
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
 
-  ipcMain.handle('clipboard:saveImage', async () => {
+  ipcMain.handle('clipboard:saveImage', async (_event, rawScope: unknown) => {
     try {
+      const scope = validateAttachmentStorageScope(rawScope)
       const image = clipboard.readImage()
       if (image.isEmpty()) return null
-      const tempDir = await mkdtemp(join(tmpdir(), 'cio-clipboard-'))
-      const tempPath = join(tempDir, 'pasted-image.png')
-      await writeFile(tempPath, image.toPNG())
+      const tempDir =
+        scope.kind === 'chat'
+          ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
+          : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+      await mkdir(tempDir, { recursive: true })
+      const tempPath = join(tempDir, `pasted-${randomUUID()}.png`)
+      await writeFile(tempPath, image.toPNG(), { flag: 'wx', mode: 0o600 })
       await privilegedIpc.registerUserSelectedFile(tempPath)
       return tempPath
     } catch (error) {
@@ -2329,6 +2377,7 @@ export function registerIpcHandlers(
       shell.showItemInFolder(safePath)
       return true
     } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return false
       Logger.error('shell:revealPath rejected out-of-scope path:', error)
       return false
     }
@@ -2358,6 +2407,7 @@ export function registerIpcHandlers(
         buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
       )
     } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
       Logger.error('file:read rejected out-of-scope path:', error)
       return null
     }
@@ -2371,6 +2421,7 @@ export function registerIpcHandlers(
       const buffer = await readFile(safePath)
       return `data:${mime};base64,${buffer.toString('base64')}`
     } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
       Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
       return null
     }

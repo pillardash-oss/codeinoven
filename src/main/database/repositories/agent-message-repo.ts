@@ -9,6 +9,11 @@ import type {
   ThreadMessagePage,
   UserMessageSummary
 } from '../../../lib/types'
+import {
+  attachmentGrantStatements,
+  ensureAttachmentGrantSchema,
+  syncAttachmentGrants
+} from './attachment-grant-repo'
 
 /** Plain-text content of a user-authored agent message (mirrors the renderer). */
 function userMessageText(partsJson: string): string {
@@ -256,9 +261,7 @@ export function encodeAgentMessage(
   const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
   const partsJson = JSON.stringify(message.parts)
   const searchText = partsToSearchText(message.parts)
-  const transportPartsJson = message.transportParts
-    ? JSON.stringify(message.transportParts)
-    : null
+  const transportPartsJson = message.transportParts ? JSON.stringify(message.transportParts) : null
   const transportOrigin = message.transportOrigin ?? null
   const modelId = message.modelId ?? null
   const providerId = message.providerId ?? null
@@ -333,7 +336,10 @@ export function encodeAgentMessage(
 }
 
 /** The INSERT ... ON CONFLICT statement for one encoded message. */
-export function encodeWriteStatement(encoded: EncodedAgentMessage): { sql: string; params: unknown[] } {
+export function encodeWriteStatement(encoded: EncodedAgentMessage): {
+  sql: string
+  params: unknown[]
+} {
   return {
     sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
@@ -406,6 +412,7 @@ export function writeEncodedMessage(
 ): void {
   const statement = encodeWriteStatement(encoded)
   executor.run(statement.sql, ...statement.params)
+  syncAttachmentGrants(executor, encoded)
 }
 
 /**
@@ -418,11 +425,15 @@ export function buildSaveMessagesStatements(
   messages: AgentMessage[]
 ): Array<{ sql: string; params: unknown[] }> {
   const statements: Array<{ sql: string; params: unknown[] }> = [
-    { sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id IS NULL', params: [threadId] },
+    {
+      sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id IS NULL',
+      params: [threadId]
+    },
     { sql: 'DELETE FROM provider_sync_cursors WHERE thread_id = ?', params: [threadId] }
   ]
   for (const message of messages) {
-    statements.push(encodeWriteStatement(encodeAgentMessage(message, threadId)))
+    const encoded = encodeAgentMessage(message, threadId)
+    statements.push(encodeWriteStatement(encoded), ...attachmentGrantStatements(encoded))
   }
   return statements
 }
@@ -444,6 +455,7 @@ export function runProviderDeltaSync(
   sessionId: string,
   messages: AgentMessage[]
 ): ProviderDeltaSyncResult {
+  ensureAttachmentGrantSchema(executor)
   const sorted = [...messages].sort(
     (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id)
   )
@@ -457,14 +469,22 @@ export function runProviderDeltaSync(
     { contentHash: string | null; threadId: string; sessionId: string | null }
   >(
     executor
-      .all<{ id: string; content_hash: string | null; thread_id: string; session_id: string | null }>(
+      .all<{
+        id: string
+        content_hash: string | null
+        thread_id: string
+        session_id: string | null
+      }>(
         'SELECT id, content_hash, thread_id, session_id FROM agent_messages WHERE thread_id = ?',
         threadId
       )
-      .map((row) => [
-        row.id,
-        { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
-      ] as const)
+      .map(
+        (row) =>
+          [
+            row.id,
+            { contentHash: row.content_hash, threadId: row.thread_id, sessionId: row.session_id }
+          ] as const
+      )
   )
 
   let skipped = 0
@@ -527,7 +547,9 @@ export function runProviderDeltaSync(
 }
 
 export class AgentMessageRepo {
-  constructor(private db: Database) {}
+  constructor(private db: Database) {
+    ensureAttachmentGrantSchema(db)
+  }
 
   upsert(message: AgentMessage, threadId: string, sessionId?: string): void {
     const existing = this.db.get<AgentMessageRow>(
@@ -584,7 +606,12 @@ export class AgentMessageRepo {
     }
   }
 
-  saveProviderCursor(threadId: string, sessionId: string, messageCount: number, lastMessageId: string): void {
+  saveProviderCursor(
+    threadId: string,
+    sessionId: string,
+    messageCount: number,
+    lastMessageId: string
+  ): void {
     this.db.run(
       `INSERT INTO provider_sync_cursors(thread_id, session_id, message_count, last_message_id, synced_at)
        VALUES(?,?,?,?,?)
@@ -602,7 +629,11 @@ export class AgentMessageRepo {
 
   /** Forget the transcript watermark after a replace/truncate of the mirror. */
   clearProviderCursor(threadId: string, sessionId: string): void {
-    this.db.run('DELETE FROM provider_sync_cursors WHERE thread_id = ? AND session_id = ?', threadId, sessionId)
+    this.db.run(
+      'DELETE FROM provider_sync_cursors WHERE thread_id = ? AND session_id = ?',
+      threadId,
+      sessionId
+    )
   }
 
   /** Forget every transcript watermark for a thread. */
@@ -893,7 +924,10 @@ export function buildSaveSubagentStatements(
   messages: AgentMessage[]
 ): Array<{ sql: string; params: unknown[] }> {
   const statements: Array<{ sql: string; params: unknown[] }> = [
-    { sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id = ?', params: [threadId, sessionId] }
+    {
+      sql: 'DELETE FROM agent_messages WHERE thread_id = ? AND session_id = ?',
+      params: [threadId, sessionId]
+    }
   ]
   for (const message of messages) {
     statements.push(encodeWriteStatement(encodeAgentMessage(message, threadId, sessionId)))
@@ -907,9 +941,7 @@ export function buildLoadPageSql(
   before: ThreadMessageCursor | undefined
 ): { sql: string; params: unknown[] } {
   const params: unknown[] = [threadId]
-  const cursor = before
-    ? ` AND (created_at < ? OR (created_at = ? AND id < ?))`
-    : ''
+  const cursor = before ? ` AND (created_at < ? OR (created_at = ? AND id < ?))` : ''
   if (before) {
     params.push(before.createdAt, before.createdAt, before.id)
   }

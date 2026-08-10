@@ -6440,6 +6440,11 @@
               onCompact={() => void compactWork()}
               projectContext={composerProject}
               projectId={thread.projectId}
+              attachmentStorage={{
+                kind: chatMode ? 'chat' : 'project',
+                projectId: thread.projectId,
+                threadId: thread.id
+              }}
               onSwitchProject={(pid) => void switchProject(pid)}
               fileTagProjectId={project?.source === 'local' && project.path
                 ? thread.projectId
