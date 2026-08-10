@@ -196,7 +196,7 @@
                 class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
                 >3</span
               >
-              <span>The code will already be filled in. Tap <strong>Add</strong> to finish.</span>
+              <span>The signed-in account adds this desktop automatically.</span>
             </li>
           </ol>
         </div>

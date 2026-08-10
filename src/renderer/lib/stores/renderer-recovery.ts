@@ -11,7 +11,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
 /** A settings section — each is its own dedicated page in the app navigation. */
 export type SettingsSection =
-  'general' | 'memory' | 'audits' | 'harnesses' | 'utilities' | 'remote' | 'about'
+  'profile' | 'general' | 'memory' | 'audits' | 'harnesses' | 'utilities' | 'remote' | 'about'
 
 export type MainView =
   | 'projects'
@@ -19,6 +19,7 @@ export type MainView =
   | 'scope'
   | 'threads'
   | 'settings'
+  | 'settings-profile'
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-harnesses'
@@ -104,6 +105,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'scope',
   'threads',
   'settings',
+  'settings-profile',
   'settings-memory',
   'settings-audits',
   'settings-harnesses',
@@ -112,6 +114,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'profile',
   'general',
   'memory',
   'audits',
