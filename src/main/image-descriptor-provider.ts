@@ -82,8 +82,8 @@ export function resolveImageEntries(value: unknown): ResolvedImageEntry[] {
     if (ids.has(id)) throw new TypeError(`Duplicate image entry id: ${id}`)
     ids.add(id)
     const type = entry['type']
-    if (type !== 'part' && type !== 'binary') {
-      throw new TypeError(`Image entry ${index} type must be "part" or "binary"`)
+    if (type !== 'path' && type !== 'binary') {
+      throw new TypeError(`Image entry ${index} type must be "path" or "binary"`)
     }
     const source = requiredString(entry['source'], `Image entry ${index} source`, 20_000)
     const resolved: ResolvedImageEntry = {
@@ -189,9 +189,9 @@ function sniffImageMagic(buffer: Buffer): string | undefined {
   }
 }
 
-/** Verify a local part source is a readable, bounded file. Throws when not. */
+/** Verify a local path source is a readable, bounded file. Throws when not. */
 export async function assertReadablePartSource(entry: ResolvedImageEntry): Promise<void> {
-  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return
+  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) return
   if (/^https?:\/\//u.test(entry.attachment.url)) return
   const path = await resolveReadablePartPath(entry)
   if (!path) {
@@ -210,7 +210,7 @@ export async function assertReadablePartSource(entry: ResolvedImageEntry): Promi
 }
 
 /**
- * Resolve a local `part` source to a readable path. macOS screenshot names use a
+ * Resolve a local `path` source to a readable path. macOS screenshot names use a
  * non-breaking space (U+00A0) between the time and AM/PM; a model echoing the path
  * back into a tool call often normalizes it to a regular space (U+0020), so the
  * exact path can be absent while the file exists. When the exact path is missing,
@@ -218,7 +218,7 @@ export async function assertReadablePartSource(entry: ResolvedImageEntry): Promi
  * normalization.
  */
 export async function resolveReadablePartPath(entry: ResolvedImageEntry): Promise<string | null> {
-  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return null
+  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) return null
   if (/^https?:\/\//u.test(entry.attachment.url)) return null
   const exact = entry.attachment.url.startsWith('file://')
     ? fileURLToPath(entry.attachment.url)
@@ -247,9 +247,9 @@ function normalizeFilenameSpaces(name: string): string {
   return name.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000\s]/gu, ' ')
 }
 
-/** Read a local part source into a data URL when the harness cannot fetch it. */
+/** Read a local path source into a data URL when the harness cannot fetch it. */
 export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Buffer | null> {
-  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) return null
+  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) return null
   if (/^https?:\/\//u.test(entry.attachment.url)) return null
   const path = await resolveReadablePartPath(entry)
   if (!path) return null
@@ -257,7 +257,7 @@ export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Bu
 }
 
 /**
- * Resolve a local `part` source into a self-contained data-URL attachment by
+ * Resolve a local `path` source into a self-contained data-URL attachment by
  * reading its bytes in the main process. This keeps the vision session from
  * re-reading the original file path — essential for transient sources (temp
  * screenshots, pasted images) that may be deleted before the harness resolves
@@ -269,7 +269,7 @@ export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Bu
 export async function resolveSelfContainedAttachment(
   entry: ResolvedImageEntry
 ): Promise<PromptAttachment> {
-  if (entry.type !== 'part' || entry.attachment.url.startsWith('data:')) {
+  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) {
     return entry.attachment
   }
   if (/^https?:\/\//u.test(entry.attachment.url)) return entry.attachment

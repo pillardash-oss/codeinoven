@@ -81,7 +81,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: IMAGE_DESCRIPTOR_TOOL_NAME,
     description:
-      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "part" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The tool accepts up to 8 images per call, so batch several frames at once; call it again for more. If the media is a video the model cannot read, extract frames with ffmpeg first and pass them as separate image entries. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
+      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "path" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The tool accepts up to 8 images per call, so batch several frames at once; call it again for more. If the media is a video the model cannot read, extract frames with ffmpeg first and pass them as separate image entries. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
     inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
     route: '/image_descriptor',
     sentWhen:
