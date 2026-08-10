@@ -13,7 +13,7 @@ import { RepositoryService } from './repository-service'
 import { GitService } from './git-service'
 import { SecretVault } from './secret-vault'
 import { GitHubAuthService } from './github-auth-service'
-import { GitHubProvider } from './providers/github-provider'
+import { GitHubProvider, ProviderHttpError } from './providers/github-provider'
 import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
@@ -119,6 +119,7 @@ import type {
   CreateProjectInput,
   EngineeringSpec,
   EngineeringSpecContent,
+  GitHubDeploymentOverview,
   AuditSectionId,
   HistoryEntry,
   EditorId,
@@ -136,6 +137,8 @@ type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentV
 const THEMES = new Set(['light', 'dark', 'system'])
 /** Pull requests fetched per sidebar page. */
 const PR_PAGE_SIZE = 20
+const GITHUB_REPOSITORY_ACCESS_MESSAGE =
+  'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -2981,13 +2984,25 @@ export function registerIpcHandlers(
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       const safePage = validatePrPage(page)
       if (!provider) return { items: [], page: safePage, hasMore: false }
-      return provider.listPullRequestPage({
-        owner: validateBoundedString(owner, 'PR owner', 1, 128),
-        repo: validateBoundedString(repo, 'PR repository', 1, 128),
-        state: validatePrState(state),
-        page: safePage,
-        perPage: PR_PAGE_SIZE
-      })
+      try {
+        return await provider.listPullRequestPage({
+          owner: validateBoundedString(owner, 'PR owner', 1, 128),
+          repo: validateBoundedString(repo, 'PR repository', 1, 128),
+          state: validatePrState(state),
+          page: safePage,
+          perPage: PR_PAGE_SIZE
+        })
+      } catch (error) {
+        if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
+          return {
+            items: [],
+            page: safePage,
+            hasMore: false,
+            accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
+          }
+        }
+        throw error
+      }
     }
   )
 
@@ -2997,10 +3012,24 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
-      const overview = await provider.getDeploymentOverview({
-        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
-        repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
-      })
+      let overview: GitHubDeploymentOverview
+      try {
+        overview = await provider.getDeploymentOverview({
+          owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+          repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+        })
+      } catch (error) {
+        if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
+          return {
+            workflowRuns: [],
+            deployments: [],
+            fetchedAt: Date.now(),
+            hasDeployments: false,
+            accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
+          }
+        }
+        throw error
+      }
       // The repo either deploys or it doesn't — persist that fact so the
       // Deployments tab only ever appears when there is something to show.
       const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0

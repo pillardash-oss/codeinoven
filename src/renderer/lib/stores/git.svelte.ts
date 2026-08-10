@@ -580,6 +580,12 @@ export class GitState {
    */
   private deploymentFailures: Record<string, number> = {}
 
+  /** One overview probe per repository, shared by tab discovery and the monitor. */
+  private deploymentOverviewRequests: Record<
+    string,
+    Promise<GitHubDeploymentOverviewResult | null> | undefined
+  > = {}
+
   /** True while a key is inside its post-failure cooldown. */
   private deploymentCoolingDown(key: string): boolean {
     const failedAt = this.deploymentFailures[key]
@@ -598,6 +604,9 @@ export class GitState {
    *  very effects that triggered the request.
    */
   private prFailures: Record<string, number> = {}
+
+  /** One request per page key, preventing duplicate IPC calls from concurrent mounts/effects. */
+  private prPageRequests: Record<string, Promise<void> | undefined> = {}
 
   /** True while a key is inside its post-failure cooldown. */
   private prCoolingDown(key: string): boolean {
@@ -650,6 +659,26 @@ export class GitState {
     const cached = this.prPages[key]
     if (!force && cached && Date.now() - cached.fetchedAt < PR_CACHE_TTL_MS) return
     if (!force && this.prCoolingDown(key)) return
+    const existingRequest = this.prPageRequests[key]
+    if (existingRequest) return existingRequest
+
+    const request = this.loadPullRequestPage(projectId, owner, repo, state, page, key)
+    this.prPageRequests[key] = request
+    try {
+      await request
+    } finally {
+      if (this.prPageRequests[key] === request) delete this.prPageRequests[key]
+    }
+  }
+
+  private async loadPullRequestPage(
+    projectId: string,
+    owner: string,
+    repo: string,
+    state: PrState,
+    page: number,
+    key: string
+  ): Promise<void> {
     this.markBusy('pr-list', true)
     try {
       const result = await invoke('pr:page', projectId, owner, repo, state, page)
@@ -723,9 +752,30 @@ export class GitState {
       return cached.overview
     }
     if (!force && this.deploymentCoolingDown(key)) return cached?.overview ?? null
+    const existingRequest = this.deploymentOverviewRequests[key]
+    if (existingRequest) return existingRequest
+
+    const request = this.loadDeploymentOverview(projectId, owner, repo, key)
+    this.deploymentOverviewRequests[key] = request
+    try {
+      return await request
+    } finally {
+      if (this.deploymentOverviewRequests[key] === request) {
+        delete this.deploymentOverviewRequests[key]
+      }
+    }
+  }
+
+  private async loadDeploymentOverview(
+    projectId: string,
+    owner: string,
+    repo: string,
+    key: string
+  ): Promise<GitHubDeploymentOverviewResult | null> {
     this.markBusy('deployments', true)
     try {
       const result = await invoke('deployment:overview', projectId, owner, repo)
+      if (result.accessError) throw new Error(result.accessError)
       this.deploymentOverviews = {
         ...this.deploymentOverviews,
         [key]: { overview: result, fetchedAt: Date.now() }

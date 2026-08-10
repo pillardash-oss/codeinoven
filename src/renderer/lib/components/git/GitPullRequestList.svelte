@@ -10,6 +10,7 @@
     MessageSquare,
     RefreshCw
   } from '@lucide/svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { relativeTime } from '$lib/format/relative-time'
@@ -43,6 +44,7 @@
   )
   const items = $derived(cached?.page.items ?? [])
   const hasMore = $derived(cached?.page.hasMore ?? false)
+  const accessError = $derived(cached?.page.accessError ?? '')
   const loading = $derived(gitState.isBusy('pr-list'))
 
   async function load(force = false): Promise<void> {
@@ -137,6 +139,19 @@
         <div class="flex items-center justify-center gap-2 py-10 text-[11px] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading pull requests…
+        </div>
+      {:else if accessError}
+        <div class="flex flex-col items-center gap-3 px-5 py-8 text-center">
+          <GitPullRequestClosed size={18} class="text-danger" />
+          <p class="text-[10px] leading-relaxed text-dimmed">{accessError}</p>
+          <button
+            type="button"
+            class="h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            onclick={() =>
+              void openInBrowser('https://github.com/apps/codeinoven/installations/new')}
+          >
+            Install GitHub App
+          </button>
         </div>
       {:else if items.length === 0}
         <p class="px-4 py-8 text-center text-[11px] text-dimmed">

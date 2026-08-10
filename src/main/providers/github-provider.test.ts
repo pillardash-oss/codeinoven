@@ -105,6 +105,7 @@ describe('GitHubProvider', () => {
   })
 
   it('maps pull requests, workflow runs, and deployments into provider models', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'Not Found' }, 404))
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         { number: 3, title: 'First', html_url: 'https://github.com/acme/app/pull/3' },
@@ -120,6 +121,8 @@ describe('GitHubProvider', () => {
     })
     expect(references).toHaveLength(2)
     expect(references[0]?.number).toBe(3)
+    const anonymousRetryHeaders = fetchMock.mock.calls[1]?.[1]?.headers as Record<string, string>
+    expect(anonymousRetryHeaders['Authorization']).toBeUndefined()
 
     fetchMock.mockResolvedValueOnce(
       jsonResponse({

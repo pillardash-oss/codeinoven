@@ -48,6 +48,17 @@ const GITHUB_API_ACCEPT = 'application/vnd.github+json'
 const GITHUB_API_VERSION = '2022-11-28'
 const USER_AGENT = 'CodeInOven'
 
+/** Sanitized provider failure that preserves the HTTP status for IPC handling. */
+export class ProviderHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(`Provider returned HTTP ${status}${message ? `: ${message}` : ''}`)
+    this.name = 'ProviderHttpError'
+  }
+}
+
 /**
  * GitHub-first REST adapter.
  *
@@ -508,9 +519,20 @@ export class GitHubProvider implements GitProvider {
           response = await this.fetch(path, init, token, controller.signal)
         }
       }
+      // A GitHub App user token can deliberately hide a public repository with
+      // 404 when the app is not installed there. Public GET endpoints remain
+      // readable without credentials, so retry those reads anonymously. Never
+      // do this for mutations or a configured self-hosted provider.
+      if (
+        response.status === 404 &&
+        (init.method ?? 'GET').toUpperCase() === 'GET' &&
+        this.baseUrl === GITHUB_API_BASE_URL
+      ) {
+        response = await this.fetch(path, init, null, controller.signal)
+      }
       if (!response.ok) {
         const message = await this.readErrorMessage(response)
-        throw new Error(`Provider returned HTTP ${response.status}${message ? `: ${message}` : ''}`)
+        throw new ProviderHttpError(response.status, message)
       }
       return await response.text()
     } catch (failure) {
@@ -551,9 +573,16 @@ export class GitHubProvider implements GitProvider {
           response = await this.fetch(path, init, token, controller.signal)
         }
       }
+      if (
+        response.status === 404 &&
+        (init.method ?? 'GET').toUpperCase() === 'GET' &&
+        this.baseUrl === GITHUB_API_BASE_URL
+      ) {
+        response = await this.fetch(path, init, null, controller.signal)
+      }
       if (!response.ok) {
         const message = await this.readErrorMessage(response)
-        throw new Error(`Provider returned HTTP ${response.status}${message ? `: ${message}` : ''}`)
+        throw new ProviderHttpError(response.status, message)
       }
       if (response.status === 204) return {}
       return (await response.json()) as Record<string, unknown> | unknown[]
@@ -570,7 +599,7 @@ export class GitHubProvider implements GitProvider {
   private fetch(
     path: string,
     init: RequestInit,
-    token: string,
+    token: string | null,
     signal: AbortSignal
   ): Promise<Response> {
     return fetch(`${this.baseUrl}${path}`, {
@@ -579,7 +608,7 @@ export class GitHubProvider implements GitProvider {
         Accept: GITHUB_API_ACCEPT,
         'X-GitHub-Api-Version': GITHUB_API_VERSION,
         'User-Agent': USER_AGENT,
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...init.headers
       },
       signal
