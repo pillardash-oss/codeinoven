@@ -142,6 +142,7 @@ import {
   parseGeneratedBrainstormContent
 } from '../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
+import { shouldDeferAutoTitleUntilIdle } from './title-generation-policy'
 import { classifyProviderIssue } from '../lib/provider-issue'
 import { generateId } from '../lib/utils'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../lib/project-artifacts'
@@ -3487,8 +3488,8 @@ export class ChatEngine {
     // First prompt of a fresh thread (forks carry a mirror) — auto-title it
     // in the background so the sidebar never fills with "New Thread" rows.
     // The fallback is applied immediately. The model-generated title uses a
-    // disposable session after the main turn becomes idle, keeping it separate
-    // without racing the harness's credential refresh.
+    // disposable session. Only Claude waits for main-turn idle because its
+    // processes share credential refresh; every other harness starts now.
     if (shouldAutoTitle) {
       const fallback = deriveTitleFromText(text)
       if (fallback) {
@@ -3519,7 +3520,7 @@ export class ChatEngine {
     // OAuth refresh is shared. Other harnesses own isolated title transports,
     // so their title must not depend on the main turn reaching a successful
     // terminal state.
-    const deferAutoTitleUntilIdle = shouldAutoTitle && driverId === 'claude-code'
+    const deferAutoTitleUntilIdle = shouldAutoTitle && shouldDeferAutoTitleUntilIdle(driverId)
     let autoTitleScheduled = false
     const scheduleAutoTitle = (): Promise<void> => {
       if (!shouldAutoTitle || autoTitleScheduled) return Promise.resolve()
@@ -4892,16 +4893,29 @@ export class ChatEngine {
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual') return
+    Logger.dev('Thread auto-title generation started', { projectId, threadId, driverId })
 
     let generated: string | null
     try {
       generated = await this.generateTitleWithModel(projectId, threadId, driverId, settings, text)
-    } catch {
+    } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
-      Logger.dev('Thread auto-title generation failed — keeping fallback')
+      Logger.dev('Thread auto-title generation failed — keeping fallback', {
+        projectId,
+        threadId,
+        driverId,
+        error: rawErrorMessage(error)
+      })
       return
     }
-    if (!generated) return
+    if (!generated) {
+      Logger.dev('Thread auto-title generation returned no usable title', {
+        projectId,
+        threadId,
+        driverId
+      })
+      return
+    }
 
     // The user may have renamed the thread while the model was working —
     // never overwrite a manual title.
@@ -4911,6 +4925,7 @@ export class ChatEngine {
       title: generated,
       titleSource: 'auto'
     })
+    Logger.dev('Thread auto-title generation applied', { projectId, threadId, driverId })
   }
 
   /** Delegate one-shot title generation and model fallback to the selected driver. */
