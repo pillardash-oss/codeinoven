@@ -54,6 +54,7 @@ describe('StartupTelemetry phase timestamps', () => {
       'process:entry',
       'electron:ready',
       'splash:created',
+      'splash:visualReady',
       'storage:ready',
       'database:ready',
       'window:created',
@@ -69,14 +70,14 @@ describe('StartupTelemetry phase timestamps', () => {
     }
 
     const phases = telemetry.recordedPhases
-    expect(phases).toHaveLength(12)
+    expect(phases).toHaveLength(13)
     for (let index = 1; index < phases.length; index++) {
       expect(phases[index]!.atMs).toBeGreaterThan(phases[index - 1]!.atMs)
       expect(phases[index]!.deltaMs).toBeGreaterThan(0)
     }
     // atMs is relative to origin, never an absolute clock value.
     expect(phases[0]!.atMs).toBe(0)
-    expect(phases[phases.length - 1]!.atMs).toBe(1100)
+    expect(phases[phases.length - 1]!.atMs).toBe(1200)
   })
 
   it('reset() clears recorded phases and the marked set', () => {

@@ -19,6 +19,7 @@ export type StartupPhase =
   | 'process:entry'
   | 'electron:ready'
   | 'splash:created'
+  | 'splash:visualReady'
   | 'storage:ready'
   | 'database:ready'
   | 'window:created'
