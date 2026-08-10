@@ -225,7 +225,7 @@
       endIndex < messages.length - 1 &&
       messages.slice(endIndex + 1).every((message) => message.role === 'user')
     const turnCompleted = messages[endIndex]?.completedAt !== undefined
-    const threadBusy = agentRuns.isBusy(thread.projectId, thread.id)
+    const threadBusy = threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
   let olderMessagesAvailable = $state(false)
@@ -242,6 +242,18 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  /** Whether the latest turn currently has any renderable working-trace parts.
+   *  When the thread is busy but nothing has materialized to write to the
+   *  screen yet (the agent is still connecting/assembling, or the hydrated
+   *  turn carries no visible reasoning/tool/sub-agent parts), the bottom
+   *  working placeholder must keep showing so the user never stares at a blank
+   *  conversation. Uses the raw busy flag — delegated work is covered by the
+   *  placeholder's `delegatedWorkBusy` term instead of a forward reference. */
+  let latestTurnRenderableParts = $derived(
+    latestTurnInfo.startIndex === -1
+      ? []
+      : getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
+  )
   // A persisted in-flight status means the turn is genuinely still running
   // (main finalizes planning/executing to completed/awaiting/failed/interrupted
   // the moment the session idles, and restart recovery marks leftovers
@@ -1390,6 +1402,13 @@
     }
     return achievementOnly && thread.achievementRole !== 'auditor' && achievementAuditorWorking
   })
+  /** Whether this thread is working in any form: its own live harness turn, a
+   *  persisted in-flight status, or delegated work (workers/auditor) it owns.
+   *  The coordinator's own session is intentionally idle between handoffs, so
+   *  delegated activity is the source of truth that its row must stay alive. */
+  let threadWorking = $derived(
+    busy || delegatedWorkBusy || thread.status === 'planning' || thread.status === 'executing'
+  )
   let delegatedActivityLabel = $derived.by((): string => {
     const assignmentCoordinator = assignment?.coordinatorThreadId === thread.id
     const workerCount = assignmentCoordinator ? activeAssignmentWorkerCount : 0
@@ -1735,7 +1754,7 @@
    *  included so a thread that is working but was never marked busy in the store
    *  still re-opens at the live bottom. */
   // svelte-ignore state_referenced_locally
-  const mountBusy = busy || thread.status === 'planning' || thread.status === 'executing'
+  const mountBusy = threadWorking
   /** Changes whenever any message's parts change, so the live view follows a
    *  streaming turn even when the message count is stable. */
   const streamVersion = $derived(messages.reduce((sum, message) => sum + message.parts.length, 0))
@@ -1838,7 +1857,7 @@
     if (!scrollRestored) return
     void messages.length
     void checkpoints.length
-    void busy
+    void threadWorking
     void streamVersion
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
@@ -2080,9 +2099,11 @@
    *  idles (and restart recovery marks leftovers interrupted at startup), so a
    *  persisted in-flight status is never "stale" — it means the turn is still
    *  running. Trusting it lets a thread the agent is working on re-open with
-   *  its working trace expanded immediately instead of a folded idle view. */
+   *  its working trace expanded immediately instead of a folded idle view.
+   *  A coordinator with delegated work (workers/auditor) is kept busy the same
+   *  way even though its own session is idle between handoffs. */
   function restoreWorkingState(status: Thread['status']): void {
-    if (status === 'planning' || status === 'executing') {
+    if (status === 'planning' || status === 'executing' || delegatedWorkBusy) {
       agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
       return
     }
@@ -2200,8 +2221,11 @@
       // streamed before this view mounted were never routed to the local
       // cache. Pull the live driver transcript now so the working trace
       // (tools, sub-agents, reasoning) renders immediately instead of a bare
-      // user message that only fills in after the turn ends.
-      if (agentRuns.isBusy(projectId, id)) {
+      // user message that only fills in after the turn ends. This covers the
+      // thread's own live turn AND delegated work it owns: the coordinator's
+      // own session is idle between handoffs, so `threadWorking` (not just the
+      // raw busy flag) decides whether accumulated work must be recovered.
+      if (threadWorking) {
         void refreshMessages()
       }
       if (providerStatus?.state === 'idle') {
@@ -5891,7 +5915,7 @@
                   {#if isTurnStart}
                     {@const collectedTurnParts = getTurnWorkingParts(
                       msgIndex,
-                      busy && isLatestTurn
+                      threadWorking && isLatestTurn
                     )}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
@@ -5901,8 +5925,8 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={busy && isLatestTurn}
-                        busy={busy && isLatestTurn}
+                        open={threadWorking && isLatestTurn}
+                        busy={threadWorking && isLatestTurn}
                         latest={isLatestTurn}
                         done={isTurnCompleted(msgIndex)}
                         startTime={isLatestTurn
@@ -6084,7 +6108,7 @@
             />
           {/if}
 
-          {#if delegatedWorkBusy || ((busy || specFormulating) && (messages.length === 0 || messages[messages.length - 1]?.role === 'user'))}
+          {#if delegatedWorkBusy || specFormulating || (threadWorking && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>
@@ -6467,7 +6491,7 @@
                           ? `${APP_NAME} is working — type to queue a message`
                           : 'Send a message...'}
               disabled={specFormulating || loopAuditing}
-              working={busy}
+              working={threadWorking}
               onStop={abortRun}
               autofocus
               showEngineeringMode={!chatMode}
