@@ -1834,8 +1834,13 @@
   // A thread the agent is working on re-opens at the live bottom instead of a
   // saved offset: the conversation grew while the user was away, so the old
   // pixel offset now lands mid-trace and hides the latest message + stream.
+  // This runs once: without a `scrollRestored` guard the synchronous
+  // `messages.length` read above makes the effect re-run on every message that
+  // streams in while the thread is busy, snapping the user back to the live
+  // tail and re-locking `userScrolledAway` — the exact "tail steals scroll"
+  // behaviour. Later arrivals are followed by the auto-scroll effect instead.
   $effect(() => {
-    if (!loaded || !scrollEl) return
+    if (!loaded || !scrollEl || scrollRestored) return
     if (mountBusy) {
       // Always anchor a busy thread to its live tail: the conversation grew
       // while the user was away, so a stale saved offset would drop them into

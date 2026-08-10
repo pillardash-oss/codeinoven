@@ -26,8 +26,22 @@
   let draft = $state('')
   let sendError = $state('')
   let scrollEl = $state<HTMLDivElement>()
+  /** Whether the user has scrolled away from the live tail. While away, the
+   *  auto-follow must stay released until they scroll back to the bottom. */
+  let userScrolledAway = $state(false)
   /** Tracks the last consumed history jump so auto-scroll resumes afterwards. */
   let lastJumpNonce = -1
+
+  const SCROLL_AT_BOTTOM_THRESHOLD = 60
+
+  function isAtBottom(el: HTMLDivElement): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
+  }
+
+  function onScroll(): void {
+    if (!scrollEl) return
+    userScrolledAway = !isAtBottom(scrollEl)
+  }
 
   const captureScrollElement: Attachment<HTMLDivElement> = (element) => {
     scrollEl = element
@@ -108,6 +122,7 @@
       }
       return
     }
+    if (userScrolledAway) return
     el.scrollTop = el.scrollHeight
     void messageCount
   })
@@ -166,6 +181,7 @@
   <div
     {@attach captureScrollElement}
     class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-4"
+    onscroll={onScroll}
   >
     <div class="mx-auto flex w-full max-w-2xl flex-col gap-4">
       {#if !loaded && loading}
