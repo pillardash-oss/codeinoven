@@ -13,7 +13,6 @@ import {
   verifyHandshakeToken
 } from './session-security'
 import { createLanTransport, type TransportSocket } from './transport'
-import { createRelayClient } from './relay'
 
 class FakeSocket implements TransportSocket {
   sent: string[] = []
@@ -158,9 +157,8 @@ describe('replay protection', () => {
   })
 })
 
-describe('handshake enforcement across routes', () => {
+describe('LAN handshake enforcement', () => {
   const peer = { host: '192.168.1.5', port: 4455 }
-  const relayUrl = 'wss://relay.example.test'
 
   it('rejects the LAN handshake when the peer secret is wrong', async () => {
     const socket = new FakeSocket()
@@ -182,33 +180,6 @@ describe('handshake enforcement across routes', () => {
     socket.receive(
       JSON.stringify(
         accepted ? { type: 'remote:hello:ok' } : { type: 'remote:error', reason: 'auth-failed' }
-      )
-    )
-
-    await expect(connectPromise).resolves.toBe('rejected')
-  })
-
-  it('rejects the relay handshake when the peer secret is wrong', async () => {
-    const socket = new FakeSocket()
-    const client = createRelayClient({
-      url: relayUrl,
-      token: 'relay-token',
-      authSecret: 'client-secret',
-      mqtt: { url: null, username: null, password: null },
-      socketFactory: () => socket,
-      onEvent: () => undefined
-    })
-
-    const connectPromise = client.connect()
-    socket.open()
-    await vi.waitFor(() => {
-      expect(socket.sent.length).toBe(1)
-    })
-    const hello = JSON.parse(socket.sent[0]) as { nonce: string; auth: string }
-    const accepted = await authenticateHandshake('server-secret', hello.nonce, hello.auth)
-    socket.receive(
-      JSON.stringify(
-        accepted ? { type: 'relay:hello:ok' } : { type: 'relay:error', reason: 'auth-failed' }
       )
     )
 

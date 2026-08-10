@@ -8,7 +8,10 @@ import { request as httpsRequest } from 'node:https'
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { RemoteGateway, type GatewayHandlers } from './remote-gateway'
 import { createLanTransport, type TransportEvent } from '../../renderer/lib/remote/transport'
-import { createMemoryDeviceKeyStore, loadOrCreateDeviceKeyMaterial } from '../../renderer/lib/remote/device-identity'
+import {
+  createMemoryDeviceKeyStore,
+  loadOrCreateDeviceKeyMaterial
+} from '../../renderer/lib/remote/device-identity'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database } from '../database/database'
@@ -54,14 +57,10 @@ function deviceInfo(device: EnrolledDevice): RemoteDeviceInfo {
   }
 }
 
-
 async function makeGateway(
   secret: string | null = SECRET,
   overrides: Partial<ConstructorParameters<typeof RemoteGateway>[0]> = {},
-  beforeStart?: (
-    staticRoot: string,
-    certificateDir: string
-  ) => Promise<void> | void
+  beforeStart?: (staticRoot: string, certificateDir: string) => Promise<void> | void
 ): Promise<{
   gateway: RemoteGateway
   port: number
@@ -755,19 +754,7 @@ describe('RemoteGateway', () => {
     }
   })
 
-  it('exposes a QR pairing URL that embeds the peer secret', async () => {
-    const { gateway } = await makeGateway()
-    try {
-      const info = gateway.info()
-      expect(info.pairingUrl).toMatch(/^https:\/\/.+:\d+\/remote\.html#pair=/)
-      expect(info.pairingUrl).toContain(encodeURIComponent(SECRET))
-      expect(info.url).not.toContain('pair=')
-    } finally {
-      await gateway.stop()
-    }
-  })
-
-  it('renders IPv6 pairing URLs in bracketed host form using advertised gateway metadata', async () => {
+  it('renders IPv6 PWA URLs in bracketed host form using advertised gateway metadata', async () => {
     const { gateway, port, certificateDir } = await makeGateway()
     try {
       await writeFile(
@@ -778,13 +765,12 @@ describe('RemoteGateway', () => {
       const info = gateway.info()
       expect(port).toBeGreaterThan(0)
       expect(info.url).toContain('https://[2001:db8::2]:')
-      expect(info.pairingUrl).toContain('https://[2001:db8::2]:')
     } finally {
       await gateway.stop()
     }
   })
 
-  it('omits the QR pairing URL while the gateway is not listening', async () => {
+  it('omits the PWA URL while the gateway is not listening', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'codeinoven-gateway-nolisten-'))
     const gateway = new RemoteGateway({
       port: 0,
@@ -794,7 +780,6 @@ describe('RemoteGateway', () => {
       staticRoot: join(dir, 'renderer'),
       handlers: { onDevicesChange: () => undefined }
     })
-    expect(gateway.info().pairingUrl).toBeNull()
     expect(gateway.info().url).toBeNull()
   })
 
@@ -977,7 +962,9 @@ describe('RemoteGateway — device proof of possession (A-04)', () => {
 
       // First connection: the phone presents its public keys + bootstrap + a
       // signature proving it owns the signing key. The desktop assigns the id.
-      const keyMaterial = await loadOrCreateDeviceKeyMaterial({ store: createMemoryDeviceKeyStore() })
+      const keyMaterial = await loadOrCreateDeviceKeyMaterial({
+        store: createMemoryDeviceKeyStore()
+      })
       let assignedId = ''
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },

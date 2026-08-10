@@ -203,8 +203,6 @@ export class RemoteModeController {
   private devices: RemoteDeviceInfo[] = []
   /** Persisted device-name overrides, keyed by device id. */
   private deviceNames: Record<string, string> = {}
-  /** Expiry of the current pairing QR value (epoch ms), or null. */
-  private pairingExpiresAt: number | null = null
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -276,8 +274,8 @@ export class RemoteModeController {
    *
    * A `PEER_SECRET_AUTH` environment value always wins. When none is supplied
    * (the human-friendly LAN case), a random secret is generated once and
-   * persisted under the app user-data dir so pairing stays stable across
-   * restarts. The QR pairing URL embeds this secret.
+   * persisted under the app user-data dir so account-backed LAN encryption is
+   * stable across restarts.
    */
   private async resolvePeerSecret(): Promise<string | null> {
     if (this.peerSecret) {
@@ -297,45 +295,39 @@ export class RemoteModeController {
   }
 
   /**
-   * Enforce the pairing-bootstrap ceremony: rotate the secret when it has
-   * expired and register the current value with the credential service so a
-   * single-use enrollment can consume it. A stale QR never grants a session.
+   * Keep the short-lived account enrollment bootstrap synchronized with the
+   * current LAN control secret.
    */
-  private async syncPairingState(): Promise<boolean> {
+  private async syncPairingState(): Promise<void> {
     const directory = join(app.getPath('userData'), 'remote-gateway')
-    let rotated = false
     if (this.credentials && !this.peerSecret && (await isPairingExpired(directory))) {
       this.resolvedPeerSecret = await rotatePeerSecret(directory)
       this.gateway?.setPeerSecret(this.resolvedPeerSecret)
-      rotated = true
-      Logger.info('Remote pairing bootstrap rotated: previous QR value expired')
+      Logger.info('Remote account enrollment bootstrap rotated after expiry')
     }
     const secret = this.resolvedPeerSecret
-    if (!secret) return rotated
+    if (!secret) return
     const expiresAt = await readPairingExpiry(directory)
-    this.pairingExpiresAt = expiresAt
     if (this.credentials) {
       await this.credentials.registerPairingValue(secret, {
         expiresAt: expiresAt ?? Date.now() + 5 * 60 * 1_000
       })
     }
-    return rotated
   }
 
   /**
-   * Rotate the live pairing bootstrap/QR immediately after a device enrolls:
-   * a stale QR value can no longer start another enrollment, and the pairing
-   * screen shows a fresh five-minute value for the next device.
+   * Rotate the LAN control secret and its short-lived account enrollment
+   * bootstrap before issuing a new account enrollment code.
    */
   private async rotatePairingBootstrap(): Promise<void> {
     if (this.peerSecret) return
     const directory = join(app.getPath('userData'), 'remote-gateway')
     this.resolvedPeerSecret = await rotatePeerSecret(directory)
     this.gateway?.setPeerSecret(this.resolvedPeerSecret)
-    this.pairingExpiresAt = Date.now() + 5 * 60 * 1_000
+    const expiresAt = Date.now() + 5 * 60 * 1_000
     if (this.credentials && this.resolvedPeerSecret) {
       await this.credentials.registerPairingValue(this.resolvedPeerSecret, {
-        expiresAt: this.pairingExpiresAt
+        expiresAt
       })
     }
     this.broadcast()
@@ -345,15 +337,13 @@ export class RemoteModeController {
     const gateway = this.gateway?.info() ?? {
       listening: false,
       port: this.lanPort,
-      url: null,
-      pairingUrl: null,
-      pairingExpiresAt: null
+      url: null
     }
     return {
       remoteMode: this.keepAlive.phase !== 'IDLE',
       phase: this.keepAlive.phase,
       blockedQuit: this.keepAlive.blockedQuit,
-      gateway: { ...gateway, pairingExpiresAt: this.pairingExpiresAt },
+      gateway,
       cloud: { ...this.cloudStatus },
       devices: this.devices
     }

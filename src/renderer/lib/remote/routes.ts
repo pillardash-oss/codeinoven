@@ -1,19 +1,8 @@
 /**
- * Remote route policy — the discriminated route union and LAN-first helpers.
- *
- * LAN routes are always preferred when a local peer is reachable; the cloud
- * relay is only attempted when LAN discovery found no reachable peer. This
- * module is platform-safe (no SvelteKit imports) so it can be unit-tested on
- * its own.
+ * Reactive route states for the account-backed remote session.
  */
 
 export interface PeerRef {
-  host: string
-  port: number
-}
-
-/** A minimal peer shape accepted by the routing decision. */
-export interface CandidatePeer {
   host: string
   port: number
 }
@@ -34,17 +23,6 @@ export type RemoteRouteKind = RemoteRoute['kind']
 /** The route the app starts from before any connectivity work happens. */
 export function initialRoute(): RemoteRoute {
   return { kind: 'DISCONNECTED' }
-}
-
-/**
- * LAN-first route decision: pick the first reachable LAN peer, otherwise fall
- * back to the relay. Relay probing is only entered when LAN found no peer.
- */
-export function lanFirstRoute(peers: readonly CandidatePeer[], relayEnabled: boolean): RemoteRoute {
-  const peer = peers[0]
-  if (peer) return { kind: 'LAN_CONNECTED', peer: { host: peer.host, port: peer.port } }
-  if (relayEnabled) return { kind: 'RELAY_PROBING' }
-  return disconnectedRoute('no-lan-peer')
 }
 
 export function routeKind(route: RemoteRoute): RemoteRouteKind {

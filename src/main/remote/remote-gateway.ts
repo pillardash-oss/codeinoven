@@ -274,25 +274,16 @@ export class RemoteGateway {
 
   info() {
     const listening = this.httpsServer !== null && this.httpsServer.listening
-    const secret = this.options.peerSecret
     const host = this.advertisedHost()
     const renderedHost = host.includes(':') ? `[${host}]` : host
     return {
       listening,
       port: this.port,
-      url: listening ? `https://${renderedHost}:${this.port}/remote.html` : null,
-      pairingUrl:
-        listening && secret
-          ? `https://${renderedHost}:${this.port}/remote.html#pair=${encodeURIComponent(secret)}`
-          : null
+      url: listening ? `https://${renderedHost}:${this.port}/remote.html` : null
     }
   }
 
-  /**
-   * Replace the peer secret (used for the pairing QR and the loopback legacy
-   * handshake). Called after a device enrolls so the live QR rotates and a
-   * stale QR value can no longer start another enrollment.
-   */
+  /** Replace the control secret used for encrypted LAN sessions. */
   setPeerSecret(secret: string): void {
     this.options.peerSecret = secret
   }

@@ -1346,17 +1346,6 @@ export interface RemoteGatewayInfo {
   port: number
   /** The URL a phone can open to reach the installable PWA. */
   url: string | null
-  /**
-   * The pairing URL a human scans as a QR code. Embeds the shared peer secret
-   * as `#pair=<secret>` so the phone opens the PWA pre-configured and connects
-   * automatically — no typing, no account.
-   */
-  pairingUrl: string | null
-  /**
-   * When the pairing value in `pairingUrl` expires (epoch ms). The bootstrap
-   * is only valid for five minutes and rotates after enrollment.
-   */
-  pairingExpiresAt: number | null
 }
 
 export interface RemoteCloudStatus {
