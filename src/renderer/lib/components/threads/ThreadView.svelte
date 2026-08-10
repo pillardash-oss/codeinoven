@@ -239,6 +239,16 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  // A persisted in-flight status means the turn is genuinely still running
+  // (main finalizes planning/executing to completed/awaiting/failed/interrupted
+  // the moment the session idles, and restart recovery marks leftovers
+  // interrupted at startup). Mark it busy synchronously at mount so the working
+  // trace is open and the view sits at the live bottom the instant the user
+  // opens the thread — never a folded trace waiting on a status round trip.
+  // svelte-ignore state_referenced_locally
+  if (thread.status === 'planning' || thread.status === 'executing') {
+    agentRuns.setBusy(thread.projectId, thread.id, true)
+  }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
     const since = agentRuns.busySince(thread.projectId, thread.id)
@@ -1718,9 +1728,11 @@
    *  re-opens at the live bottom so the last message and the streaming trace are
    *  immediately visible on return — a saved mid-conversation offset from before
    *  the turn grew is stale and hides the action. Captured non-reactively so the
-   *  restore decision is made once at mount. */
+   *  restore decision is made once at mount; the persisted in-flight status is
+   *  included so a thread that is working but was never marked busy in the store
+   *  still re-opens at the live bottom. */
   // svelte-ignore state_referenced_locally
-  const mountBusy = busy
+  const mountBusy = busy || thread.status === 'planning' || thread.status === 'executing'
   /** Changes whenever any message's parts change, so the live view follows a
    *  streaming turn even when the message count is stable. */
   const streamVersion = $derived(messages.reduce((sum, message) => sum + message.parts.length, 0))
@@ -2038,21 +2050,15 @@
    *  still working. Live session activity for pending permission/question gates
    *  is re-established by connectSession's live status instead.
    *
-   *  An in-session busy run is the live truth: on remount (switching back to a
-   *  thread the agent is still working on) the persisted status or a status
-   *  snapshot can lag behind the in-memory agentRuns store, so a stale status
-   *  must never downgrade a run that is genuinely still busy. */
+   *  A planning/executing status is treated as live work: main finalizes it to
+   *  completed/awaiting_approval/failed/interrupted the moment the session
+   *  idles (and restart recovery marks leftovers interrupted at startup), so a
+   *  persisted in-flight status is never "stale" — it means the turn is still
+   *  running. Trusting it lets a thread the agent is working on re-open with
+   *  its working trace expanded immediately instead of a folded idle view. */
   function restoreWorkingState(status: Thread['status']): void {
-    if (agentRuns.isBusy(thread.projectId, thread.id)) {
-      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-      return
-    }
     if (status === 'planning' || status === 'executing') {
-      // On a fresh app restart the store is empty and the harness session is
-      // gone, so a stale persisted in-flight status must not re-mark the thread
-      // busy — doing so left the thread (and its file-changes card)
-      // permanently in a "working" state until some later event forced a
-      // re-render.
+      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
       return
     }
     setIdleFromRestore()
