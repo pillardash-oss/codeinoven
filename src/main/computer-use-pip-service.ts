@@ -8,6 +8,7 @@ import { sendToRenderer } from './renderer-delivery'
 
 const POLL_INTERVAL_MS = 1_000
 const MAX_MISSES = 6
+const AUTO_DISMISS_GRACE_MS = 3_000
 
 interface WindowRecord {
   window_id: number
@@ -33,14 +34,22 @@ export class ComputerUsePipService {
   private timer: ReturnType<typeof setInterval> | null = null
   private active = false
   private misses = 0
+  private ownerThreadId: string | null = null
+  private dismissedPid: number | null = null
+  private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly storage: StorageEngine) {
     this.cuaBridge = new CuaBridgeService(storage)
   }
 
-  /** Latch onto the app (pid) an agent is currently driving. */
-  async track(pid: number): Promise<void> {
+  /** Latch onto the app (pid) a thread's agent is currently driving. */
+  async track(pid: number, threadId: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
+    this.clearAutoDismiss()
+    // The user closed this app's overlay — keep it closed until a new app is driven.
+    if (this.dismissedPid === pid) return
+    this.dismissedPid = null
+    this.ownerThreadId = threadId
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
     this.misses = 0
@@ -58,15 +67,44 @@ export class ComputerUsePipService {
     await client.callTool('bring_to_front', { pid })
   }
 
-  /** Stop tracking and hide the PiP. */
+  /** Stop tracking and hide the PiP (user-requested close). */
   async dismiss(): Promise<void> {
+    this.dismissedPid = this.targetPid
+    this.hide()
+  }
+
+  /**
+   * Called when a thread's utility turn ends. If that thread owns the PiP,
+   * hide the overlay shortly after so it never lingers past the run.
+   */
+  notifyTurnEnded(threadId: string): void {
+    if (!this.active || this.ownerThreadId !== threadId) return
+    this.clearAutoDismiss()
+    this.autoDismissTimer = setTimeout(() => {
+      this.autoDismissTimer = null
+      this.hide()
+    }, AUTO_DISMISS_GRACE_MS)
+  }
+
+  /** Tear down the overlay without suppressing later re-tracking of the pid. */
+  private hide(): void {
+    const wasActive = this.active
     this.active = false
     this.targetPid = null
     this.appName = ''
     this.windowId = null
     this.misses = 0
+    this.ownerThreadId = null
+    this.clearAutoDismiss()
     this.clearLoop()
-    this.broadcastState()
+    if (wasActive) this.broadcastState()
+  }
+
+  private clearAutoDismiss(): void {
+    if (this.autoDismissTimer) {
+      clearTimeout(this.autoDismissTimer)
+      this.autoDismissTimer = null
+    }
   }
 
   getState(): ComputerUsePipState {
@@ -76,6 +114,7 @@ export class ComputerUsePipService {
   }
 
   async dispose(): Promise<void> {
+    this.clearAutoDismiss()
     this.active = false
     this.clearLoop()
     const client = this.client
@@ -122,7 +161,7 @@ export class ComputerUsePipService {
       const window = await this.frontmostWindow(client, pid)
       if (!window) {
         this.misses += 1
-        if (this.misses >= MAX_MISSES) await this.dismiss()
+        if (this.misses >= MAX_MISSES) this.hide()
         return
       }
       this.misses = 0
@@ -152,7 +191,7 @@ export class ComputerUsePipService {
       if (this.misses >= MAX_MISSES) {
         await this.client?.close().catch(() => undefined)
         this.client = null
-        await this.dismiss()
+        this.hide()
       }
     }
   }
