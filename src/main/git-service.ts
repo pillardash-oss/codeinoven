@@ -479,6 +479,42 @@ export class GitService {
     })
   }
 
+  /**
+   * Pull a specific remote branch, merging or rebasing, and return the
+   * refreshed status even when the integration stops on conflicts.
+   *
+   * The push-recovery flow needs to distinguish "pulled cleanly, safe to push"
+   * from "stopped on conflicts, hand over to the conflict UI". A conflicted
+   * pull is not an error — it returns the conflicted status so the renderer
+   * can show the merge/rebase conflict banner and never auto-push a half-merged
+   * tree. Only genuine failures (network, auth, no upstream) throw.
+   */
+  async pullIntegrate(
+    projectPath: string,
+    options: { remote?: string; branch?: string; rebase?: boolean; token?: string } = {}
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const args: string[] = []
+      if (options.rebase) args.push('--rebase')
+      if (options.remote) args.push(options.remote)
+      if (options.branch) args.push(options.branch)
+      const git = options.token
+        ? this.withAuthHeader(directory, options.token)
+        : this.client(directory)
+      try {
+        await git.pull(args)
+      } catch (failure) {
+        const status = await this.readStatus(directory).catch(() => null)
+        if (status && status.conflicted.length > 0) return status
+        await this.wrapError(projectPath, 'mutation', async () => {
+          throw failure
+        })
+      }
+      return this.readStatus(directory)
+    })
+  }
+
   async push(
     projectPath: string,
     options: { setUpstream: boolean; remote?: string; branch?: string; token?: string } = {

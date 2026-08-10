@@ -1343,6 +1343,24 @@ export class RemoteRpcDispatcher {
         return this.gitService.fetch(await this.resolveProjectPath(this.string(args[0])))
       case 'git:pull':
         return this.gitService.pull(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:pullIntegrate': {
+        const projectId = this.string(args[0])
+        const options = (args[1] ?? {}) as {
+          remote?: string
+          branch?: string
+          rebase?: boolean
+        }
+        const tokenRef = `git_pat_${projectId}`
+        const token = (await this.vault.exists(tokenRef))
+          ? await this.vault.resolve(tokenRef)
+          : undefined
+        return this.gitService.pullIntegrate(await this.resolveProjectPath(projectId), {
+          remote: typeof options.remote === 'string' ? options.remote : undefined,
+          branch: typeof options.branch === 'string' ? options.branch : undefined,
+          rebase: Boolean(options.rebase),
+          token
+        })
+      }
       case 'git:push': {
         const projectId = this.string(args[0])
         const options = (args[1] ?? {}) as {

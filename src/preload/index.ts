@@ -157,6 +157,7 @@ const INVOKE_CHANNELS = [
   'git:removeRemote',
   'git:fetch',
   'git:pull',
+  'git:pullIntegrate',
   'git:push',
   'git:getCredentialStatus',
   'git:setCredential',

@@ -89,6 +89,17 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 /**
+ * Whether a `git push` failure was a non-fast-forward rejection (the remote
+ * contains commits we don't have) rather than an actual error. Matches git's
+ * standard stderr phrasing across versions.
+ */
+export function isPushRejected(message: string): boolean {
+  return /non-fast-forward|fetch first|updates were rejected|failed to push some refs/iu.test(
+    message
+  )
+}
+
+/**
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
  */
@@ -333,15 +344,43 @@ export class GitState {
     setUpstream: boolean,
     remote?: string,
     branch?: string
-  ): Promise<void> {
+  ): Promise<'pushed' | 'rejected' | 'failed'> {
     this.markBusy('push', true)
     this.error = null
     try {
       this.status = await invoke('git:push', projectId, { setUpstream, remote, branch })
+      return 'pushed'
     } catch (reason) {
-      this.error = errorMessage(reason, 'Push failed')
+      const message = errorMessage(reason, 'Push failed')
+      // A non-fast-forward rejection is not a failure — the panel turns it into
+      // the "pull & push" recovery dialog instead of a scary error banner.
+      if (isPushRejected(message)) return 'rejected'
+      this.error = message
+      return 'failed'
     } finally {
       this.markBusy('push', false)
+    }
+  }
+
+  /**
+   * Pull a specific remote branch (merge or rebase) for push recovery, then
+   * surface the refreshed status. A pull that stops on conflicts is a normal
+   * state — the panel hands over to the conflict UI and never auto-pushes.
+   */
+  async pullIntegrate(
+    projectId: string,
+    remote: string,
+    branch: string,
+    rebase: boolean
+  ): Promise<void> {
+    this.markBusy('pull', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:pullIntegrate', projectId, { remote, branch, rebase })
+    } catch (reason) {
+      this.error = errorMessage(reason, rebase ? 'Pull with rebase failed' : 'Pull failed')
+    } finally {
+      this.markBusy('pull', false)
     }
   }
 
