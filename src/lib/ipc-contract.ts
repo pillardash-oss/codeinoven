@@ -1318,9 +1318,18 @@ export interface CloseConfirmationProject {
   threads: CloseConfirmationThread[]
 }
 
-/** Sent when the user tries to close the app while threads are still working. */
+/** An open file with unsaved edits, blocking the close. */
+export interface CloseConfirmationFile {
+  projectId: string
+  path: string
+}
+
+/** Sent when the user tries to close the app while threads are still working
+ *  or files have unsaved edits. `files` is populated by the renderer, which
+ *  owns the unsaved-editor state. */
 export interface CloseConfirmationPayload {
   projects: CloseConfirmationProject[]
+  files: CloseConfirmationFile[]
 }
 
 export type AgentNotificationKind = 'completed' | 'attention' | 'error'
@@ -1439,7 +1448,9 @@ export interface IpcEventContract {
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': []
-  /** Emitted when the app is asked to close while threads are still working. */
+  /** Emitted when the app is asked to close while threads are still working or
+   *  files have unsaved edits. The renderer populates `files` from its editor
+   *  state and either confirms the close or shows the confirmation modal. */
   'window:confirmClose': [payload: CloseConfirmationPayload]
   /**
    * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the

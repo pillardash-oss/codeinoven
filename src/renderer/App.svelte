@@ -23,6 +23,7 @@
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
@@ -856,13 +857,31 @@
     await invoke('app:confirmClose')
   }
 
+  /** Save every unsaved file, then close the app. Stays open if a save fails. */
+  async function confirmForceCloseSaving(): Promise<void> {
+    if (await projectFilesWorkspace.saveAllUnsaved()) {
+      await invoke('app:confirmClose')
+    } else {
+      toast.error('Some files could not be saved', {
+        description: 'The application stayed open so you can review them.'
+      })
+    }
+  }
+
   function installIpcSubscriptions(): () => void {
     const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
       void openNotificationThread(payload)
     })
     const unsubscribeShow = subscribe('notification:show', showAgentNotification)
     const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
-      closeConfirmation = payload
+      // The renderer owns the unsaved-file editor state, so it computes the
+      // pending files here. With nothing pending the close proceeds right away.
+      const files = projectFilesWorkspace.getUnsavedFiles()
+      if (payload.projects.length === 0 && files.length === 0) {
+        void confirmForceClose()
+        return
+      }
+      closeConfirmation = { projects: payload.projects, files }
     })
     const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as Thread
@@ -1180,6 +1199,7 @@
         payload={closeConfirmation}
         onDismiss={() => (closeConfirmation = null)}
         onConfirm={confirmForceClose}
+        onConfirmSave={confirmForceCloseSaving}
       />
     {/await}
   {/if}
