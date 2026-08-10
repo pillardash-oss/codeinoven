@@ -275,6 +275,16 @@ export interface HarnessDriver {
     sessionId: string
   ): Promise<void>
 
+  /**
+   * Start any session-specific transport needed by the prepared runtime before
+   * prompt composition finishes. Implementations must keep this idempotent.
+   */
+  preparePromptTransport?(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void>
+
   /** Read the harness's current authentication state without changing it. */
   getAuthStatus?(projectPath: string): Promise<HarnessAuthStatus>
 

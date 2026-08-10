@@ -82,6 +82,11 @@ export interface SnapshotOptions {
   includeGitMetadata?: boolean
 }
 
+interface CachedCheckpointFile {
+  signature: string
+  file: CheckpointFile
+}
+
 /**
  * A stat-only view of the project used to attribute mutations to the window in
  * which a tool ran. It stores no content, so it is cheap enough to take around
@@ -107,6 +112,8 @@ const DEFAULT_LIMITS: CheckpointLimits = {
 export class ChangeTrackingService {
   private readonly limits: CheckpointLimits
   private readonly excludedDirectoryNames: Set<string>
+  private cachedProjectRoot: string | undefined
+  private snapshotCache = new Map<string, CachedCheckpointFile>()
 
   constructor(
     private readonly blobs: CheckpointBlobStore,
@@ -122,11 +129,16 @@ export class ChangeTrackingService {
 
   async snapshot(projectPath: string, options: SnapshotOptions = {}): Promise<ProjectCheckpoint> {
     const projectRoot = await this.resolveProjectRoot(projectPath)
+    if (this.cachedProjectRoot !== projectRoot) {
+      this.cachedProjectRoot = projectRoot
+      this.snapshotCache.clear()
+    }
     const git = options.includeGitMetadata ? await this.readGitMetadata(projectRoot) : undefined
     const gitPaths = git
       ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
       : undefined
     const files: Record<string, CheckpointFile> = {}
+    const nextCache = new Map<string, CachedCheckpointFile>()
     let fileCount = 0
     let totalBytes = 0
 
@@ -141,9 +153,8 @@ export class ChangeTrackingService {
       if (!metadata.isFile()) return
       const resolvedFile = await realpath(absolutePath)
       this.assertWithinRoot(projectRoot, resolvedFile)
-      const content = await readFile(resolvedFile)
-      const size = content.byteLength
       const relativePath = this.relativePath(projectRoot, resolvedFile)
+      const size = metadata.size
 
       if (size > this.limits.maxFileBytes) {
         throw new CheckpointLimitError(
@@ -162,15 +173,28 @@ export class ChangeTrackingService {
         )
       }
 
+      const signature = `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
+      const cached = this.snapshotCache.get(relativePath)
+      if (cached?.signature === signature) {
+        files[relativePath] = cached.file
+        nextCache.set(relativePath, cached)
+        fileCount += 1
+        return
+      }
+
+      const content = await readFile(resolvedFile)
       const hash = createHash('sha256').update(content).digest('hex')
       await this.blobs.put(hash, content)
-      files[relativePath] = { path: relativePath, hash, size, binary: isBinary(content) }
+      const file = { path: relativePath, hash, size, binary: isBinary(content) }
+      files[relativePath] = file
+      nextCache.set(relativePath, { signature, file })
       fileCount += 1
     }
 
     for (const path of await this.listCandidateFiles(projectRoot, gitPaths)) {
       await captureFile(path)
     }
+    this.snapshotCache = nextCache
     return {
       id: randomUUID(),
       projectRoot,

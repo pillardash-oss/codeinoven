@@ -86,10 +86,16 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
  * It never uses git reset or rewrites paths that are absent from the recorded diff.
  */
 export class CheckpointManager {
+  private readonly trackers = new Map<string, ChangeTrackingService>()
+
   constructor(private readonly db: Database) {}
 
   private tracker(projectId: string): ChangeTrackingService {
-    return new ChangeTrackingService(new StorageCheckpointBlobStore(projectId))
+    const existing = this.trackers.get(projectId)
+    if (existing) return existing
+    const tracker = new ChangeTrackingService(new StorageCheckpointBlobStore(projectId))
+    this.trackers.set(projectId, tracker)
+    return tracker
   }
 
   async beginTurn(
