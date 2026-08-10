@@ -2518,6 +2518,9 @@ export interface AppConfig {
    *  once the reported reset time passes. Only applies to harnesses that do not
    *  schedule their own provider retries (OpenCode manages its own). */
   autoRetryAfterReset: boolean
+  /** Resume regular and Sr. Engineer threads that were interrupted by an app
+   *  closure or unknown issue when the app restarts. */
+  resumeWorkOnRestart: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2545,6 +2548,7 @@ export type AppConfigPatch = Partial<
     | 'keepAwakeWhileWorking'
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
+    | 'resumeWorkOnRestart'
   >
 >
 

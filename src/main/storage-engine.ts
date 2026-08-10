@@ -39,7 +39,8 @@ const DEFAULT_CONFIG: AppConfig = {
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
   imageDescriptorAskAgain: false,
-  autoRetryAfterReset: true
+  autoRetryAfterReset: true,
+  resumeWorkOnRestart: true
 }
 
 /**

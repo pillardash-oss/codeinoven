@@ -421,21 +421,39 @@
           <!-- Recovery -->
           <div class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Recovery</h3>
-            <div class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Auto-resume after usage resets</p>
-                <p class="text-xs text-dimmed">
-                  Automatically continue threads whose agent hit a usage or rate limit once its
-                  reset time passes
-                </p>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Resume work on restart</p>
+                  <p class="text-xs text-dimmed">
+                    Threads will be resumed if they were interrupted due to an app closure or
+                    unknown issues
+                  </p>
+                </div>
+                <Switch
+                  checked={config.resumeWorkOnRestart}
+                  onchange={() =>
+                    void updateConfig({ resumeWorkOnRestart: !config.resumeWorkOnRestart })}
+                  aria-label="Toggle resuming interrupted threads after the app restarts"
+                  disabled={!settingsReady}
+                />
               </div>
-              <Switch
-                checked={config.autoRetryAfterReset}
-                onchange={() =>
-                  void updateConfig({ autoRetryAfterReset: !config.autoRetryAfterReset })}
-                aria-label="Toggle auto-resuming threads after a usage reset"
-                disabled={!settingsReady}
-              />
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Auto-resume after usage resets</p>
+                  <p class="text-xs text-dimmed">
+                    Automatically continue threads whose agent hit a usage or rate limit once its
+                    reset time passes
+                  </p>
+                </div>
+                <Switch
+                  checked={config.autoRetryAfterReset}
+                  onchange={() =>
+                    void updateConfig({ autoRetryAfterReset: !config.autoRetryAfterReset })}
+                  aria-label="Toggle auto-resuming threads after a usage reset"
+                  disabled={!settingsReady}
+                />
+              </div>
             </div>
           </div>
 

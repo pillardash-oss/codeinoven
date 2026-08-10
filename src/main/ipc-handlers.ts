@@ -57,6 +57,7 @@ import {
   validatePrReviewEvent,
   validatePrCommentBody,
   validatePushOptions,
+  validatePullIntegrateOptions,
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
@@ -168,7 +169,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'updateChannel',
   'keepAwakeWhileWorking',
   'imageDescriptorAskAgain',
-  'autoRetryAfterReset'
+  'autoRetryAfterReset',
+  'resumeWorkOnRestart'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -908,6 +910,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('autoRetryAfterReset must be a boolean')
     }
     patch.autoRetryAfterReset = value.autoRetryAfterReset
+  }
+
+  if ('resumeWorkOnRestart' in value) {
+    if (typeof value.resumeWorkOnRestart !== 'boolean') {
+      throw new TypeError('resumeWorkOnRestart must be a boolean')
+    }
+    patch.resumeWorkOnRestart = value.resumeWorkOnRestart
   }
 
   return patch
@@ -2793,6 +2802,17 @@ export function registerIpcHandlers(
   ipcMain.handle('git:pull', async (_, projectId: unknown) =>
     gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )
+  ipcMain.handle('git:pullIntegrate', async (_, projectId: unknown, options: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeOptions = validatePullIntegrateOptions(options)
+    // Resolve the vaulted PAT in main only; the token never crosses IPC.
+    const tokenRef = gitCredentialRef(safeProjectId)
+    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+    return gitService.pullIntegrate(await resolveProjectPath(safeProjectId), {
+      ...safeOptions,
+      token
+    })
+  })
   ipcMain.handle('git:push', async (_, projectId: unknown, options: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeOptions = validatePushOptions(options)
