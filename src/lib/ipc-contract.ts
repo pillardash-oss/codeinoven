@@ -160,6 +160,12 @@ export interface UpdaterStatus {
 }
 
 export interface IpcInvokeContract {
+  'account:getProfile': Contract<[], import('./types').AccountProfileState>
+  'account:beginSignIn': Contract<
+    [provider: import('./types').AccountAuthProvider],
+    import('./types').AccountSignInStart
+  >
+  'account:syncProfile': Contract<[], import('./types').AccountProfileState>
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
