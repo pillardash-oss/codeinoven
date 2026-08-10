@@ -1125,7 +1125,9 @@ export class OpenCodeDriver implements HarnessDriver {
         completion?.cancel()
         if (isolated) {
           this.titleSessions.delete(isolated.sessionId)
-          await this.deleteSessionOnHandle(isolated).catch(() => undefined)
+          await this.deleteSessionOnHandle(isolated.baseUrl, isolated.sessionId).catch(
+            () => undefined
+          )
           this.disposeIsolatedSession(isolated)
         }
       }
@@ -1337,35 +1339,62 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /**
-   * Permanently remove a session from the pooled server, releasing the work it
-   * owned (in-flight turns and any processes it spawned). No-op when the
-   * project's server is not running, and an already-missing session counts as
-   * deleted.
+   * Permanently remove a session from the harness, releasing the work it owned
+   * (in-flight turns and any processes it spawned). When the project's pooled
+   * server is running it deletes through that; otherwise it spins up a
+   * transient server purely to remove the persisted session so it cannot
+   * rehydrate on next use. An already-missing session counts as deleted.
    */
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     const turnHandle = this.turnServers.get(sessionId)
     const handle = turnHandle ?? this.servers.get(projectPath)
-    if (!handle) return
+    if (!handle) {
+      await this.deleteSessionViaTransientServer(projectPath, sessionId)
+      return
+    }
     try {
-      const res = await fetch(`${handle.baseUrl}/session/${sessionId}`, {
-        method: 'DELETE',
-        signal: AbortSignal.timeout(10_000)
-      })
-      if (!res.ok && res.status !== 404) {
-        throw await errorFromResponse(res, 'Failed to delete session')
-      }
+      await this.deleteSessionOnHandle(handle.baseUrl, sessionId)
     } finally {
       if (turnHandle) await this.stopTurnServer(sessionId)
     }
   }
 
-  private async deleteSessionOnHandle(handle: IsolatedHandle): Promise<void> {
-    const res = await fetch(`${handle.baseUrl}/session/${handle.sessionId}`, {
+  /**
+   * Delete a persisted opencode session of an idle project whose server is not
+   * running. Spawns a short-lived isolated `opencode serve` on the project,
+   * issues opencode's own session DELETE through it (which removes the session
+   * from opencode's on-disk store), then always tears the transient server down
+   * so no orphaned session or process is left behind. Best-effort: failures
+   * log and are swallowed.
+   */
+  private async deleteSessionViaTransientServer(
+    projectPath: string,
+    sessionId: string
+  ): Promise<void> {
+    let transient: IsolatedHandle | undefined
+    try {
+      const base = await this.startIsolatedServer(projectPath)
+      transient = { ...base, sessionId }
+      const handle = transient
+      this.isolatedServers.add(handle)
+      handle.process.on('exit', () => {
+        this.isolatedServers.delete(handle)
+      })
+      await this.deleteSessionOnHandle(handle.baseUrl, sessionId)
+    } catch (error) {
+      Logger.dev('Transient opencode session deletion was incomplete:', error)
+    } finally {
+      if (transient) this.disposeIsolatedSession(transient)
+    }
+  }
+
+  private async deleteSessionOnHandle(baseUrl: string, sessionId: string): Promise<void> {
+    const res = await fetch(`${baseUrl}/session/${sessionId}`, {
       method: 'DELETE',
       signal: AbortSignal.timeout(10_000)
     })
     if (!res.ok && res.status !== 404) {
-      throw await errorFromResponse(res, 'Failed to delete isolated session')
+      throw await errorFromResponse(res, 'Failed to delete session')
     }
   }
 
