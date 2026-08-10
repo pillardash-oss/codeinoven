@@ -161,7 +161,7 @@ self.addEventListener('notificationclick', (event) => {
           return
         }
       }
-      return self.clients.openWindow('./remote.html')
+      return self.clients.openWindow('/')
     })
   )
 })

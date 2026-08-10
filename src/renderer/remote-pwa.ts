@@ -9,7 +9,7 @@ import './app.css'
 // Installable phone client: register the service worker (isolated to this
 // origin), then mount the remote session UI.
 if ('serviceWorker' in navigator) {
-  void navigator.serviceWorker.register('./service-worker.js').catch(() => undefined)
+  void navigator.serviceWorker.register('/service-worker.js').catch(() => undefined)
 }
 
 // The shared renderer stores read IPC through `window.api`. On the phone there

@@ -19,7 +19,7 @@
     const apiOrigin = remoteStatus?.cloud.apiOrigin
     if (!apiOrigin) return null
     try {
-      return new URL('/remote.html', apiOrigin).toString()
+      return new URL('/', apiOrigin).toString()
     } catch {
       return null
     }
