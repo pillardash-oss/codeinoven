@@ -36,6 +36,7 @@ import {
 } from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
 import { AttachmentGrantRepo } from './database/repositories/attachment-grant-repo'
+import { HarnessUsageRepo } from './database/repositories/harness-usage-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -1016,6 +1017,7 @@ export function registerIpcHandlers(
   )
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
+  const harnessUsageRepo = new HarnessUsageRepo(database)
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
@@ -1063,6 +1065,7 @@ export function registerIpcHandlers(
   })
 
   // ─── Application config ────────────────────────────────────────────────
+  ipcMain.handle('account:getLocalUsage', () => harnessUsageRepo.profileSummary())
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
   }

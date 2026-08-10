@@ -145,7 +145,7 @@
   onMount(() => void loadUsage())
 </script>
 
-<div class="mx-auto max-w-6xl p-6 pb-24">
+<div class="w-full p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
       <h1 class="text-xl font-bold tracking-tight">Profile</h1>
@@ -208,15 +208,16 @@
     </div>
 
     <div class="mt-5 overflow-x-auto pb-2">
-      <div class="w-max min-w-full">
-        <div class="ml-8 flex gap-1" aria-hidden="true">
-          {#each calendarWeeks as week, index (`month-${index}`)}
-            <span class="w-2.5 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
-              {week.monthLabel}
-            </span>
-          {/each}
-        </div>
-        <div class="mt-1 flex gap-2">
+      <div class="min-w-[46rem]">
+        <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
+          <span aria-hidden="true"></span>
+          <div class="grid grid-cols-[repeat(52,minmax(0,1fr))] gap-1" aria-hidden="true">
+            {#each calendarWeeks as week, index (`month-${index}`)}
+              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
+                {week.monthLabel}
+              </span>
+            {/each}
+          </div>
           <div
             class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-2.5 text-dimmed"
             aria-hidden="true"
@@ -224,12 +225,15 @@
             <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
             ><span></span>
           </div>
-          <div class="flex gap-1" aria-label="Local activity calendar">
+          <div
+            class="grid grid-cols-[repeat(52,minmax(0,1fr))] gap-1"
+            aria-label="Local activity calendar"
+          >
             {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
-              <div class="flex flex-col gap-1">
+              <div class="flex min-w-0 flex-col gap-1">
                 {#each week.days as day (day.date)}
                   <span
-                    class="h-2.5 w-2.5 rounded-sm {activityClass(day)}"
+                    class="aspect-square w-full rounded-sm {activityClass(day)}"
                     title={`${day.date}: ${day.count} agent responses`}
                     aria-label={`${day.date}: ${day.count} agent responses`}
                   ></span>
