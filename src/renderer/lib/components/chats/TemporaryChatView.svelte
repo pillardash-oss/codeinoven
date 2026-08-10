@@ -33,6 +33,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { INBOX_PROJECT_ID } from '$shared/types'
   import type {
     AgentMessage,
     AgentEvent,
@@ -716,6 +717,11 @@
             onSettingsChange={updateSettings}
             {providers}
             projectId={tab.projectId}
+            attachmentStorage={{
+              kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
+              projectId: tab.projectId,
+              threadId: tab.threadId
+            }}
             harnessId={tab.settings.harnessId}
             showEngineeringMode={false}
             readOnlyMode

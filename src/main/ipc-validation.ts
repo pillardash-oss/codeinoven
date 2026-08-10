@@ -809,6 +809,22 @@ export interface PrivilegedScopeResolvers {
   /** Concrete app-owned artifact directories (per project) that reveal/preview
    *  may target — never the whole config root, which holds secrets. */
   appArtifactRoots: () => Promise<readonly string[]> | readonly string[]
+  /** Exact canonical files previously persisted as user-authored attachments. */
+  isApprovedFile?: (canonicalPath: string) => Promise<boolean> | boolean
+}
+
+export class ScopedPathError extends TypeError {
+  constructor(
+    readonly code: 'missing' | 'out_of_scope',
+    message: string
+  ) {
+    super(message)
+    this.name = 'ScopedPathError'
+  }
+}
+
+export function isMissingScopedPathError(error: unknown): boolean {
+  return error instanceof ScopedPathError && error.code === 'missing'
 }
 
 export interface PrivilegedIpcValidatorOptions {
@@ -963,11 +979,15 @@ export class PrivilegedIpcValidator {
     const candidate = this.#decodeCandidatePath(value)
     const canonical = await this.#canonicalize(candidate)
     if (this.#userSelectedFiles.has(canonical)) return canonical
+    if (await this.#scopes?.isApprovedFile?.(canonical)) return canonical
     const scopes = await this.#resolveScopes()
     for (const scope of scopes) {
       if (isWithinRoot(scope, canonical)) return canonical
     }
-    throw new TypeError('Path is outside the approved project or user-selected scopes')
+    throw new ScopedPathError(
+      'out_of_scope',
+      'Path is outside the approved project or user-selected scopes'
+    )
   }
 
   #decodeCandidatePath(value: unknown): string {
@@ -1004,7 +1024,7 @@ export class PrivilegedIpcValidator {
     try {
       return await realpath(path)
     } catch {
-      throw new TypeError('Path does not resolve to an existing file or directory')
+      throw new ScopedPathError('missing', 'Path does not resolve to an existing file or directory')
     }
   }
 

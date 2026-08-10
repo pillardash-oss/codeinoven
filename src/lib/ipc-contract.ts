@@ -686,7 +686,10 @@ export interface IpcInvokeContract {
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
-  'clipboard:saveImage': Contract<[], string | null>
+  'clipboard:saveImage': Contract<
+    [scope: { kind: 'project' | 'chat'; projectId: string; threadId: string }],
+    string | null
+  >
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[], string | null>
