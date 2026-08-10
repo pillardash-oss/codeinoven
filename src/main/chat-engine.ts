@@ -230,10 +230,8 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_PIPELINE_VERSION = 8
+const SPEC_GENERATION_PIPELINE_VERSION = 9
 const SPEC_GENERATION_MAX_ATTEMPTS = 2
-/** Total wall-clock budget for the complete specification workflow, including retries. */
-const SPEC_GENERATION_WORKFLOW_TIMEOUT_MS = 10 * 60 * 1000
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -835,7 +833,6 @@ interface SessionCompletionWaiter {
   resolve: (structuredOutput: unknown | undefined) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
-  absoluteTimer?: ReturnType<typeof setTimeout>
   /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
   refresh: () => void
 }
@@ -1000,8 +997,8 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
-  /** Model titles use a disposable harness session, but wait for the main turn
-   * to become idle so concurrent Claude processes cannot race OAuth refresh. */
+  /** Claude titles wait for the main turn to become idle so concurrent Claude
+   * processes cannot race OAuth refresh. Other harnesses title independently. */
   private pendingAutoTitles = new Map<string, PendingAutoTitle>()
   /**
    * Whether `ensureSession` confirmed the harness session natively holds the
@@ -1603,7 +1600,6 @@ export class ChatEngine {
     )
     this.idleReaperTimer.unref?.()
     void this.recoverInterruptedBrainstormEntries()
-    void this.recoverExpiredInitialSpecEntries()
     void this.resumePendingWork()
     void this.materializeAuditReportArtifacts()
   }
@@ -1833,7 +1829,6 @@ export class ChatEngine {
     this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
       clearTimeout(waiter.timer)
-      if (waiter.absoluteTimer) clearTimeout(waiter.absoluteTimer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
     }
     this.completionWaiters.clear()
@@ -3000,12 +2995,6 @@ export class ChatEngine {
     if (!thread?.sessionId) return null
     const pendingSpec = await this.readPendingInitialSpec(projectId, threadId)
     if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
-      const elapsedMs = Date.now() - pendingSpec.createdAt
-      if (elapsedMs >= SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) {
-        // Initial-spec failures are rendered by the persisted planning workflow's
-        // dedicated retry card, never by the generic provider-error card.
-        return null
-      }
       const liveActivity = this.sessionStatuses.get(thread.sessionId)
       return liveActivity?.state === 'working' && liveActivity.activity
         ? liveActivity
@@ -3526,6 +3515,18 @@ export class ChatEngine {
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
     }
+    // Claude Code background processes must remain serialized because its
+    // OAuth refresh is shared. Other harnesses own isolated title transports,
+    // so their title must not depend on the main turn reaching a successful
+    // terminal state.
+    const deferAutoTitleUntilIdle = shouldAutoTitle && driverId === 'claude-code'
+    let autoTitleScheduled = false
+    const scheduleAutoTitle = (): Promise<void> => {
+      if (!shouldAutoTitle || autoTitleScheduled) return Promise.resolve()
+      autoTitleScheduled = true
+      return this.autoTitleThread(projectId, threadId, driverId, settings, text)
+    }
+    if (!deferAutoTitleUntilIdle) void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
     const planningSpecTurn = settings.engineeringMode && specAction !== 'implement'
@@ -3548,6 +3549,7 @@ export class ChatEngine {
         brainstormWorkflow = this.brainstormEngine.chooseEntry(projectId, threadId, 'spec')
       }
       if (!brainstormWorkflow.entryChoice) {
+        void scheduleAutoTitle()
         await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', {
           read: false
         })
@@ -3561,6 +3563,7 @@ export class ChatEngine {
         if (activeBrainstorm) {
           activeBrainstormTurn = activeBrainstorm
         } else {
+          void scheduleAutoTitle()
           await this.chooseBrainstormEntry(projectId, threadId, 'brainstorm')
           return publicUserMessage
         }
@@ -3588,7 +3591,7 @@ export class ChatEngine {
       this.mermaidRepairAttempts.delete(sessionId)
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
     }
-    if (shouldAutoTitle) {
+    if (deferAutoTitleUntilIdle) {
       this.pendingAutoTitles.set(sessionId, { projectId, threadId, driverId, settings, text })
     }
     // A new turn resolves any pending auto-resume for this session — the user
@@ -7427,9 +7430,6 @@ export class ChatEngine {
     let lastError: Error | null = null
 
     for (const useStructuredOutput of formatModes) {
-      if (request.deadlineAt !== undefined && Date.now() >= request.deadlineAt) {
-        throw new Error('Specification generation exceeded its total workflow deadline')
-      }
       const isolated =
         driver instanceof OpenCodeDriver
           ? await driver.createIsolatedSession(
@@ -7471,8 +7471,7 @@ export class ChatEngine {
         sessionId,
         SPEC_GENERATION_TIMEOUT_MS,
         'Specification generation',
-        undefined,
-        request.deadlineAt
+        () => new Error('Specification generation stopped producing activity for 10 minutes')
       )
 
       try {
@@ -8980,37 +8979,6 @@ export class ChatEngine {
     return { tasks, rows, directories }
   }
 
-  /** Convert expired or orphaned persisted spec work into a visible terminal failure. */
-  private async recoverExpiredInitialSpecEntries(): Promise<void> {
-    try {
-      const threads = await this.threadManager.listAllThreads()
-      for (const thread of threads) {
-        const pending = await this.readPendingInitialSpec(thread.projectId, thread.id)
-        if (!pending || (pending.state !== 'pending' && pending.state !== 'generating')) continue
-        const elapsedMs = Date.now() - pending.createdAt
-        if (elapsedMs < SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) continue
-        const error = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
-        await this.writePendingInitialSpec({
-          ...pending,
-          generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
-          state: 'failed',
-          error,
-          updatedAt: Date.now()
-        })
-        await this.threadManager.setStatus(thread.projectId, thread.id, 'failed', { read: false })
-        Logger.error('Expired specification workflow recovered as failed', {
-          projectId: thread.projectId,
-          threadId: thread.id,
-          attempts: pending.attempts,
-          elapsedMs,
-          error
-        })
-      }
-    } catch (error) {
-      Logger.error('Expired specification workflow recovery failed:', error)
-    }
-  }
-
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */
   private async recoverInterruptedBrainstormEntries(): Promise<void> {
     try {
@@ -9307,10 +9275,6 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, threadId, 'planning')
     let lastError = ''
     while (pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS) {
-      if (Date.now() >= pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) {
-        lastError = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
-        break
-      }
       pending = {
         ...pending,
         state: 'generating',
@@ -9337,8 +9301,7 @@ export class ChatEngine {
             instructions: lastError
               ? `${pending.source}\n\nThe previous draft was rejected: ${lastError}. Return only a valid JSON object matching the required schema.`
               : pending.source,
-            settings: pending.settings,
-            deadlineAt: pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
+            settings: pending.settings
           }))
         const context = await this.memoryService.snapshotCurrent(projectId, threadId)
         const spec = await this.specEngine.createDraft({
@@ -9371,9 +9334,7 @@ export class ChatEngine {
           })
           return null
         }
-        const willRetry =
-          pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS &&
-          Date.now() < pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
+        const willRetry = pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS
         Logger.error('Specification generation attempt rejected', {
           projectId,
           threadId,
@@ -9384,11 +9345,7 @@ export class ChatEngine {
         })
         pending = {
           ...pending,
-          state:
-            pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS ||
-            Date.now() >= pending.createdAt + SPEC_GENERATION_WORKFLOW_TIMEOUT_MS
-              ? 'failed'
-              : 'pending',
+          state: pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS ? 'failed' : 'pending',
           error: lastError,
           updatedAt: Date.now()
         }
@@ -11770,8 +11727,7 @@ export class ChatEngine {
     sessionId: string,
     timeoutMs = 180_000,
     label = 'Agent session',
-    timeoutError?: () => Error,
-    absoluteDeadlineAt?: number
+    timeoutError?: () => Error
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
@@ -11792,16 +11748,6 @@ export class ChatEngine {
           waiter.timer = armTimer()
         }
       }
-      if (absoluteDeadlineAt !== undefined) {
-        waiter.absoluteTimer = setTimeout(
-          () => {
-            this.completionWaiters.delete(sessionId)
-            clearTimeout(waiter.timer)
-            waiter.reject(new Error(`${labelForMessage} exceeded its total workflow deadline`))
-          },
-          Math.max(0, absoluteDeadlineAt - Date.now())
-        )
-      }
       this.completionWaiters.set(sessionId, waiter)
     })
   }
@@ -11819,6 +11765,11 @@ export class ChatEngine {
       if (event.structuredOutput !== undefined) {
         waiter.structuredOutput = event.structuredOutput
       }
+      waiter.refresh()
+      return
+    }
+    if (event.type === 'session.status' && event.status.state !== 'idle') {
+      waiter.active = true
       waiter.refresh()
       return
     }
@@ -11844,7 +11795,6 @@ export class ChatEngine {
     const waiter = this.completionWaiters.get(sessionId)
     if (!waiter) return
     clearTimeout(waiter.timer)
-    if (waiter.absoluteTimer) clearTimeout(waiter.absoluteTimer)
     this.completionWaiters.delete(sessionId)
   }
 
