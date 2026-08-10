@@ -225,6 +225,10 @@ const SYSTEM_LAYER_RESERVE_TOKENS = 2_048
 const MAX_RECAP_TOKENS = 2_000_000
 /** How long an image-descriptor failure waits for a user decision before auto-ignoring. */
 const IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS = 300_000
+const INCOMPLETE_TURN_MESSAGE =
+  'The harness ended the turn without returning a final response. The task may be incomplete.'
+const INCOMPLETE_TURN_CONTINUATION_PROMPT =
+  'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_PIPELINE_VERSION = 7
 const MUTATING_FILE_TOOLS = new Set([
@@ -910,6 +914,8 @@ export class ChatEngine {
   private pendingMemoryDecisions = new Map<string, PendingMemoryDecision>()
   /** Number of automatic Mermaid correction prompts already issued for the active turn. */
   private mermaidRepairAttempts = new Map<string, number>()
+  /** Number of hidden continuations issued after a turn ended without a final response. */
+  private incompleteTurnRecoveryAttempts = new Map<string, number>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Threads currently running the independent audit half of Achievement. */
@@ -2587,6 +2593,8 @@ export class ChatEngine {
     this.userAbortedSessions.delete(sessionId)
     this.outboundMessageIdsBySession.delete(sessionId)
     this.pendingAutoTitles.delete(sessionId)
+    this.mermaidRepairAttempts.delete(sessionId)
+    this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
@@ -3540,7 +3548,10 @@ export class ChatEngine {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
     }
-    if (origin === 'user') this.mermaidRepairAttempts.delete(sessionId)
+    if (origin === 'user') {
+      this.mermaidRepairAttempts.delete(sessionId)
+      this.incompleteTurnRecoveryAttempts.delete(sessionId)
+    }
     if (shouldAutoTitle) {
       this.pendingAutoTitles.set(sessionId, { projectId, threadId, driverId, settings, text })
     }
@@ -10707,6 +10718,20 @@ export class ChatEngine {
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
         )
+      const missingFinalResponse =
+        !failure &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        (!turnAssistant ||
+          (!assistantText(turnAssistant).trim() && turnAssistant.structuredOutput === undefined))
+      if (!missingFinalResponse) {
+        this.incompleteTurnRecoveryAttempts.delete(sessionId)
+      } else if (
+        (this.incompleteTurnRecoveryAttempts.get(sessionId) ?? 0) >= 1 ||
+        !thread?.settings
+      ) {
+        failure = INCOMPLETE_TURN_MESSAGE
+      }
       let mermaidFailures: MermaidValidationFailure[] = []
       if (!failure && !awaitingUser && !suppressTerminalAnswer && turnAssistant) {
         const validation = await validateMermaidOutput(assistantText(turnAssistant))
@@ -10760,6 +10785,36 @@ export class ChatEngine {
             info.threadId,
             thread.settings,
             mermaidRepairPrompt(mermaidFailures),
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal'
+          )
+        } catch (error) {
+          this.pendingMemoryDecisions.delete(sessionId)
+          this.pendingAutoTitles.delete(sessionId)
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+        }
+        return
+      }
+      if (missingFinalResponse && !failure && thread?.settings) {
+        this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
+        await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
+        await this.cleanupTurnUtilities(sessionId)
+        turnUtilitiesCleaned = true
+        if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+        if (pendingTitle) this.pendingAutoTitles.set(sessionId, pendingTitle)
+        try {
+          await this.sendPrompt(
+            info.projectId,
+            info.threadId,
+            thread.settings,
+            INCOMPLETE_TURN_CONTINUATION_PROMPT,
             [],
             undefined,
             undefined,
@@ -10835,6 +10890,14 @@ export class ChatEngine {
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
+      if (failure === INCOMPLETE_TURN_MESSAGE) {
+        await this.broadcastThreadSessionError(
+          info.projectId,
+          info.threadId,
+          sessionId,
+          this.fallbackProviderIssue(info.driverId, INCOMPLETE_TURN_MESSAGE)
+        )
+      }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
       if (!failure && !awaitingUser && finishedThread) {
         try {
@@ -11093,6 +11156,7 @@ export class ChatEngine {
     this.pendingMemoryDecisions.delete(sessionId)
     this.pendingAutoTitles.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
+    this.incompleteTurnRecoveryAttempts.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)
     this.pendingBrainstormTurns.delete(sessionId)
     try {
