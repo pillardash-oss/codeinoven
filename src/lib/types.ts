@@ -147,6 +147,8 @@ export interface Thread {
   titleSource: ThreadTitleSource
   status: ThreadStatus
   pinned: boolean
+  /** Timestamp (ms) when the thread was pinned; pins are ordered newest-first by this. */
+  pinnedAt?: number
   /** Position for manual drag-to-reorder; items without sortOrder fall back to lastActivity. */
   sortOrder?: number
   /** Position within its current scope bucket and slice; independent of project ordering. */

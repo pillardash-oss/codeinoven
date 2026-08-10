@@ -453,9 +453,17 @@ class ScopeState {
       (thread) => this.bucketForThread(thread) === bucketId && this.stageForThread(thread) === slice
     )
     return threads.sort((a, b) => {
-      const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-      const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-      if (aPosition !== bPosition) return aPosition - bPosition
+      // Pinned threads share one pin-time order across every surface; manual
+      // reorder (pinned_at) is the only override. Other slices use scope order.
+      if (slice === 'pinned') {
+        const aAt = a.pinnedAt ?? -1
+        const bAt = b.pinnedAt ?? -1
+        if (aAt !== bAt) return bAt - aAt
+      } else {
+        const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+        const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+        if (aPosition !== bPosition) return aPosition - bPosition
+      }
       if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
       return a.id.localeCompare(b.id)
     })
