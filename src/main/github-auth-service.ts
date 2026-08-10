@@ -25,6 +25,15 @@ const REFRESH_GRANT_TYPE = 'refresh_token'
 const NETWORK_TIMEOUT_MS = 15_000
 const TOKEN_REFRESH_LEEWAY_MS = 5 * 60 * 1000
 
+/**
+ * How long a fetched GitHub profile (with its inlined avatar) is served from
+ * memory before it is re-fetched. The Git panel remounts on every tab switch
+ * and would otherwise re-hit `api.github.com/user` and re-download the avatar
+ * image each time — the avatar is inlined as a `data:` URL, so the browser's
+ * HTTP cache never applies to it.
+ */
+const GITHUB_USER_CACHE_TTL_MS = 5 * 60 * 1000
+
 /** Refuse to inline an avatar larger than this (guards the IPC payload). */
 const AVATAR_MAX_BYTES = 512 * 1024
 
@@ -49,6 +58,14 @@ interface StoredGitHubCredentials {
  */
 export class GitHubAuthService {
   private refreshPromise: Promise<string | null> | null = null
+
+  /**
+   * Last fetched profile (login, name, inlined avatar) with its timestamp.
+   * Served without network while fresh, so repeated panel mounts don't re-hit
+   * the GitHub API or re-download the avatar. Cleared whenever credentials
+   * change (login/logout/token rotation) so the cache can never show a stale user.
+   */
+  private cachedUser: { user: GitHubAuthStatus['user']; at: number } | null = null
 
   constructor(private readonly vault: SecretVault) {}
 
@@ -86,6 +103,8 @@ export class GitHubAuthService {
 
   /** Resolve the public profile of the signed-in user (never the token). */
   private async fetchUserProfile(): Promise<GitHubAuthStatus['user']> {
+    const cached = this.cachedUser
+    if (cached && Date.now() - cached.at < GITHUB_USER_CACHE_TTL_MS) return cached.user
     const token = await this.resolveToken()
     if (!token) return null
     try {
@@ -105,12 +124,14 @@ export class GitHubAuthService {
         const login = this.readString(record, 'login')
         const avatarUrl = this.readString(record, 'avatar_url')
         if (!login || !avatarUrl) return null
-        return {
+        const user = {
           login,
           name: this.readString(record, 'name'),
           // Never hand back the remote URL: the renderer CSP would block it.
           avatarUrl: await this.inlineAvatar(avatarUrl)
         }
+        this.cachedUser = { user, at: Date.now() }
+        return user
       } finally {
         clearTimeout(timer)
       }
@@ -211,6 +232,7 @@ export class GitHubAuthService {
   }
 
   async logout(): Promise<void> {
+    this.cachedUser = null
     await this.vault.remove(GITHUB_TOKEN_REF)
   }
 
@@ -238,6 +260,8 @@ export class GitHubAuthService {
   ): Promise<void> {
     const accessToken = this.readString(record, 'access_token')
     if (!accessToken) throw new Error('GitHub token response did not include an access token')
+    // Credentials changed — the cached profile may belong to the previous user.
+    this.cachedUser = null
     const now = Date.now()
     const expiresIn = this.readNumber(record, 'expires_in')
     const refreshTokenExpiresIn = this.readNumber(record, 'refresh_token_expires_in')
