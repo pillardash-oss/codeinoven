@@ -55,7 +55,13 @@
     if (!identity || !githubConnected) return
     error = ''
     try {
-      await gitState.ensureDeploymentOverview(projectId, identity.owner, identity.repo, force)
+      const result = await gitState.ensureDeploymentOverview(
+        projectId,
+        identity.owner,
+        identity.repo,
+        force
+      )
+      if (result?.accessError) error = result.accessError
     } catch (reason) {
       error = message(reason)
     }

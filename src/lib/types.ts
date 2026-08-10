@@ -2730,6 +2730,8 @@ export interface PullRequestPage {
   page: number
   /** Whether another page exists after this one. */
   hasMore: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
 }
 
 /** Full pull request view, loaded when one is opened in the sidebar. */
@@ -2950,6 +2952,8 @@ export interface GitHubDeploymentOverview {
  */
 export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview {
   hasDeployments: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
 }
 
 /** One step inside a workflow run job — the granular "why did it fail" data. */
