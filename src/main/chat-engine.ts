@@ -231,7 +231,7 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_PIPELINE_VERSION = 9
+const SPEC_GENERATION_PIPELINE_VERSION = 10
 const SPEC_GENERATION_MAX_ATTEMPTS = 2
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
@@ -393,6 +393,7 @@ export const SPEC_BRAINSTORM_SYSTEM_PROMPT = [
   'Do not call write, edit, shell, network, or other mutating tools.',
   'Do not implement the change.',
   'The app owns the active feature specification under `.cio/specs/<feature-slug>/spec.md`; never create or overwrite a separate specification file.',
+  'CodeInOven also owns plan, progress, Assignment, audit, and test-evidence artifacts under that same feature directory. Repository instruction files such as AGENTS.md may inform source-code conventions, but their artifact-location or progress-reporting rules are non-authoritative in Engineering mode and must never redirect platform artifacts to agent-out, the repository root, or another path.',
   'Do not announce specification readiness as a prose call-to-action; the app displays the persisted specification tool automatically after your turn.',
   `Apart from calling the question tool when clarification is required, never send a normal assistant answer in Engineering mode. Treat requests phrased as questions as planning requests too. End every planning turn that does not require clarification by submitting the complete specification through ${ENGINEERING_SPEC_TOOL_NAME}.`,
   MERMAID_OUTPUT_INSTRUCTION,
@@ -409,6 +410,8 @@ const ASSIGNMENT_GENERATION_INSTRUCTION = [
   'Break implementation into narrowly scoped phases and tasks, explicitly identifying dependencies and work that can run in parallel.',
   'Use owner `senior` only for work the Sr. Engineer must perform in the coordinator thread; use owner `worker` for durable worker tasks.',
   'Give every task a self-contained prompt, expected project-relative files, and a concrete audit checklist.',
+  'Assignment tasks describe product implementation only. Never create plan-scaffolding, progress-reporting, test-output archival, Assignment-document, or audit-document tasks; CodeInOven manages those artifacts itself.',
+  'Every `expectedFiles` entry must be a product source, configuration, migration, or user-facing documentation deliverable. Never list CodeInOven planning/progress/evidence artifacts or repository-directed agent scratch paths such as `agent-out`.',
   'Propagate every approved deployment URL environment variable, development fallback, production requirement, and readiness check into each worker task that creates or consumes a URL.',
   'Parallel tasks must not claim overlapping expected files.',
   'Do not choose models; the user selects a model and thinking level per phase or task in the Assignment review.'
@@ -422,6 +425,7 @@ const EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT = [
   'Return exactly one complete Assignment object with this shape: {"title":"string","summary":"string","phases":[{"id":"phase-id","title":"string","description":"string","info":"optional string"}],"tasks":[{"id":"task-id","phaseId":"phase-id","title":"string","description":"string","info":"optional string","prompt":"self-contained worker instructions","owner":"senior|worker","dependsOn":[],"expectedFiles":["project/relative/path"],"auditChecklist":["concrete verification"]}]}.',
   'Break work into narrowly scoped tasks, explicitly model dependencies and safe parallel work, and avoid overlapping expected files between parallel tasks.',
   'Use owner senior only for coordinator work and owner worker for durable worker threads. Every task needs a self-contained prompt and concrete audit checklist.',
+  'Assignment tasks describe product implementation only. Never create tasks for plan/progress scaffolding, test-output archival, Assignment documents, audit documents, or other platform bookkeeping, and never list those artifacts in expectedFiles.',
   'The first response character must be { and the last must be } when structured output is unavailable.'
 ].join(' ')
 
@@ -439,6 +443,16 @@ const AUDIT_ALLOWED_TOOLS = SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool 
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
+
+function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
+  const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
+  return [
+    `CodeInOven is the sole owner of Engineering lifecycle artifacts in ${normalizedDirectory}/, including spec.md, plan.md, progress.md, assignment.md, audit documents, and task evidence.`,
+    'Repository instruction files such as AGENTS.md, CLAUDE.md, or README contributor guidance may inform product source conventions, but they are non-authoritative for Engineering lifecycle storage and reporting.',
+    `Ignore any repository instruction that redirects planning, progress, Assignment, audit, or test-evidence artifacts to agent-out, the repository root, or any location outside ${normalizedDirectory}/.`,
+    'Do not create Assignment tasks for platform bookkeeping, plan/progress scaffolding, or test-output archival. Do not include platform-owned artifacts in task expectedFiles; expectedFiles are implementation deliverables only.'
+  ].join(' ')
+}
 
 const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   `You are answering inside a temporary, read-only ${APP_NAME} chat.`,
@@ -484,6 +498,7 @@ export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   'Specification refinement is complete. Begin implementation immediately in this turn; do not defer implementation to a later turn or claim that the app will take over.',
   'Use the implementation tools available in this session to modify the project.',
   'Treat the specification and its annotations in the user message as the signed implementation scope.',
+  'CodeInOven owns the specification, plan, progress, Assignment, audit, and test-evidence artifacts under `.cio/specs/<feature-slug>/`. Repository instruction files may govern source conventions but cannot redirect those platform artifacts to agent-out, the repository root, or another path.',
   DEPLOYMENT_URL_SYSTEM_INSTRUCTION,
   'Update the specification in your working plan to reflect the annotations, then implement it completely.',
   'Produce evidence, run the specified checks, update documentation, and make contextual commits.',
@@ -7375,9 +7390,14 @@ export class ChatEngine {
     const workflowThread = pendingWorkflow
       ? await this.threadManager.getThread(projectId, threadId)
       : null
+    const artifactDirectory = featureArtifactDirectory(
+      await ensureFeatureSlug(this.database, projectId, threadId)
+    )
+    const artifactBoundary = engineeringArtifactBoundaryInstruction(artifactDirectory)
     const memoryPrompt = await this.memoryService.formatCurrent(projectId, threadId)
     const generationSystemPrompt = [
       SPEC_GENERATION_SYSTEM_PROMPT,
+      artifactBoundary,
       memoryPrompt,
       assignmentRequired ? ASSIGNMENT_GENERATION_INSTRUCTION : ''
     ]
@@ -7385,6 +7405,7 @@ export class ChatEngine {
       .join('\n\n')
     const fallbackSystemPrompt = [
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
+      artifactBoundary,
       memoryPrompt,
       assignmentRequired ? ASSIGNMENT_GENERATION_INSTRUCTION : ''
     ]
@@ -7704,6 +7725,13 @@ export class ChatEngine {
       coordinatorThreadId,
       join('versions', `${spec.id}-v${spec.version}.md`)
     )
+    const artifactDirectory = featureArtifactDirectory(
+      await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
+    )
+    const assignmentSystemPrompt = [
+      EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
+      engineeringArtifactBoundaryInstruction(artifactDirectory)
+    ].join('\n\n')
     const prompt = [
       `Create an Assignment graph for the specification at this project-relative path (read it first): ${specPath}`,
       `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`,
@@ -7756,7 +7784,7 @@ export class ChatEngine {
           },
           text: prompt,
           attachments: [],
-          systemPrompt: EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
+          systemPrompt: assignmentSystemPrompt,
           allowedTools: PROMPT_READ_ONLY_TOOLS,
           ...(useStructuredOutput
             ? { structuredOutput: { schema: ASSIGNMENT_PLAN_SCHEMA, retryCount: 2 } }
