@@ -8,10 +8,10 @@
 export const IMAGE_DESCRIPTOR_TOOL_NAME = 'image_descriptor'
 
 /** How the image source should be interpreted. */
-export type ImageDescriptorSourceType = 'part' | 'binary'
+export type ImageDescriptorSourceType = 'path' | 'binary'
 
 /** One image requested for description. `source` is a file path / file URL /
- *  http(s) URL / data URL when `type` is `part`, or base64 (or a data URL)
+ *  http(s) URL / data URL when `type` is `path`, or base64 (or a data URL)
  *  when `type` is `binary`. Each entry carries a unique `id` so responses can
  *  be mapped back to the request. */
 export interface ImageDescriptorEntry {
@@ -38,7 +38,7 @@ export const IMAGE_DESCRIPTOR_INPUT_SCHEMA: Record<string, unknown> = {
       minItems: 1,
       maxItems: IMAGE_DESCRIPTOR_MAX_IMAGES,
       description:
-        'Images to describe. Each entry has a unique id, a source, and a type: "part" when source is a file path or URL the model can read, or "binary" when source is base64 image data.',
+        'Images to describe. Each entry has a unique id, a source, and a type: "path" when source is a file path or URL the model can read, or "binary" when source is base64 image data.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -53,13 +53,13 @@ export const IMAGE_DESCRIPTOR_INPUT_SCHEMA: Record<string, unknown> = {
             type: 'string',
             minLength: 1,
             description:
-              'File path, file:// URL, http(s) URL, or data URL when type is "part"; base64 image data or a data URL when type is "binary".'
+              'File path, file:// URL, http(s) URL, or data URL when type is "path"; base64 image data or a data URL when type is "binary".'
           },
           type: {
             type: 'string',
-            enum: ['part', 'binary'],
+            enum: ['path', 'binary'],
             description:
-              'How to read the source: "part" reads it as a file/URL reference, "binary" decodes it as base64 image data.'
+              'How to read the source: "path" reads it as a file/URL reference, "binary" decodes it as base64 image data.'
           }
         },
         required: ['id', 'source', 'type']
@@ -81,7 +81,7 @@ export const IMAGE_DESCRIPTOR_OUTPUT_SCHEMA: Record<string, unknown> = {
         properties: {
           id: { type: 'string' },
           source: { type: 'string' },
-          type: { type: 'string', enum: ['part', 'binary'] },
+          type: { type: 'string', enum: ['path', 'binary'] },
           description: { type: 'string' },
           error: { type: 'string' }
         },

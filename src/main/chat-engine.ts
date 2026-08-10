@@ -169,7 +169,7 @@ const MEMORY_SYSTEM_INSTRUCTION = [
 
 /** Guidance injected for models that cannot see images (attachment: false). */
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
-  'You cannot see images. When the user (or a discovered file) provides an image, call the image_descriptor tool to obtain a text description of it before proceeding — pass each image as an entry with a unique id, its file path or URL as the source and type "part", or base64 image data as the source and type "binary". The tool accepts several images per call, so you can describe them in batches. If the attachment is a video file you cannot read directly, first check whether ffmpeg is available on the user\'s system and use it to extract representative frames, then pass those frames to image_descriptor as multiple image entries.'
+  'You cannot see images. When the user (or a discovered file) provides an image, call the image_descriptor tool to obtain a text description of it before proceeding — pass each image as an entry with a unique id, its file path or URL as the source and type "path", or base64 image data as the source and type "binary". The tool accepts several images per call, so you can describe them in batches. If the attachment is a video file you cannot read directly, first check whether ffmpeg is available on the user\'s system and use it to extract representative frames, then pass those frames to image_descriptor as multiple image entries.'
 
 const PROVIDER_CATALOG_TTL_MS = 24 * 60 * 60 * 1000
 
