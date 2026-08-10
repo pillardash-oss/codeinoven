@@ -78,6 +78,10 @@
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
+  /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
+  let pushDiverged = $state(false)
+  /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
+  let pushRecoverMode = $state<'merge' | 'rebase' | null>(null)
   let showIntegrateModal = $state(false)
   let showStashModal = $state(false)
   let stashMessage = $state('')
@@ -639,6 +643,13 @@
   )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
 
+  async function performPush(remote: { name: string; url: string }): Promise<void> {
+    if (!status?.branch) return
+    const result = await gitState.push(projectId, false, remote.name)
+    // A non-fast-forward rejection becomes the recovery dialog, not an error.
+    if (result === 'rejected') pushDiverged = true
+  }
+
   async function pushAction(): Promise<void> {
     const remote = primaryRemote
     if (!remote || !status?.branch) {
@@ -649,13 +660,36 @@
       pushConfirm = true
       return
     }
-    await gitState.push(projectId, false, remote.name)
+    // Known divergence from the last fetch — never attempt the doomed push.
+    if (status.behind > 0) {
+      pushDiverged = true
+      return
+    }
+    await performPush(remote)
   }
 
   async function confirmPushUpstream(): Promise<void> {
     pushConfirm = false
     if (!primaryRemote || !status?.branch) return
-    await gitState.push(projectId, true, primaryRemote.name, status.branch)
+    const result = await gitState.push(projectId, true, primaryRemote.name, status.branch)
+    if (result === 'rejected') pushDiverged = true
+  }
+
+  /** Pull the remote into the local branch, then push once integration is clean. */
+  async function recoverPush(mode: 'merge' | 'rebase'): Promise<void> {
+    const remote = primaryRemote
+    if (!remote || !status?.branch || pushRecoverMode) return
+    pushDiverged = false
+    pushRecoverMode = mode
+    try {
+      await gitState.pullIntegrate(projectId, remote.name, status.branch, mode === 'rebase')
+      // Conflicts hand over to the conflict UI; never auto-push a half-merged tree.
+      if (!gitState.error && gitState.conflicted.length === 0) {
+        await performPush(remote)
+      }
+    } finally {
+      pushRecoverMode = null
+    }
   }
 
   const conflictState = $derived(gitState.conflictState)
@@ -2008,6 +2042,64 @@
         </button>
       </div>
     </div>
+  {/if}
+
+  {#if pushDiverged}
+    <Modal open title="Push blocked — branch has diverged" onClose={() => (pushDiverged = false)}>
+      <div class="space-y-2">
+        <p class="text-[10px] leading-relaxed text-muted">
+          The remote branch has commits you don't have locally, so Git will not let you push over
+          them. Integrate the remote changes first, then push again.
+        </p>
+        <p class="rounded-lg border border-border bg-surface px-3 py-2 text-[10px] text-dimmed">
+          {status?.branch && primaryRemote
+            ? `${primaryRemote.name}/${status.branch}`
+            : 'Remote branch'}
+          {#if (status?.behind ?? 0) > 0 || (status?.ahead ?? 0) > 0}
+            — <span class="font-medium text-muted">{status?.ahead ?? 0} ahead</span> ·
+            <span class="font-medium text-muted">{status?.behind ?? 0} behind</span>
+          {/if}
+        </p>
+        <p class="text-[9px] leading-relaxed text-dimmed">
+          Merge keeps both histories and adds a merge commit. Rebase replays your commits on top of
+          the remote for a straight history. Conflicts pause integration so you can resolve them
+          here before anything is pushed.
+        </p>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+            onclick={() => (pushDiverged = false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={pushRecoverMode !== null}
+            onclick={() => void recoverPush('rebase')}
+          >
+            {#if pushRecoverMode === 'rebase'}
+              <Loader2 size={11} class="animate-spin" />
+            {/if}
+            Rebase &amp; push
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            disabled={pushRecoverMode !== null}
+            onclick={() => void recoverPush('merge')}
+          >
+            {#if pushRecoverMode === 'merge'}
+              <Loader2 size={11} class="animate-spin" />
+            {/if}
+            Pull &amp; push
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
   {/if}
 
   <!--

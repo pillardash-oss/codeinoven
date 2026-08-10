@@ -286,6 +286,26 @@ export function validatePushOptions(value: unknown): {
   return options
 }
 
+/** Options for the conflict-aware pull used by push recovery. */
+export function validatePullIntegrateOptions(value: unknown): {
+  remote?: string
+  branch?: string
+  rebase: boolean
+} {
+  const input = assertRecord(value, 'Pull integrate options')
+  rejectUnknownFields(input, new Set(['remote', 'branch', 'rebase']), 'pull integrate options')
+  const options: { remote?: string; branch?: string; rebase: boolean } = {
+    rebase: validateBoolean(input.rebase, 'Rebase')
+  }
+  if (input.remote !== undefined) {
+    options.remote = validateRemoteName(input.remote)
+  }
+  if (input.branch !== undefined) {
+    options.branch = validateBranchName(input.branch, 'Pull branch')
+  }
+  return options
+}
+
 /** Validate a PR list state filter. */
 export function validatePrState(value: unknown): import('../lib/types').PrState {
   return assertEnum(value, PR_STATES, 'PR state')
