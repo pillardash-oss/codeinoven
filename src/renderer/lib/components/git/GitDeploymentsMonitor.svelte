@@ -4,7 +4,6 @@
     CircleDot,
     CircleX,
     Clock3,
-    ExternalLink,
     GitBranch,
     Loader2,
     PackageCheck,
@@ -15,6 +14,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import GitDeploymentDetail from './GitDeploymentDetail.svelte'
+  import GitWorkflowRunDetail from './GitWorkflowRunDetail.svelte'
   import type { GitHubDeployment, GitHubWorkflowRun } from '$shared/types'
 
   interface Props {
@@ -29,6 +29,8 @@
   let error = $state('')
   /** When set, the in-app deployment detail view replaces the list. */
   let selectedDeployment = $state<GitHubDeployment | null>(null)
+  /** When set, the in-app workflow-run detail view replaces the list. */
+  let selectedRun = $state<GitHubWorkflowRun | null>(null)
 
   /**
    * The overview is cached in the store, so switching back to this tab renders
@@ -180,7 +182,14 @@
         {/if}
       </div>
     {:else if overview}
-      {#if selectedDeployment && identity}
+      {#if selectedRun && identity}
+        <GitWorkflowRunDetail
+          {projectId}
+          {identity}
+          run={selectedRun}
+          onBack={() => (selectedRun = null)}
+        />
+      {:else if selectedDeployment && identity}
         <GitDeploymentDetail
           {projectId}
           {identity}
@@ -208,9 +217,10 @@
                 {#each overview.workflowRuns as run (run.id)}
                   <button
                     type="button"
-                    class="flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-elevated"
-                    title="Open workflow run #{run.runNumber} on GitHub"
-                    onclick={() => run.url && void openInBrowser(run.url)}
+                    class="flex w-full cursor-pointer items-start gap-2.5 px-3 py-2 text-left transition-colors hover:bg-elevated"
+                    title="View workflow run #{run.runNumber}"
+                    aria-label="View workflow run #{run.runNumber}"
+                    onclick={() => (selectedRun = run)}
                   >
                     {#if run.status !== 'completed'}
                       <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
@@ -244,7 +254,6 @@
                         <span class="shrink-0">{relativeTime(run.updatedAt)}</span>
                       </div>
                     </div>
-                    <ExternalLink size={11} class="mt-0.5 shrink-0 text-dimmed" />
                   </button>
                 {/each}
               </div>
