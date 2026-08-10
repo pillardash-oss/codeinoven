@@ -160,6 +160,7 @@ export interface UpdaterStatus {
 }
 
 export interface IpcInvokeContract {
+  'account:getLocalUsage': Contract<[], import('./types').AccountUsageSummary>
   'account:getProfile': Contract<[], import('./types').AccountProfileState>
   'account:beginSignIn': Contract<
     [provider: import('./types').AccountAuthProvider],

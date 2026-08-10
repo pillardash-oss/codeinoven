@@ -17,6 +17,7 @@ import type {
 export type { InvokeArgs, InvokeChannel, InvokeResult } from '../lib/ipc-contract'
 
 const INVOKE_CHANNELS = [
+  'account:getLocalUsage',
   'account:getProfile',
   'account:beginSignIn',
   'account:syncProfile',
