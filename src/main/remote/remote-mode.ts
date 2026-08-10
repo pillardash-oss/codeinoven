@@ -395,14 +395,6 @@ export class RemoteModeController {
   async ensureGateway(): Promise<RemoteModeStatus> {
     if (!this.gateway && this.staticRoot) {
       await this.startGateway()
-    } else if (this.gateway) {
-      const pairingRotated = await this.syncPairingState()
-      if (pairingRotated && this.remoteModeActive) {
-        // The transport key changed with the LAN pairing bootstrap. Refresh
-        // the hosted control grant before cloud fallback can reuse the old key.
-        this.stopCloudAccess()
-        await this.restoreCloudAccess()
-      }
     }
     this.syncTray()
     this.broadcast()

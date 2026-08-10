@@ -212,16 +212,78 @@
       secret = pair
     }
     if (pwaPair.length === 0) return
-    // Connect immediately, then retry in the background until it lands so a
-    // desktop restart mid-session heals on its own.
+    // This is the legacy direct-LAN bootstrap path. Attempt it once and leave
+    // any retry to the explicit reconnect action; an expired or consumed QR
+    // must never create a permanent 1.5-second socket storm. Account-backed
+    // sessions own their bounded LAN/cloud reconnection policy separately.
     void handleConnect(pwaPair)
-    const retry = setInterval(() => {
-      if (pwaPair.length === 0 || connected || busy) return
-      void handleConnect(pwaPair)
-    }, 1500)
-    return () => clearInterval(retry)
   })
 </script>
+
+{#snippet internetAccess()}
+  <section class="rounded-xl border bg-surface p-4" aria-label="Remote access">
+    <div class="flex items-center gap-1.5">
+      <Globe2 size={14} class="text-muted" />
+      <h2 class="text-sm font-semibold text-foreground">Remote access</h2>
+    </div>
+    <p class="mt-2 text-xs leading-relaxed text-muted">
+      Connect through one account-backed workspace. The app uses LAN automatically when both devices
+      are on the same network and falls back to the cloud relay everywhere else.
+    </p>
+    {#if !remoteStatus?.cloud.configured}
+      <p class="mt-2 text-xs leading-relaxed text-muted">
+        Set <span class="font-mono text-foreground">REMOTE_API_ORIGIN</span> to your hosted mobile origin
+        to enroll this desktop.
+      </p>
+    {:else if remoteStatus.cloud.state === 'enrollment-pending'}
+      <p class="mt-3 text-xs text-muted">Enter this one-time code in the mobile PWA:</p>
+      <p
+        class="mt-2 select-all rounded-lg bg-raised px-3 py-2 text-center font-mono text-sm font-semibold tracking-wider text-foreground"
+      >
+        {remoteStatus.cloud.enrollmentCode}
+      </p>
+      <p class="mt-2 text-[11px] text-dimmed">
+        The code expires automatically. It never contains the desktop control secret.
+      </p>
+    {:else}
+      <div class="mt-3 flex items-center justify-between gap-3 text-xs">
+        <span class="text-muted">Connection</span>
+        <span class="font-medium text-foreground">
+          {remoteStatus?.cloud.state === 'online'
+            ? 'Ready'
+            : remoteStatus?.cloud.state === 'connecting'
+              ? 'Connecting…'
+              : remoteStatus?.cloud.desktopId
+                ? 'Offline'
+                : 'Not enrolled'}
+        </span>
+      </div>
+      {#if remoteStatus?.cloud.lastError}
+        <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
+      {/if}
+    {/if}
+    <div class="mt-3 flex gap-2">
+      <button
+        type="button"
+        class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
+        disabled={busy || !remoteStatus?.cloud.configured}
+        onclick={() => void beginCloudEnrollment()}
+      >
+        {remoteStatus?.cloud.desktopId ? 'Create new code' : 'Enroll desktop'}
+      </button>
+      {#if remoteStatus?.cloud.desktopId}
+        <button
+          type="button"
+          class="h-9 cursor-pointer rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          disabled={busy}
+          onclick={() => void resetCloudEnrollment()}
+        >
+          Remove enrollment
+        </button>
+      {/if}
+    </div>
+  </section>
+{/snippet}
 
 <div class={embedded ? 'flex flex-col' : 'flex h-full flex-col overflow-y-auto bg-app'}>
   {#if !pwa && !embedded}
@@ -261,7 +323,11 @@
       </section>
     {/if}
 
-    {#if !pwa && remoteStatus?.gateway?.pairingUrl}
+    {#if !pwa}
+      {@render internetAccess()}
+    {/if}
+
+    {#if !pwa && !embedded && remoteStatus?.gateway?.pairingUrl}
       <PairingQr
         pairingUrl={remoteStatus.gateway.pairingUrl}
         phoneUrl={remoteStatus.gateway.url}
@@ -270,11 +336,13 @@
       />
     {/if}
 
-    <RemoteStatus
-      snapshot={remoteSession.snapshot}
-      {busy}
-      onReconnect={() => void handleConnect()}
-    />
+    {#if !embedded}
+      <RemoteStatus
+        snapshot={remoteSession.snapshot}
+        {busy}
+        onReconnect={() => void handleConnect()}
+      />
+    {/if}
 
     {#if !pwa && desktop}
       <ConnectedDevices
@@ -298,7 +366,7 @@
       {/if}
     {/if}
 
-    {#if !pwa}
+    {#if !pwa && !embedded}
       <section class="rounded-xl border bg-surface p-4" aria-label="Remote mode">
         <h2 class="text-sm font-semibold text-foreground">Remote mode</h2>
         <div class="mt-2">
@@ -321,123 +389,66 @@
           </p>
         {/if}
       </section>
+    {/if}
 
-      <section class="rounded-xl border bg-surface p-4" aria-label="Internet access">
+    {#if !embedded}
+      <section class="rounded-xl border bg-surface p-4" aria-label="Connection settings">
         <div class="flex items-center gap-1.5">
-          <Globe2 size={14} class="text-muted" />
-          <h2 class="text-sm font-semibold text-foreground">Internet access</h2>
+          <ShieldCheck size={14} class="text-muted" />
+          <h2 class="text-sm font-semibold text-foreground">Connection settings</h2>
         </div>
-        {#if !remoteStatus?.cloud.configured}
-          <p class="mt-2 text-xs leading-relaxed text-muted">
-            Set <span class="font-mono text-foreground">REMOTE_API_ORIGIN</span> to your hosted mobile
-            origin to enroll this desktop.
-          </p>
-        {:else if remoteStatus.cloud.state === 'enrollment-pending'}
-          <p class="mt-2 text-xs text-muted">Enter this one-time code in the mobile PWA:</p>
-          <p
-            class="mt-2 select-all rounded-lg bg-raised px-3 py-2 text-center font-mono text-sm font-semibold tracking-wider text-foreground"
-          >
-            {remoteStatus.cloud.enrollmentCode}
-          </p>
-          <p class="mt-2 text-[11px] text-dimmed">
-            The code expires automatically. It never contains the desktop control secret.
-          </p>
-        {:else}
-          <div class="mt-2 flex items-center justify-between gap-3 text-xs">
-            <span class="text-muted">Cloud relay</span>
-            <span class="font-medium text-foreground">
-              {remoteStatus?.cloud.state === 'online'
-                ? 'Online'
-                : remoteStatus?.cloud.state === 'connecting'
-                  ? 'Connecting…'
-                  : remoteStatus?.cloud.desktopId
-                    ? 'Offline'
-                    : 'Not enrolled'}
-            </span>
+        <dl class="mt-2 space-y-1.5 text-xs">
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-dimmed">LAN route</dt>
+            <dd class="font-medium text-foreground">
+              {config.lan.enabled ? 'Enabled' : 'Disabled'} · port {config.lan.port}
+            </dd>
           </div>
-          {#if remoteStatus?.cloud.lastError}
-            <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
-          {/if}
-        {/if}
-        <div class="mt-3 flex gap-2">
-          <button
-            type="button"
-            class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
-            disabled={busy || !remoteStatus?.cloud.configured}
-            onclick={() => void beginCloudEnrollment()}
-          >
-            {remoteStatus?.cloud.desktopId ? 'Create new code' : 'Enroll desktop'}
-          </button>
-          {#if remoteStatus?.cloud.desktopId}
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-dimmed">Relay fallback</dt>
+            <dd class="max-w-56 truncate font-medium text-foreground" title={config.relay.url}>
+              {config.relay.enabled ? config.relay.url : 'Disabled'}
+            </dd>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-dimmed">Peer secret</dt>
+            <dd class="font-medium text-foreground">
+              {config.peer.authSecret ? 'Configured' : 'Entered in this client'}
+            </dd>
+          </div>
+        </dl>
+
+        <div class="mt-3 border-t pt-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-semibold text-muted">Recent diagnostics</h3>
             <button
               type="button"
-              class="h-9 cursor-pointer rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              disabled={busy}
-              onclick={() => void resetCloudEnrollment()}
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+              aria-label={diagnosticsOpen ? 'Collapse diagnostics' : 'Expand diagnostics'}
+              title="Refresh diagnostics"
+              onclick={() => {
+                refreshDiagnostics()
+                diagnosticsOpen = !diagnosticsOpen
+              }}
             >
-              Remove enrollment
+              <RefreshCw size={12} />
+              <span>{diagnosticsOpen ? 'Collapse' : 'Show'}</span>
             </button>
+          </div>
+          {#if diagnosticsOpen}
+            <ul class="mt-2 max-h-48 space-y-1 overflow-y-auto">
+              {#each diagnostics as entry (entry.at + entry.message)}
+                <li class="flex gap-2 text-[10px] leading-snug">
+                  <span class="shrink-0 uppercase text-dimmed">{entry.level}</span>
+                  <span class="break-all text-muted">{entry.message}</span>
+                </li>
+              {:else}
+                <li class="text-[10px] text-dimmed">No remote diagnostics recorded yet.</li>
+              {/each}
+            </ul>
           {/if}
         </div>
       </section>
     {/if}
-
-    <section class="rounded-xl border bg-surface p-4" aria-label="Connection settings">
-      <div class="flex items-center gap-1.5">
-        <ShieldCheck size={14} class="text-muted" />
-        <h2 class="text-sm font-semibold text-foreground">Connection settings</h2>
-      </div>
-      <dl class="mt-2 space-y-1.5 text-xs">
-        <div class="flex items-center justify-between gap-3">
-          <dt class="text-dimmed">LAN route</dt>
-          <dd class="font-medium text-foreground">
-            {config.lan.enabled ? 'Enabled' : 'Disabled'} · port {config.lan.port}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-          <dt class="text-dimmed">Relay fallback</dt>
-          <dd class="max-w-56 truncate font-medium text-foreground" title={config.relay.url}>
-            {config.relay.enabled ? config.relay.url : 'Disabled'}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between gap-3">
-          <dt class="text-dimmed">Peer secret</dt>
-          <dd class="font-medium text-foreground">
-            {config.peer.authSecret ? 'Configured' : 'Entered in this client'}
-          </dd>
-        </div>
-      </dl>
-
-      <div class="mt-3 border-t pt-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-xs font-semibold text-muted">Recent diagnostics</h3>
-          <button
-            type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-            aria-label={diagnosticsOpen ? 'Collapse diagnostics' : 'Expand diagnostics'}
-            title="Refresh diagnostics"
-            onclick={() => {
-              refreshDiagnostics()
-              diagnosticsOpen = !diagnosticsOpen
-            }}
-          >
-            <RefreshCw size={12} />
-            <span>{diagnosticsOpen ? 'Collapse' : 'Show'}</span>
-          </button>
-        </div>
-        {#if diagnosticsOpen}
-          <ul class="mt-2 max-h-48 space-y-1 overflow-y-auto">
-            {#each diagnostics as entry (entry.at + entry.message)}
-              <li class="flex gap-2 text-[10px] leading-snug">
-                <span class="shrink-0 uppercase text-dimmed">{entry.level}</span>
-                <span class="break-all text-muted">{entry.message}</span>
-              </li>
-            {:else}
-              <li class="text-[10px] text-dimmed">No remote diagnostics recorded yet.</li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-    </section>
   </main>
 </div>

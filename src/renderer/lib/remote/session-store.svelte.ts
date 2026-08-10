@@ -520,37 +520,30 @@ export class RemoteSessionStore {
     if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
     const keyMaterial = await this.ensureKeyMaterial()
     const peer: DiscoveredPeer = { host: target.host, port: target.port, source: 'manual' }
-    const probe = createLanTransport({
+    const device = {
+      deviceId: keyMaterial.deviceId,
+      deviceName: keyMaterial.deviceName,
+      authVersion: keyMaterial.authVersion,
+      signingKey: keyMaterial.signingKey,
+      signingPublicJwk: keyMaterial.signingPublicJwk,
+      agreementPublicJwk: keyMaterial.agreementPublicJwk
+    }
+    const connected = await this.openLanSession(
       peer,
-      authSecret: route.controlSecret,
-      scheme: target.scheme,
-      handshakeTimeoutMs: LAN_HANDSHAKE_TIMEOUT_MS,
-      device: {
-        deviceId: keyMaterial.deviceId,
-        deviceName: keyMaterial.deviceName,
-        authVersion: keyMaterial.authVersion,
-        signingKey: keyMaterial.signingKey,
-        signingPublicJwk: keyMaterial.signingPublicJwk,
-        agreementPublicJwk: keyMaterial.agreementPublicJwk
-      },
-      pairingBootstrap: route.controlSecret,
-      onEvent: () => undefined
-    })
-    const reachable = (await probe.connect()) === 'open'
-    probe.close()
-    if (!reachable) {
+      route.controlSecret,
+      target.scheme,
+      device,
+      keyMaterial.deviceId ? null : route.controlSecret
+    )
+    if (!connected) {
       this.scheduleLanUpgrade()
       return
     }
     this.accountRelayClient?.close()
     this.accountRelayClient = null
-    if (await this.openLanSession(peer, route.controlSecret, target.scheme)) {
-      this.dispatch({ type: 'lanConnected', peer })
-      this.dispatch({ type: 'peerReachableChanged', reachable: true })
-      remoteLog.info('Remote session upgraded from cloud relay to LAN')
-      return
-    }
-    await this.connectCloud(route)
+    this.dispatch({ type: 'lanConnected', peer })
+    this.dispatch({ type: 'peerReachableChanged', reachable: true })
+    remoteLog.info('Remote session upgraded from cloud relay to LAN')
   }
 
   /** Update the desktop keep-alive phase surfaced to the phone client. */

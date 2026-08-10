@@ -594,6 +594,22 @@
             <Loader2 size={15} class="animate-spin" />
             Loading…
           </div>
+        {:else if mobileState.loadError}
+          <div class="flex flex-col items-start gap-3 px-3 py-4">
+            <div>
+              <p class="text-[13px] font-medium text-foreground">Could not load the workspace</p>
+              <p class="mt-1 text-[12px] leading-relaxed text-dimmed">
+                The desktop connection dropped before projects were loaded.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-[12px] font-semibold text-on-primary transition-colors active:bg-primary-hover"
+              onclick={() => void mobileState.loadData()}
+            >
+              Try again
+            </button>
+          </div>
         {:else if mobileState.sidebarMode === 'projects'}
           <!-- Pinned threads above everything. -->
           {#if mobileState.pinnedThreads.length > 0}
