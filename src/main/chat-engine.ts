@@ -149,6 +149,11 @@ import { messageId as createMessageId } from '../lib/id'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseAuditReportContent, validateAuditReportContent } from '../lib/audit/audit-validation'
 import { parseGeneratedAssignmentContent } from '../lib/assignment/assignment-validation'
+import {
+  mermaidRepairPrompt,
+  validateMermaidOutput,
+  type MermaidValidationFailure
+} from './mermaid-output-validator'
 
 /**
  * Workflow instruction injected into every prompt when Engineering is
@@ -348,7 +353,9 @@ const CHATS_CWD_DIR = 'chats-cwd'
 
 export const MERMAID_OUTPUT_INSTRUCTION = [
   'Use a fenced `mermaid` block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram.',
-  'Keep diagrams concise and valid.',
+  'Keep diagrams concise and parse-valid.',
+  'In flowcharts, wrap every human-readable node label in double quotes, especially labels containing punctuation, parentheses, paths, or code.',
+  'The application validates completed Mermaid blocks and rejects an invalid answer for one automatic correction attempt.',
   'A diagram supplements the required explanation and specification detail; it never replaces them.',
   'Do not add decorative diagrams.'
 ].join(' ')
@@ -901,6 +908,8 @@ export class ChatEngine {
   private pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
   private completionWaiters = new Map<string, SessionCompletionWaiter>()
   private pendingMemoryDecisions = new Map<string, PendingMemoryDecision>()
+  /** Number of automatic Mermaid correction prompts already issued for the active turn. */
+  private mermaidRepairAttempts = new Map<string, number>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Threads currently running the independent audit half of Achievement. */
@@ -3531,6 +3540,7 @@ export class ChatEngine {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
     }
+    if (origin === 'user') this.mermaidRepairAttempts.delete(sessionId)
     if (shouldAutoTitle) {
       this.pendingAutoTitles.set(sessionId, { projectId, threadId, driverId, settings, text })
     }
@@ -10648,6 +10658,7 @@ export class ChatEngine {
     this.pendingAutoTitles.delete(sessionId)
     let assistantResponse = ''
     let completedSuccessfully = false
+    let turnUtilitiesCleaned = false
     let assignmentContinuation: {
       assignment: AssignmentPlan
       settings: ThreadSettings
@@ -10665,29 +10676,11 @@ export class ChatEngine {
 
       const mirror = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      const merged = mergeAgentMessages(
-        mirror,
-        classifyProviderMessages(
-          messages,
-          this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
-        )
-      )
-      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged)
-      // Snapshot this turn's harness usage into the dedicated analytics table.
-      // Runs on every turn end (success or failure) and is ledger-guarded, so
-      // cost/tokens are added to the thread's existing per-harness totals once.
-      await this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
-      // The harness demonstrably ran — confirm its behavior manifest in use so
-      // the reliable declared baseline becomes a validated runtime confirmation
-      // (unless the user explicitly overrode it). Fire-and-forget: never let
-      // manifest bookkeeping block turn finalization.
-      if (this.harnessManifest) {
-        void this.harnessManifest
-          .recordInUse(info.driverId)
-          .catch((error) => Logger.dev('Harness manifest in-use confirmation failed:', error))
-      }
-
-      const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+      const suppressTerminalAnswer =
+        this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
+      let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer)
+      let merged = mergeAgentMessages(mirror, classifiedMessages)
+      const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
@@ -10714,6 +10707,76 @@ export class ChatEngine {
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
         )
+      let mermaidFailures: MermaidValidationFailure[] = []
+      if (!failure && !awaitingUser && !suppressTerminalAnswer && turnAssistant) {
+        const validation = await validateMermaidOutput(assistantText(turnAssistant))
+        mermaidFailures = validation.failures
+        if (mermaidFailures.length === 0) {
+          this.mermaidRepairAttempts.delete(sessionId)
+        } else {
+          const rejectionReason = mermaidValidationFailureMessage(mermaidFailures)
+          const rejected = rejectedMermaidMessage(turnAssistant, rejectionReason)
+          classifiedMessages = classifiedMessages.map((message) =>
+            message.id === rejected.id ? rejected : message
+          )
+          merged = mergeAgentMessages(mirror, classifiedMessages)
+          if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !thread?.settings) {
+            failure = rejectionReason
+            merged = mergeAgentMessages(merged, [
+              mermaidValidationNotice(turnAssistant, rejectionReason)
+            ])
+          }
+        }
+      }
+      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged)
+      // Snapshot this turn's harness usage into the dedicated analytics table.
+      // Runs on every turn end (success or failure) and is ledger-guarded, so
+      // cost/tokens are added to the thread's existing per-harness totals once.
+      await this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
+      // The harness demonstrably ran — confirm its behavior manifest in use so
+      // the reliable declared baseline becomes a validated runtime confirmation
+      // (unless the user explicitly overrode it). Fire-and-forget: never let
+      // manifest bookkeeping block turn finalization.
+      if (this.harnessManifest) {
+        void this.harnessManifest
+          .recordInUse(info.driverId)
+          .catch((error) => Logger.dev('Harness manifest in-use confirmation failed:', error))
+      }
+      if (mermaidFailures.length > 0 && !failure && thread?.settings) {
+        this.mermaidRepairAttempts.set(sessionId, 1)
+        await this.finishCheckpoint(
+          sessionId,
+          info,
+          'failed',
+          mermaidValidationFailureMessage(mermaidFailures)
+        )
+        await this.cleanupTurnUtilities(sessionId)
+        turnUtilitiesCleaned = true
+        if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+        if (pendingTitle) this.pendingAutoTitles.set(sessionId, pendingTitle)
+        try {
+          await this.sendPrompt(
+            info.projectId,
+            info.threadId,
+            thread.settings,
+            mermaidRepairPrompt(mermaidFailures),
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal'
+          )
+        } catch (error) {
+          this.pendingMemoryDecisions.delete(sessionId)
+          this.pendingAutoTitles.delete(sessionId)
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+        }
+        return
+      }
       const persistedRevision = this.pendingSpecRevisions.has(sessionId)
         ? null
         : await this.readPendingSpecRevision(info.projectId, info.threadId)
@@ -10870,7 +10933,7 @@ export class ChatEngine {
       await this.onSessionError(sessionId, issue.message)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
-      await this.cleanupTurnUtilities(sessionId)
+      if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
       this.userAbortedSessions.delete(sessionId)
@@ -11029,6 +11092,7 @@ export class ChatEngine {
     if (info.ephemeral) return
     this.pendingMemoryDecisions.delete(sessionId)
     this.pendingAutoTitles.delete(sessionId)
+    this.mermaidRepairAttempts.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)
     this.pendingBrainstormTurns.delete(sessionId)
     try {
@@ -12016,6 +12080,54 @@ function memoryProposalSchemaProperties(): Record<string, unknown> {
   const properties = PROPOSE_MEMORY_SCHEMA['properties']
   if (!isRecord(properties)) throw new Error('The memory proposal schema is invalid')
   return properties
+}
+
+function assistantText(message: AgentMessage): string {
+  return message.parts
+    .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n')
+}
+
+function mermaidValidationFailureMessage(failures: MermaidValidationFailure[]): string {
+  const diagnostics = failures
+    .map((failure) => `diagram ${failure.block}: ${failure.detail}`)
+    .join('; ')
+  return `The model returned invalid Mermaid syntax (${diagnostics}).`
+}
+
+function rejectedMermaidMessage(message: AgentMessage, error: string): AgentMessage {
+  return {
+    ...message,
+    origin: message.origin ?? 'provider',
+    visibility: 'working_trace',
+    parts: message.parts.filter((part) => part.type !== 'text'),
+    transportParts: message.transportParts ?? message.parts,
+    transportOrigin: message.transportOrigin ?? 'provider',
+    error
+  }
+}
+
+function mermaidValidationNotice(message: AgentMessage, detail: string): AgentMessage {
+  const id = `${message.id}-mermaid-validation`
+  const createdAt = (message.completedAt ?? message.createdAt) + 1
+  return {
+    id,
+    role: 'assistant',
+    origin: 'assistant',
+    visibility: 'conversation',
+    parts: [
+      {
+        type: 'text',
+        id: `${id}-text`,
+        messageID: id,
+        text: `CodeInOven rejected the response after the model returned invalid Mermaid twice. No invalid diagram was accepted. ${detail}`,
+        phase: 'final_answer'
+      }
+    ],
+    createdAt,
+    completedAt: createdAt
+  }
 }
 
 function assistantMemoryDecisionContext(message: AgentMessage): string {
