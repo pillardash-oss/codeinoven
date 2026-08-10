@@ -37,16 +37,27 @@
   let head = $state('')
   let base = $state('')
   let draft = $state(false)
+  /** Push committed local changes to the head branch so they land in the PR. */
+  let pushLocal = $state(true)
+  /** Commit staged files first, using the PR title as the commit message. */
+  let commitLocal = $state(false)
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
   let compare = $state<PullRequestCompare | null>(null)
   let comparing = $state(false)
   let compareError = $state('')
   let compareSequence = 0
+  /** True while the commit → push → create sequence runs. */
+  let submitting = $state(false)
 
   const branch = $derived(gitState.status?.branch ?? null)
   const branches = $derived(gitState.branches.map((b) => b.name))
   const creating = $derived(gitState.isBusy('pr-create'))
+  const hasStagedChanges = $derived(
+    (gitState.status?.changes ?? []).some(
+      (change) => change.staged && change.status !== 'conflicted'
+    )
+  )
 
   /** A PR is only worth creating when the head has commits the base lacks. */
   const canCreate = $derived(
@@ -56,7 +67,8 @@
       head !== base &&
       Boolean(title.trim()) &&
       compare?.hasChanges === true &&
-      !creating
+      !creating &&
+      !submitting
   )
 
   async function loadOrigin(): Promise<void> {
@@ -110,17 +122,40 @@
   }
 
   async function createPullRequest(): Promise<void> {
-    if (!originIdentity || !head || !base || !canCreate) return
-    const reference = await gitState.createPullRequest(projectId, {
-      title: title.trim(),
-      body: body.trim() || undefined,
-      head,
-      base,
-      draft
-    })
-    if (reference) {
-      result = reference
-      onCreated?.()
+    if (!originIdentity || !head || !base || !canCreate || submitting) return
+    submitting = true
+    try {
+      // 1. Commit staged files first, using the PR title as the message.
+      if (commitLocal && hasStagedChanges) {
+        await gitState.commit(projectId, `commit: ${title.trim()}`)
+        if (gitState.error) return
+      }
+      // 2. Push committed local changes so they land in the pull request.
+      if (pushLocal) {
+        const hasUpstream =
+          gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+        const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
+        if (pushed === 'rejected') {
+          gitState.error =
+            'Push was rejected — the remote branch has commits that are not in your branch. Pull or rebase first, then try again.'
+          return
+        }
+        if (pushed === 'failed') return
+      }
+      // 3. Create the pull request.
+      const reference = await gitState.createPullRequest(projectId, {
+        title: title.trim(),
+        body: body.trim() || undefined,
+        head,
+        base,
+        draft
+      })
+      if (reference) {
+        result = reference
+        onCreated?.()
+      }
+    } finally {
+      submitting = false
     }
   }
 
@@ -296,18 +331,50 @@
           bind:value={body}></textarea>
       </div>
 
-      <div class="flex items-center justify-between gap-2">
-        <div>
-          <span class="text-[10px] text-muted">Create as draft</span>
-          <p class="text-[9px] leading-relaxed text-dimmed">
-            Drafts signal work-in-progress. They can't be merged until they're marked ready.
-          </p>
+      <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Push local changes</span>
+            <p class="text-[9px] leading-relaxed text-dimmed">
+              Push committed changes to
+              <span class="font-mono text-foreground">{head}</span> so they're included in this pull request.
+            </p>
+          </div>
+          <Switch
+            checked={pushLocal}
+            onchange={(value) => (pushLocal = value)}
+            aria-label="Push local changes"
+          />
         </div>
-        <Switch
-          checked={draft}
-          onchange={(value) => (draft = value)}
-          aria-label="Create as draft"
-        />
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Commit local changes</span>
+            <p class="text-[9px] leading-relaxed text-dimmed">
+              {hasStagedChanges
+                ? `Commit staged files as commit: ${title.trim() || 'Title'} before pushing.`
+                : 'No staged files to commit right now.'}
+            </p>
+          </div>
+          <Switch
+            checked={commitLocal}
+            onchange={(value) => (commitLocal = value)}
+            disabled={!hasStagedChanges}
+            aria-label="Commit local changes"
+          />
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Create as draft</span>
+            <p class="text-[9px] leading-relaxed text-dimmed">
+              Drafts can't be merged until they're marked ready.
+            </p>
+          </div>
+          <Switch
+            checked={draft}
+            onchange={(value) => (draft = value)}
+            aria-label="Create as draft"
+          />
+        </div>
       </div>
     {/if}
 
