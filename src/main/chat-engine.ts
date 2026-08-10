@@ -145,7 +145,11 @@ import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { classifyProviderIssue } from '../lib/provider-issue'
 import { generateId } from '../lib/utils'
-import { ensureFeatureSlug, featureArtifactDirectory } from '../lib/project-artifacts'
+import {
+  ensureFeatureSlug,
+  featureArtifactDirectory,
+  requireLocalProject
+} from '../lib/project-artifacts'
 import { messageId as createMessageId } from '../lib/id'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseAuditReportContent, validateAuditReportContent } from '../lib/audit/audit-validation'
@@ -233,6 +237,9 @@ const INCOMPLETE_TURN_CONTINUATION_PROMPT =
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_MAX_ATTEMPTS = 2
 const CURRENT_SPEC_GENERATION_VERSION = 1
+const SPEC_GENERATION_FAILURE_USER_MESSAGE =
+  'Spec generation failed, model returned an invalid spec.'
+const SPEC_MEMORY_MAX_LESSONS = 12
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -881,6 +888,7 @@ interface PendingInitialSpecGeneration {
   createdAt: number
   updatedAt: number
   error?: string
+  repairArtifactPath?: string
   brainstormId?: string
   brainstormVersion?: number
   brainstormInputHash?: string
@@ -891,6 +899,60 @@ interface PendingInitialSpecGeneration {
    * produces a misleading "invalid JSON" recovery log.
    */
   skipSubmittedRead?: boolean
+}
+
+type SpecGenerationFormatMode = 'structured' | 'json' | 'domain'
+
+interface SpecGenerationLesson {
+  code: string
+  instruction: string
+  observations: number
+  lastObservedAt: number
+}
+
+interface SpecGenerationMemory {
+  schemaVersion: 1
+  harnessId: string
+  providerId: string
+  modelId: string
+  lessons: SpecGenerationLesson[]
+  updatedAt: number
+}
+
+interface RejectedSpecArtifact {
+  schemaVersion: 1
+  generationVersion: number
+  projectId: string
+  threadId: string
+  attempt: number
+  format: SpecGenerationFormatMode
+  harnessId: string
+  providerId: string
+  modelId: string
+  diagnostic: string
+  rejectedOutput: string
+  createdAt: number
+}
+
+class GeneratedJsonParseError extends Error {
+  constructor(
+    message: string,
+    readonly rawOutput: string
+  ) {
+    super(message)
+    this.name = 'GeneratedJsonParseError'
+  }
+}
+
+class GeneratedSpecOutputError extends Error {
+  constructor(
+    readonly diagnostic: string,
+    readonly rejectedOutput: string,
+    readonly repairArtifactPath?: string
+  ) {
+    super(repairArtifactPath ? `${diagnostic} Repair artifact: ${repairArtifactPath}` : diagnostic)
+    this.name = 'GeneratedSpecOutputError'
+  }
 }
 
 class AssignmentApiRequestError extends Error {
@@ -3776,7 +3838,7 @@ export class ChatEngine {
           this.sessionStatuses.set(sessionId, { state: 'idle' })
           this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
           await this.cleanupTurnUtilities(sessionId)
-          if (!generated) throw new Error('The specification agent did not submit a valid draft.')
+          if (!generated) throw new Error(SPEC_GENERATION_FAILURE_USER_MESSAGE)
           const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
           this.pendingMemoryDecisions.delete(sessionId)
           if (pendingMemory) {
@@ -6945,7 +7007,7 @@ export class ChatEngine {
         skipSubmittedRead: true
       })
       const generated = await this.runPendingInitialSpec(projectId, threadId)
-      if (!generated) throw new Error('The finalized Brainstorm did not produce a specification')
+      if (!generated) throw new Error(SPEC_GENERATION_FAILURE_USER_MESSAGE)
       return generated
     } catch (error) {
       await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
@@ -7356,10 +7418,12 @@ export class ChatEngine {
     )
     const artifactBoundary = engineeringArtifactBoundaryInstruction(artifactDirectory)
     const memoryPrompt = await this.memoryService.formatCurrent(projectId, threadId)
+    const specMemoryPrompt = await this.formatSpecGenerationMemory(projectId, settings)
     const generationSystemPrompt = [
       SPEC_GENERATION_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
+      specMemoryPrompt,
       assignmentRequired ? ASSIGNMENT_GENERATION_INSTRUCTION : ''
     ]
       .filter(Boolean)
@@ -7368,6 +7432,7 @@ export class ChatEngine {
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
+      specMemoryPrompt,
       assignmentRequired ? ASSIGNMENT_GENERATION_INSTRUCTION : ''
     ]
       .filter(Boolean)
@@ -7425,6 +7490,7 @@ export class ChatEngine {
       !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
     const formatModes = useStructuredOutput ? [true, false] : [false]
     let lastError: Error | null = null
+    let repairError: GeneratedSpecOutputError | null = null
 
     for (const useStructuredOutput of formatModes) {
       const isolated =
@@ -7459,7 +7525,7 @@ export class ChatEngine {
         })
         const status = this.initialSpecWorkingStatus(
           pendingWorkflow,
-          `Formulating specification · attempt ${Math.max(1, pendingWorkflow.attempts)}/${SPEC_GENERATION_MAX_ATTEMPTS}`
+          `${repairError || pendingWorkflow.repairArtifactPath ? 'Correcting invalid specification output' : 'Formulating specification'} · attempt ${Math.max(1, pendingWorkflow.attempts)}/${SPEC_GENERATION_MAX_ATTEMPTS}`
         )
         this.sessionStatuses.set(workflowThread.sessionId, status)
         this.broadcast({ type: 'session.status', sessionId: workflowThread.sessionId, status })
@@ -7479,7 +7545,9 @@ export class ChatEngine {
             permissionLevel: 'auto_review',
             engineeringMode: false
           },
-          text: source,
+          text: [source, repairError ? this.specRepairInstruction(repairError) : '']
+            .filter(Boolean)
+            .join('\n\n'),
           attachments: [],
           systemPrompt: useStructuredOutput ? generationSystemPrompt : fallbackSystemPrompt,
           allowedTools: PROMPT_READ_ONLY_TOOLS,
@@ -7522,7 +7590,21 @@ export class ChatEngine {
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
         }
-        lastError = error instanceof Error ? error : new Error('The specification agent failed.')
+        const rejectedError =
+          error instanceof GeneratedSpecOutputError
+            ? await this.prepareRejectedSpecRepair({
+                projectId,
+                threadId,
+                attempt: Math.max(1, pendingWorkflow?.attempts ?? 1),
+                format: useStructuredOutput ? 'structured' : 'json',
+                settings,
+                error
+              })
+            : null
+        lastError =
+          rejectedError ??
+          (error instanceof Error ? error : new Error('The specification agent failed.'))
+        if (rejectedError) repairError = rejectedError
         if (this.userAbortedInitialSpecOperations.has(workflowKey)) throw lastError
         Logger.error('Specification generation session rejected', {
           projectId,
@@ -7531,7 +7613,7 @@ export class ChatEngine {
           structuredOutput: useStructuredOutput,
           error: lastError.message
         })
-        if (useStructuredOutput) {
+        if (useStructuredOutput && !rejectedError) {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
           Logger.info(
             'Structured specification generation failed; using JSON-only output for this model:',
@@ -7557,7 +7639,7 @@ export class ChatEngine {
       }
     }
 
-    throw lastError ?? new Error('The specification agent failed.')
+    throw repairError ?? lastError ?? new Error('The specification agent failed.')
   }
 
   /** Generate a reviewable Assignment from the exact active Spec without revising that Spec. */
@@ -9070,7 +9152,7 @@ export class ChatEngine {
 
     const generated = await this.runPendingInitialSpec(projectId, threadId)
     if (!generated) {
-      throw new Error('The specification could not be generated.')
+      throw new Error(SPEC_GENERATION_FAILURE_USER_MESSAGE)
     }
     return generated
   }
@@ -9082,6 +9164,239 @@ export class ChatEngine {
   private async artifactRef(projectId: string, threadId: string, file: string): Promise<string> {
     const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
     return join(featureArtifactDirectory(featureSlug), file)
+  }
+
+  private specMemorySegment(value: string): string {
+    const readable =
+      value
+        .trim()
+        .replace(/[^A-Za-z0-9._-]+/gu, '-')
+        .replace(/^[._-]+|[._-]+$/gu, '')
+        .slice(0, 48) || 'unknown'
+    const digest = createHash('sha256').update(value).digest('hex').slice(0, 10)
+    return `${readable}-${digest}`
+  }
+
+  private specMemoryPath(projectId: string, settings: ThreadSettings): string {
+    return join(
+      'projects',
+      projectId,
+      'spec-memory',
+      this.specMemorySegment(settings.harnessId || 'opencode'),
+      this.specMemorySegment(settings.providerId),
+      this.specMemorySegment(settings.modelId),
+      'lessons.json'
+    )
+  }
+
+  private knownSpecGenerationLessonInstruction(code: string): string | null {
+    switch (code) {
+      case 'valid-json-object':
+        return 'Return one syntactically valid JSON object with no Markdown fence, prose prefix, prose suffix, comments, or trailing commas.'
+      case 'assignment-graph-required':
+        return 'When Assignment mode is enabled, include the complete required assignment graph in the same specification object.'
+      case 'required-spec-fields':
+        return 'Before submission, verify that every required specification field and every required non-empty nested field is present.'
+      case 'spec-schema-conformance':
+        return 'Before submission, verify the complete output against the supplied specification schema, including nested object, array, enum, and dependency rules.'
+      default:
+        return null
+    }
+  }
+
+  private async readSpecGenerationMemory(
+    projectId: string,
+    settings: ThreadSettings
+  ): Promise<SpecGenerationMemory | null> {
+    const stored = await this.storage.read<unknown>(this.specMemoryPath(projectId, settings))
+    if (!isRecord(stored) || !Array.isArray(stored.lessons)) return null
+    const lessons = stored.lessons.flatMap((candidate): SpecGenerationLesson[] => {
+      if (
+        !isRecord(candidate) ||
+        typeof candidate.code !== 'string' ||
+        typeof candidate.observations !== 'number' ||
+        !Number.isFinite(candidate.observations) ||
+        candidate.observations < 1 ||
+        typeof candidate.lastObservedAt !== 'number' ||
+        !Number.isFinite(candidate.lastObservedAt)
+      ) {
+        return []
+      }
+      const instruction = this.knownSpecGenerationLessonInstruction(candidate.code)
+      if (!instruction) return []
+      return [
+        {
+          code: candidate.code,
+          instruction,
+          observations: Math.max(1, Math.floor(candidate.observations)),
+          lastObservedAt: candidate.lastObservedAt
+        }
+      ]
+    })
+    return {
+      schemaVersion: 1,
+      harnessId: settings.harnessId || 'opencode',
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      lessons: lessons.slice(-SPEC_MEMORY_MAX_LESSONS),
+      updatedAt: typeof stored.updatedAt === 'number' ? stored.updatedAt : 0
+    }
+  }
+
+  private async formatSpecGenerationMemory(
+    projectId: string,
+    settings: ThreadSettings
+  ): Promise<string> {
+    const memory = await this.readSpecGenerationMemory(projectId, settings)
+    if (!memory?.lessons.length) return ''
+    return [
+      'Model-specific specification generation lessons from earlier validation failures:',
+      ...memory.lessons.map((lesson) => `- ${lesson.instruction}`),
+      'These lessons concern only the output contract. Do not infer or reuse prior specification content.'
+    ].join('\n')
+  }
+
+  private specGenerationLesson(
+    error: GeneratedSpecOutputError
+  ): Pick<SpecGenerationLesson, 'code' | 'instruction'> {
+    const diagnostic = error.diagnostic.toLowerCase()
+    if (diagnostic.includes('invalid json')) {
+      return {
+        code: 'valid-json-object',
+        instruction: this.knownSpecGenerationLessonInstruction('valid-json-object') ?? ''
+      }
+    }
+    if (diagnostic.includes('assignment graph')) {
+      return {
+        code: 'assignment-graph-required',
+        instruction: this.knownSpecGenerationLessonInstruction('assignment-graph-required') ?? ''
+      }
+    }
+    if (diagnostic.includes('missing')) {
+      return {
+        code: 'required-spec-fields',
+        instruction: this.knownSpecGenerationLessonInstruction('required-spec-fields') ?? ''
+      }
+    }
+    return {
+      code: 'spec-schema-conformance',
+      instruction: this.knownSpecGenerationLessonInstruction('spec-schema-conformance') ?? ''
+    }
+  }
+
+  private async rememberSpecGenerationLesson(
+    projectId: string,
+    settings: ThreadSettings,
+    error: GeneratedSpecOutputError
+  ): Promise<void> {
+    const now = Date.now()
+    const lesson = this.specGenerationLesson(error)
+    const current = await this.readSpecGenerationMemory(projectId, settings)
+    const prior = current?.lessons.find((candidate) => candidate.code === lesson.code)
+    const lessons = [
+      ...(current?.lessons.filter((candidate) => candidate.code !== lesson.code) ?? []),
+      {
+        ...lesson,
+        observations: (prior?.observations ?? 0) + 1,
+        lastObservedAt: now
+      }
+    ].slice(-SPEC_MEMORY_MAX_LESSONS)
+    await this.storage.write(this.specMemoryPath(projectId, settings), {
+      schemaVersion: 1,
+      harnessId: settings.harnessId || 'opencode',
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      lessons,
+      updatedAt: now
+    } satisfies SpecGenerationMemory)
+  }
+
+  private async persistRejectedSpecOutput(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: SpecGenerationFormatMode
+    settings: ThreadSettings
+    error: GeneratedSpecOutputError
+  }): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.database, input.projectId, input.threadId)
+    const relativePath = join(
+      'err-spec',
+      `attempt-${Math.max(1, input.attempt)}-${input.format}.json`
+    )
+    const artifactPath = join(featureArtifactDirectory(featureSlug), relativePath).replace(
+      /\\/gu,
+      '/'
+    )
+    const artifact: RejectedSpecArtifact = {
+      schemaVersion: 1,
+      generationVersion: CURRENT_SPEC_GENERATION_VERSION,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      attempt: Math.max(1, input.attempt),
+      format: input.format,
+      harnessId: input.settings.harnessId || 'opencode',
+      providerId: input.settings.providerId,
+      modelId: input.settings.modelId,
+      diagnostic: input.error.diagnostic,
+      rejectedOutput: input.error.rejectedOutput,
+      createdAt: Date.now()
+    }
+    await this.storage.writeProjectSpecRaw(
+      input.projectId,
+      featureSlug,
+      relativePath,
+      `${JSON.stringify(artifact, null, 2)}\n`,
+      requireLocalProject(this.database, input.projectId)
+    )
+    return artifactPath
+  }
+
+  private async prepareRejectedSpecRepair(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: SpecGenerationFormatMode
+    settings: ThreadSettings
+    error: GeneratedSpecOutputError
+  }): Promise<GeneratedSpecOutputError> {
+    let artifactPath: string | undefined
+    try {
+      artifactPath = await this.persistRejectedSpecOutput(input)
+    } catch (artifactError) {
+      Logger.error('Rejected specification artifact persistence failed', {
+        projectId: input.projectId,
+        threadId: input.threadId,
+        attempt: input.attempt,
+        format: input.format,
+        error: rawErrorMessage(artifactError)
+      })
+    }
+    try {
+      await this.rememberSpecGenerationLesson(input.projectId, input.settings, input.error)
+    } catch (memoryError) {
+      Logger.error('Specification generation lesson persistence failed', {
+        projectId: input.projectId,
+        threadId: input.threadId,
+        error: rawErrorMessage(memoryError)
+      })
+    }
+    return new GeneratedSpecOutputError(
+      input.error.diagnostic,
+      input.error.rejectedOutput,
+      artifactPath
+    )
+  }
+
+  private specRepairInstruction(error: GeneratedSpecOutputError): string {
+    return [
+      'The previous specification output failed deterministic validation.',
+      `Exact validator diagnostic: ${error.diagnostic}`,
+      error.repairArtifactPath
+        ? `Read the rejected output and diagnostic at ${error.repairArtifactPath}. Correct that output and return one complete replacement JSON object matching the required schema.`
+        : 'Correct the reported contract violation and return one complete replacement JSON object matching the required schema.',
+      'Do not explain the correction and do not return a partial patch.'
+    ].join('\n')
   }
 
   private initialSpecKey(projectId: string, threadId: string): string {
@@ -9263,6 +9578,7 @@ export class ChatEngine {
 
     await this.threadManager.setStatus(projectId, threadId, 'planning')
     let lastError = ''
+    let encounteredInvalidSpec = Boolean(pending.repairArtifactPath)
     while (pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS) {
       pending = {
         ...pending,
@@ -9280,18 +9596,85 @@ export class ChatEngine {
         startedAt: pending.createdAt
       })
       try {
-        const submittedContent = pending.skipSubmittedRead
-          ? null
-          : await this.readSubmittedSpecContent(pending)
+        const submittedResult: EngineeringSpecContent | GeneratedSpecOutputError | null =
+          pending.skipSubmittedRead ? null : await this.readSubmittedSpecContent(pending)
+        const submittedRepair: GeneratedSpecOutputError | null =
+          submittedResult instanceof GeneratedSpecOutputError ? submittedResult : null
+        const submittedContent: EngineeringSpecContent | null =
+          submittedResult && !(submittedResult instanceof GeneratedSpecOutputError)
+            ? submittedResult
+            : null
+        encounteredInvalidSpec ||= submittedRepair !== null
+        if (submittedRepair?.repairArtifactPath) {
+          pending = {
+            ...pending,
+            error: submittedRepair.message,
+            repairArtifactPath: submittedRepair.repairArtifactPath,
+            updatedAt: Date.now()
+          }
+          await this.writePendingInitialSpec(pending)
+        }
         const content =
           submittedContent ??
           (await this.generateSpec(projectId, threadId, {
             mode: 'conversation',
-            instructions: lastError
-              ? `${pending.source}\n\nThe previous draft was rejected: ${lastError}. Return only a valid JSON object matching the required schema.`
-              : pending.source,
+            instructions: [
+              pending.source,
+              submittedRepair ? this.specRepairInstruction(submittedRepair) : '',
+              lastError
+                ? [
+                    'The previous specification output failed deterministic validation.',
+                    `Exact validator diagnostic: ${lastError}`,
+                    pending.repairArtifactPath
+                      ? `Read the rejected output and diagnostic at ${pending.repairArtifactPath}. Correct it before submitting a complete replacement object.`
+                      : '',
+                    'Return only one complete valid JSON object matching the required schema.'
+                  ]
+                    .filter(Boolean)
+                    .join('\n')
+                : ''
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
             settings: pending.settings
           }))
+        const validationTimestamp = Date.now()
+        const validation = validateEngineeringSpec({
+          schemaVersion: 1,
+          id: 'pending-generated-spec',
+          projectId,
+          threadId,
+          version: 1,
+          status: 'draft',
+          content,
+          annotations: [],
+          dismissedValidationIssues: [],
+          decisionComments: [],
+          context: [],
+          provenance: {
+            source: 'agent',
+            actor: 'spec-validator',
+            createdAt: validationTimestamp
+          },
+          createdAt: validationTimestamp,
+          updatedAt: validationTimestamp
+        })
+        if (!validation.valid) {
+          const validationError = new GeneratedSpecOutputError(
+            `Specification domain validation failed: ${validation.issues
+              .map((issue) => `${issue.path}: ${issue.message}`)
+              .join('; ')}`,
+            stringifyRejectedSpecOutput(content)
+          )
+          throw await this.prepareRejectedSpecRepair({
+            projectId,
+            threadId,
+            attempt: pending.attempts,
+            format: 'domain',
+            settings: pending.settings,
+            error: validationError
+          })
+        }
         const context = await this.memoryService.snapshotCurrent(projectId, threadId)
         const spec = await this.specEngine.createDraft({
           projectId,
@@ -9312,6 +9695,8 @@ export class ChatEngine {
       } catch (error) {
         const created = await this.getActiveSpec(projectId, threadId)
         if (created) return this.finalizeInitialSpec(created, pending)
+        const invalidSpecError = error instanceof GeneratedSpecOutputError ? error : null
+        encounteredInvalidSpec ||= invalidSpecError !== null
         lastError = error instanceof Error ? error.message : 'The specification agent failed.'
         if (this.userAbortedInitialSpecOperations.delete(operationKey)) {
           await this.clearPendingInitialSpec(projectId, threadId)
@@ -9336,6 +9721,7 @@ export class ChatEngine {
           ...pending,
           state: pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS ? 'failed' : 'pending',
           error: lastError,
+          repairArtifactPath: invalidSpecError?.repairArtifactPath ?? pending.repairArtifactPath,
           updatedAt: Date.now()
         }
         await this.writePendingInitialSpec(pending)
@@ -9367,15 +9753,20 @@ export class ChatEngine {
       // opens the dedicated Retry specification card without a red error card.
       this.broadcast({ type: 'session.status', sessionId: thread.sessionId, status })
     }
-    this.broadcastToast(`Specification generation failed: ${lastError}`)
-    throw new Error(lastError || 'The specification could not be generated.')
+    this.broadcastToast(
+      encounteredInvalidSpec
+        ? SPEC_GENERATION_FAILURE_USER_MESSAGE
+        : `Specification generation failed: ${lastError}`
+    )
+    return null
   }
 
   /** Read a specification submitted through the main planning session's contract. */
   private async readSubmittedSpecContent(
     pending: PendingInitialSpecGeneration
-  ): Promise<EngineeringSpecContent | null> {
+  ): Promise<EngineeringSpecContent | GeneratedSpecOutputError | null> {
     if (!pending.sessionId) return null
+    let format: SpecGenerationFormatMode = 'json'
     try {
       const { driver, projectPath } = await this.resolve(
         pending.projectId,
@@ -9387,6 +9778,7 @@ export class ChatEngine {
       if (!response) return null
       const assignmentRequired = pending.settings.assignmentMode === true
       if (response.structuredOutput !== undefined) {
+        format = 'structured'
         return validateGeneratedSpecContent(response.structuredOutput, assignmentRequired)
       }
       const text = response.parts
@@ -9396,6 +9788,16 @@ export class ChatEngine {
       return text.trim() ? parseGeneratedSpecContent(text, assignmentRequired) : null
     } catch (error) {
       Logger.info('Planning-session specification submission was invalid; using recovery:', error)
+      if (error instanceof GeneratedSpecOutputError) {
+        return this.prepareRejectedSpecRepair({
+          projectId: pending.projectId,
+          threadId: pending.threadId,
+          attempt: Math.max(1, pending.attempts),
+          format,
+          settings: pending.settings,
+          error
+        })
+      }
       return null
     }
   }
@@ -12307,30 +12709,45 @@ export function parseGeneratedSpecContent(
   raw: string,
   assignmentRequired = false
 ): EngineeringSpecContent {
-  const parsed = parseGeneratedJson(raw, 'The spec agent returned invalid JSON')
+  let parsed: unknown
+  try {
+    parsed = parseGeneratedJson(raw, 'The spec agent returned invalid JSON')
+  } catch (error) {
+    if (error instanceof GeneratedJsonParseError) {
+      throw new GeneratedSpecOutputError(error.message, error.rawOutput)
+    }
+    throw error
+  }
   return validateGeneratedSpecContent(parsed, assignmentRequired)
 }
 
 function parseGeneratedJson(raw: string, invalidMessage: string): unknown {
-  const direct = tryParseJson(raw.trim())
-  if (direct !== undefined) return direct
+  const direct = parseJsonCandidate(raw.trim())
+  if (direct.ok) return direct.value
+  let exactError = direct.error
 
   for (let start = raw.indexOf('{'); start >= 0; start = raw.indexOf('{', start + 1)) {
     const end = findJsonObjectEnd(raw, start)
     if (end === null) continue
-    const parsed = tryParseJson(raw.slice(start, end + 1))
-    if (parsed !== undefined) return parsed
+    const parsed = parseJsonCandidate(raw.slice(start, end + 1))
+    if (parsed.ok) return parsed.value
+    exactError = parsed.error
   }
 
-  throw new Error(invalidMessage)
+  throw new GeneratedJsonParseError(`${invalidMessage}: ${exactError}`, raw)
 }
 
-function tryParseJson(candidate: string): unknown | undefined {
-  if (!candidate) return undefined
+type ParsedJsonCandidate = { ok: true; value: unknown } | { ok: false; error: string }
+
+function parseJsonCandidate(candidate: string): ParsedJsonCandidate {
+  if (!candidate) return { ok: false, error: 'The response was empty.' }
   try {
-    return JSON.parse(candidate) as unknown
-  } catch {
-    return undefined
+    return { ok: true, value: JSON.parse(candidate) as unknown }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'The JSON parser rejected the response.'
+    }
   }
 }
 
@@ -12489,6 +12906,29 @@ function validateMemoryEnum<const Value extends string>(
 }
 
 function validateGeneratedSpecContent(
+  parsed: unknown,
+  assignmentRequired = false
+): EngineeringSpecContent {
+  try {
+    return validateGeneratedSpecContentUnchecked(parsed, assignmentRequired)
+  } catch (error) {
+    if (error instanceof GeneratedSpecOutputError) throw error
+    throw new GeneratedSpecOutputError(
+      error instanceof Error ? error.message : 'The spec agent returned an invalid object',
+      stringifyRejectedSpecOutput(parsed)
+    )
+  }
+}
+
+function stringifyRejectedSpecOutput(parsed: unknown): string {
+  try {
+    return `${JSON.stringify(parsed, null, 2)}\n`
+  } catch {
+    return String(parsed)
+  }
+}
+
+function validateGeneratedSpecContentUnchecked(
   parsed: unknown,
   assignmentRequired = false
 ): EngineeringSpecContent {
