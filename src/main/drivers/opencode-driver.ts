@@ -61,12 +61,7 @@ const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: string }> =
 /** Delay before retrying a dropped SSE connection. */
 const SSE_RECONNECT_MS = 1000
 const TITLE_GENERATION_TIMEOUT_MS = 180_000
-
-interface TitleTurnWaiter {
-  resolve: () => void
-  reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
-}
+const TITLE_RESULT_POLL_INTERVAL_MS = 250
 
 interface ServerHandle {
   projectPath: string
@@ -864,7 +859,6 @@ export class OpenCodeDriver implements HarnessDriver {
   private eventCallback: AgentEventCallback | null = null
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
-  private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
   private processObserver: AgentProcessObserver | null = null
 
   /**
@@ -1082,11 +1076,9 @@ export class OpenCodeDriver implements HarnessDriver {
 
     for (const candidate of attempts) {
       let isolated: IsolatedHandle | null = null
-      let completion: { promise: Promise<void>; cancel: () => void } | null = null
       try {
         isolated = await this.createIsolatedSession(projectPath, 'Thread title')
         this.titleSessions.add(isolated.sessionId)
-        completion = this.waitForTitleTurn(isolated.sessionId)
         await this.sendPrompt(
           projectPath,
           {
@@ -1107,14 +1099,7 @@ export class OpenCodeDriver implements HarnessDriver {
           },
           isolated
         )
-        await completion.promise
-        const messages = await this.loadMessages(projectPath, isolated.sessionId, isolated)
-        const response = [...messages].reverse().find((message) => message.role === 'assistant')
-        const raw = response?.parts
-          .filter((part) => part.type === 'text')
-          .map((part) => part.text)
-          .join('\n')
-        const title = raw ? sanitizeGeneratedTitle(raw) : null
+        const title = await this.waitForTitleResult(isolated)
         if (title) return title
       } catch (error) {
         Logger.dev(
@@ -1122,7 +1107,6 @@ export class OpenCodeDriver implements HarnessDriver {
           error
         )
       } finally {
-        completion?.cancel()
         if (isolated) {
           this.titleSessions.delete(isolated.sessionId)
           await this.deleteSessionOnHandle(isolated.baseUrl, isolated.sessionId).catch(
@@ -1613,11 +1597,6 @@ export class OpenCodeDriver implements HarnessDriver {
       handle.process.kill()
     }
     this.isolatedServers.clear()
-    for (const waiter of this.titleTurnWaiters.values()) {
-      clearTimeout(waiter.timer)
-      waiter.reject(new Error('OpenCode is shutting down'))
-    }
-    this.titleTurnWaiters.clear()
     this.titleSessions.clear()
     this.starting.clear()
     this.turnStarting.clear()
@@ -2037,46 +2016,47 @@ export class OpenCodeDriver implements HarnessDriver {
 
   private emit(event: AgentEvent): void {
     if ('sessionId' in event && this.titleSessions.has(event.sessionId)) {
-      const waiter = this.titleTurnWaiters.get(event.sessionId)
-      if (event.type === 'session.error') {
-        this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.reject(new Error(event.error ?? 'OpenCode title generation failed'))
-      } else if (
-        event.type === 'session.idle' ||
-        (event.type === 'session.status' && event.status.state === 'idle')
-      ) {
-        this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.resolve()
-      }
+      // Title sessions are private utility work. Completion is read from the
+      // isolated transcript so a fast response cannot race SSE subscription.
       return
     }
     this.eventCallback?.(event)
   }
 
-  private waitForTitleTurn(sessionId: string): { promise: Promise<void>; cancel: () => void } {
-    let resolvePromise: () => void = () => undefined
-    let rejectPromise: (error: Error) => void = () => undefined
-    const promise = new Promise<void>((resolve, reject) => {
-      resolvePromise = resolve
-      rejectPromise = reject
-    })
-    const timer = setTimeout(() => {
-      this.clearTitleTurnWaiter(sessionId)
-      rejectPromise(new Error('OpenCode title generation timed out'))
-    }, TITLE_GENERATION_TIMEOUT_MS)
-    this.titleTurnWaiters.set(sessionId, {
-      resolve: resolvePromise,
-      reject: rejectPromise,
-      timer
-    })
-    return { promise, cancel: () => this.clearTitleTurnWaiter(sessionId) }
-  }
-
-  private clearTitleTurnWaiter(sessionId: string): void {
-    const waiter = this.titleTurnWaiters.get(sessionId)
-    if (!waiter) return
-    clearTimeout(waiter.timer)
-    this.titleTurnWaiters.delete(sessionId)
+  private async waitForTitleResult(handle: IsolatedHandle): Promise<string | null> {
+    const deadline = Date.now() + TITLE_GENERATION_TIMEOUT_MS
+    let lastReadError: Error | null = null
+    while (Date.now() < deadline) {
+      if (
+        handle.abortController.signal.aborted ||
+        handle.process.exitCode !== null ||
+        handle.process.signalCode !== null
+      ) {
+        throw new Error(
+          `OpenCode title process exited (${handle.process.exitCode ?? handle.process.signalCode ?? 'aborted'})`
+        )
+      }
+      let messages: AgentMessage[]
+      try {
+        messages = await this.fetchMessages(handle, handle.sessionId)
+        lastReadError = null
+      } catch (error) {
+        lastReadError = error instanceof Error ? error : new Error('Title transcript read failed')
+        await new Promise((resolve) => setTimeout(resolve, TITLE_RESULT_POLL_INTERVAL_MS))
+        continue
+      }
+      const response = [...messages].reverse().find((message) => message.role === 'assistant')
+      if (response?.error) throw new Error(response.error)
+      if (response?.completedAt !== undefined) {
+        const raw = response.parts
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text)
+          .join('\n')
+        return raw ? sanitizeGeneratedTitle(raw) : null
+      }
+      await new Promise((resolve) => setTimeout(resolve, TITLE_RESULT_POLL_INTERVAL_MS))
+    }
+    throw lastReadError ?? new Error('OpenCode title generation timed out')
   }
 
   // ─── Wire-format mapping ──────────────────────────────────────────────────
