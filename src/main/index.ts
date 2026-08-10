@@ -357,7 +357,30 @@ function getPreloadPath(): string {
  * exists, then the logo/spinner layer on top. Closed once the main window
  * paints.
  */
-function createSplashWindow(): BrowserWindow {
+type SplashVisualOutcome = 'ready' | 'closed' | 'load-failed' | 'timeout'
+
+const SPLASH_VISUAL_TIMEOUT_MS = 5_000
+
+function waitForSplashVisual(splash: BrowserWindow): Promise<SplashVisualOutcome> {
+  return new Promise((resolveVisual) => {
+    let settled = false
+    const finish = (outcome: SplashVisualOutcome): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolveVisual(outcome)
+    }
+    const timeout = setTimeout(() => finish('timeout'), SPLASH_VISUAL_TIMEOUT_MS)
+    splash.once('ready-to-show', () => finish('ready'))
+    splash.once('closed', () => finish('closed'))
+    splash.webContents.once('did-fail-load', () => finish('load-failed'))
+  })
+}
+
+function createSplashWindow(): {
+  splash: BrowserWindow
+  visualReady: Promise<SplashVisualOutcome>
+} {
   const splash = new BrowserWindow({
     width: 420,
     height: 320,
@@ -378,17 +401,20 @@ function createSplashWindow(): BrowserWindow {
     }
   })
   splashWindow = splash
+  const visualReady = waitForSplashVisual(splash)
 
-  if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    void splash.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
-  } else {
-    void splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'))
-  }
+  const loading =
+    !isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']
+      ? splash.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
+      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'))
+  // `did-fail-load` resolves the visual barrier as `load-failed`; consume the
+  // matching navigation rejection so it cannot become an unhandled promise.
+  void loading.catch(() => undefined)
 
   splash.once('closed', () => {
     if (splashWindow === splash) splashWindow = null
   })
-  return splash
+  return { splash, visualReady }
 }
 
 function closeSplash(): void {
@@ -755,16 +781,29 @@ void app
   .then(async () => {
     if (!hasSingleInstanceLock) return
     startupTelemetry.mark('electron:ready')
-    // Show the splash before any awaited work so the app feels instant.
-    createSplashWindow()
+    // This is the first post-ready action. Construct and show the native splash
+    // immediately, then yield the main event loop until Chromium presents its
+    // first frame. Synchronous SQLite/schema work cannot begin before this
+    // barrier, so low-end devices always get visual feedback first.
+    const { visualReady: splashVisualReady } = createSplashWindow()
     startupTelemetry.mark('splash:created')
+    const splashOutcome = await splashVisualReady
+    if (splashOutcome === 'ready') {
+      startupTelemetry.mark('splash:visualReady')
+    }
 
-    // Wire the durable log sink before any fallible startup work. The error
+    // Only after the splash is visibly rendered, wire the durable log sink
+    // before any fallible startup work. The error
     // dialog tells the user to "export diagnostics after the app opens", which
     // only works if startup failures are actually persisted — so the log path
     // must be known before `database.init()` can abort the startup chain.
     mkdirSync(dirname(storage.resolve('logs/main.jsonl')), { recursive: true })
     Logger.initialize(storage.resolve('logs/main.jsonl'))
+    if (splashOutcome !== 'ready') {
+      Logger.error('Splash did not reach visual readiness before startup continued', {
+        outcome: splashOutcome
+      })
+    }
 
     if (isProduction) {
       installProductionApplicationMenu(APP_NAME)

@@ -27,6 +27,7 @@ interface IterationResult {
   featuresReadyMs: number
   iteration: number
   proofReadyMs: number
+  splashVisualReadyMs: number
   visualReadyMs: number
   workspaceReadyMs: number
   startup: StartupTelemetrySnapshot
@@ -178,6 +179,7 @@ async function runIteration(
       fail(`iteration ${iteration} produced an invalid startup proof`)
     }
     const requiredPhases = new Set([
+      'splash:visualReady',
       'renderer:documentLoaded',
       'window:visualReady',
       'renderer:hydrated',
@@ -190,6 +192,7 @@ async function runIteration(
         `iteration ${iteration} did not prove required startup phases: ${[...requiredPhases].join(', ')}`
       )
     }
+    const splashVisualReadyMs = phaseTime(proof, 'splash:visualReady', iteration)
     const documentLoadedMs = phaseTime(proof, 'renderer:documentLoaded', iteration)
     const featuresReadyMs = phaseTime(proof, 'features:ready', iteration)
     const visualReadyMs = phaseTime(proof, 'window:visualReady', iteration)
@@ -199,6 +202,7 @@ async function runIteration(
       documentLoadedMs,
       featuresReadyMs,
       proofReadyMs: Math.max(documentLoadedMs, visualReadyMs, workspaceReadyMs),
+      splashVisualReadyMs,
       visualReadyMs,
       workspaceReadyMs,
       startup: proof.startup
@@ -243,6 +247,7 @@ async function main(): Promise<void> {
     target: options.target,
     executable: basename(executable),
     iterations: results.length,
+    splashVisualReadyMs: summarize(results.map((result) => result.splashVisualReadyMs)),
     visualReadyMs: summarize(results.map((result) => result.visualReadyMs)),
     documentLoadedMs: summarize(results.map((result) => result.documentLoadedMs)),
     featuresReadyMs: summarize(results.map((result) => result.featuresReadyMs)),
