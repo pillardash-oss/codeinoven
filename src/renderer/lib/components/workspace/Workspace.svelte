@@ -12,7 +12,6 @@
     Trash2,
     X,
     MessageSquare,
-    Settings,
     SquarePen,
     Pencil,
     Copy,
@@ -49,6 +48,7 @@
   import StatusBadge from '../shared/StatusBadge.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
+  import SidebarAccountControls from './SidebarAccountControls.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -104,8 +104,6 @@
     Thread,
     ThreadSearchResult
   } from '$shared/types'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { Download, CheckCircle2, Loader2, Clock, RefreshCw, AlertCircle } from '@lucide/svelte'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -1934,82 +1932,7 @@
 
       {#snippet footer()}
         {#if !workspaceState.specStudioOpen}
-          <div class="flex items-center gap-1 px-2 py-1.5">
-            <button
-              class="flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Open settings (⌘,)"
-              onclick={() => navigate('settings')}
-            >
-              <Settings size={14} />
-              Settings
-            </button>
-
-            <!-- Update indicator pill -->
-            {#if updaterState.status.canAutoUpdate}
-              {#if updaterState.status.state === 'checking'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-dimmed"
-                  disabled
-                  title="Checking for updates"
-                >
-                  <Loader2 size={12} class="animate-spin" />
-                </button>
-              {:else if updaterState.status.state === 'available'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-primary transition-colors hover:bg-elevated"
-                  title="Update {updaterState.status
-                    .availableVersion} available — click to download"
-                  onclick={() => void updaterState.downloadUpdate()}
-                >
-                  <Download size={12} />
-                </button>
-              {:else if updaterState.status.state === 'downloading'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted"
-                  disabled
-                  title="Downloading… {updaterState.status.downloadProgress}%"
-                >
-                  <Loader2 size={12} class="animate-spin" />
-                  <span class="tabular-nums">{updaterState.status.downloadProgress}%</span>
-                </button>
-              {:else if updaterState.status.state === 'downloaded'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-primary transition-colors hover:bg-elevated"
-                  title="Update ready — click to restart and install"
-                  onclick={() => void updaterState.installUpdate()}
-                >
-                  <RefreshCw size={12} />
-                </button>
-              {:else if updaterState.status.state === 'waiting'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-accent"
-                  disabled
-                  title="Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
-                  1
-                    ? 's'
-                    : ''} to finish"
-                >
-                  <Clock size={12} />
-                </button>
-              {:else if updaterState.status.state === 'error'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-danger"
-                  title="Update error: {updaterState.status.errorMessage}"
-                  onclick={() => navigate('settings')}
-                >
-                  <AlertCircle size={12} />
-                </button>
-              {:else}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-dimmed"
-                  title="Up to date"
-                  onclick={() => navigate('settings')}
-                >
-                  <CheckCircle2 size={12} />
-                </button>
-              {/if}
-            {/if}
-          </div>
+          <SidebarAccountControls {active} {navigate} />
         {/if}
       {/snippet}
 
