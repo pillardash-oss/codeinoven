@@ -802,11 +802,11 @@
     return map
   })
 
-  /** Pinned standalone chats (inbox project), sorted by activity. */
+  /** Pinned standalone chats (inbox project), ordered newest-pinned first. */
   let pinnedInboxThreads = $derived(
     allThreads
       .filter((t) => t.projectId === INBOX_PROJECT_ID && !t.archived && t.pinned)
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
   /** Non-pinned standalone chats (inbox project), working first then by activity. */
@@ -819,17 +819,18 @@
   /** Threads mode: all active threads sorted by the selected mode, persisted pins first. */
   let allThreadsFlat = $derived.by(() => {
     const list = allThreads.filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
+    // Pinned threads keep one shared pin-time order regardless of the sort mode;
+    // the chosen mode only applies to unpinned threads.
+    const pinned = list
+      .filter((t) => t.pinned)
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
+    const unpinned = list.filter((t) => !t.pinned)
     if (threadSortState.mode === 'status') {
-      return list.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+      unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+    } else {
+      unpinned.sort((a, b) => b.lastActivity - a.lastActivity)
     }
-    return list.sort((a, b) => {
-      if (threadSortState.mode === 'default') {
-        const aPinned = a.pinned
-        const bPinned = b.pinned
-        if (aPinned !== bPinned) return aPinned ? -1 : 1
-      }
-      return b.lastActivity - a.lastActivity
-    })
+    return [...pinned, ...unpinned]
   })
 
   let recentThreads = $derived.by(() => {

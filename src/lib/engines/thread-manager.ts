@@ -246,11 +246,26 @@ export class ThreadManager {
 
   async reorderThreads(projectId: string, orderedIds: string[]): Promise<Thread[]> {
     this.threadRepo.batchUpdateSortOrder(orderedIds)
-    const threads = orderedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
-    for (const thread of threads) {
+    const ordered = orderedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
+
+    // Pinned threads keep a single pin-time order across every surface: rewrite
+    // pinned_at so the first pinned thread in the new list is most-recent.
+    const pinned = ordered.filter((thread) => thread.pinned)
+    if (pinned.length > 0) {
+      const base = Date.now()
+      this.threadRepo.batchUpdatePinnedAt(
+        pinned.map((thread) => thread.id),
+        base
+      )
+      pinned.forEach((thread, index) => {
+        thread.pinnedAt = base - index
+      })
+    }
+
+    for (const thread of ordered) {
       this.onChange?.(thread)
     }
-    return threads
+    return ordered
   }
 
   async reorderScopeThreads(
@@ -300,11 +315,30 @@ export class ThreadManager {
       canonicalOrder.map((t) => t.id)
     )
 
+    // Reordering the pinned slice is a manual pin reorder: rewrite pinned_at so
+    // the first pinned thread is most-recent, keeping pin order consistent with
+    // every other surface.
+    let pinnedBase = 0
+    if (slice === 'pinned' && canonicalOrder.length > 0) {
+      pinnedBase = Date.now()
+      this.threadRepo.batchUpdatePinnedAt(
+        canonicalOrder.map((t) => t.id),
+        pinnedBase
+      )
+    }
+
     const updatedThreads: Thread[] = []
     for (let index = 0; index < canonicalOrder.length; index++) {
       const existing = canonicalOrder[index]
-      if (existing.scopeSortOrder !== index) {
-        const updated: Thread = { ...existing, scopeSortOrder: index }
+      if (
+        existing.scopeSortOrder !== index ||
+        (slice === 'pinned' && existing.pinnedAt !== pinnedBase - index)
+      ) {
+        const updated: Thread = {
+          ...existing,
+          scopeSortOrder: index,
+          ...(slice === 'pinned' ? { pinnedAt: pinnedBase - index } : {})
+        }
         this.onChange?.(updated)
         updatedThreads.push(updated)
       } else {
@@ -564,8 +598,9 @@ export class ThreadManager {
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
-    this.threadRepo.setPinned(threadId, pinned)
-    const updated: Thread = { ...existing, pinned, updatedAt: Date.now() }
+    const pinnedAt = pinned ? Date.now() : undefined
+    this.threadRepo.setPinned(threadId, pinned, pinnedAt)
+    const updated: Thread = { ...existing, pinned, pinnedAt, updatedAt: Date.now() }
     this.onChange?.(updated)
     return updated
   }

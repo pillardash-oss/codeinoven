@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS threads (
   title_source         TEXT NOT NULL DEFAULT 'default' CHECK(title_source IN ('default','auto','manual')),
   status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','executing','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
+  pinned_at            INTEGER,
   sort_order           INTEGER,
   scope_sort_order     INTEGER,
   archived             INTEGER NOT NULL DEFAULT 0,

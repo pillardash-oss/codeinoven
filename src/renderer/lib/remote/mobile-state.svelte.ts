@@ -57,6 +57,16 @@ export function mobileThreadSort(a: Thread, b: Thread): number {
   return a.id.localeCompare(b.id)
 }
 
+/** Pinned threads share one pin-time order across every surface: newest-pinned first. */
+function mobilePinnedThreadSort(a: Thread, b: Thread): number {
+  const aAt = a.pinnedAt ?? -1
+  const bAt = b.pinnedAt ?? -1
+  if (aAt !== bAt) return bAt - aAt
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
+  return a.id.localeCompare(b.id)
+}
+
 export interface MobileJumpTarget {
   id: string
   content: string
@@ -103,7 +113,7 @@ class MobileState {
   pinnedThreads = $derived(
     this.allThreads
       .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
-      .sort(mobileThreadSort)
+      .sort(mobilePinnedThreadSort)
   )
 
   threadsByProject = $derived.by(() => {

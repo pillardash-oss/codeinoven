@@ -88,6 +88,7 @@ export class Database {
     this.applySchema()
     this.ensureAssignmentStoppedSchema()
     this.ensureThreadWorkflowSchema()
+    this.ensureThreadPinnedAtSchema()
     this.backfillAssignmentThreadLineage()
     this.ensureThreadSearchSchema()
     this.ensureAgentMessageCreditsSchema()
@@ -647,6 +648,22 @@ export class Database {
     if (!names.has('context_usage')) {
       this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
     }
+  }
+
+  /**
+   * Add the `pinned_at` timestamp used to order pinned threads (newest pinned
+   * first) and backfill existing pinned rows from their last activity so they
+   * sort deterministically before the user next reorders them.
+   */
+  private ensureThreadPinnedAtSchema(): void {
+    const columns = this.all<{ name: string }>('PRAGMA table_info(threads)')
+    const names = new Set(columns.map((column) => column.name))
+    if (!names.has('pinned_at')) {
+      this.db?.exec('ALTER TABLE threads ADD COLUMN pinned_at INTEGER')
+    }
+    this.db?.exec(
+      'UPDATE threads SET pinned_at = last_activity WHERE pinned = 1 AND pinned_at IS NULL'
+    )
   }
 
   /** Expand pre-existing Assignment status constraints with the terminal stopped state. */

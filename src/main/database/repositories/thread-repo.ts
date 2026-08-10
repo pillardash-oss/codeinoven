@@ -18,6 +18,7 @@ interface ThreadRow {
   title_source: string
   status: string
   pinned: number
+  pinned_at: number | null
   sort_order: number | null
   scope_sort_order: number | null
   archived: number
@@ -119,6 +120,7 @@ function rowToThread(row: ThreadRow): Thread {
     titleSource: (row.title_source || 'default') as ThreadTitleSource,
     status: row.status as ThreadStatus,
     pinned: row.pinned === 1,
+    pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
     scopeSortOrder: row.scope_sort_order ?? undefined,
     archived: row.archived === 1,
@@ -206,19 +208,20 @@ export interface ThreadListOptions {
   includeArchived?: boolean
   /**
    * Ordering for the returned rows.
-   * - `default`: pinned, then manual `sort_order`, then `last_activity`. Manual
-   *   reordering can push an active thread beyond a bounded `limit`, so a
-   *   "recent" hydration query must use `activity` instead.
-   * - `activity`: pinned, then `last_activity` descending — guarantees the most
-   *   recently active threads are always loaded regardless of `sort_order`.
+   * - `default`: pinned (newest pinned first), then manual `sort_order`, then
+   *   `last_activity`. Manual reordering can push an active thread beyond a
+   *   bounded `limit`, so a "recent" hydration query must use `activity` instead.
+   * - `activity`: pinned (newest pinned first), then `last_activity` descending —
+   *   guarantees the most recently active threads are always loaded regardless
+   *   of `sort_order`.
    */
   order?: 'default' | 'activity'
 }
 
 function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
-    ? 'ORDER BY pinned DESC, last_activity DESC'
-    : 'ORDER BY pinned DESC, sort_order ASC, last_activity DESC'
+    ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
+    : 'ORDER BY pinned DESC, pinned_at DESC, sort_order ASC, last_activity DESC'
 }
 
 function buildListClauses(
@@ -251,14 +254,14 @@ export class ThreadRepo {
     this.db.run(
       `INSERT INTO threads(
         id, project_id, provider_id, title, title_source, status,
-        pinned, sort_order, scope_sort_order, archived, read,
+        pinned, pinned_at, sort_order, scope_sort_order, archived, read,
         branch, feature_slug, scope_bucket_id, settings, context_usage,
         session_id, dismissed_spec_id, dismissed_spec_version,
         audit_state, loop_iteration, active_audit_id, active_audit_version,
         assignment_id, assignment_role, assignment_task_id,
         coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
         created_at, updated_at, last_activity, working_directory
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         project_id=excluded.project_id,
         provider_id=excluded.provider_id,
@@ -300,6 +303,7 @@ export class ThreadRepo {
       thread.titleSource ?? 'default',
       thread.status,
       thread.pinned ? 1 : 0,
+      thread.pinnedAt ?? null,
       thread.sortOrder ?? null,
       thread.scopeSortOrder ?? null,
       thread.archived ? 1 : 0,
@@ -428,10 +432,11 @@ export class ThreadRepo {
     )
   }
 
-  setPinned(id: string, pinned: boolean): void {
+  setPinned(id: string, pinned: boolean, pinnedAt?: number): void {
     this.db.run(
-      'UPDATE threads SET pinned = ?, updated_at = ? WHERE id = ?',
+      'UPDATE threads SET pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?',
       pinned ? 1 : 0,
+      pinned ? (pinnedAt ?? Date.now()) : null,
       Date.now(),
       id
     )
@@ -473,6 +478,21 @@ export class ThreadRepo {
     this.db.transaction(() => {
       for (let i = 0; i < ids.length; i++) {
         stmt.run(i, now, ids[i])
+      }
+    })
+  }
+
+  /**
+   * Rewrite pin timestamps so the first id is treated as most-recently pinned.
+   * `base` is the newest value; each subsequent entry gets base - index, keeping
+   * them distinct and ordered (newest/front first) so a newly pinned thread
+   * (pinned_at = now) always lands at the top.
+   */
+  batchUpdatePinnedAt(ids: string[], base: number): void {
+    const stmt = this.db.prepare('UPDATE threads SET pinned_at = ? WHERE id = ?')
+    this.db.transaction(() => {
+      for (let i = 0; i < ids.length; i++) {
+        stmt.run(base - i, ids[i])
       }
     })
   }

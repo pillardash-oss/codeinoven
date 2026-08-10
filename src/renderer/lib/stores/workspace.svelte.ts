@@ -346,27 +346,22 @@ export function threadSort(
 }
 
 /**
- * Sort for pinned threads: a manual drag-reorder is authoritative within a
- * project, unlike `threadSort` where recency wins. sortOrder is project-scoped
- * (assigned across the whole project's list on reorder), so it is only compared
- * for threads in the same project; threads without a manual order fall back to
- * recency. Drafts (unsent composer content) always float to the top.
+ * Sort for pinned threads. Pin order is authoritative and shared across every
+ * surface: newest-pinned first, with a manual drag-reorder (which rewrites
+ * pinned_at) as the only override. Threads with unsent draft content float to
+ * the top so they are never buried.
  */
 export function pinnedThreadSort(
   a: Thread,
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
-  const ka = threadSortKey(a, draftThreadKeys)
-  const kb = threadSortKey(b, draftThreadKeys)
-  if (ka !== kb) return ka - kb
-  if (a.projectId === b.projectId) {
-    const aOrder = a.sortOrder
-    const bOrder = b.sortOrder
-    if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) {
-      return aOrder - bOrder
-    }
-  }
+  const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
+  const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
+  if (aDraft !== bDraft) return aDraft ? -1 : 1
+  const aAt = a.pinnedAt ?? -1
+  const bAt = b.pinnedAt ?? -1
+  if (aAt !== bAt) return bAt - aAt
   const activityDiff = b.lastActivity - a.lastActivity
   if (activityDiff !== 0) return activityDiff
   return a.id.localeCompare(b.id)
