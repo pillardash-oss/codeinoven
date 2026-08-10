@@ -74,6 +74,8 @@
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
   let showPullRequestSheet = $state(false)
+  /** Bumped after a PR is created so the open-PR list refetches. */
+  let prListRefresh = $state(0)
   let showIdentityForm = $state(false)
   let identityName = $state('')
   let identityEmail = $state('')
@@ -1816,6 +1818,8 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
+              onCreate={() => (showPullRequestSheet = true)}
+              refreshSignal={prListRefresh}
             />
           {/if}
         </div>
@@ -2165,7 +2169,11 @@
   {/if}
 
   {#if showPullRequestSheet}
-    <GitPullRequestSheet {projectId} onClose={() => (showPullRequestSheet = false)} />
+    <GitPullRequestSheet
+      {projectId}
+      onClose={() => (showPullRequestSheet = false)}
+      onCreated={() => (prListRefresh += 1)}
+    />
   {/if}
 
   {#if showStashModal}

@@ -11,6 +11,7 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubDeviceCode,
   GitHubPollResult,
+  GitHubWorkflowRunDetail,
   GitIdentity,
   GitRemoteInfo,
   GitResetMode,
@@ -24,6 +25,7 @@ import type {
   PrState,
   PullRequestBundle,
   PullRequestComment,
+  PullRequestCompare,
   PullRequestFile,
   PullRequestPage,
   PullRequestReference
@@ -58,8 +60,10 @@ export type GitOperation =
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
+  | 'pr-reopen'
   | 'deployments'
   | 'deployment-detail'
+  | 'deployment-run-detail'
   | 'deployment-log'
 
 /** How long a cached PR page or bundle is served without refetching. */
@@ -586,6 +590,43 @@ export class GitState {
   }
 
   /**
+   * Compare two refs so the create-PR form can gate on there being a real
+   * change. Returns null on failure so the form can disable creation safely.
+   */
+  async comparePullRequests(
+    projectId: string,
+    owner: string,
+    repo: string,
+    base: string,
+    head: string
+  ): Promise<PullRequestCompare | null> {
+    try {
+      return await invoke('pr:compare', projectId, owner, repo, base, head)
+    } catch {
+      return null
+    }
+  }
+
+  /** Reopen a closed pull request, mirroring GitHub's reopen. */
+  async reopenPullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-reopen', true)
+    this.error = null
+    try {
+      return await invoke('pr:reopen', projectId, owner, repo, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be reopened')
+      return null
+    } finally {
+      this.markBusy('pr-reopen', false)
+    }
+  }
+
+  /**
    * Cached PR listings and detail bundles.
    *
    * The sidebar tab is mounted and unmounted every time the user switches tabs,
@@ -610,6 +651,8 @@ export class GitState {
   deploymentDetails: Record<string, { detail: GitHubDeploymentDetail; fetchedAt: number }> = $state(
     {}
   )
+  deploymentRunDetails: Record<string, { detail: GitHubWorkflowRunDetail; fetchedAt: number }> =
+    $state({})
   deploymentLogs: Record<string, { log: GitHubDeploymentJobLog; fetchedAt: number }> = $state({})
 
   /**
@@ -674,6 +717,10 @@ export class GitState {
 
   static deploymentDetailKey(owner: string, repo: string, deploymentId: number): string {
     return `${owner}/${repo}#${deploymentId}`
+  }
+
+  static workflowRunKey(owner: string, repo: string, runId: number): string {
+    return `${owner}/${repo}/runs/${runId}`
   }
 
   static deploymentLogKey(owner: string, repo: string, jobId: number): string {
@@ -857,6 +904,37 @@ export class GitState {
       throw reason
     } finally {
       this.markBusy('deployment-detail', false)
+    }
+  }
+
+  /** Load one workflow run's rich detail (run + jobs), serving cache first. */
+  async ensureWorkflowRunDetail(
+    projectId: string,
+    owner: string,
+    repo: string,
+    runId: number,
+    force = false
+  ): Promise<GitHubWorkflowRunDetail | null> {
+    const key = GitState.workflowRunKey(owner, repo, runId)
+    const cached = this.deploymentRunDetails[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < DEPLOYMENT_CACHE_TTL_MS) {
+      return cached.detail
+    }
+    if (!force && this.deploymentCoolingDown(key)) return cached?.detail ?? null
+    this.markBusy('deployment-run-detail', true)
+    try {
+      const result = await invoke('deployment:runDetail', projectId, owner, repo, runId)
+      this.deploymentRunDetails = {
+        ...this.deploymentRunDetails,
+        [key]: { detail: result, fetchedAt: Date.now() }
+      }
+      delete this.deploymentFailures[key]
+      return result
+    } catch (reason) {
+      this.markDeploymentFailure(key)
+      throw reason
+    } finally {
+      this.markBusy('deployment-run-detail', false)
     }
   }
 

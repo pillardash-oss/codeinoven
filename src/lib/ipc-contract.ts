@@ -65,6 +65,7 @@ import type {
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
   GitHubPollResult,
+  GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
   GitRemoteInfo,
@@ -79,6 +80,7 @@ import type {
   PrState,
   PullRequestBundle,
   PullRequestComment,
+  PullRequestCompare,
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
@@ -753,6 +755,14 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number, method: PrMergeMethod],
     PullRequestReference
   >
+  'pr:compare': Contract<
+    [projectId: string, owner: string, repo: string, base: string, head: string],
+    PullRequestCompare
+  >
+  'pr:reopen': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestReference
+  >
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage
@@ -764,6 +774,10 @@ export interface IpcInvokeContract {
   'deployment:detail': Contract<
     [projectId: string, owner: string, repo: string, deploymentId: number],
     GitHubDeploymentDetail
+  >
+  'deployment:runDetail': Contract<
+    [projectId: string, owner: string, repo: string, runId: number],
+    GitHubWorkflowRunDetail
   >
   'deployment:jobLog': Contract<
     [projectId: string, owner: string, repo: string, jobId: number],

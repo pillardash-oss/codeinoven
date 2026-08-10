@@ -2738,6 +2738,23 @@ export interface PullRequestPage {
   accessError?: string
 }
 
+/**
+ * GitHub compare result for two refs, used to gate pull request creation.
+ * A PR only makes sense when the head actually has commits the base lacks.
+ */
+export interface PullRequestCompare {
+  status: 'ahead' | 'behind' | 'diverged' | 'identical'
+  /** Commits the head has that the base does not. */
+  aheadBy: number
+  /** Commits the base has that the head does not. */
+  behindBy: number
+  totalCommits: number
+  /** Changed files between the two refs. */
+  filesChanged: number
+  /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
+  hasChanges: boolean
+}
+
 /** Full pull request view, loaded when one is opened in the sidebar. */
 export interface PullRequestDetail extends PullRequestSummary {
   body: string
@@ -2994,6 +3011,13 @@ export interface GitHubDeploymentJobLog {
   jobId: number
   log: string
   truncated: boolean
+}
+
+/** Everything the in-app workflow-run detail view needs. */
+export interface GitHubWorkflowRunDetail {
+  run: GitHubWorkflowRun
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
 }
 
 /** One entry from `git stash list`, e.g. `stash@{0}`. */
