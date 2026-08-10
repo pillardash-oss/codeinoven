@@ -3556,7 +3556,32 @@ export class ChatEngine {
       this.markSessionWorking(sessionId)
       return publicUserMessage
     }
-    const utilityInstructions = await this.prepareTurnUtilities(
+    const checkpointPromise: Promise<string | undefined> = planningSpecTurn
+      ? Promise.resolve(undefined)
+      : this.checkpointManager
+          .beginTurn(
+            projectId,
+            threadId,
+            projectPath,
+            text.slice(0, 80) || 'Agent turn',
+            project.changeTrackingMode === 'git',
+            messageId
+          )
+          .then((checkpoint) => checkpoint.id)
+          .catch((error: unknown) => {
+            if (!(error instanceof CheckpointLimitError)) throw error
+            Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
+              projectId,
+              threadId,
+              detail: error.message
+            })
+            this.broadcastToast(
+              'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
+              'info'
+            )
+            return undefined
+          })
+    const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
       threadId,
@@ -3571,20 +3596,24 @@ export class ChatEngine {
       // talk to the Assignment API over HTTP, so they do not need the gateway.
       (isChatThread && !chatFileSystemEnabled) || targetThread?.assignmentRole === 'worker'
     )
+    const transportPromise = utilityInstructionsPromise.then(() =>
+      driver.preparePromptTransport?.(projectPath, sessionId, settings)
+    )
     // Behavior and vision layers are branch-agnostic and needed both for the
     // system-prompt base estimate and the final composition below, so compute
     // them once before the history recap budget is derived.
     const behaviorMode =
       specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
-    const behaviorPrompt = await this.getBehaviorPrompt(
-      projectId,
-      threadId,
-      projectPath,
-      behaviorMode
-    )
-    const imageDescriptorNote = (await this.modelLacksVision(projectId, settings))
-      ? IMAGE_DESCRIPTOR_SYSTEM_NOTE
-      : ''
+    const [checkpointId, utilityInstructions, behaviorPrompt, modelNeedsImageDescriptor, rawRecap] =
+      await Promise.all([
+        checkpointPromise,
+        utilityInstructionsPromise,
+        this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode),
+        this.modelLacksVision(projectId, settings),
+        this.buildHistoryRecap(projectId, threadId, driverId),
+        transportPromise
+      ])
+    const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
     // One aggregate selected-model input budget across user text + the final
     // system/behavior/tool prompt + hidden orchestration context + history
     // recap, with output/tool headroom reserved once (A-13). The recap takes
@@ -3622,7 +3651,6 @@ export class ChatEngine {
     // the fixed user + system layers exceed the budget (never harness
     // truncation). Recompose the ACTUAL sent driverText from the precise hidden
     // allowance and sync the persisted mirror so the transport text matches.
-    const rawRecap = await this.buildHistoryRecap(projectId, threadId, driverId)
     const composition = composeBudgetedSend({
       availableInputTokens: inputBudget,
       userText: text,
@@ -3812,31 +3840,6 @@ export class ChatEngine {
     await this.clearPendingSpecRevision(projectId, threadId)
 
     try {
-      let checkpointId: string | undefined
-      try {
-        checkpointId = (
-          await this.checkpointManager.beginTurn(
-            projectId,
-            threadId,
-            projectPath,
-            text.slice(0, 80) || 'Agent turn',
-            project.changeTrackingMode === 'git',
-            messageId
-          )
-        ).id
-      } catch (error) {
-        if (!(error instanceof CheckpointLimitError)) throw error
-        Logger.info('Checkpoint skipped because the project exceeds snapshot limits', {
-          projectId,
-          threadId,
-          detail: error.message
-        })
-        this.broadcastToast(
-          'Rollback checkpoint skipped because this project exceeds the snapshot limit. The agent will continue normally.',
-          'info'
-        )
-      }
-
       // Refresh the permission policy for the session used by this turn.
       this.registerSession(
         sessionId,

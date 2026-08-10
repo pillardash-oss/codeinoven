@@ -1037,6 +1037,18 @@ export class OpenCodeDriver implements HarnessDriver {
     if (previous) await previous.cleanup()
   }
 
+  async preparePromptTransport(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    if (this.utilityRuntimes.has(sessionId)) {
+      await this.ensureTurnServer(projectPath, sessionId, settings.providerId)
+      return
+    }
+    await this.ensureServer(projectPath)
+  }
+
   async createSession(projectPath: string, title: string): Promise<string> {
     const handle = await this.ensureServer(projectPath)
     return this.createSessionOnHandle(handle, title)
@@ -1162,7 +1174,9 @@ export class OpenCodeDriver implements HarnessDriver {
   ): Promise<void> {
     const handle =
       isolated ??
-      (await this.ensureTurnServer(projectPath, opts.sessionId, opts.settings.providerId))
+      (this.utilityRuntimes.has(opts.sessionId)
+        ? await this.ensureTurnServer(projectPath, opts.sessionId, opts.settings.providerId)
+        : await this.ensureServer(projectPath))
 
     const parts: Array<Record<string, unknown>> = [{ type: 'text', text: opts.text }]
     for (const attachment of opts.attachments) {
