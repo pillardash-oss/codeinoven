@@ -667,6 +667,11 @@ function createWindow(): BrowserWindow {
     trafficLightPosition: { x: 16, y: 16 },
     webPreferences: {
       autoplayPolicy: 'no-user-gesture-required',
+      // Keep the renderer responsive when the window is hidden or occluded so
+      // background events (e.g. the notification alert played from the
+      // renderer) are handled the moment they arrive instead of after Chromium
+      // throttles the backgrounded page.
+      backgroundThrottling: false,
       preload: getPreloadPath(),
       sandbox: true,
       contextIsolation: true,
