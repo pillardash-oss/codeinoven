@@ -825,10 +825,6 @@ export class Database {
     if (!this.tableExists('harness_usage')) {
       this.db?.exec(HARNESS_USAGE_SQL)
     }
-    // The one-time harness_usage backfill feature was fully removed. Purge the
-    // dead backfill gate so no stale metadata lingers for a feature that no
-    // longer exists. Idempotent no-op when the key is absent.
-    this.run("DELETE FROM db_meta WHERE key = 'harness_usage_backfilled'")
   }
 
   /**
