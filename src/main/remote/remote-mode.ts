@@ -928,6 +928,9 @@ export class RemoteModeController {
     ipcMain.handle('remote:resetCloudEnrollment', (): Promise<RemoteModeStatus> => {
       return this.resetCloudEnrollment()
     })
+    ipcMain.handle('account:getLocalUsage', (): Promise<AccountUsageSummary> =>
+      this.localAccountUsage()
+    )
     ipcMain.handle('account:getProfile', (): Promise<AccountProfileState> => this.accountProfile())
     ipcMain.handle(
       'account:beginSignIn',
@@ -1021,6 +1024,22 @@ export class RemoteModeController {
     if (!profile) throw new Error('Account profile response is invalid')
     await this.applyGlobalMemories?.(profile.globalMemories)
     return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+  }
+
+  private async localAccountUsage(): Promise<AccountUsageSummary> {
+    if (this.loadAccountProfileData) return (await this.loadAccountProfileData()).usage
+    return {
+      messageCount: 0,
+      costUsd: 0,
+      tokens: 0,
+      durationMs: 0,
+      topHarnessId: null,
+      topModelId: null,
+      harnesses: [],
+      models: [],
+      activityDays: [],
+      generatedAt: Date.now()
+    }
   }
 
   private scheduleAccountProfileSync(delayMs: number): void {

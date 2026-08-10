@@ -142,7 +142,6 @@
     label: string
     keywords: string[]
   }> = [
-    { id: 'profile', label: 'Profile', keywords: ['account', 'usage', 'activity', 'cloud'] },
     { id: 'general', label: 'General', keywords: ['appearance', 'theme', 'preferences'] },
     { id: 'memory', label: 'Memory', keywords: ['instructions', 'knowledge'] },
     {
@@ -157,6 +156,7 @@
       keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools']
     },
     { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'] },
+    { id: 'profile', label: 'Profile', keywords: ['account', 'usage', 'activity', 'cloud'] },
     {
       id: 'about',
       label: 'About',

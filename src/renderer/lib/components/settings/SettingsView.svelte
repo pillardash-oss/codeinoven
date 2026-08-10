@@ -86,13 +86,13 @@
     label: string
     icon: typeof SlidersHorizontal
   }> = [
-    { id: 'profile', label: 'Profile', icon: UserRound },
     { id: 'general', label: 'General', icon: SlidersHorizontal },
     { id: 'memory', label: 'Memory', icon: BrainCircuit },
     { id: 'audits', label: 'Agents', icon: UsersRound },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
     { id: 'remote', label: 'Remote', icon: Globe },
+    { id: 'profile', label: 'Profile', icon: UserRound },
     { id: 'about', label: 'About', icon: Info }
   ]
 
