@@ -228,14 +228,15 @@
       }
     }
     // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
-    // wait a frame so the browser has final layout, then scroll. Retry a few
-    // frames in case the rows mount a tick later than expected.
+    // wait frames so the browser has final layout, then scroll. Retry over a few
+    // frames because the folder's rows can mount a tick later than expected —
+    // in Projects mode the row only appears once the folder has expanded and the
+    // per-folder row budget has grown to include it.
     await tick()
-    await nextAnimationFrame()
-    scrollThreadRowIntoView(threadId)
-    if (!findThreadRow(threadId)) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       await nextAnimationFrame()
       scrollThreadRowIntoView(threadId)
+      if (findThreadRow(threadId)) break
     }
   }
 
