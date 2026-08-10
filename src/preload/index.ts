@@ -179,6 +179,7 @@ const INVOKE_CHANNELS = [
   'pr:merge',
   'pr:compare',
   'pr:reopen',
+  'pr:close',
   'pr:page',
   'deployment:overview',
   'deployment:detail',

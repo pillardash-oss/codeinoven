@@ -78,6 +78,8 @@ export interface GitProvider {
   }): Promise<PullRequestCompare>
   /** Reopen a closed pull request. */
   reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference>
+  /** Close an open pull request without merging. */
+  closePullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>

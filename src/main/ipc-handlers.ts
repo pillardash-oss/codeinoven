@@ -3055,6 +3055,14 @@ export function registerIpcHandlers(
     }
   )
 
+  ipcMain.handle(
+    'pr:close',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.closePullRequest(target)
+    }
+  )
+
   /** Shared preamble for every single-PR channel: provider + validated target. */
   const pullRequestTarget = async (
     projectId: unknown,
