@@ -60,6 +60,8 @@ import {
   validatePrCommentBody,
   validatePushOptions,
   validatePullIntegrateOptions,
+  validateMergeCommitTitle,
+  validateMergeCommitMessage,
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
@@ -3020,7 +3022,9 @@ export function registerIpcHandlers(
       owner: unknown,
       repo: unknown,
       pullNumber: unknown,
-      method: unknown
+      method: unknown,
+      commitTitle?: unknown,
+      commitMessage?: unknown
     ) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
@@ -3028,7 +3032,13 @@ export function registerIpcHandlers(
         owner: validateBoundedString(owner, 'PR owner', 1, 128),
         repo: validateBoundedString(repo, 'PR repository', 1, 128),
         pullNumber: validatePrNumber(pullNumber),
-        method: validateMergeMethod(method)
+        method: validateMergeMethod(method),
+        ...(commitTitle === undefined
+          ? {}
+          : { commitTitle: validateMergeCommitTitle(commitTitle) }),
+        ...(commitMessage === undefined
+          ? {}
+          : { commitMessage: validateMergeCommitMessage(commitMessage) })
       })
     }
   )

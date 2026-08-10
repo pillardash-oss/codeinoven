@@ -26,6 +26,10 @@ export interface MergePullRequestInput {
   repo: string
   pullNumber: number
   method: PrMergeMethod
+  /** Optional custom commit title; only used for merge-commit and squash. */
+  commitTitle?: string
+  /** Optional custom commit message (the "comment" on the merge). */
+  commitMessage?: string
 }
 
 /** List pull requests for a repository, optionally filtered by state. */

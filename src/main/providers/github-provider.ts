@@ -91,9 +91,16 @@ export class GitHubProvider implements GitProvider {
   }
 
   async mergePullRequest(input: MergePullRequestInput): Promise<PullRequestReference> {
+    const body: Record<string, unknown> = { merge_method: input.method }
+    // Rebase preserves the original commits, so GitHub ignores custom messages
+    // there. For merge-commit and squash the title/message become the commit.
+    if (input.method !== 'rebase') {
+      if (input.commitTitle) body['commit_title'] = input.commitTitle
+      if (input.commitMessage) body['commit_message'] = input.commitMessage
+    }
     const response = await this.request(
       `/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/pulls/${input.pullNumber}/merge`,
-      { method: 'PUT', body: JSON.stringify({ merge_method: input.method }) }
+      { method: 'PUT', body: JSON.stringify(body) }
     )
     const record = Array.isArray(response) ? {} : response
     return {

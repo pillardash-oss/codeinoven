@@ -61,6 +61,8 @@
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
   let closeConfirm = $state(false)
+  let commitTitle = $state('')
+  let commitMessage = $state('')
   let notice = $state('')
   let expandedCommit = $state<string | null>(null)
   let commitFiles = $state<Record<string, PullRequestFile[]>>({})
@@ -239,17 +241,29 @@
 
   async function merge(): Promise<void> {
     mergeConfirm = false
+    // GitHub ignores custom title/message for rebase, which preserves the
+    // original commits. Trimmed-empty values are omitted so GitHub uses its own.
     const merged = await gitState.mergePullRequest(
       projectId,
       identity.owner,
       identity.repo,
       number,
-      method
+      method,
+      method === 'rebase' ? undefined : commitTitle.trim() || undefined,
+      method === 'rebase' ? undefined : commitMessage.trim() || undefined
     )
     if (merged) {
       notice = `Merged with ${method}`
       await refresh()
     }
+  }
+
+  /** Prefill the merge commit title/message the way GitHub does, per method. */
+  function openMergeConfirm(): void {
+    commitTitle =
+      method === 'merge' ? `Merge pull request #${number} from ${summary.headRef}` : summary.title
+    commitMessage = method === 'squash' ? (detail?.body ?? '') : ''
+    mergeConfirm = true
   }
 
   /** Reopen a closed pull request, the same way GitHub does. */
@@ -807,7 +821,7 @@
           class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
           title={`Merge this pull request into ${summary.baseRef}`}
           disabled={merging}
-          onclick={() => (mergeConfirm = true)}
+          onclick={openMergeConfirm}
         >
           {#if merging}
             <Loader2 size={11} class="animate-spin" />
@@ -864,6 +878,48 @@
         {/if}
         This runs on GitHub and cannot be undone from here.
       </AlertDialog.Description>
+
+      {#if method === 'rebase'}
+        <p
+          class="mt-3 rounded-lg border border-border bg-surface px-3 py-2 text-[10px] leading-relaxed text-dimmed"
+        >
+          Rebase preserves the original commits, so there's no custom commit message to add.
+        </p>
+      {:else}
+        <div class="mt-3 space-y-2">
+          <div>
+            <label
+              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              for="merge-commit-title"
+            >
+              Commit title
+            </label>
+            <input
+              id="merge-commit-title"
+              class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              placeholder={method === 'merge'
+                ? `Merge pull request #${number} from ${summary.headRef}`
+                : 'Title of the squashed commit'}
+              bind:value={commitTitle}
+            />
+          </div>
+          <div>
+            <label
+              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              for="merge-commit-message"
+            >
+              Commit message
+            </label>
+            <textarea
+              id="merge-commit-message"
+              class="min-h-16 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+              placeholder={method === 'merge'
+                ? 'Describe the merge (optional)'
+                : 'Commit message for the squashed changes'}
+              bind:value={commitMessage}></textarea>
+          </div>
+        </div>
+      {/if}
       <div class="mt-5 flex justify-end gap-2">
         <AlertDialog.Cancel
           class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"

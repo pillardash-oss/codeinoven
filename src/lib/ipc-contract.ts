@@ -756,7 +756,15 @@ export interface IpcInvokeContract {
     PullRequestReference[]
   >
   'pr:merge': Contract<
-    [projectId: string, owner: string, repo: string, pullNumber: number, method: PrMergeMethod],
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      method: PrMergeMethod,
+      commitTitle?: string,
+      commitMessage?: string
+    ],
     PullRequestReference
   >
   'pr:compare': Contract<
