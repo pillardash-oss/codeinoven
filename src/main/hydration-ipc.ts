@@ -6,6 +6,7 @@ import { ScopeManager } from '../lib/engines/scope-manager'
 import { ThreadManager } from '../lib/engines/thread-manager'
 import { validateBoundedInteger, validateEntityId } from './ipc-validation'
 import type { Thread } from '../lib/types'
+import type { ThreadCreationCoordinator } from './thread-creation-coordinator'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -16,7 +17,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * document is evaluating. This runs before BrowserWindow navigation; feature
  * graphs remain registered by `registerIpcHandlers` after first paint.
  */
-export function registerHydrationIpcHandlers(storage: StorageEngine, database: Database): void {
+export function registerHydrationIpcHandlers(
+  storage: StorageEngine,
+  database: Database,
+  threadCreation?: ThreadCreationCoordinator
+): void {
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)
@@ -31,9 +36,12 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   ipcMain.handle('scope:get', (_, projectId: unknown) =>
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
-  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-    threadManager.getThread(projectId, threadId)
-  )
+  ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+    // A thread just created optimistically may still be finalizing; wait for
+    // its row before answering so the renderer never reads a phantom thread.
+    await threadCreation?.awaitReady(threadId)
+    return threadManager.getThread(projectId, threadId)
+  })
   ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
     const options = isRecord(rawOptions) ? rawOptions : {}
     const projectId =

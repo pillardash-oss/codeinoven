@@ -157,7 +157,28 @@ export class ThreadManager {
     return thread
   }
 
+  /** The full synchronous `createThread`, used by internal orchestrators. */
   async createThread(input: CreateThreadInput): Promise<Thread> {
+    const { thread, finalize } = this.prepareCreateThread(input)
+    await finalize()
+    return thread
+  }
+
+  /**
+   * Split the create so the renderer-facing path can return the thread
+   * immediately and finalize persistence in the background:
+   *
+   * - The synchronous half validates the project, enforces the thread bound
+   *   (including the all-pinned refusal), and builds the thread object.
+   * - The `finalize` half performs the DB work that can be deferred — the
+   *   lazy capacity eviction (the expensive cascade delete) and the upsert.
+   *   Eviction failure never breaks the new thread; it is surfaced through
+   *   `onEvictionError` so the caller can audit it while the create proceeds.
+   */
+  prepareCreateThread(
+    input: CreateThreadInput,
+    options: { onEvictionError?: (error: unknown) => void } = {}
+  ): { thread: Thread; finalize: () => Promise<void> } {
     const project = this.projectRepo.get(input.projectId)
     if (!project) {
       throw new Error(`Project not found: ${input.projectId}`)
@@ -172,16 +193,13 @@ export class ThreadManager {
       input.assignmentRole === 'worker' ||
       input.achievementRole === 'auditor' ||
       input.coordinatorThreadId !== undefined
+    let toEvict: Thread | undefined
     if (!creatingOrchestrationChild && active.length >= threadLimit) {
       const unpinned = active
         .filter((t) => !t.pinned)
         .sort((a, b) => a.lastActivity - b.lastActivity)
-      const toEvict = unpinned[0]
-      if (toEvict) {
-        // The bounded bucket is destructive by design: permanently delete the
-        // oldest unpinned logical task and every private orchestration child.
-        await this.deleteThread(input.projectId, toEvict.id)
-      } else {
+      toEvict = unpinned[0]
+      if (!toEvict) {
         // Every active thread is pinned — refuse deterministically instead of
         // silently exceeding the limit.
         throw new AllThreadsPinnedError(input.projectId, threadLimit, active.length)
@@ -217,9 +235,21 @@ export class ThreadManager {
       workingDirectory: input.workingDirectory ?? ''
     }
 
-    this.threadRepo.upsert(thread)
+    const finalize = async (): Promise<void> => {
+      // The new thread lands first so the optimistic create always yields a
+      // persisted row; the bounded bucket delete is best-effort cleanup that
+      // must never roll back the creation it is making room for.
+      this.threadRepo.upsert(thread)
+      if (toEvict) {
+        try {
+          await this.deleteThread(input.projectId, toEvict.id)
+        } catch (error) {
+          options.onEvictionError?.(error)
+        }
+      }
+    }
 
-    return thread
+    return { thread, finalize }
   }
 
   async getThread(projectId: string, threadId: string): Promise<Thread | null> {

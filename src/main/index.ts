@@ -29,7 +29,7 @@ import type { ComputerUsePipService } from './computer-use-pip-service'
 import type { UpdaterService } from './updater-service'
 import type { PowerWakeService } from './power-wake-service'
 import type { RetrySchedulerService } from './retry-scheduler-service'
-import type { ThreadCreationCoordinator } from './thread-creation-coordinator'
+import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import type { PtyService } from './pty-service'
 import type { ProviderConnectionService } from './provider-connection'
 import type { HarnessUpdateService } from './harness-update-service'
@@ -325,7 +325,7 @@ let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
-let threadCreation: ThreadCreationCoordinator = new ThreadCreationCoordinator()
+const threadCreation = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
@@ -473,7 +473,13 @@ async function bootPostPaintServices(): Promise<void> {
   installFilePreviewProtocol(projectFilesService)
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
-  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService, threadCreation)
+  chatEngine = new ChatEngine(
+    storage,
+    database,
+    computerUsePipService,
+    harnessManifestService,
+    threadCreation
+  )
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
