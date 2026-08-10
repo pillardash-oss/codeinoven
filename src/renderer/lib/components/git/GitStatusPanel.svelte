@@ -55,7 +55,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
-  import type { PullRequestSummary } from '$shared/types'
+  import type { PullRequestReference, PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -342,6 +342,29 @@
       `When you are done, remove the worktree with \`git worktree remove ${reportDirectory}/worktree --force\``,
       `and delete the local branch \`pr-${pr.number}\`. Do not push anything and do not merge the PR.`
     ].join('\n')
+  }
+
+  /** Open a just-created PR inside the git panel's PR detail view. */
+  function viewCreatedPullRequest(created: {
+    reference: PullRequestReference
+    head: string
+    base: string
+    draft: boolean
+  }): void {
+    showPullRequestSheet = false
+    selectedPullRequest = {
+      number: created.reference.number,
+      title: created.reference.title,
+      url: created.reference.url,
+      state: 'open',
+      draft: created.draft,
+      authorLogin: '',
+      headRef: created.head,
+      baseRef: created.base,
+      createdAt: '',
+      updatedAt: '',
+      comments: 0
+    }
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -2173,6 +2196,7 @@
       {projectId}
       onClose={() => (showPullRequestSheet = false)}
       onCreated={() => (prListRefresh += 1)}
+      onView={viewCreatedPullRequest}
     />
   {/if}
 

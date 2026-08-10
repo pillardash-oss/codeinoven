@@ -9,6 +9,7 @@
     CircleCheck,
     CircleSlash,
     ExternalLink,
+    Eye,
     GitPullRequest,
     Loader2,
     TriangleAlert
@@ -19,9 +20,16 @@
     onClose: () => void
     /** Fired once a pull request is actually created, so the list can refresh. */
     onCreated?: () => void
+    /** Fired from the success screen to open the created PR inside the git panel. */
+    onView?: (created: {
+      reference: PullRequestReference
+      head: string
+      base: string
+      draft: boolean
+    }) => void
   }
 
-  let { projectId, onClose, onCreated }: Props = $props()
+  let { projectId, onClose, onCreated, onView }: Props = $props()
 
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
@@ -165,23 +173,29 @@
     {#if result}
       {@const pr = result}
       <div class="rounded-lg border border-success/30 bg-success/10 px-3 py-2">
-        <p class="text-[11px] font-medium text-success">Pull request #{pr.number}</p>
-        <p class="mt-0.5 truncate text-[10px] text-muted">{pr.url}</p>
+        <p class="text-[11px] font-medium text-success">Pull request #{pr.number} created</p>
+        <p class="mt-0.5 truncate text-[10px] text-muted">{pr.title}</p>
         <div class="mt-2 flex items-center gap-1.5">
           <button
             type="button"
             class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary hover:bg-primary-hover"
+            title="Open this pull request in the Git panel"
+            onclick={() => {
+              onClose()
+              onView?.({ reference: pr, head, base, draft })
+            }}
+          >
+            <Eye size={12} />
+            View PR
+          </button>
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+            title="Open this pull request on GitHub"
             onclick={() => void openInBrowser(pr.url)}
           >
             <ExternalLink size={12} />
             Open in browser
-          </button>
-          <button
-            type="button"
-            class="cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
-            onclick={onClose}
-          >
-            Done
           </button>
         </div>
       </div>
