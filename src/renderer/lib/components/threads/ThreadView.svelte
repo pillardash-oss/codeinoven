@@ -1777,6 +1777,15 @@
     if (scrollEl.scrollTop <= HISTORY_PRELOAD_THRESHOLD) void loadOlderMessages()
   }
 
+  /** Release the tail-follow lock the moment the user starts scrolling up. The
+   *  `scroll` event fires a frame after the wheel gesture, so waiting for it
+   *  lets a queued auto-follow callback land in that gap and snap back to the
+   *  live tail. Flipping the flag here, synchronously with the input, is what
+   *  makes the lock release "as soon as the user scrolls". */
+  function onWheel(event: WheelEvent): void {
+    if (event.deltaY < 0) userScrolledAway = true
+  }
+
   let loadingOlderMessages = $state(false)
 
   async function loadOlderMessages(): Promise<void> {
@@ -1861,6 +1870,14 @@
     void streamVersion
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
+      // The scroll event lags the wheel gesture by a frame, so userScrolledAway
+      // can still be false here right after the user scrolled up. Re-check the
+      // live position before snapping, otherwise this queued callback races the
+      // input and drags the view back to the tail mid-gesture.
+      if (!isAtBottom(scrollEl)) {
+        userScrolledAway = true
+        return
+      }
       scrollEl.scrollTop = scrollEl.scrollHeight
     })
   })
@@ -5629,6 +5646,7 @@
       bind:this={scrollEl}
       class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-4"
       onscroll={onScroll}
+      onwheel={onWheel}
       onpointerup={captureResponseSelection}
       role="log"
       aria-label="Conversation"
