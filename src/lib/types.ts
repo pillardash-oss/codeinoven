@@ -691,6 +691,8 @@ export interface ComputerUsePipState {
   active: boolean
   pid?: number
   appName?: string
+  /** Id of the thread whose agent is driving the tracked app, when active. */
+  threadId?: string
 }
 
 export interface SessionConfig {
