@@ -841,6 +841,8 @@ export interface ImageDescriptorErrorRequest {
   threadId: string
   /** The actual error reported by the vision model / harness session. */
   error: string
+  /** Provider-neutral failure category used to explain network/upload failures clearly. */
+  kind: AgentProviderIssueKind
   /** Vision model that produced the failure. */
   selection: AgentModelSelection
   /** Partial description generated before the failure, if any. */

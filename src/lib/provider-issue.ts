@@ -56,7 +56,15 @@ export function classifyProviderIssue(
   if (
     normalized.includes('network') ||
     normalized.includes('connection') ||
-    normalized.includes('timeout')
+    normalized.includes('timeout') ||
+    normalized.includes('timed out') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('enotfound') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('dns') ||
+    normalized.includes('offline')
   ) {
     return 'network'
   }

@@ -52,6 +52,7 @@ import {
 } from './utility-orchestration-service'
 import {
   IMAGE_DESCRIPTOR_PROMPT,
+  imageDescriptorInactivityTimeoutMs,
   resolveSelfContainedAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
@@ -67,6 +68,7 @@ import type {
   AgentQuestionRequest,
   AgentQuestionResolution,
   AgentProviderIssue,
+  AgentProviderIssueKind,
   AgentSessionStatus,
   AgentToolCatalog,
   AgentToolDefinition,
@@ -811,6 +813,16 @@ interface SessionCompletionWaiter {
   timer: ReturnType<typeof setTimeout>
   /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
   refresh: () => void
+}
+
+class ImageDescriptorInactivityError extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    readonly attempt: number,
+    readonly nextTimeoutMs?: number
+  ) {
+    super('Image upload or vision-model response timed out')
+  }
 }
 
 interface PendingMemoryDecision {
@@ -4336,12 +4348,17 @@ export class ChatEngine {
           'No vision model is configured for image description. Choose a vision model on the Agents settings page, or pick one when sending an image.'
       }))
     }
-    const results: ImageDescriptorResult[] = []
-    for (const image of request.images) {
-      const outcome = await this.describeWithImageDescriptorRecovery(request, selection, image)
-      results.push(outcome)
+    this.clearSessionWatchdog(request.sessionId)
+    try {
+      const results: ImageDescriptorResult[] = []
+      for (const image of request.images) {
+        const outcome = await this.describeWithImageDescriptorRecovery(request, selection, image)
+        results.push(outcome)
+      }
+      return results
+    } finally {
+      this.startSessionWatchdog(request.sessionId)
     }
-    return results
   }
 
   /**
@@ -4359,17 +4376,25 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult> {
     let selection = initialSelection
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      // A reply to the error card briefly re-arms the parent watchdog. The
+      // descriptor owns its own adaptive inactivity deadline while retrying.
+      this.clearSessionWatchdog(request.sessionId)
       try {
         const description = await this.describeImageOnVisionModel(
           request.projectId,
           request.threadId,
           request.projectPath,
           selection,
-          image
+          image,
+          attempt
         )
         return { id: image.id, source: image.source, type: image.type, description }
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Image description failed'
+        const message = this.imageDescriptorFailureMessage(error)
+        const kind: AgentProviderIssueKind =
+          error instanceof ImageDescriptorInactivityError
+            ? 'network'
+            : classifyProviderIssue(message)
         Logger.dev('Image description failed', {
           harnessId: selection.harnessId,
           providerId: selection.providerId,
@@ -4384,7 +4409,8 @@ export class ChatEngine {
           const decision = await this.requestImageDescriptorDecision(
             request,
             selection,
-            attributedMessage
+            attributedMessage,
+            kind
           )
           if (decision.action === 'retry') {
             if (decision.selection) {
@@ -4432,7 +4458,8 @@ export class ChatEngine {
   private requestImageDescriptorDecision(
     request: ImageDescriptorExecutorRequest,
     selection: AgentModelSelection,
-    error: string
+    error: string,
+    kind: AgentProviderIssueKind
   ): Promise<ImageDescriptorUserDecision> {
     const id = generateId()
     this.clearSessionWatchdog(request.sessionId)
@@ -4444,6 +4471,7 @@ export class ChatEngine {
         projectId: request.projectId,
         threadId: request.threadId,
         error,
+        kind,
         selection,
         partialOutput: '',
         imageCount: request.images.length,
@@ -4498,7 +4526,8 @@ export class ChatEngine {
     threadId: string,
     projectPath: string,
     selection: AgentModelSelection,
-    image: ResolvedImageEntry
+    image: ResolvedImageEntry,
+    attempt: number
   ): Promise<string> {
     const { driver } = await this.resolve(projectId, selection.harnessId, threadId)
     const settings: ThreadSettings = {
@@ -4528,11 +4557,19 @@ export class ChatEngine {
       true
     )
     try {
-      const completion = this.waitForSessionCompletion(sessionId, 180_000, 'Image description')
       // Inline local file sources as data URLs so the vision session never
       // depends on the original path still existing (transient temp screenshots
       // and pasted images can be deleted before the harness reads them).
       const attachment = await resolveSelfContainedAttachment(image)
+      const timeoutMs = imageDescriptorInactivityTimeoutMs(attachment, attempt)
+      const nextTimeoutMs =
+        attempt === 0 ? imageDescriptorInactivityTimeoutMs(attachment, attempt + 1) : undefined
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        timeoutMs,
+        'Image upload or vision-model response',
+        () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
+      )
       const request: SendPromptOptions = {
         sessionId,
         settings,
@@ -4579,6 +4616,23 @@ export class ChatEngine {
         }
       }
     }
+  }
+
+  /** Turn an inactivity deadline into an actionable network/upload explanation. */
+  private imageDescriptorFailureMessage(error: unknown): string {
+    if (!(error instanceof ImageDescriptorInactivityError)) {
+      return error instanceof Error ? error.message : 'Image description failed'
+    }
+    const currentWindow = this.formatTimeoutWindow(error.timeoutMs)
+    if (error.attempt === 0 && error.nextTimeoutMs !== undefined) {
+      return `No image-upload or vision-model activity was received for ${currentWindow}. A slow or unstable network may have stalled the file upload. Retry will use a longer ${this.formatTimeoutWindow(error.nextTimeoutMs)} inactivity window, which resets whenever the provider reports progress.`
+    }
+    return `No image-upload or vision-model activity was received for ${currentWindow}, even with the extended retry window. Check the network connection and retry; the file upload or provider response may have stalled.`
+  }
+
+  private formatTimeoutWindow(timeoutMs: number): string {
+    const minutes = Math.ceil(timeoutMs / 60_000)
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`
   }
 
   /**
@@ -11286,14 +11340,17 @@ export class ChatEngine {
   private waitForSessionCompletion(
     sessionId: string,
     timeoutMs = 180_000,
-    label = 'Agent session'
+    label = 'Agent session',
+    timeoutError?: () => Error
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
       const armTimer = (): ReturnType<typeof setTimeout> =>
         setTimeout(() => {
           this.completionWaiters.delete(sessionId)
-          reject(new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`))
+          reject(
+            timeoutError?.() ?? new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`)
+          )
         }, timeoutMs)
       const waiter: SessionCompletionWaiter = {
         active: false,

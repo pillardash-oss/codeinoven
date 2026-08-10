@@ -50,6 +50,7 @@
         override.modelId !== request.selection.modelId ||
         override.harnessId !== request.selection.harnessId)
   )
+  let networkRelated = $derived(request.kind === 'network')
   let working = $state(false)
   let actionError = $state('')
 
@@ -88,7 +89,7 @@
     <div class="flex min-w-0 items-center gap-2">
       <AlertTriangle size={15} class="shrink-0 text-danger" />
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        Vision model failed
+        {networkRelated ? 'Upload or network interrupted' : 'Vision model failed'}
       </p>
     </div>
     <button
@@ -105,7 +106,9 @@
   <div class="space-y-4 p-4">
     <div>
       <p class="text-sm font-semibold text-foreground">
-        The vision model could not describe this image
+        {networkRelated
+          ? 'The image upload or vision response was interrupted'
+          : 'The vision model could not describe this image'}
       </p>
       <p
         class="mt-1.5 break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-danger"
@@ -113,9 +116,11 @@
         {request.error}
       </p>
       <p class="mt-2 text-xs leading-relaxed text-muted">
-        {changed
-          ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
-          : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
+        {networkRelated
+          ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model or continue without the description.'
+          : changed
+            ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
+            : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
       </p>
     </div>
 
@@ -167,7 +172,7 @@
       {:else}
         <RotateCw size={13} />
       {/if}
-      {changed ? 'Retry with this model' : 'Retry'}
+      {changed ? 'Retry with this model' : networkRelated ? 'Retry with more time' : 'Retry'}
     </button>
   </div>
 </section>
