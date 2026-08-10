@@ -66,7 +66,9 @@ CREATE TRIGGER IF NOT EXISTS project_fts_delete AFTER DELETE ON projects BEGIN
   INSERT INTO project_fts(project_fts, rowid, name) VALUES('delete', old.rowid, old.name);
 END;
 
-CREATE TRIGGER IF NOT EXISTS project_fts_update AFTER UPDATE ON projects BEGIN
+DROP TRIGGER IF EXISTS project_fts_update;
+CREATE TRIGGER IF NOT EXISTS project_fts_update AFTER UPDATE ON projects
+WHEN new.name != old.name BEGIN
   INSERT INTO project_fts(project_fts, rowid, name) VALUES('delete', old.rowid, old.name);
   INSERT INTO project_fts(rowid, name) VALUES (new.rowid, new.name);
 END;`
@@ -148,7 +150,9 @@ CREATE TRIGGER IF NOT EXISTS history_fts_delete AFTER DELETE ON history_entries 
   INSERT INTO history_fts(history_fts, rowid, content) VALUES('delete', old.rowid, old.content);
 END;
 
-CREATE TRIGGER IF NOT EXISTS history_fts_update AFTER UPDATE ON history_entries BEGIN
+DROP TRIGGER IF EXISTS history_fts_update;
+CREATE TRIGGER IF NOT EXISTS history_fts_update AFTER UPDATE ON history_entries
+WHEN new.content != old.content BEGIN
   INSERT INTO history_fts(history_fts, rowid, content) VALUES('delete', old.rowid, old.content);
   INSERT INTO history_fts(rowid, content) VALUES (new.rowid, new.content);
 END;`
@@ -211,7 +215,9 @@ CREATE TRIGGER IF NOT EXISTS agent_messages_fts_delete AFTER DELETE ON agent_mes
   INSERT INTO agent_messages_fts(agent_messages_fts, rowid, search_text) VALUES('delete', old.rowid, old.search_text);
 END;
 
-CREATE TRIGGER IF NOT EXISTS agent_messages_fts_update AFTER UPDATE ON agent_messages BEGIN
+DROP TRIGGER IF EXISTS agent_messages_fts_update;
+CREATE TRIGGER IF NOT EXISTS agent_messages_fts_update AFTER UPDATE ON agent_messages
+WHEN new.search_text != old.search_text BEGIN
   INSERT INTO agent_messages_fts(agent_messages_fts, rowid, search_text) VALUES('delete', old.rowid, old.search_text);
   INSERT INTO agent_messages_fts(rowid, search_text) VALUES (new.rowid, new.search_text);
 END;`

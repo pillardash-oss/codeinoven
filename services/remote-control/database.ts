@@ -406,6 +406,20 @@ export class RemoteControlDatabase {
       .run(crypto.randomUUID(), userId, desktopId, kind, '{}', Date.now())
   }
 
+  /** Bound the audit log to 90 days and a fixed row cap. */
+  pruneAudit(now: number, maxEvents = 10_000, maxAgeMs = 90 * 24 * 60 * 60 * 1_000): void {
+    this.db.prepare('DELETE FROM audit_events WHERE created_at < ?').run(now - maxAgeMs)
+    const count =
+      this.db.query<{ cnt: number }, []>('SELECT count(*) AS cnt FROM audit_events').get()?.cnt ?? 0
+    if (count > maxEvents) {
+      this.db
+        .prepare(
+          'DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events ORDER BY created_at DESC LIMIT -1 OFFSET ?)'
+        )
+        .run(maxEvents)
+    }
+  }
+
   private ensureLanEndpointColumn(): void {
     const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(desktops)').all()
     if (!columns.some((column) => column.name === 'lan_endpoint')) {

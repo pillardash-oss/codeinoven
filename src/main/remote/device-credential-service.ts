@@ -196,10 +196,46 @@ export class DeviceCredentialService {
   private readonly repo: RemoteDeviceRepo
   private readonly now: () => number
   private readonly pendingApprovals = new Map<string, PendingStepUpApproval>()
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(db: Database, options: { now?: () => number } = {}) {
     this.repo = new RemoteDeviceRepo(db)
     this.now = options.now ?? (() => Date.now())
+  }
+
+  // ── Periodic maintenance ─────────────────────────────────────────────
+
+  /** Prune tombstone rows older than the retention window. */
+  pruneTombstones(): void {
+    this.repo.pruneTombstones(this.now(), TOMBSTONE_RETENTION_MS)
+  }
+
+  /**
+   * Schedule bounded-growth maintenance (audit log cap + age, tombstone
+   * retention) on a fire-and-forget interval. The timer is `unref()`'d so it
+   * never holds the app open, making an explicit `stop()` optional.
+   */
+  startPeriodicMaintenance(intervalMs = 6 * 60 * 60 * 1_000): void {
+    if (this.maintenanceTimer) return
+    const run = (): void => {
+      try {
+        this.pruneAudit()
+        this.pruneTombstones()
+      } catch {
+        // Best-effort: a failed prune must never take the remote stack down.
+      }
+    }
+    run()
+    this.maintenanceTimer = setInterval(run, intervalMs)
+    this.maintenanceTimer.unref?.()
+  }
+
+  /** Stop the periodic maintenance timer (no-op when not started). */
+  stopPeriodicMaintenance(): void {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer)
+      this.maintenanceTimer = null
+    }
   }
 
   // ── Pairing bootstrap lifecycle ───────────────────────────────────────

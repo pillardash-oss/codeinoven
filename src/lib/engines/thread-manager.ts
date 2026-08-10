@@ -136,8 +136,12 @@ export class ThreadManager {
   }
 
   /** Accumulate a completed turn's harness usage (ledger-guarded, idempotent). */
-  accumulateHarnessUsage(projectId: string, threadId: string, messages: AgentMessage[]): void {
-    this.harnessUsageRepo.accumulateTurn(projectId, threadId, messages)
+  accumulateHarnessUsage(
+    projectId: string,
+    threadId: string,
+    messages: AgentMessage[]
+  ): Promise<{ ok: boolean; error?: string }> {
+    return this.harnessUsageRepo.accumulateTurn(projectId, threadId, messages)
   }
 
   /** Rebuild a thread's harness usage rows from its persisted messages. */
