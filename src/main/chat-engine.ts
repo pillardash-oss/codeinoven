@@ -10602,7 +10602,7 @@ export class ChatEngine {
       // Snapshot this turn's harness usage into the dedicated analytics table.
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
-      this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
+      await this.threadManager.accumulateHarnessUsage(info.projectId, info.threadId, messages)
       // The harness demonstrably ran — confirm its behavior manifest in use so
       // the reliable declared baseline becomes a validated runtime confirmation
       // (unless the user explicitly overrode it). Fire-and-forget: never let

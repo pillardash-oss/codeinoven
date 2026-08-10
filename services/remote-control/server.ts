@@ -610,6 +610,7 @@ const cleanupTimer = setInterval(() => {
   }
   database.deleteExpiredSessions()
   database.deleteExpiredEnrollments()
+  database.pruneAudit(Date.now())
   relayHub.sweep()
   const now = Date.now()
   for (const [key, bucket] of rateBuckets) {

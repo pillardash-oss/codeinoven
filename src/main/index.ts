@@ -492,6 +492,9 @@ async function bootPostPaintServices(): Promise<void> {
 
     /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
     remoteCredentials = new DeviceCredentialService(database)
+    // Bound the security audit log and tombstone tables; unref'd so it never
+    // holds the app open.
+    remoteCredentials.startPeriodicMaintenance()
     remoteMode = new RemoteModeController({
       lanPort: remoteEnvInt('LAN_PORT', DEFAULT_LAN_PORT),
       localPort: remoteEnvInt('LAN_LOCAL_PORT', DEFAULT_LAN_PORT + 1),
