@@ -80,7 +80,6 @@ However, if you have a way to name files like I just described above, maybe in y
 - DON'T EVER RUN `git push` OR ATTEMPT TO PUSH! It doesn't matter how many commits behind the project is!
 - Always use the equivalent MCP/skills available to you when working on various technologies. Example: when working on svelte, always use the MCP to look up docs, test and fix your code!
 - Do not write new tests unless explicitly told to.
-- NEVER globally defer thread title generation until the main agent turn is idle. Preserve the tested contract in `src/main/title-generation-policy.ts`: only Claude Code may defer because its processes share OAuth refresh state; OpenCode, Codex, Cline, Antigravity, and Pi must launch their disposable title session independently, including Engineering-mode entry turns. The generated title must replace the immediate fallback unless the user manually renamed the thread. Any change to this flow MUST update and pass the scoped title-generation regression tests.
 - IF YOU EVER SEE ANY CHANGES YOU DID NOT MAKE NEVER REVERT SO YOU DON'T DESTROY ANOTHER'S CHANGES!! ALWAYS WORK SURGICALLY!!
 - NEVER RUN `git reset` blindly. If you need to revert anything, list the files individually. NEVER CAUSE A USER TO LOSE THEIR CHANGES!
 - ALWAYS COMMIT!

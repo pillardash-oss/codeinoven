@@ -1,8 +1,17 @@
 /**
- * Claude Code processes share OAuth refresh state, so its disposable title
- * session must wait for the main turn. Every other harness owns an isolated
- * title transport and must start immediately, including Engineering entry turns.
+ * TITLE-GENERATION INVARIANT: invoke this launcher as soon as the driver is
+ * resolved. Never defer it to the main session's idle/success event. A title
+ * updates its thread by ID, while provider-specific authentication concurrency
+ * belongs inside that provider's driver.
  */
-export function shouldDeferAutoTitleUntilIdle(driverId: string): boolean {
-  return driverId === 'claude-code'
+export function createAutoTitleLauncher(
+  enabled: boolean,
+  generate: () => Promise<void>
+): () => Promise<void> {
+  let launched = false
+  return (): Promise<void> => {
+    if (!enabled || launched) return Promise.resolve()
+    launched = true
+    return generate()
+  }
 }
