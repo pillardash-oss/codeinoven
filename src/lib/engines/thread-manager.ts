@@ -144,16 +144,6 @@ export class ThreadManager {
     return this.harnessUsageRepo.accumulateTurn(projectId, threadId, messages)
   }
 
-  /** Rebuild a thread's harness usage rows from its persisted messages. */
-  reconcileHarnessUsage(projectId: string, threadId: string): void {
-    this.harnessUsageRepo.reconcile(projectId, threadId)
-  }
-
-  /** Rebuild harness usage for every thread that has assistant messages. */
-  reconcileAllHarnessUsage(): void {
-    this.harnessUsageRepo.reconcileAll()
-  }
-
   private getOwnedThread(projectId: string, threadId: string): Thread | null {
     const thread = this.threadRepo.get(threadId)
     return thread?.projectId === projectId ? thread : null
