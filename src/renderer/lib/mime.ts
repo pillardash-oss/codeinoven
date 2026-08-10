@@ -85,9 +85,12 @@ export function fileUrlToPath(url: string): string {
   // starts at index 7, so slice(7) keeps it. Slicing 8 (`file:///`) would
   // drop the leading slash and turn the absolute path into a broken relative
   // path that readFile() cannot resolve.
-  if (url.startsWith('file:///')) return url.slice('file://'.length)
-  if (url.startsWith('file://')) return url.slice('file://'.length)
-  return url
+  const encodedPath = url.startsWith('file://') ? url.slice('file://'.length) : url
+  try {
+    return decodeURIComponent(encodedPath)
+  } catch {
+    return encodedPath
+  }
 }
 
 export function isVideoMime(mime: string): boolean {

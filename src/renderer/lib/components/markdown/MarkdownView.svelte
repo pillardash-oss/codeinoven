@@ -23,6 +23,8 @@
     allowHtml?: boolean
     /** Fired when a file citation is clicked. */
     onCiteFile?: (path: string, line?: number) => void
+    /** Fired when an explicit local file URL is clicked. */
+    onOpenLocalFile?: (url: string) => void
     /** Fired when an annotatable Mermaid diagram requests a review comment. */
     onAnnotateMermaid?: (code: string, event: MouseEvent) => void
   }
@@ -32,6 +34,7 @@
     class: className = '',
     allowHtml = false,
     onCiteFile,
+    onOpenLocalFile,
     onAnnotateMermaid
   }: Props = $props()
 
@@ -158,6 +161,12 @@
 
     const href = link.getAttribute('href')
     if (!href) return
+    if (href.startsWith('file://')) {
+      event.preventDefault()
+      clearTooltip()
+      onOpenLocalFile?.(href)
+      return
+    }
     if (href.startsWith('http://') || href.startsWith('https://')) {
       event.preventDefault()
       clearTooltip()

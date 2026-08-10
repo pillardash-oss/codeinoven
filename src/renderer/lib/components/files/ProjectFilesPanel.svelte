@@ -49,6 +49,12 @@
       : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
+  // This panel can be restored directly from persisted sidebar state before a
+  // file action has had a chance to prepare the workspace store.
+  function prepareProjectFilesState(): void {
+    projectFilesWorkspace.ensureState(projectId)
+  }
+  prepareProjectFilesState()
   let projectState = $derived(projectFilesWorkspace.getState(projectId))
   let activeTab = $derived(
     contextTab?.fileTabId
