@@ -163,17 +163,44 @@
     )
   }
 
-  function revealThreadInSidebar(threadId: string): void {
+  function nextAnimationFrame(): Promise<void> {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  }
+
+  function scrollThreadRowIntoView(threadId: string): void {
+    const scroller = sidebarScroller
+    const row = findThreadRow(threadId)
+    if (!row) return
+    if (!scroller) {
+      row.scrollIntoView({ block: 'nearest' })
+      return
+    }
+    // Scroll the sidebar scroller directly so the row is fully inside its
+    // visible area. scrollIntoView can be defeated by intervening containers
+    // (folders, padding wrappers), so compute the offset ourselves and only
+    // move when the row is actually clipped.
+    const rowRect = row.getBoundingClientRect()
+    const scrollerRect = scroller.getBoundingClientRect()
+    if (rowRect.top < scrollerRect.top) {
+      scroller.scrollTop -= scrollerRect.top - rowRect.top
+    } else if (rowRect.bottom > scrollerRect.bottom) {
+      scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
+    }
+  }
+
+  async function revealThreadInSidebar(threadId: string): Promise<void> {
     // The scope-board project view has its own per-stage lists and scrolling;
     // leave it alone and only reveal for the regular Projects/Threads/Chats.
     if (isScopeBoardView) return
     // In Projects mode the target thread may sit in a collapsed folder and/or
     // past the per-folder "show more" cutoff. Expand its folder and raise the
-    // row budget so the row actually renders, then scroll once the re-layout
-    // has settled. In Threads mode the flat list always renders every row, so
-    // only the scroll step applies.
+    // row budget so the row actually renders. We intentionally don't gate this
+    // on the current mode: when Ctrl+Tab crosses modes (e.g. Chats → Projects)
+    // the mode prop may not have propagated yet, but expanding is harmless and
+    // ensures the folder is open by the time the scroll step runs. In Threads
+    // mode the flat list always renders every row, so only the scroll applies.
     const active = selectedThread
-    if (active && active.projectId !== INBOX_PROJECT_ID && mode === 'projects') {
+    if (active && active.projectId !== INBOX_PROJECT_ID) {
       expandedFolders.add(active.projectId)
       const folderThreads = threadsByProject.get(active.projectId) ?? []
       const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
@@ -183,24 +210,16 @@
         if (needed > current) threadShowCount.set(active.projectId, needed)
       }
     }
-    // Defer one frame so the folder expansion / re-sort has produced final
-    // layout, then bring the row fully into view inside the sidebar scroller.
-    requestAnimationFrame(() => {
-      const scroller = sidebarScroller
-      const row = findThreadRow(threadId)
-      if (!row) return
-      if (!scroller) {
-        row.scrollIntoView({ block: 'nearest' })
-        return
-      }
-      const rowRect = row.getBoundingClientRect()
-      const scrollerRect = scroller.getBoundingClientRect()
-      if (rowRect.top < scrollerRect.top) {
-        scroller.scrollTop -= scrollerRect.top - rowRect.top
-      } else if (rowRect.bottom > scrollerRect.bottom) {
-        scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
-      }
-    })
+    // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
+    // wait a frame so the browser has final layout, then scroll. Retry a few
+    // frames in case the rows mount a tick later than expected.
+    await tick()
+    await nextAnimationFrame()
+    scrollThreadRowIntoView(threadId)
+    if (!findThreadRow(threadId)) {
+      await nextAnimationFrame()
+      scrollThreadRowIntoView(threadId)
+    }
   }
 
   function handleSidebarUserScroll(): void {
@@ -1593,13 +1612,13 @@
   async function openThread(thread: Thread): Promise<void> {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
+    // Reveal immediately (guaranteed even if the markRead round-trip is slow),
+    // and again once the list re-sorts from the updated activity.
+    revealThreadInSidebar(thread.id)
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
     upsertThreadInList(updated)
     workspaceState.updateThread(updated)
     scopeState.updateThread(updated)
-    // Every thread-open path funnels through here (clicking a row, Ctrl+Tab,
-    // search results, notifications), so this is the reliable hook to scroll
-    // the active thread into view in the left sidebar.
     revealThreadInSidebar(thread.id)
   }
 
