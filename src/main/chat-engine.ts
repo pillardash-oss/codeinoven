@@ -1827,6 +1827,9 @@ export class ChatEngine {
     permissionLevel: PermissionLevel,
     skipRuntime = false
   ): Promise<string> {
+    // A new agent turn begins here — re-enable a user-dismissed PiP so it may
+    // show again if CUA is used, and cancel any auto-dismiss from the last turn.
+    this.computerUsePip?.notifyTurnStarted(threadId)
     // A web-only inbox chat masks its tool set to web utilities, so the app
     // gateway and any materialized utility runtime are never reachable. Skipping
     // the runtime here keeps the shared `chats-cwd` opencode server alive across

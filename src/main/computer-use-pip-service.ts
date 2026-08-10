@@ -35,7 +35,7 @@ export class ComputerUsePipService {
   private active = false
   private misses = 0
   private ownerThreadId: string | null = null
-  private dismissedPid: number | null = null
+  private dismissedThreadId: string | null = null
   private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly storage: StorageEngine) {
@@ -46,9 +46,9 @@ export class ComputerUsePipService {
   async track(pid: number, threadId: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
-    // The user closed this app's overlay — keep it closed until a new app is driven.
-    if (this.dismissedPid === pid) return
-    this.dismissedPid = null
+    // The user closed the overlay this turn — keep it hidden for the rest of
+    // the turn; only the next agent turn (after a new user message) re-enables it.
+    if (this.dismissedThreadId === threadId) return
     this.ownerThreadId = threadId
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
@@ -69,8 +69,18 @@ export class ComputerUsePipService {
 
   /** Stop tracking and hide the PiP (user-requested close). */
   async dismiss(): Promise<void> {
-    this.dismissedPid = this.targetPid
+    this.dismissedThreadId = this.ownerThreadId
     this.hide()
+  }
+
+  /**
+   * Called when a thread's agent turn begins (a user message was accepted).
+   * Clears the user's close so the next turn may show the PiP again if CUA is
+   * used, and cancels a pending auto-dismiss from a just-finished turn.
+   */
+  notifyTurnStarted(threadId: string): void {
+    if (this.dismissedThreadId === threadId) this.dismissedThreadId = null
+    if (this.ownerThreadId === threadId) this.clearAutoDismiss()
   }
 
   /**
@@ -86,7 +96,7 @@ export class ComputerUsePipService {
     }, AUTO_DISMISS_GRACE_MS)
   }
 
-  /** Tear down the overlay without suppressing later re-tracking of the pid. */
+  /** Tear down the overlay without touching the user's per-turn close marker. */
   private hide(): void {
     const wasActive = this.active
     this.active = false
