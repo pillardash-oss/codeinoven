@@ -78,6 +78,7 @@ class MobileState {
   allThreads = $state<Thread[]>([])
   orchestrationThreads = $state<Thread[]>([])
   loading = $state(true)
+  loadError = $state<string | null>(null)
 
   selectedThread = $state<Thread | null>(null)
   selectedProject = $state<Project | null>(null)
@@ -169,6 +170,8 @@ class MobileState {
   // ─── Data loading ───────────────────────────────────────────────────────
 
   async loadData(): Promise<void> {
+    this.loading = true
+    this.loadError = null
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
@@ -182,10 +185,12 @@ class MobileState {
       for (const [projectId, iconUrl] of await loadProjectIcons(this.projects)) {
         this.projectIcons.set(projectId, iconUrl)
       }
-    } catch {
+    } catch (error) {
       this.projects = []
       this.allThreads = []
       this.orchestrationThreads = []
+      this.loadError =
+        error instanceof Error ? error.message : 'The desktop workspace could not be loaded.'
     } finally {
       this.loading = false
     }
