@@ -7,7 +7,6 @@ COPY services/remote-control/*.ts ./
 
 ENV HOST=0.0.0.0
 ENV PORT=8877
-ENV REMOTE_DATABASE_PATH=/data/remote-control.sqlite
 
 RUN mkdir -p /data && chown -R bun:bun /app /data
 USER bun

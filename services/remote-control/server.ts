@@ -4,6 +4,7 @@ import { auth, authDatabasePath, closeAuthDatabase, remoteAuthSession } from './
 import { RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import { RelayHub } from './relay-hub'
+import { remoteBrowserOrigin, trustRemoteProxy } from './runtime-config'
 import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
@@ -11,15 +12,9 @@ const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
-const trustProxy = process.env['REMOTE_TRUST_PROXY'] === 'true'
 
 const port = positiveInteger(process.env['PORT'], 8877)
-const allowedOrigins = new Set(
-  (process.env['REMOTE_ALLOWED_ORIGINS'] ?? 'http://localhost:5173')
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean)
-)
+const allowedOrigins = new Set([remoteBrowserOrigin])
 
 const database = new RemoteControlDatabase(authDatabasePath)
 const relayHub = new RelayHub({
@@ -53,7 +48,7 @@ function requestOriginAllowed(request: Request): boolean {
 }
 
 function requestKey(request: Request): string {
-  if (trustProxy) {
+  if (trustRemoteProxy) {
     const forwarded = request.headers.get('x-client-ip')?.trim()
     if (forwarded && isIP(forwarded) !== 0) return forwarded
   }
