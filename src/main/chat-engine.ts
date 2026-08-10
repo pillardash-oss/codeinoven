@@ -1014,6 +1014,12 @@ export class ChatEngine {
   /** How long to wait without any SSE events before declaring a session dead. */
   private static readonly SESSION_ACTIVITY_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
+  /** How long a session that is demonstrably still working (an in-flight shell
+   *  tool or a running sub-agent) may stay silent before the watchdog re-checks
+   *  instead of aborting it. Long CLI actions legitimately emit no events for
+   *  far longer than the activity window, so silence alone must not kill them. */
+  private static readonly SILENT_WORK_GRACE_MS = 30 * 60 * 1000 // 30 minutes
+
   /**
    * How long after a user interaction the user is still considered "active".
    * While the user is active, pending questions will not auto-answer.
@@ -11128,12 +11134,12 @@ export class ChatEngine {
    * The timer is reset on every SSE event — if it fires, no events arrived
    * within the timeout window and the session is treated as dead.
    */
-  private startSessionWatchdog(sessionId: string): void {
+  private startSessionWatchdog(
+    sessionId: string,
+    timeoutMs = ChatEngine.SESSION_ACTIVITY_TIMEOUT_MS
+  ): void {
     this.clearSessionWatchdog(sessionId)
-    const timer = setTimeout(
-      () => void this.fireSessionWatchdog(sessionId),
-      ChatEngine.SESSION_ACTIVITY_TIMEOUT_MS
-    )
+    const timer = setTimeout(() => void this.fireSessionWatchdog(sessionId), timeoutMs)
     this.sessionWatchdogs.set(sessionId, timer)
   }
 
@@ -11161,14 +11167,30 @@ export class ChatEngine {
 
   /**
    * Called when the watchdog fires — the session has been silent for too long.
-   * We try to fetch the conversation history from the agent to surface the
-   * actual error (rate-limit, credit exhaustion, provider deprecated, etc.)
-   * before cleaning up.
+   * When the session is demonstrably still working (an in-flight shell tool or
+   * a running sub-agent), the silence is legitimate and the window is extended
+   * instead of aborting. Otherwise we try to fetch the conversation history
+   * from the agent to surface the actual error (rate-limit, credit exhaustion,
+   * provider deprecated, etc.) before cleaning up.
    */
   private async fireSessionWatchdog(sessionId: string): Promise<void> {
     this.sessionWatchdogs.delete(sessionId)
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
+
+    // A genuinely-working-but-silent session must never be aborted: a long CLI
+    // action can legitimately produce no events for far longer than the
+    // activity window. Extend the window (re-evaluating when it fires again) so
+    // live work survives; only silence with no in-flight work is treated as dead.
+    if (this.hasInFlightWork(sessionId, info)) {
+      Logger.info('Session silent but demonstrably working — extending watchdog', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId
+      })
+      this.startSessionWatchdog(sessionId, ChatEngine.SILENT_WORK_GRACE_MS)
+      return
+    }
 
     const issue = await this.recoverWatchdogIssue(sessionId, info)
 
@@ -11182,6 +11204,17 @@ export class ChatEngine {
     } catch {
       /* abort is best-effort */
     }
+  }
+
+  /** True when a silent session has live work we must not abort: an in-flight
+   *  shell/CLI tool or a running provider-native sub-agent. */
+  private hasInFlightWork(sessionId: string, info: SessionInfo): boolean {
+    if (info.openUnboundedTools && info.openUnboundedTools.size > 0) return true
+    for (const [childSessionId, owner] of this.childSessionOwners) {
+      if (owner.parentSessionId !== sessionId) continue
+      if (this.sessionStatuses.get(childSessionId)?.state === 'working') return true
+    }
+    return false
   }
 
   /**
