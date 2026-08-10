@@ -549,12 +549,6 @@ async function bootPostPaintServices(): Promise<void> {
     }
 
     try {
-      chatEngine?.backfillHarnessUsage()
-    } catch (error) {
-      Logger.error('Harness usage backfill failed (non-fatal):', error)
-    }
-
-    try {
       await powerWakeService?.start()
       if (powerWakeService) setPowerWakeService(powerWakeService)
     } catch (error) {

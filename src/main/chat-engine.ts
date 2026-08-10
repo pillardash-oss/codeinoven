@@ -1698,12 +1698,6 @@ export class ChatEngine {
     return structuredClone(pending.request)
   }
 
-  /** Backfill harness_usage analytics for pre-existing threads on first launch
-   *  of this feature. Runs once after the database is initialised. */
-  backfillHarnessUsage(): void {
-    this.threadManager.reconcileAllHarnessUsage()
-  }
-
   /**
    * Terminate every harness connection that is still active. Called when the
    * user explicitly confirms a forced close (the working-threads confirmation
