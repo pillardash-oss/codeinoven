@@ -69,6 +69,7 @@ interface OutboundRecord {
 const DEFAULT_QUEUE_LIMIT = 1_000
 const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
+const PAYLOAD_AUTH_FAILURE_CLOSE_CODE = 4002
 
 function relayUrl(path: string): string {
   const target = new URL(path, window.location.origin)
@@ -109,6 +110,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   let closing = false
   let reconnectTimer: number | null = null
   let reconnectAttempt = 0
+  let payloadAuthenticationFailed = false
   let settled = false
   let settle: (result: 'open' | 'offline' | 'failed') => void = () => undefined
   let timer: number | null = null
@@ -179,6 +181,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
 
   function establishConnection(): Promise<'open' | 'offline' | 'failed'> {
     settled = false
+    payloadAuthenticationFailed = false
     socket = socketFactory(url)
     timer = window.setTimeout(() => {
       finish('failed')
@@ -255,8 +258,10 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
           })
           .catch(() => {
             if (wireId !== undefined) inboundProcessing.delete(wireId)
-            remoteLog.error('Cloud relay payload authentication failed')
-            socket?.close()
+            if (closing || payloadAuthenticationFailed) return
+            payloadAuthenticationFailed = true
+            remoteLog.error('Cloud relay payload authentication failed; automatic reconnect paused')
+            socket?.close(PAYLOAD_AUTH_FAILURE_CLOSE_CODE, 'payload-authentication-failed')
           })
       }
     }
@@ -267,7 +272,11 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       if (closing) return
       const reason = event.reason || `relay-closed-${event.code}`
       const controlKeyRotated = event.reason === 'control-key-rotated'
-      if (controlKeyRotated) {
+      const terminalAuthenticationFailure =
+        controlKeyRotated ||
+        payloadAuthenticationFailed ||
+        event.reason === 'payload-authentication-failed'
+      if (terminalAuthenticationFailure) {
         // Retrying with the in-memory key would reproduce the same decrypt
         // failure forever. Stop this client so the account screen can fetch
         // the newly uploaded encrypted grant before the next connection.
@@ -275,14 +284,14 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
         inFlight.clear()
       }
       if (wasOpen || settled) {
-        if (!controlKeyRotated) requeueInFlight()
+        if (!terminalAuthenticationFailure) requeueInFlight()
         options.onEvent({ kind: 'disconnected', reason })
-        if (!controlKeyRotated) scheduleReconnect()
+        if (!terminalAuthenticationFailure) scheduleReconnect()
         return
       }
       if (!settled) finish('failed')
       options.onEvent({ kind: 'disconnected', reason })
-      if (!controlKeyRotated) scheduleReconnect()
+      if (!terminalAuthenticationFailure) scheduleReconnect()
     }
     socket.onerror = () => {
       remoteLog.error('Cloud relay WebSocket failed')

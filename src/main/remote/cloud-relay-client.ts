@@ -82,6 +82,7 @@ const DEFAULT_QUEUE_LIMIT = 1_000
 const DEFAULT_REPLAY_LIMIT = 4_096
 const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
+const PAYLOAD_AUTH_FAILURE_CLOSE_CODE = 4002
 
 /** Resolve `promise` with `fallback` when it does not settle within `ms`. */
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
@@ -222,6 +223,7 @@ export class CloudRelayClient {
       this.handleMessage(event.data)
     }
     socket.onerror = () => {
+      if (this.closing || this.closed) return
       Logger.error('Remote cloud relay WebSocket failed')
     }
     socket.onclose = (event) => {
@@ -248,6 +250,25 @@ export class CloudRelayClient {
     this.socket = null
     this.options.onDisconnected(reason)
     this.scheduleReconnect(reason)
+  }
+
+  /**
+   * Stop permanently when authenticated ciphertext cannot be decrypted.
+   * A key mismatch or tampered frame is not a transient network failure;
+   * reconnecting would only replay the same retained ciphertext forever.
+   */
+  private failClosed(reason: string): void {
+    if (this.closing || this.closed) return
+    this.closed = true
+    this.authenticated = false
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
+    this.clearTimers()
+    this.queue.length = 0
+    this.inFlight.clear()
+    this.socket?.close(PAYLOAD_AUTH_FAILURE_CLOSE_CODE, reason)
+    this.socket = null
+    this.options.onDisconnected(reason)
   }
 
   private scheduleReconnect(reason: string): void {
@@ -389,8 +410,11 @@ export class CloudRelayClient {
         })
         .catch(() => {
           if (wireId !== undefined) this.inboundProcessing.delete(wireId)
-          Logger.error('Remote cloud relay payload authentication failed')
-          this.dropAndRetry('decrypt-failed')
+          if (this.closing || this.closed) return
+          Logger.error(
+            'Remote cloud relay payload authentication failed; automatic reconnect paused'
+          )
+          this.failClosed('payload-authentication-failed')
         })
     }
   }
