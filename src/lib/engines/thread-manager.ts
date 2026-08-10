@@ -258,6 +258,34 @@ export class ThreadManager {
     return ordered
   }
 
+  /**
+   * Manual reorder of the pinned threads for a project. This is the single way
+   * pin order changes: the first id becomes most-recently pinned (top). Only
+   * pinned_at is rewritten — nothing else, so it stays consistent across every
+   * surface and a newly pinned thread always lands on top.
+   */
+  async reorderPinnedThreads(projectId: string, orderedPinnedIds: string[]): Promise<Thread[]> {
+    if (new Set(orderedPinnedIds).size !== orderedPinnedIds.length) {
+      throw new Error('Pinned order must contain unique IDs')
+    }
+    const owned = orderedPinnedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
+    if (owned.some((thread) => !thread.pinned)) {
+      throw new Error('Pinned reorder list must contain only pinned threads')
+    }
+    const base = Date.now()
+    this.threadRepo.batchUpdatePinnedAt(
+      owned.map((thread) => thread.id),
+      base
+    )
+    const updated: Thread[] = []
+    owned.forEach((thread, index) => {
+      const next = { ...thread, pinnedAt: base - index }
+      this.onChange?.(next)
+      updated.push(next)
+    })
+    return updated
+  }
+
   async reorderScopeThreads(
     projectId: string,
     bucketId: string,
