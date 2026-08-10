@@ -713,7 +713,6 @@
     for (const directory of [...directories].sort(
       (left, right) => left.split('/').length - right.split('/').length
     )) {
-      projectFilesWorkspace.markDirectoryExpanded(projectId, directory)
       await projectFilesWorkspace.loadDirectory(projectId, directory)
     }
   }
