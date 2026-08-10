@@ -200,6 +200,11 @@ class MobileState {
     this.sidebarOpen = false
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
     this.applyThreadUpdate(updated)
+    // The notification store is intentionally loaded lazily on the phone; a
+    // thread that was opened no longer needs its panel notifications.
+    void import('$lib/stores/notification-panel.svelte').then(({ notificationPanelState }) => {
+      notificationPanelState.dismissForThread(thread.projectId, thread.id)
+    })
   }
 
   async openThreadById(projectId: string, threadId: string): Promise<void> {

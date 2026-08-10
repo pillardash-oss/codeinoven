@@ -275,6 +275,12 @@ export class NotificationService {
     if (!NOTIFIABLE_STATUSES.has(thread.status)) return
     if (previous === thread.status) return
     if (thread.read) return
+    // A thread that transitions straight from `failed` to `completed` — without
+    // an intervening working status — is reporting a stale/wrong success: the
+    // turn never actually re-ran (a fresh run would pass through executing or
+    // planning). Emitting a "done" notification right after an error one is
+    // exactly the misleading double-notify users have reported, so suppress it.
+    if (thread.status === 'completed' && previous === 'failed') return
 
     let projectName = ''
     try {
