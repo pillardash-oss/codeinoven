@@ -424,6 +424,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentSessionStatus | null
   >
+  'agent:dismissSessionError': Contract<
+    [projectId: string, threadId: string, sessionId: string],
+    void
+  >
   'agent:getChildSessionStatus': Contract<
     [projectId: string, threadId: string, sessionId: string],
     AgentSessionStatus | null

@@ -2259,6 +2259,17 @@
     })
   }
 
+  /** Dismiss an error card: clear the thread's cached error state and reset its
+   *  status from failed back to completed so it reads as done, not error. */
+  async function dismissSessionError(): Promise<void> {
+    try {
+      await invoke('agent:dismissSessionError', thread.projectId, thread.id, sessionId)
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The thread error could not be dismissed.'
+    }
+  }
+
   // ─── Agent event handling ────────────────────────────────────────────────
 
   function setProviderError(issue: AgentProviderIssue): void {
@@ -6064,6 +6075,7 @@
             onDismiss={() => {
               errorMessage = ''
               providerStatus = null
+              void dismissSessionError()
             }}
           />
         </div>

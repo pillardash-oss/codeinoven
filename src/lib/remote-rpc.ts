@@ -99,6 +99,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:listContextCapabilities',
   'agent:closeTemporaryChat',
   'agent:getChildSessionStatus',
+  'agent:dismissSessionError',
   'agent:retryChildSession',
   'agent:abortChildSession',
   // Engineering workflow (spec/assignment/audit/brainstorm studios)
@@ -377,6 +378,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:compact': { scope: 'conversation.control', stepUp: 'none' },
   'agent:closeTemporaryChat': { scope: 'conversation.control', stepUp: 'none' },
   'agent:retryChildSession': { scope: 'conversation.control', stepUp: 'none' },
+  'agent:dismissSessionError': { scope: 'conversation.control', stepUp: 'none' },
   'agent:abortChildSession': { scope: 'conversation.control', stepUp: 'none' },
 
   // permission.reply — default-No, always step-up

@@ -103,6 +103,7 @@ export interface RemoteRpcServices {
     | 'refreshAccountUsage'
     | 'loadSessionMessages'
     | 'getChildSessionStatus'
+    | 'dismissSessionError'
     | 'retryChildSession'
     | 'abortChildSession'
     | 'closeTemporaryChat'
@@ -757,6 +758,12 @@ export class RemoteRpcDispatcher {
         )
       case 'agent:getChildSessionStatus':
         return chatEngine.getChildSessionStatus(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'agent:dismissSessionError':
+        return chatEngine.dismissSessionError(
           this.string(args[0]),
           this.string(args[1]),
           this.string(args[2])

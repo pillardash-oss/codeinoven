@@ -55,6 +55,7 @@ const INVOKE_CHANNELS = [
   'agent:ensureSession',
   'agent:getTemporaryChatStatus',
   'agent:getSessionStatus',
+  'agent:dismissSessionError',
   'agent:getChildSessionStatus',
   'agent:retryChildSession',
   'agent:abortChildSession',
