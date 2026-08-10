@@ -231,7 +231,6 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_PIPELINE_VERSION = 10
 const SPEC_GENERATION_MAX_ATTEMPTS = 2
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
@@ -878,7 +877,7 @@ interface PendingAutoTitle {
 
 interface PendingInitialSpecGeneration {
   schemaVersion: 1
-  generationVersion?: number
+  generationVersion: 1
   projectId: string
   threadId: string
   sessionId: string
@@ -9082,7 +9081,7 @@ export class ChatEngine {
       )
       pending = {
         schemaVersion: 1,
-        generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
+        generationVersion: 1,
         projectId,
         threadId,
         sessionId: thread.sessionId ?? '',
@@ -9098,7 +9097,6 @@ export class ChatEngine {
       const now = Date.now()
       pending = {
         ...pending,
-        generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
         state: 'pending',
         attempts: 0,
         error: undefined,
@@ -9151,9 +9149,9 @@ export class ChatEngine {
     projectId: string,
     threadId: string
   ): Promise<PendingInitialSpecGeneration | null> {
-    return this.storage.read<PendingInitialSpecGeneration>(
-      this.initialSpecPath(projectId, threadId)
-    )
+    return this.storage
+      .read<PendingInitialSpecGeneration>(this.initialSpecPath(projectId, threadId))
+      .then((persisted) => (persisted ? { ...persisted, generationVersion: 1 } : null))
   }
 
   private async queuePendingInitialSpec(input: {
@@ -9171,7 +9169,7 @@ export class ChatEngine {
       existing
         ? {
             ...existing,
-            generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
+            generationVersion: 1,
             sessionId: input.sessionId,
             source: input.source,
             settings: structuredClone(input.settings),
@@ -9187,7 +9185,7 @@ export class ChatEngine {
           }
         : {
             schemaVersion: 1,
-            generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
+            generationVersion: 1,
             projectId: input.projectId,
             threadId: input.threadId,
             sessionId: input.sessionId,
@@ -9287,23 +9285,7 @@ export class ChatEngine {
     let pending = await this.readPendingInitialSpec(projectId, threadId)
     if (!pending) return null
     if (pending.state === 'failed' && pending.attempts >= SPEC_GENERATION_MAX_ATTEMPTS) {
-      if (pending.generationVersion === SPEC_GENERATION_PIPELINE_VERSION) return null
-      pending = {
-        ...pending,
-        generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
-        state: 'pending',
-        attempts: 0,
-        error: undefined,
-        updatedAt: Date.now()
-      }
-      await this.writePendingInitialSpec(pending)
-    } else if (pending.generationVersion !== SPEC_GENERATION_PIPELINE_VERSION) {
-      pending = {
-        ...pending,
-        generationVersion: SPEC_GENERATION_PIPELINE_VERSION,
-        updatedAt: Date.now()
-      }
-      await this.writePendingInitialSpec(pending)
+      return null
     }
     if (pending.state === 'generating') {
       pending = {
