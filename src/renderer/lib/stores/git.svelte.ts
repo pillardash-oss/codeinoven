@@ -62,6 +62,7 @@ export type GitOperation =
   | 'pr-list'
   | 'pr-detail'
   | 'pr-reopen'
+  | 'pr-close'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -626,6 +627,25 @@ export class GitState {
       return null
     } finally {
       this.markBusy('pr-reopen', false)
+    }
+  }
+
+  /** Close an open pull request without merging, mirroring GitHub's close. */
+  async closePullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-close', true)
+    this.error = null
+    try {
+      return await invoke('pr:close', projectId, owner, repo, pullNumber)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be closed')
+      return null
+    } finally {
+      this.markBusy('pr-close', false)
     }
   }
 

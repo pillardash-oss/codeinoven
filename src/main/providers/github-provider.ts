@@ -146,6 +146,15 @@ export class GitHubProvider implements GitProvider {
     return this.toReference(response)
   }
 
+  /** Close an open pull request without merging, the same way GitHub does. */
+  async closePullRequest(input: PullRequestTarget): Promise<PullRequestReference> {
+    const response = await this.request(`${this.pullPath(input)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'closed' })
+    })
+    return this.toReference(response)
+  }
+
   async listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]> {
     const query = input.state ? `?state=${encodeURIComponent(input.state)}` : ''
     const response = await this.request(

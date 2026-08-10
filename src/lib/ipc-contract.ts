@@ -767,6 +767,10 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number],
     PullRequestReference
   >
+  'pr:close': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestReference
+  >
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage

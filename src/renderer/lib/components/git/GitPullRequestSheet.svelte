@@ -206,25 +206,6 @@
           <div class="min-w-0 flex-1">
             <label
               class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-              for="pr-base"
-            >
-              Base (into)
-            </label>
-            <select
-              id="pr-base"
-              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={base}
-              disabled={branches.length === 0}
-            >
-              {#each branches as name (name)}
-                <option value={name}>{name}</option>
-              {/each}
-            </select>
-          </div>
-          <ArrowRight size={14} class="mb-2.5 shrink-0 text-dimmed" />
-          <div class="min-w-0 flex-1">
-            <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
               for="pr-head"
             >
               Head (from)
@@ -233,6 +214,25 @@
               id="pr-head"
               class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
               bind:value={head}
+              disabled={branches.length === 0}
+            >
+              {#each branches as name (name)}
+                <option value={name}>{name}</option>
+              {/each}
+            </select>
+          </div>
+          <ArrowRight size={14} class="mb-2.5 shrink-0 text-primary" />
+          <div class="min-w-0 flex-1">
+            <label
+              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+              for="pr-base"
+            >
+              Base (into)
+            </label>
+            <select
+              id="pr-base"
+              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              bind:value={base}
               disabled={branches.length === 0}
             >
               {#each branches as name (name)}
@@ -249,7 +249,7 @@
             >
           {:else if comparing}
             <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
-            <span class="text-dimmed">Comparing {base}...{head}</span>
+            <span class="text-dimmed">Comparing {head} into {base}</span>
           {:else if compareError}
             <TriangleAlert size={11} class="shrink-0 text-warning" />
             <span class="text-warning">{compareError}</span>
