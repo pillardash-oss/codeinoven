@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
+import packageJson from './package.json'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), [
@@ -60,6 +61,9 @@ export default defineConfig(({ mode }) => {
       }
     },
     renderer: {
+      define: {
+        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
+      },
       root: resolve(__dirname, 'src/renderer'),
       publicDir: resolve(__dirname, 'src/renderer/static'),
       plugins: [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()],

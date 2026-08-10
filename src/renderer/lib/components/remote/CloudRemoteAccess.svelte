@@ -17,6 +17,8 @@
   } from '$lib/remote/cloud-api'
   import { remoteSession } from '$lib/remote/session-store.svelte'
 
+  declare const __CODEINOVEN_APP_VERSION__: string
+
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
 
   function normalizeEnrollmentCode(value: string): string {
@@ -257,65 +259,61 @@
   </form>
 {/snippet}
 
-<main class="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-app p-6 pb-12 text-foreground">
-  <header class="mb-6 flex items-start gap-3">
-    <div
-      class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary"
-    >
-      <Laptop size={19} />
-    </div>
-    <div>
-      <h1 class="text-xl font-bold tracking-tight">Remote workspace</h1>
-      <p class="mt-0.5 text-sm text-muted">Connect securely to any of your desktops.</p>
-    </div>
-  </header>
-
-  {#if loading}
-    <section class="rounded-xl border bg-surface p-4 text-sm text-muted" aria-live="polite">
-      Restoring your session…
-    </section>
-  {:else if !user}
-    <section class="space-y-4 rounded-xl border bg-surface p-5">
-      <div>
-        <h2 class="text-sm font-semibold">Create or sign in to your CodeInOven account</h2>
-        <p class="mt-1 text-xs leading-relaxed text-muted">
-          {claimFromLink
-            ? 'Continue with Google or Apple first. The one-time desktop code will be ready when you return.'
-            : 'Use Google or Apple to create your account automatically or return to an existing account.'}
-        </p>
-      </div>
+{#if loading || !user}
+  <main class="grid min-h-dvh w-full place-items-center bg-app p-6 text-foreground">
+    <section class="flex w-full max-w-xs flex-col items-center text-center">
+      <img class="h-24 w-24 rounded-2xl" src="/logo.png" alt="CodeInOven" />
+      <h1 class="mt-5 text-lg font-semibold tracking-tight">Remote connection</h1>
 
       {#if errorMessage}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" aria-live="polite">
+        <p
+          class="mt-4 w-full rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger"
+          aria-live="polite"
+        >
           {errorMessage}
         </p>
       {/if}
 
-      <div class="space-y-2">
-        <button
-          class="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          disabled={busy}
-          onclick={() => void beginAccountSignIn('google')}
-        >
-          <VendorIcon name="Google" size={16} />
-          {activeSignInProvider === 'google' ? 'Opening Google…' : 'Continue with Google'}
-        </button>
-        <button
-          class="flex h-10 w-full items-center justify-center gap-2 rounded-lg border bg-surface px-4 text-sm font-semibold text-foreground hover:bg-elevated disabled:opacity-50"
-          type="button"
-          disabled={busy}
-          onclick={() => void beginAccountSignIn('apple')}
-        >
-          <VendorIcon name="Apple" size={16} />
-          {activeSignInProvider === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
-        </button>
-      </div>
-      <p class="text-center text-[11px] leading-relaxed text-dimmed">
-        Your GitHub sidebar connection remains separate from this account.
-      </p>
+      {#if !loading}
+        <div class="mt-6 w-full space-y-2">
+          <button
+            class="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            type="button"
+            disabled={busy}
+            onclick={() => void beginAccountSignIn('google')}
+          >
+            <VendorIcon name="Google" size={16} />
+            {activeSignInProvider === 'google' ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+          <button
+            class="flex h-11 w-full items-center justify-center gap-2 rounded-lg border bg-surface px-4 text-sm font-semibold text-foreground hover:bg-elevated disabled:opacity-50"
+            type="button"
+            disabled={busy}
+            onclick={() => void beginAccountSignIn('apple')}
+          >
+            <VendorIcon name="Apple" size={16} />
+            {activeSignInProvider === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
+          </button>
+        </div>
+      {/if}
+
+      <p class="mt-5 text-[11px] text-dimmed">v{__CODEINOVEN_APP_VERSION__}</p>
     </section>
-  {:else}
+  </main>
+{:else}
+  <main class="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-app p-6 pb-12 text-foreground">
+    <header class="mb-6 flex items-start gap-3">
+      <div
+        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary"
+      >
+        <Laptop size={19} />
+      </div>
+      <div>
+        <h1 class="text-xl font-bold tracking-tight">Remote workspace</h1>
+        <p class="mt-0.5 text-sm text-muted">Connect securely to any of your desktops.</p>
+      </div>
+    </header>
+
     <div class="space-y-5">
       <section class="rounded-xl border bg-surface p-4">
         <div class="flex items-center justify-between gap-3">
@@ -429,5 +427,5 @@
         </p>
       {/if}
     </div>
-  {/if}
-</main>
+  </main>
+{/if}

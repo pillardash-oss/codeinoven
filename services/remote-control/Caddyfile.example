@@ -23,6 +23,9 @@
     }
   }
 
+  @pwaRoot path /
+  rewrite @pwaRoot /remote.html
+
   handle {
     root * /srv/codeinoven/renderer
     try_files {path} /remote.html

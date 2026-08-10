@@ -19,8 +19,8 @@ export async function currentCloudUser(): Promise<CloudUser> {
 export async function signInWithCloudProvider(provider: CloudAuthProvider): Promise<void> {
   const result = await authClient.signIn.social({
     provider,
-    callbackURL: '/remote.html',
-    errorCallbackURL: `/remote.html?authError=${provider}`
+    callbackURL: '/',
+    errorCallbackURL: `/?authError=${provider}`
   })
   if (result.error) throw new Error(result.error.message ?? `${provider}-sign-in-failed`)
 }

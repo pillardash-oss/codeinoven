@@ -108,6 +108,20 @@ export function remoteEnvInt(name: string, fallback: number): number {
 
 const CLOUD_REQUEST_TIMEOUT_MS = 15_000
 
+class CloudRequestCancelledError extends Error {
+  constructor() {
+    super('Cloud request cancelled')
+    this.name = 'CloudRequestCancelledError'
+  }
+}
+
+class CloudRequestTimeoutError extends Error {
+  constructor() {
+    super('Cloud service request timed out')
+    this.name = 'CloudRequestTimeoutError'
+  }
+}
+
 /**
  * Fetch with an application-level deadline and external cancellation. The
  * request aborts when the timeout elapses or the owning controller shuts the
@@ -123,9 +137,17 @@ async function fetchWithDeadline(
   const controller = new AbortController()
   const onExternalAbort = (): void => controller.abort()
   externalSignal?.addEventListener('abort', onExternalAbort, { once: true })
-  const timer = setTimeout(() => controller.abort(), timeoutMs) as unknown as number
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   try {
     return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (externalSignal?.aborted) throw new CloudRequestCancelledError()
+    if (timedOut) throw new CloudRequestTimeoutError()
+    throw error
   } finally {
     clearTimeout(timer)
     externalSignal?.removeEventListener('abort', onExternalAbort)
@@ -198,6 +220,8 @@ export class RemoteModeController {
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
   private cloudAbortController: AbortController | null = null
+  private cloudPollGeneration = 0
+  private cloudPollRunningGeneration: number | null = null
   private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
@@ -859,15 +883,29 @@ export class RemoteModeController {
 
   private scheduleEnrollmentPoll(delayMs: number): void {
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
-    this.cloudPollTimer = setTimeout(() => void this.checkEnrollmentStatus(), delayMs)
+    const generation = this.cloudPollGeneration
+    this.cloudPollTimer = setTimeout(() => {
+      this.cloudPollTimer = null
+      if (generation === this.cloudPollGeneration) void this.checkEnrollmentStatus()
+    }, delayMs)
   }
 
   private async checkEnrollmentStatus(): Promise<void> {
     const config = this.cloudConfig
     if (!config || !this.vault || !this.remoteModeActive) return
     if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
+    const controller = this.cloudAbortController
+    const generation = this.cloudPollGeneration
+    if (this.cloudPollRunningGeneration === generation) return
+    this.cloudPollRunningGeneration = generation
+    const isCurrentPoll = (): boolean =>
+      generation === this.cloudPollGeneration &&
+      controller === this.cloudAbortController &&
+      config === this.cloudConfig &&
+      this.remoteModeActive
     try {
       const token = await this.vault.resolve(config.tokenRef)
+      if (!isCurrentPoll()) return
       const response = await fetchWithDeadline(
         new URL(
           `/v1/device-enrollments/${encodeURIComponent(config.desktopId)}/status`,
@@ -875,8 +913,9 @@ export class RemoteModeController {
         ),
         { headers: { Authorization: `Bearer ${token}` } },
         CLOUD_REQUEST_TIMEOUT_MS,
-        this.cloudAbortController?.signal
+        controller.signal
       )
+      if (!isCurrentPoll()) return
       if (!response.ok) throw new Error('Enrollment status rejected')
       const payload = (await response.json()) as Record<string, unknown>
       if (payload['revoked'] === true) {
@@ -931,8 +970,9 @@ export class RemoteModeController {
             })
           },
           CLOUD_REQUEST_TIMEOUT_MS,
-          this.cloudAbortController?.signal
+          controller.signal
         )
+        if (!isCurrentPoll()) return
         if (!grantResponse.ok) throw new Error('Control grant upload failed')
         this.connectCloudRelay(token)
         return
@@ -946,10 +986,15 @@ export class RemoteModeController {
       this.broadcast()
       this.scheduleEnrollmentPoll(2_000)
     } catch (error) {
+      if (error instanceof CloudRequestCancelledError || !isCurrentPoll()) return
       Logger.error('Remote cloud enrollment status failed:', error)
       this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'Service unreachable' }
       this.broadcast()
       this.scheduleEnrollmentPoll(5_000)
+    } finally {
+      if (this.cloudPollRunningGeneration === generation) {
+        this.cloudPollRunningGeneration = null
+      }
     }
   }
 
@@ -1000,6 +1045,8 @@ export class RemoteModeController {
   }
 
   private stopCloudAccess(): void {
+    this.cloudPollGeneration += 1
+    this.cloudPollRunningGeneration = null
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudPollTimer = null
     // Cancel any in-flight enrollment/status request and abort the relay
