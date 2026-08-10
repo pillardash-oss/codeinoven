@@ -711,6 +711,12 @@ export function mapClaudeCodeRecord(
     const incoming = messageFromAssistant(rawMessage)
     const existing = context.session.messages.find((message) => message.id === incoming.id)
     const mapped = existing ? mergeAssistantRecord(existing, incoming) : incoming
+    const rawError = mapped.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    const authenticationFailure = entry['error'] === 'authentication_failed'
     const usageEvent = mapped.tokens
       ? [
           {
@@ -731,7 +737,24 @@ export function mapClaudeCodeRecord(
           sessionId: context.sessionId,
           part
         })),
-        ...usageEvent
+        ...usageEvent,
+        ...(authenticationFailure
+          ? [
+              {
+                type: 'message.completed' as const,
+                sessionId: context.sessionId,
+                messageId: mapped.id,
+                error: rawError || 'Claude Code authentication failed.',
+                issue: {
+                  kind: 'authentication' as const,
+                  message: 'Claude Code sign-in expired. Sign in again, then retry this message.',
+                  rawError: rawError || 'Claude Code authentication failed.',
+                  harnessId: 'claude-code',
+                  retryable: true
+                }
+              }
+            ]
+          : [])
       ]
     }
   }
