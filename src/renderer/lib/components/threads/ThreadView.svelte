@@ -3757,7 +3757,6 @@
       brainstormGenerationFailed = true
       brainstormError =
         error instanceof Error ? error.message : 'The planning path could not be started.'
-      errorMessage = brainstormError
     } finally {
       brainstormBusy = false
       brainstormEntryInFlight = null

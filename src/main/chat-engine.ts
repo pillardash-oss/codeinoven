@@ -3002,37 +3002,18 @@ export class ChatEngine {
     if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
       const elapsedMs = Date.now() - pendingSpec.createdAt
       if (elapsedMs >= SPEC_GENERATION_WORKFLOW_TIMEOUT_MS) {
-        const message = `Specification generation exceeded the ${SPEC_GENERATION_WORKFLOW_TIMEOUT_MS / 60_000}-minute workflow limit.`
-        return {
-          state: 'error',
-          issue: {
-            kind: 'unknown',
-            message,
-            rawError: pendingSpec.error ?? message,
-            harnessId: pendingSpec.settings.harnessId,
-            retryable: true,
-            attempt: pendingSpec.attempts
-          }
-        }
+        // Initial-spec failures are rendered by the persisted planning workflow's
+        // dedicated retry card, never by the generic provider-error card.
+        return null
       }
       const liveActivity = this.sessionStatuses.get(thread.sessionId)
       return liveActivity?.state === 'working' && liveActivity.activity
         ? liveActivity
         : this.initialSpecWorkingStatus(pendingSpec)
     }
-    if (pendingSpec?.state === 'failed' && pendingSpec.error) {
-      return {
-        state: 'error',
-        issue: {
-          kind: 'unknown',
-          message: `Specification generation failed: ${pendingSpec.error}`,
-          rawError: pendingSpec.error,
-          harnessId: pendingSpec.settings.harnessId,
-          retryable: true,
-          attempt: pendingSpec.attempts
-        }
-      }
-    }
+    // The Sr. Engineer planning surface owns failed initial-spec presentation
+    // and its Retry specification action. Do not rehydrate a provider card.
+    if (pendingSpec?.state === 'failed') return null
     const live = this.sessionStatuses.get(thread.sessionId)
     if (live) return live
     // After an app restart the in-memory status is gone, but a persisted
@@ -9433,19 +9414,13 @@ export class ChatEngine {
       error: pending.error
     })
     const thread = await this.threadManager.getThread(projectId, threadId)
-    await this.broadcastThreadSessionError(
-      projectId,
-      threadId,
-      thread?.sessionId ?? pending.sessionId,
-      {
-        kind: 'unknown',
-        message: `Specification generation failed: ${pending.error}`,
-        rawError: pending.error,
-        harnessId: pending.settings.harnessId,
-        retryable: true,
-        attempt: pending.attempts
-      }
-    )
+    if (thread?.sessionId) {
+      const status: AgentSessionStatus = { state: 'idle' }
+      this.sessionStatuses.set(thread.sessionId, status)
+      // Idle prompts the renderer to reconcile persisted planning state, which
+      // opens the dedicated Retry specification card without a red error card.
+      this.broadcast({ type: 'session.status', sessionId: thread.sessionId, status })
+    }
     this.broadcastToast(`Specification generation failed: ${lastError}`)
     throw new Error(lastError || 'The specification could not be generated.')
   }
