@@ -2,6 +2,8 @@
   import { X, PictureInPicture2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 
   const DEFAULT_POSITION = { x: 24, y: 24 }
   let position = $state({ ...DEFAULT_POSITION })
@@ -11,7 +13,19 @@
   let windowSize = $state({ width: 0, height: 0 })
   let overlayElement = $state<HTMLDivElement | undefined>()
 
-  const visible = $derived(pipState.active && pipState.frameDataUrl !== null)
+  const isThreadView = $derived(
+    rendererRecovery.activeView === 'projects' ||
+      rendererRecovery.activeView === 'chats' ||
+      rendererRecovery.activeView === 'threads'
+  )
+
+  const visible = $derived(
+    pipState.active &&
+      pipState.frameDataUrl !== null &&
+      isThreadView &&
+      pipState.threadId !== null &&
+      pipState.threadId === workspaceState.selectedThread?.id
+  )
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return

@@ -109,7 +109,12 @@ export class ComputerUsePipService {
 
   getState(): ComputerUsePipState {
     return this.active && this.targetPid !== null
-      ? { active: true, pid: this.targetPid, appName: this.appName }
+      ? {
+          active: true,
+          pid: this.targetPid,
+          appName: this.appName,
+          threadId: this.ownerThreadId ?? undefined
+        }
       : { active: false }
   }
 
@@ -175,6 +180,9 @@ export class ComputerUsePipService {
       })
       const image = extractImage(result)
       if (!image) return
+      // The overlay may have been dismissed (or re-targeted) while we awaited
+      // the driver — never resurrect it with a stale frame.
+      if (!this.active || this.targetPid !== pid) return
       const frame: ComputerUsePipFrame = {
         pid,
         appName: this.appName,
@@ -187,6 +195,7 @@ export class ComputerUsePipService {
       this.broadcast('computerUse:pipFrame', frame)
     } catch (error) {
       Logger.error('computer-use PiP capture failed:', error)
+      if (!this.active || this.targetPid !== pid) return
       this.misses += 1
       if (this.misses >= MAX_MISSES) {
         await this.client?.close().catch(() => undefined)
