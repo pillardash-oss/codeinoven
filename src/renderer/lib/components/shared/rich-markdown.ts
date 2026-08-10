@@ -57,10 +57,16 @@ function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]):
 
   let html = escapeHtml(prepared)
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-  html = html.replace(/__([^_\n]+)__/g, '<strong class="font-semibold">$1</strong>')
+  html = html.replace(
+    /(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])/g,
+    '<strong class="font-semibold">$1</strong>'
+  )
   html = html.replace(/~~([^~\n]+)~~/g, '<del class="text-muted line-through">$1</del>')
   html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-  html = html.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em class="italic">$1</em>')
+  html = html.replace(
+    /(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])/g,
+    '<em class="italic">$1</em>'
+  )
   return html
     .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => code[Number(index)] ?? '')
     .replace(/\uE002(\d+)\uE003/g, (_match, index: string) => badges[Number(index)] ?? '')
@@ -471,10 +477,10 @@ function applyInlineRule(root: HTMLElement): boolean {
   const prefix = textNode.data.slice(0, endOffset)
   const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
-    [/__([^_\n]+)__$/, 'strong'],
+    [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
     [/~~([^~\n]+)~~$/, 'del'],
     [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<!_)_([^_\n]+)_$/, 'em'],
+    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em'],
     [/`([^`\n]+)`$/, 'code']
   ]
 
