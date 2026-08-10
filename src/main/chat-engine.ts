@@ -1224,6 +1224,11 @@ export class ChatEngine {
       this.getSessionStatus(projectId, threadId)
     )
     ipcMain.handle(
+      'agent:dismissSessionError',
+      (_, projectId: string, threadId: string, sessionId: string) =>
+        this.dismissSessionError(projectId, threadId, sessionId)
+    )
+    ipcMain.handle(
       'agent:getChildSessionStatus',
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.getChildSessionStatus(projectId, threadId, sessionId)
@@ -2948,6 +2953,40 @@ export class ChatEngine {
         ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
         ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
       }
+    }
+  }
+
+  /**
+   * Dismiss a thread's error card. The user closing it means they no longer
+   * want to see the error status (or the card) again, so clear every piece of
+   * cached error state for the session and reset the thread's status from
+   * `failed` back to `completed` so it reads as done rather than error. This is
+   * a user-intent reset: it never re-runs the turn or schedules anything.
+   */
+  async dismissSessionError(
+    projectId: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    if (sessionId) sessionId = validateEntityId(sessionId, 'Session ID')
+    if (this.sessionStatuses.get(sessionId)?.state === 'error') {
+      this.sessionStatuses.delete(sessionId)
+    }
+    this.retryScheduler?.clear(sessionId)
+    this.clearSessionWatchdog(sessionId)
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (thread?.status === 'failed') {
+      await this.threadManager.setStatus(projectId, threadId, 'completed', { read: true })
+    }
+    if (sessionId) {
+      this.broadcast({
+        type: 'session.status',
+        sessionId,
+        status: { state: 'idle' }
+      })
     }
   }
 
