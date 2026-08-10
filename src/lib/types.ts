@@ -2093,8 +2093,6 @@ export interface SpecGenerationRequest {
   mode: 'problem' | 'conversation'
   instructions: string
   settings: ThreadSettings
-  /** Optional absolute wall-clock deadline for coordinator-owned generation. */
-  deadlineAt?: number
 }
 
 export type SpecActionIntent = 'request' | 'review' | 'implement'
