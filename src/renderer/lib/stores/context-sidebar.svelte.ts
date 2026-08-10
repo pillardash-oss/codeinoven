@@ -424,12 +424,15 @@ class ContextSidebarState {
     }
   }
 
+  /** Rewrite a sidebar tab's file mapping. Returns whether any tab was remapped
+   *  so callers can fall back to opening a fresh sidebar tab when the workspace
+   *  tab has no matching sidebar tab anymore (e.g. after the tab was closed). */
   remapProjectFile(
     projectId: string,
     previousFileTabId: string,
     nextFileTabId: string,
     nextPath: string
-  ): void {
+  ): boolean {
     for (const context of Object.values(this.contexts)) {
       const index = context.tabs.findIndex(
         (tab) =>
@@ -447,6 +450,25 @@ class ContextSidebarState {
         path: nextPath
       }
       if (context.activeTabId === previous.id) context.activeTabId = nextId
+      return true
+    }
+    return false
+  }
+
+  /** Stop rendering a file tab as a preview (italicised) — used when the user
+   *  starts editing it, which pins the tab. */
+  pinProjectFile(projectId: string, fileTabId: string): void {
+    for (const context of Object.values(this.contexts)) {
+      for (const tab of context.tabs) {
+        if (
+          tab.kind === 'files' &&
+          tab.projectId === projectId &&
+          tab.fileTabId === fileTabId &&
+          tab.preview
+        ) {
+          tab.preview = false
+        }
+      }
     }
   }
 

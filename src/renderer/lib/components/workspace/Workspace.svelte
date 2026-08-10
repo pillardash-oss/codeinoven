@@ -67,6 +67,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import {
     contextSidebarState,
+    type ContextSidebarTab,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -721,12 +722,74 @@
     terminalFullscreenTabId = tabId
   }
 
+  /** A files tab with unsaved changes waiting on a save/discard decision. */
+  let closeTabTarget = $state<{
+    sidebarTabId: string
+    projectId: string
+    fileTabId: string
+    path: string
+  } | null>(null)
+
   function closeContextTab(id: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'files' && tab.fileTabId) {
+      const pending = pendingFileCloseTarget(tab)
+      if (pending) {
+        closeTabTarget = pending
+        return
+      }
+    }
+    closeContextTabNow(id, tab)
+  }
+
+  function pendingFileCloseTarget(
+    tab: ContextSidebarTab
+  ): { sidebarTabId: string; projectId: string; fileTabId: string; path: string } | null {
+    if (tab.kind !== 'files' || !tab.fileTabId) return null
+    try {
+      const fileState = projectFilesWorkspace.getState(tab.projectId)
+      const fileTab = fileState.tabs.find((candidate) => candidate.id === tab.fileTabId)
+      const session = fileTab ? fileState.sessions[fileTab.path] : undefined
+      if (!fileTab || !session || session.draft === session.source.content) return null
+      return {
+        sidebarTabId: tab.id,
+        projectId: tab.projectId,
+        fileTabId: tab.fileTabId,
+        path: fileTab.path
+      }
+    } catch {
+      return null
+    }
+  }
+
+  function closeContextTabNow(id: string, tab: ContextSidebarTab): void {
+    if (tab.kind === 'files' && tab.fileTabId) {
+      projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
+    }
     contextSidebarState.close(id)
-    if (tab?.kind === 'temporary-chat') {
+    if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
     }
+  }
+
+  async function saveAndCloseTab(): Promise<void> {
+    const target = closeTabTarget
+    if (!target) return
+    closeTabTarget = null
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === target.sidebarTabId)
+    if (!tab || tab.kind !== 'files') return
+    await projectFilesWorkspace.save(target.projectId, target.path)
+    closeContextTabNow(target.sidebarTabId, tab)
+  }
+
+  function discardCloseTab(): void {
+    const target = closeTabTarget
+    if (!target) return
+    closeTabTarget = null
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === target.sidebarTabId)
+    if (!tab || tab.kind !== 'files') return
+    closeContextTabNow(target.sidebarTabId, tab)
   }
 
   // ─── Derived ─────────────────────────────────────────────────────────────
@@ -1537,9 +1600,7 @@
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const pinnedIds = pinnedThreads
-      .filter((t) => t.projectId === projectId)
-      .map((t) => t.id)
+    const pinnedIds = pinnedThreads.filter((t) => t.projectId === projectId).map((t) => t.id)
     const fromIdx = pinnedIds.indexOf(draggedId)
     const toIdx = pinnedIds.indexOf(targetId)
     if (fromIdx === -1 || toIdx === -1) return
@@ -3211,3 +3272,42 @@
     </Dialog.Root>
   {/if}
 {/if}
+
+<!-- Closing a files tab with unsaved changes -->
+<Dialog.Root bind:open={() => closeTabTarget !== null, (open) => !open && (closeTabTarget = null)}>
+  <Dialog.Portal>
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+    <Dialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <Dialog.Title class="text-sm font-semibold text-foreground">Unsaved changes</Dialog.Title>
+      <Dialog.Description class="mt-2 text-xs leading-5 text-muted">
+        <span class="font-mono text-foreground">{closeTabTarget?.path}</span> has unsaved changes. Save
+        them before closing the tab?
+      </Dialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <Dialog.Close
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </Dialog.Close>
+        <button
+          type="button"
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          title="Close the tab and discard unsaved changes"
+          onclick={discardCloseTab}
+        >
+          Discard changes
+        </button>
+        <button
+          type="button"
+          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          title="Save the file and close the tab"
+          onclick={() => void saveAndCloseTab()}
+        >
+          Save &amp; close
+        </button>
+      </div>
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>

@@ -5,6 +5,7 @@ import type {
   ProjectTextFile,
   TurnCheckpointFileDiff
 } from '$shared/types'
+import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
@@ -418,7 +419,7 @@ class ProjectFilesWorkspace {
     const existingTab = state.tabs.find((t) => t.id === nextTabId)
     if (existingTab) {
       state.activeTabId = nextTabId
-      contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+      this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, existingTab.preview)
       return
     }
 
@@ -434,7 +435,7 @@ class ProjectFilesWorkspace {
     if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
     state.activeTabId = nextTabId
 
-    contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+    this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
 
     if (state.sessions[nextPath]) return
     if (this.isPreviewableBinary(nextMime)) return
@@ -483,7 +484,11 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const index = state.tabs.findIndex((tab) => tab.id === tabId)
     if (index === -1) return
+    const closed = state.tabs[index]
     state.tabs.splice(index, 1)
+    if (!state.tabs.some((tab) => tab.path === closed.path)) {
+      delete state.sessions[closed.path]
+    }
     if (state.activeTabId !== tabId) return
     state.activeTabId = state.tabs[index]?.id ?? state.tabs[index - 1]?.id ?? null
   }
@@ -536,8 +541,20 @@ class ProjectFilesWorkspace {
   }
 
   updateDraft(projectId: string, path: string, content: string): void {
-    const session = this.ensureState(projectId).sessions[path]
-    if (session) session.draft = content
+    const state = this.ensureState(projectId)
+    const session = state.sessions[path]
+    if (!session) return
+    session.draft = content
+    // Editing a preview tab pins it — the user is actively working on the file.
+    if (session.draft !== session.source.content) {
+      const tab = state.tabs.find(
+        (candidate) => candidate.origin === 'working' && candidate.path === path
+      )
+      if (tab && tab.preview) {
+        tab.preview = false
+        contextSidebarState.pinProjectFile(projectId, tab.id)
+      }
+    }
   }
 
   async save(projectId: string, path: string): Promise<void> {
@@ -673,7 +690,7 @@ class ProjectFilesWorkspace {
     const existingTab = state.tabs.find((candidate) => candidate.id === nextTabId)
     if (existingTab) {
       state.activeTabId = nextTabId
-      contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+      this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
       return
     }
 
@@ -689,7 +706,7 @@ class ProjectFilesWorkspace {
     if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
     state.activeTabId = nextTabId
 
-    contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+    this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
 
     if (state.sessions[nextPath]) return
     if (this.isPreviewableBinary(nextMime)) return
@@ -716,6 +733,81 @@ class ProjectFilesWorkspace {
     } finally {
       delete state.loadingPaths[path]
     }
+  }
+
+  /** Repoint a sidebar tab at a different file tab, or create one when the
+   *  workspace tab has no matching sidebar tab (its tab may have been closed).
+   *  Prevents a single file click from silently failing to show a preview. */
+  private remapOrOpenContextTab(
+    projectId: string,
+    previousTabId: string,
+    nextTabId: string,
+    nextPath: string,
+    preview: boolean
+  ): void {
+    const remapped = contextSidebarState.remapProjectFile(
+      projectId,
+      previousTabId,
+      nextTabId,
+      nextPath
+    )
+    if (remapped) return
+    const threadId = contextSidebarState.threadIdForProject(projectId)
+    if (threadId)
+      contextSidebarState.openProjectFile(projectId, threadId, nextTabId, nextPath, preview)
+  }
+
+  /** Pin an open file tab (stop showing it as an italic preview) — used when
+   *  the user starts editing the file. */
+  pinTab(projectId: string, tabId: string): void {
+    const state = this.ensureState(projectId)
+    const tab = state.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || !tab.preview) return
+    tab.preview = false
+    contextSidebarState.pinProjectFile(projectId, tab.id)
+  }
+
+  /** Files with unsaved edits across every prepared project. */
+  getUnsavedFiles(): CloseConfirmationFile[] {
+    const files: CloseConfirmationFile[] = []
+    for (const projectId of Object.keys(this.projects)) {
+      const state = this.projects[projectId]
+      for (const session of Object.values(state.sessions)) {
+        if (session.draft !== session.source.content) {
+          files.push({ projectId, path: session.source.path })
+        }
+      }
+    }
+    return files
+  }
+
+  /** Save every unsaved file across all projects. Returns false if any save
+   *  failed (the caller should keep the app open). */
+  async saveAllUnsaved(): Promise<boolean> {
+    let saved = true
+    for (const projectId of Object.keys(this.projects)) {
+      const state = this.projects[projectId]
+      for (const path of Object.keys(state.sessions)) {
+        const session = state.sessions[path]
+        if (session.draft === session.source.content || session.saving) continue
+        const submittedDraft = session.draft
+        try {
+          const source = await invoke(
+            'projectFiles:save',
+            projectId,
+            path,
+            submittedDraft,
+            session.source.revision
+          )
+          session.source = source
+          if (session.draft === submittedDraft) session.draft = source.content
+        } catch {
+          session.error = 'The file could not be saved'
+          saved = false
+        }
+      }
+    }
+    return saved
   }
 
   private parentDirectory(path: string): string {

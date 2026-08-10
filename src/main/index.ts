@@ -166,6 +166,10 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
  * Decide whether a close/quit can proceed. With nothing working (or no window
  * to ask) the quit continues immediately; otherwise the renderer is prompted
  * and the quit pauses until `app:confirmClose` arrives.
+ *
+ * The renderer is always asked — it owns the unsaved-file editor state, which
+ * also gates the close. It replies through `app:confirmClose` immediately when
+ * nothing is pending, or shows the confirmation modal otherwise.
  */
 function requestCloseConfirmation(): void {
   if (quitCleanupStarted || quitConfirmed) return
@@ -176,12 +180,7 @@ function requestCloseConfirmation(): void {
     return
   }
   const working = getActiveThreadProjects()
-  if (working.length === 0) {
-    quitConfirmed = true
-    app.quit()
-    return
-  }
-  sendToRenderer(window.webContents, 'window:confirmClose', { projects: working })
+  sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
 }
 
 ipcMain.handle('app:confirmClose', async () => {
