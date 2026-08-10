@@ -1,15 +1,44 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Globe2 } from '@lucide/svelte'
+  import { Check, Copy, ExternalLink, Globe2 } from '@lucide/svelte'
   import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
+  import EnrollmentQr from '$lib/components/remote/EnrollmentQr.svelte'
   import StepUpApproval from '$lib/components/remote/StepUpApproval.svelte'
+  import { copyText } from '$lib/copy-text'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import type { RemoteModeStatus, RemotePendingStepUpApproval } from '$shared/ipc-contract'
 
   let remoteStatus = $state<RemoteModeStatus | null>(null)
   let pendingApprovals = $state<RemotePendingStepUpApproval[]>([])
   let loading = $state(true)
   let busy = $state(false)
+  let copied = $state<'code' | 'link' | null>(null)
+
+  let mobileAppUrl = $derived.by(() => {
+    const apiOrigin = remoteStatus?.cloud.apiOrigin
+    if (!apiOrigin) return null
+    try {
+      return new URL('/remote.html', apiOrigin).toString()
+    } catch {
+      return null
+    }
+  })
+
+  let enrollmentLink = $derived.by(() => {
+    const code = remoteStatus?.cloud.enrollmentCode
+    if (!mobileAppUrl || !code) return null
+    const enrollmentHash = new URLSearchParams({ enroll: code }).toString()
+    return `${mobileAppUrl}#${enrollmentHash}`
+  })
+
+  async function copyEnrollmentValue(kind: 'code' | 'link', value: string): Promise<void> {
+    await copyText(value)
+    copied = kind
+    window.setTimeout(() => {
+      if (copied === kind) copied = null
+    }, 1_500)
+  }
 
   async function handleRenameDevice(deviceId: string, name: string): Promise<void> {
     try {
@@ -122,16 +151,120 @@
         to enroll this desktop.
       </p>
     {:else if remoteStatus.cloud.state === 'enrollment-pending'}
-      <p class="mt-3 text-xs text-muted">Enter this one-time code in the mobile PWA:</p>
-      <p
-        class="mt-2 select-all rounded-lg bg-raised px-3 py-2 text-center font-mono text-sm font-semibold tracking-wider text-foreground"
-      >
-        {remoteStatus.cloud.enrollmentCode}
-      </p>
-      <p class="mt-2 text-[11px] text-dimmed">
-        The code expires automatically. It never contains the desktop control secret.
-      </p>
+      <div class="mt-4">
+        <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <p class="text-xs font-semibold text-foreground">
+            First, create your CodeInOven account with GitHub.
+          </p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            Use the same GitHub account you want connected to the GitHub sidebar. That single
+            identity also secures remote access to your desktops.
+          </p>
+        </div>
+
+        <h3 class="mt-4 text-sm font-semibold text-foreground">Continue on your phone</h3>
+        <p class="mt-1 text-xs leading-relaxed text-muted">
+          The QR opens the mobile PWA and carries this one-time code. It does not contain your
+          desktop control secret.
+        </p>
+
+        <div class="mt-4 flex flex-col gap-4 sm:flex-row">
+          {#if enrollmentLink}
+            <EnrollmentQr value={enrollmentLink} />
+          {/if}
+
+          <ol class="min-w-0 flex-1 space-y-3 text-xs text-muted">
+            <li class="flex gap-2.5">
+              <span
+                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
+                >1</span
+              >
+              <span>Scan the QR code with your phone, or copy the mobile-app link below.</span>
+            </li>
+            <li class="flex gap-2.5">
+              <span
+                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
+                >2</span
+              >
+              <span>
+                Choose <strong>Continue with GitHub</strong> to create your account or sign in.
+              </span>
+            </li>
+            <li class="flex gap-2.5">
+              <span
+                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
+                >3</span
+              >
+              <span>The code will already be filled in. Tap <strong>Add</strong> to finish.</span>
+            </li>
+          </ol>
+        </div>
+
+        {#if mobileAppUrl && enrollmentLink}
+          <div class="mt-4 rounded-lg bg-raised p-3">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Mobile app</p>
+            <p class="mt-1 truncate text-xs text-foreground" title={mobileAppUrl}>{mobileAppUrl}</p>
+            <div class="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                title="Copy mobile app link"
+                aria-label="Copy mobile app link"
+                onclick={() => void copyEnrollmentValue('link', enrollmentLink)}
+              >
+                {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
+                {copied === 'link' ? 'Copied link' : 'Copy link'}
+              </button>
+              <button
+                type="button"
+                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                title="Open mobile app in browser"
+                aria-label="Open mobile app in browser"
+                onclick={() => void openInBrowser(enrollmentLink)}
+              >
+                <ExternalLink size={13} /> Open link
+              </button>
+            </div>
+          </div>
+        {/if}
+
+        {#if remoteStatus.cloud.enrollmentCode}
+          <div class="mt-3 flex items-center gap-2 rounded-lg bg-raised p-3">
+            <div class="min-w-0 flex-1">
+              <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                One-time code
+              </p>
+              <p
+                class="mt-1 select-all font-mono text-sm font-semibold tracking-wider text-foreground"
+              >
+                {remoteStatus.cloud.enrollmentCode}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+              title="Copy one-time enrollment code"
+              aria-label="Copy one-time enrollment code"
+              onclick={() =>
+                void copyEnrollmentValue('code', remoteStatus?.cloud.enrollmentCode ?? '')}
+            >
+              {#if copied === 'code'}<Check size={13} />{:else}<Copy size={13} />{/if}
+              {copied === 'code' ? 'Copied' : 'Copy code'}
+            </button>
+          </div>
+        {/if}
+      </div>
     {:else}
+      {#if !remoteStatus.cloud.desktopId}
+        <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <p class="text-xs font-semibold text-foreground">
+            You need a CodeInOven account before enrolling this desktop.
+          </p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            Create it with the same GitHub account you want connected to the GitHub sidebar.
+          </p>
+        </div>
+      {/if}
       <div class="mt-3 flex items-center justify-between gap-3 text-xs">
         <span class="text-muted">Connection</span>
         <span class="font-medium text-foreground">
