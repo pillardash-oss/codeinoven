@@ -211,7 +211,9 @@
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
    *  request stays open until that turn actually completes (or the agent starts
-   *  a newer turn). */
+   *  a newer turn). While the thread is busy, the latest turn is by definition
+   *  the active one: a steer the agent is demonstrably working on must keep its
+   *  trace open even when the preceding assistant message is stamped complete. */
   const latestTurnInfo = $derived.by(() => {
     const startIndex = lastTurnStartIndex(messages)
     if (startIndex === -1) return { startIndex: -1, active: false }
@@ -223,7 +225,8 @@
       endIndex < messages.length - 1 &&
       messages.slice(endIndex + 1).every((message) => message.role === 'user')
     const turnCompleted = messages[endIndex]?.completedAt !== undefined
-    return { startIndex, active: !(trailingUserOnly && turnCompleted) }
+    const threadBusy = agentRuns.isBusy(thread.projectId, thread.id)
+    return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
   let olderMessagesAvailable = $state(false)
   let loadingNewerMessages = $state(false)
@@ -1806,6 +1809,10 @@
   $effect(() => {
     if (!loaded || !scrollEl) return
     if (mountBusy) {
+      // Always anchor a busy thread to its live tail: the conversation grew
+      // while the user was away, so a stale saved offset would drop them into
+      // a blank body with the current turn's message and trace out of view.
+      renderedStartIndex = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
     } else if (savedScrollState) {
@@ -1844,6 +1851,20 @@
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
     userScrolledAway = false
   }
+
+  // The render window must always cover the live tail of the conversation.
+  // Message hydration, paging, and reconcile can shrink, grow, or reorder the
+  // list after the window index was computed; if the window ever points past
+  // the newest message the body goes blank. Snap it back to the tail window so
+  // the latest turn (its user message and working trace) is always on screen.
+  // Only adjusts out-of-range windows — an explicit history scroll that lands
+  // inside the list is left untouched.
+  $effect(() => {
+    const maxStart = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
+    if (renderedStartIndex > maxStart && messages.length > 0) {
+      renderedStartIndex = maxStart
+    }
+  })
 
   function formatTime(ts: number): string {
     if (!ts) return ''
@@ -1994,7 +2015,11 @@
   }
 
   function initializeHistoryWindow(messageCount: number): void {
-    if (historyWindowInitialized) return
+    // A busy thread always opens at its live tail: the conversation grew while
+    // the user was away, so a stale mid-conversation offset (saved scroll
+    // state or a pre-populated cache) would hide the latest turn's user
+    // message and streaming trace behind the "Load earlier messages" window.
+    if (historyWindowInitialized && !mountBusy) return
     renderedStartIndex = Math.max(0, messageCount - HISTORY_WINDOW_SIZE)
     historyWindowInitialized = true
   }
@@ -2169,6 +2194,16 @@
       // mirror + restore to finish so the queue is populated before deciding.
       await localReady
       if (!alive) return
+      // A thread opened while its turn is still running has its accumulated
+      // working trace only in the live harness session: the mirror persists
+      // assistant parts only when the turn idles/completes, and parts that
+      // streamed before this view mounted were never routed to the local
+      // cache. Pull the live driver transcript now so the working trace
+      // (tools, sub-agents, reasoning) renders immediately instead of a bare
+      // user message that only fills in after the turn ends.
+      if (agentRuns.isBusy(projectId, id)) {
+        void refreshMessages()
+      }
       if (providerStatus?.state === 'idle') {
         scheduleIdleAttention()
       }
