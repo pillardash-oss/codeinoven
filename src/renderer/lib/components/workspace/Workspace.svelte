@@ -163,8 +163,24 @@
   }
 
   function revealThreadInSidebar(threadId: string): void {
+    const scroller = sidebarScroller
     const row = findThreadRow(threadId)
-    row?.scrollIntoView({ block: 'nearest' })
+    if (!row) return
+    if (!scroller) {
+      row.scrollIntoView({ block: 'nearest' })
+      return
+    }
+    // Scroll the sidebar scroller directly so the row is fully inside its
+    // visible area. scrollIntoView can be defeated by intervening containers
+    // (folders, padding wrappers), so compute the offset ourselves and only
+    // move when the row is actually clipped.
+    const rowRect = row.getBoundingClientRect()
+    const scrollerRect = scroller.getBoundingClientRect()
+    if (rowRect.top < scrollerRect.top) {
+      scroller.scrollTop -= scrollerRect.top - rowRect.top
+    } else if (rowRect.bottom > scrollerRect.bottom) {
+      scroller.scrollTop += rowRect.bottom - scrollerRect.bottom
+    }
   }
 
   function handleSidebarUserScroll(): void {
