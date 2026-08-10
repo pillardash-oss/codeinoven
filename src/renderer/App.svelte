@@ -71,7 +71,8 @@
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
     imageDescriptorAskAgain: false,
-    autoRetryAfterReset: true
+    autoRetryAfterReset: true,
+    resumeWorkOnRestart: true
   }
 
   let config = $state<AppConfig>(defaultConfig)

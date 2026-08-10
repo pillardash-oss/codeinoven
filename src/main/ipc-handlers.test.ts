@@ -68,7 +68,8 @@ const defaultConfig: AppConfig = {
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
   imageDescriptorAskAgain: false,
-  autoRetryAfterReset: false
+  autoRetryAfterReset: false,
+  resumeWorkOnRestart: true
 }
 
 beforeEach(async () => {
@@ -118,6 +119,8 @@ describe('validateAppConfigPatch', () => {
           }
         },
         imageDescriptorAskAgain: true,
+        autoRetryAfterReset: true,
+        resumeWorkOnRestart: false,
         memory
       })
     ).toMatchObject({
@@ -139,6 +142,8 @@ describe('validateAppConfigPatch', () => {
         }
       },
       imageDescriptorAskAgain: true,
+      autoRetryAfterReset: true,
+      resumeWorkOnRestart: false,
       memory: {
         enabled: true,
         entries: [
@@ -171,6 +176,9 @@ describe('validateAppConfigPatch', () => {
     { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
     { imageDescriptorAskAgain: 'yes' },
     { imageDescriptorAskAgain: 1 },
+    { autoRetryAfterReset: 'yes' },
+    { resumeWorkOnRestart: 'yes' },
+    { resumeWorkOnRestart: 1 },
     {
       memory: {
         enabled: true,

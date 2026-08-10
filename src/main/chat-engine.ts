@@ -114,7 +114,7 @@ import type {
   Thread,
   ThreadSettings
 } from '../lib/types'
-import { INBOX_PROJECT_ID } from '../lib/types'
+import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
 import {
   budgetTurnLayers,
@@ -2963,11 +2963,7 @@ export class ChatEngine {
    * `failed` back to `completed` so it reads as done rather than error. This is
    * a user-intent reset: it never re-runs the turn or schedules anything.
    */
-  async dismissSessionError(
-    projectId: string,
-    threadId: string,
-    sessionId: string
-  ): Promise<void> {
+  async dismissSessionError(projectId: string, threadId: string, sessionId: string): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -8678,6 +8674,8 @@ export class ChatEngine {
 
   async resumePendingWork(): Promise<void> {
     try {
+      const config = await this.storage.getConfig()
+      if (config.resumeWorkOnRestart === false) return
       const threads = await this.threadManager.listAllThreads()
       for (const thread of threads) {
         if (thread.archived) continue
@@ -8724,6 +8722,53 @@ export class ChatEngine {
       }
     } catch (error) {
       Logger.error('Achievement recovery failed:', error)
+    }
+  }
+
+  /**
+   * Resume regular threads that RestartRecoveryService flagged as interrupted
+   * by an app closure or unknown issue. Each eligible thread receives an
+   * internal "Continue" through the normal sendPrompt pipeline so its persisted
+   * harness session picks up where it stopped and the broadcast status flips
+   * the sidebar back to "working". Sr. Engineer coordinators and orchestration
+   * children are intentionally skipped — their owner workflows (assignments,
+   * achievement loops) are resumed by `resumePendingWork`. Gated by the
+   * "Resume work on restart" setting.
+   */
+  async resumeRecoveredThreads(recovered: Thread[]): Promise<void> {
+    const config = await this.storage.getConfig()
+    if (config.resumeWorkOnRestart === false) return
+    for (const thread of recovered) {
+      try {
+        if (thread.archived) continue
+        if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
+          continue
+        }
+        if (isOrchestrationChildThread(thread)) continue
+        if (!thread.settings || !thread.sessionId) continue
+        const current = this.sessionStatuses.get(thread.sessionId)
+        if (current?.state === 'working' || current?.state === 'waiting') continue
+        await this.sendPrompt(
+          thread.projectId,
+          thread.id,
+          validateThreadSettings(thread.settings),
+          'Continue',
+          [],
+          undefined,
+          createMessageId(),
+          undefined,
+          undefined,
+          undefined,
+          'internal'
+        )
+      } catch (error) {
+        // Leave the thread in its interrupted state; the user can still Retry manually.
+        Logger.error('Recovered thread resume failed (non-fatal):', {
+          projectId: thread.projectId,
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
     }
   }
 

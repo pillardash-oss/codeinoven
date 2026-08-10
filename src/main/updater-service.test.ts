@@ -60,7 +60,8 @@ function defaultConfig(): AppConfig {
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
     imageDescriptorAskAgain: false,
-    autoRetryAfterReset: true
+    autoRetryAfterReset: true,
+    resumeWorkOnRestart: true
   }
 }
 
