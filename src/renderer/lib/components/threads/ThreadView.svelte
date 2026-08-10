@@ -105,6 +105,7 @@
   import { collectAgentSources } from '$lib/agent-sources'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
+  import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
@@ -268,7 +269,7 @@
   // opens the thread — never a folded trace waiting on a status round trip.
   // svelte-ignore state_referenced_locally
   if (thread.status === 'planning' || thread.status === 'executing') {
-    agentRuns.setBusy(thread.projectId, thread.id, true)
+    agentRuns.setBusy(thread.projectId, thread.id, true, undefined, thread.lastActivity)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
@@ -1282,9 +1283,12 @@
   let brainstormEntryTrace = $derived.by<AgentPart[]>(() => {
     if (!activePlanningEntry || brainstormConversationTurnActive) return []
     const label =
-      activePlanningEntry === 'brainstorm'
-        ? 'Preparing the reviewable Brainstorm document from this conversation.'
-        : 'Preparing the engineering specification from this conversation.'
+      activePlanningEntry === 'spec' && providerStatus?.state === 'working'
+        ? (providerStatus.activity?.label ??
+          'Preparing the engineering specification from this conversation.')
+        : activePlanningEntry === 'brainstorm'
+          ? 'Preparing the reviewable Brainstorm document from this conversation.'
+          : 'Preparing the engineering specification from this conversation.'
     return [
       {
         type: 'text',
@@ -1513,7 +1517,11 @@
   let activityLabel = $derived.by((): string => {
     if (loopAuditing) return 'Auditing'
     if (activePlanningEntry === 'brainstorm') return 'Formulating brainstorm'
-    if (activePlanningEntry === 'spec') return 'Formulating specification'
+    if (activePlanningEntry === 'spec') {
+      return providerStatus?.state === 'working'
+        ? (providerStatus.activity?.label ?? 'Formulating specification')
+        : 'Formulating specification'
+    }
     if (specFormulating) return 'Formulating'
     if (!settings.engineeringMode) return 'Working'
     switch (thread.status) {
@@ -1594,6 +1602,53 @@
     }
   }
 
+  /** Scroll the transcript to a section heading inside a specific message —
+   *  the jump target used by section sources in the Sources panel. Loads a
+   *  window around the message when it lies outside the loaded cache. */
+  async function scrollToMessageSection(messageId: string, section: string): Promise<void> {
+    const cachedIndex = messages.findIndex((message) => message.id === messageId)
+    if (cachedIndex >= 0) {
+      if (cachedIndex < visibleStartIndex) {
+        renderedStartIndex = cachedIndex
+        await tick()
+      }
+    } else {
+      if (jumpLoading) return
+      jumpLoading = true
+      try {
+        const page = await invoke(
+          'thread:loadMessagesAround',
+          thread.projectId,
+          thread.id,
+          messageId,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        const targetIndex = messages.findIndex((message) => message.id === messageId)
+        if (targetIndex < 0) return
+        renderedStartIndex = Math.max(0, targetIndex - Math.floor(HISTORY_WINDOW_SIZE / 4))
+        olderMessagesAvailable = page.hasOlder
+        await tick()
+        if (page.hasNewer) {
+          const newest = page.messages[page.messages.length - 1]
+          if (newest) void fillForwardFrom(thread.projectId, thread.id, newest.id)
+        }
+      } finally {
+        jumpLoading = false
+      }
+    }
+    const messageElement = document.getElementById(`msg-${messageId}`)
+    const anchor = messageElement?.querySelector<HTMLElement>(
+      `[data-section="${CSS.escape(section)}"]`
+    )
+    if (anchor) {
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    } else {
+      messageElement?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }
+
   /** Page forward from a far-back jump anchor until the cache reaches the tail. */
   async function fillForwardFrom(
     projectId: string,
@@ -1653,6 +1708,15 @@
   // Feed the header count and Sources sidebar from the persisted conversation.
   $effect(() => {
     workspaceState.sources = sources
+  })
+
+  // Jump the transcript to a section requested from the Sources panel.
+  $effect(() => {
+    const target = sectionNavigationState.last
+    const sequence = sectionNavigationState.sequence
+    if (!target || sequence === 0) return
+    if (target.projectId !== thread.projectId || target.threadId !== thread.id) return
+    void scrollToMessageSection(target.messageId, target.section)
   })
 
   // Feed the header's history dropdown with every user-authored message: the
@@ -2130,9 +2194,9 @@
    *  its working trace expanded immediately instead of a folded idle view.
    *  A coordinator with delegated work (workers/auditor) is kept busy the same
    *  way even though its own session is idle between handoffs. */
-  function restoreWorkingState(status: Thread['status']): void {
+  function restoreWorkingState(status: Thread['status'], startedAt = thread.lastActivity): void {
     if (status === 'planning' || status === 'executing' || delegatedWorkBusy) {
-      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
+      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId(), startedAt)
       return
     }
     setIdleFromRestore()
@@ -2171,7 +2235,10 @@
       // The live session status (connectSession) is authoritative; only fall
       // back to the persisted thread status when no live status was seen.
       if (!liveStatusKnown) {
-        restoreWorkingState(threadData?.status ?? thread.status)
+        restoreWorkingState(
+          threadData?.status ?? thread.status,
+          threadData?.lastActivity ?? thread.lastActivity
+        )
       }
       seedContextUsageSnapshot(threadData?.contextUsage)
       restoreQueuedMessage()
@@ -2224,7 +2291,13 @@
       // actively working on while the status map lags).
       liveStatusKnown = providerStatus !== null
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
-        agentRuns.setBusy(projectId, id, true, latestUserMessageId())
+        agentRuns.setBusy(
+          projectId,
+          id,
+          true,
+          latestUserMessageId(),
+          providerStatus.state === 'working' ? providerStatus.startedAt : undefined
+        )
       } else if (
         (providerStatus?.state === 'error' || providerStatus?.state === 'idle') &&
         !agentRuns.isBusy(projectId, id)
@@ -2510,7 +2583,13 @@
         if (event.status.state === 'waiting' || event.status.state === 'working') {
           acknowledgeLocalTurn()
           if (event.status.state === 'working') idleAttentionHandled = false
-          agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
+          agentRuns.setBusy(
+            thread.projectId,
+            thread.id,
+            true,
+            latestUserMessageId(),
+            event.status.state === 'working' ? event.status.startedAt : undefined
+          )
           errorMessage = ''
         } else if (event.status.state === 'idle') {
           const interruptedCompaction = compactionInterrupted()

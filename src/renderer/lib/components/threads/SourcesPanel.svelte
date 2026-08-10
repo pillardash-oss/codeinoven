@@ -4,6 +4,7 @@
     BookOpen,
     FileText,
     Globe2,
+    Hash,
     Image as ImageIcon,
     Loader2,
     Pencil,
@@ -14,10 +15,16 @@
   } from '@lucide/svelte'
   import { isImageMime, fileUrlToPath } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
-  import type { AgentSource, FileAgentSource, FileCitationAgentSource } from '$lib/agent-sources'
+  import type {
+    AgentSource,
+    FileAgentSource,
+    FileCitationAgentSource,
+    SectionAgentSource
+  } from '$lib/agent-sources'
   import MediaPreview from '../chats/MediaPreview.svelte'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -91,6 +98,7 @@
   const webCount = $derived(sources.filter((source) => source.kind === 'web').length)
   const imageCount = $derived(sources.filter((source) => source.kind === 'generated-image').length)
   const citationCount = $derived(sources.filter((source) => source.kind === 'file-citation').length)
+  const sectionCount = $derived(sources.filter((source) => source.kind === 'section').length)
 
   const availableMcps = $derived(capabilities?.mcp ?? [])
   const availableSkills = $derived(capabilities?.skill ?? [])
@@ -227,6 +235,7 @@
     if (source.kind === 'attachment') return 'Attachment'
     if (source.kind === 'generated-image') return 'Generated image'
     if (source.kind === 'file-citation') return 'File cited'
+    if (source.kind === 'section') return 'Section'
     return 'Website'
   }
 
@@ -234,6 +243,16 @@
     const projectId = workspaceState.activeProject?.id
     if (!projectId) return
     void revealCitationFile(projectId, source.path, source.line)
+  }
+
+  function handleSectionClick(source: SectionAgentSource): void {
+    if (!projectId || !threadId) return
+    sectionNavigationState.request({
+      projectId,
+      threadId,
+      messageId: source.messageId,
+      section: source.section
+    })
   }
 
   function openFileInViewer(source: FileAgentSource): void {
@@ -425,6 +444,11 @@
             {citationCount} cited files
           </span>
         {/if}
+        {#if sectionCount > 0}
+          <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">
+            {sectionCount} sections
+          </span>
+        {/if}
       </div>
     {/if}
 
@@ -469,6 +493,12 @@
                 class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
               >
                 <FileText size={15} />
+              </span>
+            {:else if source.kind === 'section'}
+              <span
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+              >
+                <Hash size={15} />
               </span>
             {:else if isImageSource(source)}
               <button
@@ -528,6 +558,15 @@
                   {#if source.line}
                     <span class="ml-1 text-[10px] text-dimmed tabular-nums">:{source.line}</span>
                   {/if}
+                </button>
+              {:else if source.kind === 'section'}
+                <button
+                  type="button"
+                  class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-primary hover:text-primary/80"
+                  title={`Jump to section ${source.section} in this conversation`}
+                  onclick={() => handleSectionClick(source)}
+                >
+                  <span class="truncate">{source.title}</span>
                 </button>
               {:else}
                 <button

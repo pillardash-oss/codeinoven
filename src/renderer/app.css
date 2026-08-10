@@ -265,6 +265,17 @@ body {
   font-size: 1.1em;
 }
 
+/* Section-anchored headings keep their scroll target clear of sticky chrome
+   when a `§2.3` reference or a Sources panel entry jumps to them. */
+.markdown-body h1[id],
+.markdown-body h2[id],
+.markdown-body h3[id],
+.markdown-body h4[id],
+.markdown-body h5[id],
+.markdown-body h6[id] {
+  scroll-margin-top: 1.25rem;
+}
+
 .markdown-body a {
   color: var(--color-info);
   text-decoration: underline;

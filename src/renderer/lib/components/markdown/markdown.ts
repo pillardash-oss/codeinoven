@@ -10,7 +10,13 @@
 import { Marked, type Token, type Tokens } from 'marked'
 import DOMPurify from 'dompurify'
 import hljs from 'highlight.js/lib/common'
-import { linkifyFileCitations } from '$lib/agent-source-citations'
+import {
+  collectSectionKeys,
+  linkifyFileCitations,
+  linkifySectionReferences,
+  sectionAnchor,
+  sectionKeyFromHeading
+} from '$lib/agent-source-citations'
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
 import { faviconState } from '$lib/stores/favicons.svelte'
 
@@ -151,6 +157,20 @@ function createMarked(allowHtml: boolean): Marked {
             .join('\n')
           return `<section class="footnotes" data-footnotes>\n<h2 id="footnote-label" class="sr-only">Footnotes</h2>\n<ol>\n${lis}\n</ol>\n</section>`
         }
+      },
+      {
+        // Section-numbered headings get a stable anchor id (`section-2-3`) plus
+        // a `data-section` marker so `§2.3` references and the Sources panel can
+        // resolve the heading deterministically — even when several messages
+        // carry the same section numbers.
+        name: 'heading',
+        renderer(token: Tokens.Generic) {
+          const heading = token as Tokens.Heading
+          const key = sectionKeyFromHeading(heading.text)
+          const attrs = key ? ` id="${sectionAnchor(key)}" data-section="${escapeHtml(key)}"` : ''
+          const content = this.parser.parseInline(heading.tokens)
+          return `<h${heading.depth}${attrs}>${content}</h${heading.depth}>\n`
+        }
       }
     ]
   })
@@ -236,8 +256,9 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
  */
 export function lexMarkdown(text: string, allowHtml = false): Token[] {
   const parser = allowHtml ? markedWithHtml : marked
+  const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
   const tokens = parser.lexer(
-    linkifyFileCitations(text, (path) => citationPathsState.isValidPath(path))
+    linkifyFileCitations(sectionLinked, (path) => citationPathsState.isValidPath(path))
   )
   return resolveFootnotes(tokens)
 }

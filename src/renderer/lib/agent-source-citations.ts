@@ -39,6 +39,113 @@ function cleanUrl(value: string): string {
   return value.replace(/[.,;:!?]+$/gu, '')
 }
 
+// ─── Section references (§N, §N.N) ────────────────────────────────────────
+
+const SECTION_REF_PATTERN = /§\s*((?:[A-Za-z]-)?\d+(?:\.\d+)*)/gu
+const HEADING_PATTERN = /^ {0,3}(#{1,6})\s+(.+)$/u
+const FENCE_OPEN_PATTERN = /^ {0,3}(`{3,}|~{3,})/u
+
+/**
+ * A section key is the leading number/code of a heading, e.g. `2.3` from
+ * `## 2.3 Working-tree caveat` or `9` from `## 9. Authoritative references`.
+ * Optional leading letters cover codes like `A-01`.
+ */
+export function sectionKeyFromHeading(text: string): string | null {
+  const trimmed = text.trim()
+  if (!trimmed) return null
+  const body = trimmed.startsWith('§') ? trimmed.replace(/^§+/u, '').trim() : trimmed
+  return /^((?:[A-Za-z]-)?\d+(?:\.\d+)*)/u.exec(body)?.[1] ?? null
+}
+
+/** Stable, HTML-id-safe anchor for a section key (`2.3` → `section-2-3`). */
+export function sectionAnchor(key: string): string {
+  return `section-${key.toLowerCase().replace(/[^a-z0-9]+/gu, '-')}`
+}
+
+/** Fence-aware line scan: tracks fenced code blocks so callers can skip them. */
+function scanMarkdownLines(text: string, visit: (line: string, inFence: boolean) => void): void {
+  const lines = text.split('\n')
+  let fenceChar: string | null = null
+  let fenceLength = 0
+  for (const line of lines) {
+    if (fenceChar) {
+      const closing = new RegExp(
+        `^ {0,3}${escapeRegExp(fenceChar)}{${fenceLength},}[ \\t]*$`,
+        'u'
+      ).test(line)
+      if (closing) {
+        fenceChar = null
+        fenceLength = 0
+        visit(line, false)
+        continue
+      }
+      visit(line, true)
+      continue
+    }
+    const opening = FENCE_OPEN_PATTERN.exec(line)
+    if (opening) {
+      fenceChar = opening[1]?.[0] ?? null
+      fenceLength = opening[1]?.length ?? 0
+      visit(line, true)
+      continue
+    }
+    visit(line, false)
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/** Distinct section keys referenced in the text (`§2.3`, `§9`), skipping code. */
+export function extractSectionReferences(text: string): string[] {
+  const keys = new Set<string>()
+  scanMarkdownLines(text, (line, inFence) => {
+    if (inFence) return
+    for (const segment of line.split('`').filter((_, index) => index % 2 === 0)) {
+      for (const match of segment.matchAll(SECTION_REF_PATTERN)) {
+        if (match[1]) keys.add(match[1])
+      }
+    }
+  })
+  return [...keys]
+}
+
+/** Section keys of headings present in the text (`## 2.3 Foo` → `2.3`). */
+export function collectSectionKeys(text: string): Set<string> {
+  const keys = new Set<string>()
+  scanMarkdownLines(text, (line, inFence) => {
+    if (inFence) return
+    const heading = HEADING_PATTERN.exec(line)
+    const key = heading ? sectionKeyFromHeading(heading[2] ?? '') : null
+    if (key) keys.add(key)
+  })
+  return keys
+}
+
+/** Rewrite `§N.N` to a same-document anchor link when the section exists.
+ *  Code (fenced or inline) and heading lines are left untouched. */
+export function linkifySectionReferences(text: string, knownKeys: ReadonlySet<string>): string {
+  const out: string[] = []
+  scanMarkdownLines(text, (line, inFence) => {
+    if (inFence || HEADING_PATTERN.test(line)) {
+      out.push(line)
+      return
+    }
+    const segments = line.split('`')
+    const linked = segments
+      .map((segment, index) => {
+        if (index % 2 === 1) return segment
+        return segment.replace(SECTION_REF_PATTERN, (match, key: string) =>
+          knownKeys.has(key) ? `[${match}](#${sectionAnchor(key)})` : match
+        )
+      })
+      .join('`')
+    out.push(linked)
+  })
+  return out.join('\n')
+}
+
 function decodePath(value: string): string {
   try {
     return decodeURI(value)
