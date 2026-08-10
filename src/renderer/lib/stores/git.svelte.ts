@@ -566,12 +566,23 @@ export class GitState {
     owner: string,
     repo: string,
     pullNumber: number,
-    method: PrMergeMethod
+    method: PrMergeMethod,
+    commitTitle?: string,
+    commitMessage?: string
   ): Promise<PullRequestReference | null> {
     this.markBusy('pr-merge', true)
     this.error = null
     try {
-      return await invoke('pr:merge', projectId, owner, repo, pullNumber, method)
+      return await invoke(
+        'pr:merge',
+        projectId,
+        owner,
+        repo,
+        pullNumber,
+        method,
+        commitTitle,
+        commitMessage
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be merged')
       return null

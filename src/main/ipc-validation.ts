@@ -327,6 +327,18 @@ export function validatePrCommentBody(value: unknown, allowEmpty = false): strin
   return body
 }
 
+/** Validate an optional merge commit title (single line, GitHub-capped). */
+export function validateMergeCommitTitle(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  return validateBoundedString(value, 'Merge commit title', 1, 256)
+}
+
+/** Validate an optional merge commit message (like a comment on the merge). */
+export function validateMergeCommitMessage(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  return validateBoundedString(value, 'Merge commit message', 1, 65_536)
+}
+
 /** Validate an optional stash message. */
 export function validateStashMessage(value: unknown): string | undefined {
   if (value === undefined) return undefined
