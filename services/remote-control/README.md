@@ -1,8 +1,8 @@
 # CodeInOven remote control service
 
-This is the GitHub account, desktop registry, enrollment, and opaque WebSocket relay for the hosted
-mobile PWA. Both the desktop and phone create outbound connections, so the desktop does not need an
-inbound public port and continues to work behind NAT and normal firewalls.
+This is the account service, desktop registry, enrollment, and opaque WebSocket relay for the
+hosted mobile PWA. Both the desktop and phone create outbound connections, so the desktop does not
+need an inbound public port and continues to work behind NAT and normal firewalls.
 
 ## Run locally
 
@@ -16,11 +16,13 @@ Back up the SQLite database using a WAL-aware snapshot. The service deliberately
 the desktop control secret: the desktop encrypts a device-bound grant directly to the PWA's
 non-extractable Web Crypto key.
 
-## GitHub identity
+## Account identity
 
-Better Auth is the sole hosted-account authority. GitHub OAuth creates one canonical user ID that
-owns remote desktops. CodeInOven is permanently free: the service has no payment tiers,
-subscriptions, billing state, or entitlement records. There is no separate remote password.
+Better Auth is the sole hosted-account authority. Google or Apple sign-in creates one canonical
+user ID that owns remote desktops. First sign-in creates the account automatically; later sign-ins
+return to it. GitHub authorization belongs to the desktop workspace sidebar and remains independent
+from this account. CodeInOven is permanently free: the service has no payment tiers, subscriptions,
+billing state, or entitlement records. There is no separate remote password.
 
 ## Audit events
 
@@ -35,14 +37,23 @@ event set is:
 Each row contains the event name, timestamp, and the related user/desktop IDs when available. The
 metadata field is currently an empty JSON object reserved for a future versioned schema.
 
-Configure a GitHub App or OAuth App with:
+Configure a Google OAuth web client with:
 
-- Callback URL: `https://mobile.codeinoven.com/api/auth/callback/github`
-- GitHub App account permission: **Email addresses — Read-only**
-- Device Flow enabled if the same GitHub App client ID is used by packaged desktops
+- Authorized redirect URI: `https://mobile.codeinoven.com/api/auth/callback/google`
 
-The server needs the client ID and client secret. The desktop build receives only the public
-client ID; the client secret must remain in Coolify.
+Configure Sign in with Apple with:
+
+- A primary App ID with the **Sign in with Apple** capability.
+- A Service ID used as `APPLE_OAUTH_CLIENT_ID`.
+- Domain: `mobile.codeinoven.com`.
+- Return URL: `https://mobile.codeinoven.com/api/auth/callback/apple`.
+- A Sign in with Apple key, its Team ID and Key ID, and the downloaded `.p8` private key.
+
+Store `APPLE_PRIVATE_KEY` as one line with PEM newlines escaped as `\n`; the service restores the
+line breaks before signing.
+
+Google and Apple secrets remain server-only in Coolify. The service generates Apple's required
+client-secret JWT at runtime, with a 180-day expiry, whenever an Apple authorization starts.
 
 ## Coolify deployment
 
@@ -50,9 +61,9 @@ client ID; the client secret must remain in Coolify.
 - Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
   the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
   `/healthz` over the private Compose network. Coolify terminates public TLS.
-- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `CODEINOVEN_GITHUB_CLIENT_ID`, and
-  `GITHUB_OAUTH_CLIENT_SECRET` in Coolify. Generate `BETTER_AUTH_SECRET` with
-  `openssl rand -base64 32`.
+- Set `REMOTE_PUBLIC_HOST`, `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`,
+  `GOOGLE_OAUTH_CLIENT_SECRET`, `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and
+  `APPLE_PRIVATE_KEY` in Coolify. Generate `BETTER_AUTH_SECRET` with `openssl rand -base64 32`.
 - Keep one replica of the SQLite service. The named `remote-data` volume persists the database;
   configure WAL-aware backups for that volume before launch.
 - SQLite is supported for a single service instance. Use a durable volume, WAL-aware backups, and
@@ -79,7 +90,8 @@ or self-hosting.
 
 ## Enrollment and relay protocol
 
-1. The user signs into the PWA with GitHub. Better Auth stores the session in an HttpOnly cookie.
+1. The user signs into the PWA with Google or Apple. Better Auth creates the account when needed
+   and stores the session in an HttpOnly cookie.
 2. A desktop requests an enrollment and receives a one-time claim code plus a device token.
 3. The signed-in user enters/scans the claim code in the PWA. Codes expire after ten minutes, and
    the PWA binds the claim to a non-extractable P-256 key stored in IndexedDB.

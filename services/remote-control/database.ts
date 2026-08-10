@@ -183,7 +183,7 @@ export class RemoteControlDatabase {
     this.db
       .prepare(
         `INSERT INTO users(id, email, display_name, password_hash, created_at)
-         VALUES(?, ?, ?, 'oauth:github', ?)
+         VALUES(?, ?, ?, 'oauth:social', ?)
          ON CONFLICT(id) DO UPDATE SET
            email = excluded.email,
            display_name = excluded.display_name`
