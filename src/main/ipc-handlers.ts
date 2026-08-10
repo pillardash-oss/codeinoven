@@ -140,6 +140,7 @@ const THEMES = new Set(['light', 'dark', 'system'])
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
+const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -3234,7 +3235,25 @@ export function registerIpcHandlers(
       if (verdict !== 'APPROVE' && !text.trim()) {
         throw new Error('Leave a comment explaining the requested changes')
       }
-      await provider.createPullRequestReview({ ...target, event: verdict, body: text })
+      try {
+        await provider.createPullRequestReview({ ...target, event: verdict, body: text })
+        return { status: 'submitted' } as const
+      } catch (error) {
+        if (
+          error instanceof ProviderHttpError &&
+          error.status === 403 &&
+          /resource not accessible by integration/iu.test(error.message)
+        ) {
+          return {
+            status: 'permission_required',
+            message:
+              `CodeInOven needs Pull requests read and write access for ${target.owner}/${target.repo}. ` +
+              'Install the GitHub App on this repository or approve its pending permission update.',
+            settingsUrl: GITHUB_APP_INSTALL_URL
+          } as const
+        }
+        throw error
+      }
     }
   )
 

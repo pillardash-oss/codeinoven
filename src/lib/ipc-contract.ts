@@ -84,6 +84,7 @@ import type {
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
+  PullRequestReviewResult,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -807,7 +808,7 @@ export interface IpcInvokeContract {
       event: PrReviewEvent,
       body: string
     ],
-    void
+    PullRequestReviewResult
   >
   /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
   'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>

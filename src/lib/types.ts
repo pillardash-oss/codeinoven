@@ -2700,6 +2700,15 @@ export interface PrDraft {
 /** PR create request as the renderer sends it; owner/repo resolve from the origin. */
 export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
 
+/** Result of submitting a pull-request review through the GitHub App. */
+export type PullRequestReviewResult =
+  | { status: 'submitted' }
+  | {
+      status: 'permission_required'
+      message: string
+      settingsUrl: string
+    }
+
 /** Renderer-safe PR reference created or merged by a provider. */
 export interface PullRequestReference {
   number: number
