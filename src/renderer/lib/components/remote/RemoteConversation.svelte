@@ -52,17 +52,40 @@
   )
 
   onMount(() => {
+    const { projectId, id } = thread
     // Keep mobile hydration below the encrypted transport's frame cap. Older
     // history remains available through the existing paged thread API.
-    void threadMessages.load(thread.projectId, thread.id, 40)
+    const hydrate = async (): Promise<void> => {
+      await threadMessages.load(projectId, id, 40)
+      // A thread opened while its turn is still running has its accumulated
+      // working trace only in the live harness session — the mirror persists
+      // assistant parts only when the turn idles/completes. Pull the live
+      // transcript so the in-progress work renders immediately instead of a
+      // bare user message that only fills in after the turn ends.
+      try {
+        const status = await invoke('agent:getSessionStatus', projectId, id)
+        if (
+          status?.state === 'working' ||
+          status?.state === 'waiting' ||
+          thread.status === 'planning' ||
+          thread.status === 'executing'
+        ) {
+          await threadMessages.load(projectId, id)
+        }
+      } catch {
+        // Status is best-effort; the paged mirror already loaded.
+      }
+    }
+    void hydrate()
+    const bind = (sessionId: string | undefined): void => {
+      if (sessionId) threadMessages.setSessionId(projectId, id, sessionId)
+    }
     if (thread.sessionId) {
-      threadMessages.setSessionId(thread.projectId, thread.id, thread.sessionId)
+      bind(thread.sessionId)
     } else {
-      void invoke('thread:get', thread.projectId, thread.id)
+      void invoke('thread:get', projectId, id)
         .then((data) => {
-          if (data?.sessionId) {
-            threadMessages.setSessionId(thread.projectId, thread.id, data.sessionId)
-          }
+          bind(data?.sessionId)
         })
         .catch(() => undefined)
     }
