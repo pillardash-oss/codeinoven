@@ -25,6 +25,12 @@ const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
 ])
 const MAX_RETAINED_NOTIFICATIONS = 200
 const BADGE_STATE_PATH = 'state/notification-badge.json'
+/**
+ * Cooldown covering the alert's duration. Only the first notification of a
+ * burst plays a sound — notifications arriving inside this window still show
+ * their cards but stay quiet so a burst never machine-guns beeps.
+ */
+const NOTIFICATION_SOUND_DEDUP_MS = 2_500
 
 interface BadgeStateRecord {
   version: 1
@@ -43,6 +49,7 @@ export class NotificationService {
   private readonly activeNotifications = new Map<string, Notification>()
   private readonly abortingThreads = new Set<string>()
   private readonly badgeThreads = new Set<string>()
+  private lastNotificationSoundPlayedAt = 0
   private started = false
   private unsupportedLogged = false
   /**
@@ -304,7 +311,8 @@ export class NotificationService {
     forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
-    const soundDispatched = this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(windows)
+    const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
         this.unsupportedLogged = true
@@ -321,7 +329,7 @@ export class NotificationService {
         subtitle: projectName || APP_NAME,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent: soundDispatched
+        silent
       })
 
       notification.on('click', (): void => {
@@ -392,7 +400,8 @@ export class NotificationService {
     forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
-    const soundDispatched = this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(windows)
+    const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
         this.unsupportedLogged = true
@@ -409,7 +418,7 @@ export class NotificationService {
         subtitle: projectName || APP_NAME,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent: soundDispatched
+        silent
       })
 
       notification.on('click', (): void => {
@@ -449,7 +458,8 @@ export class NotificationService {
       }
     }
 
-    const soundDispatched = this.dispatchNotificationSound()
+    this.dispatchNotificationSound()
+    const silent = this.appManagesSound()
     if (!Notification.isSupported()) {
       return {
         status: 'unsupported',
@@ -463,7 +473,7 @@ export class NotificationService {
         groupId: `${APP_SLUG}-system`,
         title: `${APP_NAME} notifications`,
         body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
-        silent: soundDispatched
+        silent
       })
       let settled = false
       const finish = (result: SystemNotificationTestResult): void => {
@@ -562,11 +572,33 @@ export class NotificationService {
     }
   }
 
+  /**
+   * The app plays its own audible alert (`alert.wav`) from the renderer, so the
+   * OS notification must never add its default sound: as long as a renderer is
+   * alive the app owns audio and the OS notification is shown silent. Without a
+   * live renderer the OS notification falls back to its own sound.
+   */
+  private appManagesSound(windows = BrowserWindow.getAllWindows()): boolean {
+    return windows.some((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+  }
+
+  /**
+   * Dispatch the custom audible alert for a notification. Only the first
+   * notification of a burst plays: notifications arriving within the dedup
+   * window after the last played sound still show their cards but stay quiet.
+   * The gate lives here in the main process — not the throttled renderer — so
+   * the decision is deterministic and the first sound is dispatched the moment
+   * its notification arrives, instead of seconds after the OS card appears.
+   */
   private dispatchNotificationSound(windows = BrowserWindow.getAllWindows()): boolean {
     const soundWindow = windows.find(
       (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
     )
     if (!soundWindow) return false
+
+    const now = Date.now()
+    if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
+    this.lastNotificationSoundPlayedAt = now
 
     return sendToRenderer(soundWindow.webContents, 'notification:playSound')
   }
