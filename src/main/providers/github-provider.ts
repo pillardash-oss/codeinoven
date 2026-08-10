@@ -8,11 +8,13 @@ import type {
   GitHubDeploymentStatus,
   GitRepositoryIdentity,
   GitHubWorkflowRun,
+  GitHubWorkflowRunDetail,
   PrDraft,
   PullRequestComment,
   PullRequestCommit,
   PullRequestCheck,
   PullRequestChecks,
+  PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
   PullRequestReview,
@@ -99,6 +101,49 @@ export class GitHubProvider implements GitProvider {
       url: `https://github.com/${input.owner}/${input.repo}/pull/${input.pullNumber}`,
       title: this.readString(record, 'title') ?? `Pull request #${input.pullNumber}`
     }
+  }
+
+  /**
+   * Compare two refs so the create-PR form can tell the user whether there is
+   * anything to compare (GitHub's own "There isn't anything to compare" state).
+   * A PR only makes sense when the head has commits the base lacks.
+   */
+  async comparePullRequests(input: {
+    owner: string
+    repo: string
+    base: string
+    head: string
+  }): Promise<PullRequestCompare> {
+    const response = await this.request(
+      `${this.repoPath(input)}/compare/${encodeURIComponent(input.base)}...${encodeURIComponent(input.head)}`,
+      { method: 'GET' }
+    )
+    const record = Array.isArray(response) ? {} : response
+    const rawStatus = this.readString(record, 'status')
+    const status: PullRequestCompare['status'] =
+      rawStatus === 'ahead' || rawStatus === 'behind' || rawStatus === 'diverged'
+        ? rawStatus
+        : 'identical'
+    const totalCommits = this.readNumber(record, 'total_commits')
+    const rawFiles = record['files']
+    const filesChanged = Array.isArray(rawFiles) ? rawFiles.length : 0
+    return {
+      status,
+      aheadBy: this.readNumber(record, 'ahead_by'),
+      behindBy: this.readNumber(record, 'behind_by'),
+      totalCommits,
+      filesChanged,
+      hasChanges: (status === 'ahead' || status === 'diverged') && totalCommits > 0
+    }
+  }
+
+  /** Reopen a closed pull request, the same way GitHub does. */
+  async reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference> {
+    const response = await this.request(`${this.pullPath(input)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state: 'open' })
+    })
+    return this.toReference(response)
   }
 
   async listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]> {
@@ -426,6 +471,37 @@ export class GitHubProvider implements GitProvider {
     const workflowRun = await this.resolveDeploymentRun(input, deployment, statuses)
     const jobs = workflowRun ? await this.getRunJobs(input, workflowRun.id) : []
     return { deployment, statuses, workflowRun, jobs, fetchedAt: Date.now() }
+  }
+
+  /** Everything the in-app workflow-run detail view needs (run + jobs). */
+  async getWorkflowRunDetail(input: {
+    owner: string
+    repo: string
+    runId: number
+  }): Promise<GitHubWorkflowRunDetail> {
+    const base = this.repoPath(input)
+    const [runPayload, jobs] = await Promise.all([
+      this.request(`${base}/actions/runs/${input.runId}`, { method: 'GET' }).catch(() => null),
+      this.getRunJobs(input, input.runId)
+    ])
+    const mapped =
+      runPayload !== null && !Array.isArray(runPayload) ? this.toWorkflowRun(runPayload) : null
+    const run: GitHubWorkflowRun = mapped ?? {
+      id: input.runId,
+      name: 'Workflow',
+      displayTitle: `Workflow run #${input.runId}`,
+      runNumber: input.runId,
+      event: '',
+      status: 'unknown',
+      conclusion: null,
+      branch: '',
+      headSha: '',
+      url: '',
+      actorLogin: '',
+      createdAt: '',
+      updatedAt: ''
+    }
+    return { run, jobs, fetchedAt: Date.now() }
   }
 
   /** Capped raw log text for one workflow run job, rendered in-app. */

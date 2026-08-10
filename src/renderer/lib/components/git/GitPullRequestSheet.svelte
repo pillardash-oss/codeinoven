@@ -3,36 +3,53 @@
   import { invoke } from '$lib/ipc.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
-  import type { PrMergeMethod, PullRequestReference } from '$shared/types'
-  import { ExternalLink, GitPullRequest, Loader2, Merge } from '@lucide/svelte'
+  import type { PullRequestCompare, PullRequestReference } from '$shared/types'
+  import {
+    ArrowRight,
+    CircleCheck,
+    CircleSlash,
+    ExternalLink,
+    GitPullRequest,
+    Loader2,
+    TriangleAlert
+  } from '@lucide/svelte'
 
   interface Props {
     projectId: string
     onClose: () => void
+    /** Fired once a pull request is actually created, so the list can refresh. */
+    onCreated?: () => void
   }
 
-  let { projectId, onClose }: Props = $props()
+  let { projectId, onClose, onCreated }: Props = $props()
 
-  type PrMode = 'create' | 'merge'
-
-  let mode = $state<PrMode>('create')
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
   let body = $state('')
   let head = $state('')
   let base = $state('')
   let draft = $state(false)
-  let method = $state<PrMergeMethod>('squash')
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
-  let openPRs = $state<PullRequestReference[]>([])
-  let loadingPRs = $state(false)
-  let selectedPR = $state<PullRequestReference | null>(null)
+  let compare = $state<PullRequestCompare | null>(null)
+  let comparing = $state(false)
+  let compareError = $state('')
+  let compareSequence = 0
 
   const branch = $derived(gitState.status?.branch ?? null)
   const branches = $derived(gitState.branches.map((b) => b.name))
   const creating = $derived(gitState.isBusy('pr-create'))
-  const merging = $derived(gitState.isBusy('pr-merge'))
+
+  /** A PR is only worth creating when the head has commits the base lacks. */
+  const canCreate = $derived(
+    Boolean(originIdentity) &&
+      Boolean(head) &&
+      Boolean(base) &&
+      head !== base &&
+      Boolean(title.trim()) &&
+      compare?.hasChanges === true &&
+      !creating
+  )
 
   async function loadOrigin(): Promise<void> {
     try {
@@ -54,28 +71,49 @@
     return owner && repo ? { owner, repo } : null
   }
 
+  /** Compare head against base; a stale response from an earlier selection is dropped. */
+  async function runCompare(): Promise<void> {
+    if (!originIdentity || !head || !base || head === base) return
+    const sequence = ++compareSequence
+    comparing = true
+    compareError = ''
+    try {
+      const snapshot = await gitState.comparePullRequests(
+        projectId,
+        originIdentity.owner,
+        originIdentity.repo,
+        base,
+        head
+      )
+      if (sequence !== compareSequence) return
+      if (snapshot) {
+        compare = snapshot
+      } else {
+        compare = null
+        compareError = 'Could not compare these branches.'
+      }
+    } catch (reason) {
+      if (sequence !== compareSequence) return
+      compare = null
+      compareError = reason instanceof Error ? reason.message : 'Could not compare these branches.'
+    } finally {
+      if (sequence === compareSequence) comparing = false
+    }
+  }
+
   async function createPullRequest(): Promise<void> {
-    if (!originIdentity || !head) return
+    if (!originIdentity || !head || !base || !canCreate) return
     const reference = await gitState.createPullRequest(projectId, {
       title: title.trim(),
       body: body.trim() || undefined,
       head,
-      base: base || 'main',
+      base,
       draft
     })
-    if (reference) result = reference
-  }
-
-  async function mergePullRequest(): Promise<void> {
-    if (!originIdentity || !selectedPR) return
-    const reference = await gitState.mergePullRequest(
-      projectId,
-      originIdentity.owner,
-      originIdentity.repo,
-      selectedPR.number,
-      method
-    )
-    if (reference) result = reference
+    if (reference) {
+      result = reference
+      onCreated?.()
+    }
   }
 
   async function openInBrowser(url: string): Promise<void> {
@@ -83,22 +121,6 @@
     if (!/^https:\/\//u.test(url)) return
     await invoke('shell:openExternal', url)
     onClose()
-  }
-
-  async function loadOpenPRs(): Promise<void> {
-    if (!originIdentity || loadingPRs) return
-    loadingPRs = true
-    try {
-      openPRs = await gitState.listPullRequests(
-        projectId,
-        originIdentity.owner,
-        originIdentity.repo
-      )
-    } catch {
-      openPRs = []
-    } finally {
-      loadingPRs = false
-    }
   }
 
   $effect(() => {
@@ -113,43 +135,18 @@
   })
 
   $effect(() => {
-    if (mode === 'merge' && originIdentity) void loadOpenPRs()
+    if (head === base) {
+      compare = null
+      compareError = ''
+      compareSequence++
+      return
+    }
+    if (originIdentity && head && base) void runCompare()
   })
 </script>
 
-<Modal open title="Pull request" {onClose} size="lg">
+<Modal open title="New pull request" {onClose} size="lg">
   <div class="space-y-3">
-    <div
-      class="flex items-center rounded-md bg-elevated p-0.5"
-      role="group"
-      aria-label="Pull request action"
-    >
-      <button
-        type="button"
-        class={[
-          'flex h-6 flex-1 items-center justify-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-          mode === 'create' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
-        ]}
-        aria-pressed={mode === 'create'}
-        onclick={() => (mode = 'create')}
-      >
-        <GitPullRequest size={12} />
-        Create
-      </button>
-      <button
-        type="button"
-        class={[
-          'flex h-6 flex-1 items-center justify-center gap-1.5 rounded px-2.5 text-[10px] font-medium transition-colors',
-          mode === 'merge' ? 'bg-overlay text-foreground' : 'text-muted hover:text-foreground'
-        ]}
-        aria-pressed={mode === 'merge'}
-        onclick={() => (mode = 'merge')}
-      >
-        <Merge size={12} />
-        Merge
-      </button>
-    </div>
-
     {#if originError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
@@ -173,7 +170,7 @@
         <div class="mt-2 flex items-center gap-1.5">
           <button
             type="button"
-            class="flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary hover:bg-primary-hover"
             onclick={() => void openInBrowser(pr.url)}
           >
             <ExternalLink size={12} />
@@ -181,49 +178,18 @@
           </button>
           <button
             type="button"
-            class="rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
+            class="cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated"
             onclick={onClose}
           >
             Done
           </button>
         </div>
       </div>
-    {:else if mode === 'create'}
-      <div class="space-y-2">
-        <div>
-          <label
-            class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-            for="pr-title"
-          >
-            Title
-          </label>
-          <input
-            id="pr-title"
-            class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-            placeholder="Summary of the change"
-            bind:value={title}
-          />
-        </div>
-        <div class="grid grid-cols-2 gap-2">
-          <div>
-            <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-              for="pr-head"
-            >
-              Head (from)
-            </label>
-            <select
-              id="pr-head"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={head}
-              disabled={branches.length === 0}
-            >
-              {#each branches as name (name)}
-                <option value={name}>{name}</option>
-              {/each}
-            </select>
-          </div>
-          <div>
+    {:else}
+      <!-- Compare first, like GitHub: pick the branches, then write about the change. -->
+      <div class="rounded-lg border border-border bg-surface p-2.5">
+        <div class="flex items-end gap-2">
+          <div class="min-w-0 flex-1">
             <label
               class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
               for="pr-base"
@@ -232,7 +198,7 @@
             </label>
             <select
               id="pr-base"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
               bind:value={base}
               disabled={branches.length === 0}
             >
@@ -241,83 +207,93 @@
               {/each}
             </select>
           </div>
-        </div>
-        <div>
-          <label
-            class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-            for="pr-body"
-          >
-            Description
-          </label>
-          <textarea
-            id="pr-body"
-            class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-            placeholder="What does this change do?"
-            bind:value={body}></textarea>
-        </div>
-        <div class="flex items-center justify-between gap-2">
-          <span class="text-[10px] text-muted">Create as draft</span>
-          <Switch
-            checked={draft}
-            onchange={(value) => (draft = value)}
-            aria-label="Create as draft"
-          />
-        </div>
-      </div>
-    {:else}
-      <div class="space-y-2">
-        {#if loadingPRs}
-          <div class="flex items-center justify-center gap-2 py-6 text-xs text-dimmed">
-            <Loader2 size={14} class="animate-spin" />
-            Loading pull requests
-          </div>
-        {:else if openPRs.length === 0}
-          <div class="rounded-lg border border-border bg-surface px-3 py-4 text-center">
-            <GitPullRequest size={18} class="mx-auto mb-1.5 text-dimmed" />
-            <p class="text-[11px] font-medium text-muted">No open pull requests</p>
-            <p class="mt-0.5 text-[10px] text-dimmed">
-              Create a pull request first, then come back to merge it.
-            </p>
-          </div>
-        {:else}
-          <div>
+          <ArrowRight size={14} class="mb-2.5 shrink-0 text-dimmed" />
+          <div class="min-w-0 flex-1">
             <label
               class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-              for="pr-select"
+              for="pr-head"
             >
-              Select pull request
+              Head (from)
             </label>
             <select
-              id="pr-select"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-              bind:value={selectedPR}
+              id="pr-head"
+              class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
+              bind:value={head}
+              disabled={branches.length === 0}
             >
-              {#each openPRs as pr (pr.number)}
-                <option value={pr}>#{pr.number} — {pr.title}</option>
+              {#each branches as name (name)}
+                <option value={name}>{name}</option>
               {/each}
             </select>
           </div>
-          <div>
-            <label
-              class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
-              for="pr-method"
+        </div>
+        <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[10px]">
+          {#if head === base}
+            <CircleSlash size={11} class="shrink-0 text-dimmed" />
+            <span class="text-dimmed"
+              >The head and base are the same branch — pick a different head.</span
             >
-              Merge method
-            </label>
-            <select
-              id="pr-method"
-              class="h-8 w-full rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
-              bind:value={method}
-            >
-              <option value="merge">Merge commit</option>
-              <option value="squash">Squash and merge</option>
-              <option value="rebase">Rebase and merge</option>
-            </select>
-          </div>
-          <p class="text-[10px] leading-relaxed text-muted">
-            Merging closes the pull request on GitHub. Your local branch is left untouched.
+          {:else if comparing}
+            <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
+            <span class="text-dimmed">Comparing {base}...{head}</span>
+          {:else if compareError}
+            <TriangleAlert size={11} class="shrink-0 text-warning" />
+            <span class="text-warning">{compareError}</span>
+          {:else if compare && !compare.hasChanges}
+            <CircleSlash size={11} class="shrink-0 text-dimmed" />
+            <span class="text-dimmed">There isn't anything to compare.</span>
+          {:else if compare}
+            <CircleCheck size={11} class="shrink-0 text-success" />
+            <span class="text-success">
+              Able to merge — {compare.aheadBy} ahead · {compare.behindBy} behind ·
+              {compare.totalCommits} commit{compare.totalCommits === 1 ? '' : 's'} ·
+              {compare.filesChanged} file{compare.filesChanged === 1 ? '' : 's'} changed
+            </span>
+          {/if}
+        </div>
+      </div>
+
+      <div>
+        <label
+          class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          for="pr-title"
+        >
+          Title
+        </label>
+        <input
+          id="pr-title"
+          class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="Summary of the change"
+          bind:value={title}
+        />
+      </div>
+
+      <div>
+        <label
+          class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
+          for="pr-body"
+        >
+          Description
+        </label>
+        <textarea
+          id="pr-body"
+          class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          placeholder="What does this change do?"
+          bind:value={body}></textarea>
+      </div>
+
+      <div class="flex items-center justify-between gap-2">
+        <div>
+          <span class="text-[10px] text-muted">Create as draft</span>
+          <p class="text-[9px] leading-relaxed text-dimmed">
+            Drafts signal work-in-progress. They can't be merged until they're marked ready.
           </p>
-        {/if}
+        </div>
+        <Switch
+          checked={draft}
+          onchange={(value) => (draft = value)}
+          aria-label="Create as draft"
+        />
       </div>
     {/if}
 
@@ -335,40 +311,27 @@
       <div class="flex items-center justify-end gap-2">
         <button
           type="button"
-          class="rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+          class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
           onclick={onClose}
         >
           Cancel
         </button>
-        {#if mode === 'create'}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={!originIdentity || !head || !title.trim() || creating}
-            onclick={() => void createPullRequest()}
-          >
-            {#if creating}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <GitPullRequest size={12} />
-            {/if}
-            Create pull request
-          </button>
-        {:else}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={!originIdentity || !selectedPR || merging}
-            onclick={() => void mergePullRequest()}
-          >
-            {#if merging}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <Merge size={12} />
-            {/if}
-            Merge pull request
-          </button>
-        {/if}
+        <button
+          type="button"
+          class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+          disabled={!canCreate}
+          title={!canCreate && compare !== null && !compare.hasChanges
+            ? 'There isn\u2019t anything to compare'
+            : undefined}
+          onclick={() => void createPullRequest()}
+        >
+          {#if creating}
+            <Loader2 size={12} class="animate-spin" />
+          {:else}
+            <GitPullRequest size={12} />
+          {/if}
+          Create pull request
+        </button>
       </div>
     {/if}
   {/snippet}

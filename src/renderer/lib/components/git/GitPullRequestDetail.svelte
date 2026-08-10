@@ -13,6 +13,7 @@
     Merge,
     MessagesSquare,
     RefreshCw,
+    RotateCcw,
     Send,
     ShieldCheck,
     ThumbsUp,
@@ -76,7 +77,9 @@
   const posting = $derived(gitState.isBusy('pr-comment'))
   const reviewing = $derived(gitState.isBusy('pr-review'))
   const merging = $derived(gitState.isBusy('pr-merge'))
-  const open = $derived((detail?.state ?? summary.state) === 'open')
+  const reopening = $derived(gitState.isBusy('pr-reopen'))
+  const prState = $derived(detail?.state ?? summary.state)
+  const open = $derived(prState === 'open')
   const hasBody = $derived(commentBody.trim().length > 0)
   /** Why merging may not be a good idea right now — shown next to the button. */
   const mergeBlocker = $derived.by(() => {
@@ -242,6 +245,20 @@
     )
     if (merged) {
       notice = `Merged with ${method}`
+      await refresh()
+    }
+  }
+
+  /** Reopen a closed pull request, the same way GitHub does. */
+  async function reopen(): Promise<void> {
+    const reopened = await gitState.reopenPullRequest(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number
+    )
+    if (reopened) {
+      notice = 'Pull request reopened'
       await refresh()
     }
   }
@@ -718,44 +735,68 @@
 
     <!-- Merging is a separate decision from reviewing, so it gets its own row. -->
     <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
-      <label class="text-[9px] uppercase tracking-wide text-dimmed" for="pr-merge-method">
-        Merge
-      </label>
-      <select
-        id="pr-merge-method"
-        class="h-7 cursor-pointer rounded-md border border-border bg-elevated px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
-        title="How the commits are combined when merging"
-        aria-label="Merge method"
-        bind:value={method}
-        disabled={!open}
-      >
-        {#each mergeMethods as option (option.id)}
-          <option value={option.id}>{option.label}</option>
-        {/each}
-      </select>
-      {#if mergeBlocker}
-        <span class="flex min-w-0 items-center gap-1 text-[9px] text-warning">
-          <TriangleAlert size={10} class="shrink-0" />
-          <span class="truncate">{mergeBlocker}</span>
+      {#if open}
+        <label class="text-[9px] uppercase tracking-wide text-dimmed" for="pr-merge-method">
+          Merge
+        </label>
+        <select
+          id="pr-merge-method"
+          class="h-7 cursor-pointer rounded-md border border-border bg-elevated px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
+          title="How the commits are combined when merging"
+          aria-label="Merge method"
+          bind:value={method}
+        >
+          {#each mergeMethods as option (option.id)}
+            <option value={option.id}>{option.label}</option>
+          {/each}
+        </select>
+        {#if mergeBlocker}
+          <span class="flex min-w-0 items-center gap-1 text-[9px] text-warning">
+            <TriangleAlert size={10} class="shrink-0" />
+            <span class="truncate">{mergeBlocker}</span>
+          </span>
+        {/if}
+        <span class="flex-1"></span>
+        <button
+          type="button"
+          class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          title={`Merge this pull request into ${summary.baseRef}`}
+          disabled={merging}
+          onclick={() => (mergeConfirm = true)}
+        >
+          {#if merging}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <Merge size={11} />
+          {/if}
+          Merge into {summary.baseRef}
+        </button>
+      {:else if prState === 'closed'}
+        <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
+          <CircleSlash size={10} class="shrink-0" />
+          <span class="truncate">Closed without merging</span>
+        </span>
+        <span class="flex-1"></span>
+        <button
+          type="button"
+          class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title="Reopen this pull request"
+          disabled={reopening}
+          onclick={() => void reopen()}
+        >
+          {#if reopening}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <RotateCcw size={11} />
+          {/if}
+          Reopen
+        </button>
+      {:else if prState === 'merged'}
+        <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
+          <Merge size={10} class="shrink-0" />
+          <span class="truncate">Merged — nothing more to do</span>
         </span>
       {/if}
-      <span class="flex-1"></span>
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-        title={open
-          ? `Merge this pull request into ${summary.baseRef}`
-          : 'This pull request is no longer open'}
-        disabled={!open || merging}
-        onclick={() => (mergeConfirm = true)}
-      >
-        {#if merging}
-          <Loader2 size={11} class="animate-spin" />
-        {:else}
-          <Merge size={11} />
-        {/if}
-        Merge into {summary.baseRef}
-      </button>
     </div>
   </div>
 </div>

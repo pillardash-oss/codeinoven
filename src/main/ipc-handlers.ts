@@ -2981,6 +2981,28 @@ export function registerIpcHandlers(
     }
   )
 
+  ipcMain.handle(
+    'pr:compare',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, base: unknown, head: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to create pull requests')
+      return provider.comparePullRequests({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        base: validateBranchName(base, 'Compare base'),
+        head: validateBranchName(head, 'Compare head')
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:reopen',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.reopenPullRequest(target)
+    }
+  )
+
   /** Shared preamble for every single-PR channel: provider + validated target. */
   const pullRequestTarget = async (
     projectId: unknown,
@@ -3069,6 +3091,19 @@ export function registerIpcHandlers(
         owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
         deploymentId: validateBoundedInteger(deploymentId, 'Deployment ID', 1, 2_147_483_647)
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:runDetail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to inspect workflow runs')
+      return provider.getWorkflowRunDetail({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        runId: validateBoundedInteger(runId, 'Workflow run ID', 1, 2_147_483_647)
       })
     }
   )

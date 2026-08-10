@@ -23,9 +23,20 @@
     githubConnected: boolean
     onOpen: (pr: PullRequestSummary) => void
     onSignIn: () => void
+    onCreate: () => void
+    /** Bumped by the parent after a PR is created so the open list refreshes. */
+    refreshSignal?: number
   }
 
-  let { projectId, identity, githubConnected, onOpen, onSignIn }: Props = $props()
+  let {
+    projectId,
+    identity,
+    githubConnected,
+    onOpen,
+    onSignIn,
+    onCreate,
+    refreshSignal = 0
+  }: Props = $props()
 
   const states: Array<{ id: PrState; label: string }> = [
     { id: 'open', label: 'Open' },
@@ -86,6 +97,12 @@
       void gitState.ensurePullRequestPage(projectId, owner, repo, prState, page)
     }
   })
+
+  // After a new PR is created the cached "open" page may not include it yet —
+  // force a refetch so it appears right away.
+  $effect(() => {
+    if (refreshSignal > 0 && identity && githubConnected) void load(true)
+  })
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -122,6 +139,15 @@
         </button>
       {/each}
       <span class="flex-1"></span>
+      <button
+        type="button"
+        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="Create pull request"
+        aria-label="Create pull request"
+        onclick={onCreate}
+      >
+        <GitPullRequest size={12} />
+      </button>
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"

@@ -2,6 +2,7 @@ import type {
   GitHubDeploymentDetail,
   GitHubDeploymentJobLog,
   GitHubDeploymentOverview,
+  GitHubWorkflowRunDetail,
   GitRepositoryIdentity,
   PrDraft,
   PrMergeMethod,
@@ -10,6 +11,7 @@ import type {
   PullRequestComment,
   PullRequestChecks,
   PullRequestCommit,
+  PullRequestCompare,
   PullRequestDetail,
   PullRequestFile,
   PullRequestReview,
@@ -67,6 +69,15 @@ export interface CreatePrReviewInput extends PullRequestTarget {
 export interface GitProvider {
   createPullRequest(draft: PrDraft): Promise<PullRequestReference>
   mergePullRequest(input: MergePullRequestInput): Promise<PullRequestReference>
+  /** Compare two refs so the create-PR form can gate on there being a real change. */
+  comparePullRequests(input: {
+    owner: string
+    repo: string
+    base: string
+    head: string
+  }): Promise<PullRequestCompare>
+  /** Reopen a closed pull request. */
+  reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>
@@ -88,6 +99,12 @@ export interface GitProvider {
     repo: string
     deploymentId: number
   }): Promise<GitHubDeploymentDetail>
+  /** Rich in-app workflow-run detail: the run itself plus its jobs/steps. */
+  getWorkflowRunDetail(input: {
+    owner: string
+    repo: string
+    runId: number
+  }): Promise<GitHubWorkflowRunDetail>
   /** Capped raw log text for one workflow run job, for the in-app log viewer. */
   getDeploymentJobLog(input: {
     owner: string
