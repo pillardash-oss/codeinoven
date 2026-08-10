@@ -565,6 +565,14 @@ class ThreadMessagesStore {
     if (!target) return
     const { projectId, threadId } = target
 
+    // Live streaming activity is authoritative evidence the agent is still
+    // working. A stray idle/status snapshot between activity blips must never
+    // leave the thread idle — and fold its working trace — while parts keep
+    // streaming (the definitive session.idle that ends the turn clears it).
+    if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+      agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
+    }
+
     switch (event.type) {
       case 'message.part.updated':
         this.upsertPart(projectId, threadId, event.sessionId, event.part)

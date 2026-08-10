@@ -5282,6 +5282,17 @@
     return parts
   }
 
+  /** True once the turn starting at `startMsgIndex` produced a completed
+   *  assistant message — the only state in which the working trace may fold. */
+  function isTurnCompleted(startMsgIndex: number): boolean {
+    let endIndex = startMsgIndex
+    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role !== 'user') {
+      endIndex += 1
+    }
+    const last = messages[endIndex]
+    return last?.role === 'assistant' && last.completedAt !== undefined
+  }
+
   /** Find the last text part in a turn ending at the given message index. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
@@ -5858,6 +5869,7 @@
                         open={busy && isLatestTurn}
                         busy={busy && isLatestTurn}
                         latest={isLatestTurn}
+                        done={isTurnCompleted(msgIndex)}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
