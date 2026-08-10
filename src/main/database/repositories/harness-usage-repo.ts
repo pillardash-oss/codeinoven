@@ -6,7 +6,11 @@ import type {
   AgentMessage,
   AgentTokenUsage,
   HarnessModelUsage,
-  HarnessUsage
+  HarnessUsage,
+  LocalProfileAnalytics,
+  LocalProfileAnalyticsRange,
+  LocalProfileProjectBreakdown,
+  LocalProfileUsageBreakdown
 } from '../../../lib/types'
 
 interface HarnessUsageRow {
@@ -52,6 +56,21 @@ interface UsageAggregateRow {
   cost_usd: number
   tokens_total: number
   duration_ms: number
+}
+
+interface LocalUsageAggregateRow extends UsageAggregateRow {
+  harness_id: string | null
+  provider_id: string | null
+}
+
+interface LocalProjectAggregateRow extends UsageAggregateRow {
+  name: string
+  color: string | null
+  icon_type: string | null
+  icon: string | null
+  thread_count: number
+  active_days: number
+  last_active_at: number
 }
 
 function tokensFromRow(
@@ -229,6 +248,141 @@ export class HarnessUsageRepo {
       harnesses,
       models,
       activityDays: activity,
+      generatedAt: Date.now()
+    }
+  }
+
+  /** Range-aware local Profile analytics derived from persisted assistant messages. */
+  profileAnalytics(range: LocalProfileAnalyticsRange): LocalProfileAnalytics {
+    const aggregateSelect = `COUNT(*) AS message_count,
+              SUM(COALESCE(cost, 0)) AS cost_usd,
+              SUM(COALESCE(CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+              SUM(CASE
+                    WHEN completed_at IS NOT NULL AND completed_at > created_at
+                    THEN completed_at - created_at
+                    ELSE 0
+                  END) AS duration_ms`
+    const messageRange = `role = 'assistant'
+       AND harness_id IS NOT NULL
+       AND created_at >= ?
+       AND created_at < ?`
+    const params = [range.startAt, range.endAt] as const
+
+    const harnessRows = this.db.all<LocalUsageAggregateRow>(
+      `SELECT harness_id AS id,
+              harness_id,
+              NULL AS provider_id,
+              ${aggregateSelect}
+       FROM agent_messages
+       WHERE ${messageRange}
+       GROUP BY harness_id
+       ORDER BY message_count DESC, MAX(created_at) DESC`,
+      ...params
+    )
+    const providerRows = this.db.all<LocalUsageAggregateRow>(
+      `SELECT provider_id AS id,
+              NULL AS harness_id,
+              provider_id,
+              ${aggregateSelect}
+       FROM agent_messages
+       WHERE ${messageRange} AND provider_id IS NOT NULL
+       GROUP BY provider_id
+       ORDER BY message_count DESC, MAX(created_at) DESC`,
+      ...params
+    )
+    const modelRows = this.db.all<LocalUsageAggregateRow>(
+      `SELECT model_id AS id,
+              harness_id,
+              provider_id,
+              ${aggregateSelect}
+       FROM agent_messages
+       WHERE ${messageRange} AND model_id IS NOT NULL
+       GROUP BY harness_id, provider_id, model_id
+       ORDER BY message_count DESC, MAX(created_at) DESC`,
+      ...params
+    )
+    const projectRows = this.db.all<LocalProjectAggregateRow>(
+      `SELECT p.id,
+              p.name,
+              p.color,
+              p.icon_type,
+              p.icon,
+              COUNT(*) AS message_count,
+              SUM(COALESCE(m.cost, 0)) AS cost_usd,
+              SUM(COALESCE(CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+              SUM(CASE
+                    WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
+                    THEN m.completed_at - m.created_at
+                    ELSE 0
+                  END) AS duration_ms,
+              COUNT(DISTINCT t.id) AS thread_count,
+              COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
+              MAX(m.created_at) AS last_active_at
+       FROM agent_messages m
+       JOIN threads t ON t.id = m.thread_id
+       JOIN projects p ON p.id = t.project_id
+       WHERE m.role = 'assistant'
+         AND m.harness_id IS NOT NULL
+         AND m.created_at >= ?
+         AND m.created_at < ?
+         AND p.hidden = 0
+       GROUP BY p.id
+       ORDER BY message_count DESC, last_active_at DESC`,
+      ...params
+    )
+    const activityRows = this.db.all<{ date: string; message_count: number }>(
+      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+              COUNT(*) AS message_count
+       FROM agent_messages
+       WHERE ${messageRange}
+       GROUP BY date
+       ORDER BY date ASC`,
+      ...params
+    )
+    const toUsageBreakdown = (row: LocalUsageAggregateRow): LocalProfileUsageBreakdown => ({
+      id: row.id,
+      ...(row.harness_id ? { harnessId: row.harness_id } : {}),
+      ...(row.provider_id ? { providerId: row.provider_id } : {}),
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total,
+      durationMs: row.duration_ms
+    })
+    const harnesses = harnessRows.map(toUsageBreakdown)
+    const providers = providerRows.map(toUsageBreakdown)
+    const models = modelRows.map(toUsageBreakdown)
+    const projects: LocalProfileProjectBreakdown[] = projectRows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      ...(row.color ? { color: row.color } : {}),
+      ...(row.icon_type ? { iconType: row.icon_type } : {}),
+      hasCustomIcon: Boolean(row.icon),
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total,
+      durationMs: row.duration_ms,
+      threadCount: row.thread_count,
+      activeDays: row.active_days,
+      lastActiveAt: row.last_active_at
+    }))
+    const activityDays: AccountActivityDay[] = activityRows.map((row) => ({
+      date: row.date,
+      messageCount: row.message_count
+    }))
+    return {
+      range,
+      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      costUsd: harnessRows.reduce((sum, row) => sum + row.cost_usd, 0),
+      tokens: harnessRows.reduce((sum, row) => sum + row.tokens_total, 0),
+      durationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
+      topHarnessId: harnesses[0]?.id ?? null,
+      topProviderId: providers[0]?.id ?? null,
+      topModelId: models[0]?.id ?? null,
+      harnesses,
+      providers,
+      models,
+      projects,
+      activityDays,
       generatedAt: Date.now()
     }
   }
