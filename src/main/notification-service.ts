@@ -2,6 +2,7 @@ import { app, BrowserWindow, Notification } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
 import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { StorageEngine } from './storage-engine'
 import type { Database } from './database/database'
@@ -291,7 +292,7 @@ export class NotificationService {
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('notification:show', payload)
+        sendToRenderer(window.webContents, 'notification:show', payload)
       }
     }
     forwardRemoteEvent('notification:show', payload)
@@ -379,7 +380,7 @@ export class NotificationService {
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('notification:show', payload)
+        sendToRenderer(window.webContents, 'notification:show', payload)
       }
     }
     forwardRemoteEvent('notification:show', payload)
@@ -561,8 +562,7 @@ export class NotificationService {
     )
     if (!soundWindow) return false
 
-    soundWindow.webContents.send('notification:playSound')
-    return true
+    return sendToRenderer(soundWindow.webContents, 'notification:playSound')
   }
 
   private retainNotification(key: string, notification: Notification): void {

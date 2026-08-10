@@ -38,6 +38,7 @@ import type { RemoteModeController } from './remote/remote-mode'
 import type { DeviceCredentialService } from './remote/device-credential-service'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
+import { sendToRenderer } from './renderer-delivery'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -175,7 +176,7 @@ function requestCloseConfirmation(): void {
     app.quit()
     return
   }
-  window.webContents.send('window:confirmClose', { projects: working })
+  sendToRenderer(window.webContents, 'window:confirmClose', { projects: working })
 }
 
 ipcMain.handle('app:confirmClose', async () => {
@@ -457,7 +458,7 @@ async function bootPostPaintServices(): Promise<void> {
   resolveFeaturesReady?.()
   resolveFeaturesReady = null
   if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-    mainWindow.webContents.send('app:featuresReady')
+    sendToRenderer(mainWindow.webContents, 'app:featuresReady')
   }
 
   void (async () => {
@@ -691,7 +692,7 @@ function createWindow(): BrowserWindow {
     // before the renderer can decide what should actually close.
     if (isCloseShortcut(input)) {
       event.preventDefault()
-      window.webContents.send('window:closeShortcut')
+      sendToRenderer(window.webContents, 'window:closeShortcut')
     }
   })
 
@@ -736,7 +737,7 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
     if (window.isMinimized()) window.restore()
     if (!window.isVisible()) window.show()
     window.focus()
-    window.webContents.send('notification:threadClicked', payload)
+    sendToRenderer(window.webContents, 'notification:threadClicked', payload)
   }
 
   if (window.webContents.isLoading()) {
@@ -1041,7 +1042,7 @@ app.on('before-quit', (event) => {
   // renderer can unsubscribe from IPC events and release resources.
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-      win.webContents.send('window:beforeQuit')
+      sendToRenderer(win.webContents, 'window:beforeQuit')
     }
   }
 

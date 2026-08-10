@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
 import { RepositoryService } from './repository-service'
 import { ProjectFilesService } from './project-files-service'
 import { ProjectManager } from '../lib/engines/project-manager'
@@ -4211,7 +4212,7 @@ export class ChatEngine {
     if (!(await this.destroyTemporaryChat(temporaryChatId))) return
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) {
-        window.webContents.send('agent:temporaryChatExpired', temporaryChatId)
+        sendToRenderer(window.webContents, 'agent:temporaryChatExpired', temporaryChatId)
       }
     }
   }
@@ -10077,7 +10078,7 @@ export class ChatEngine {
   /** Broadcast an agent event to every renderer window and the remote peer. */
   private broadcast(event: AgentEvent): void {
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('agent:event', event)
+      sendToRenderer(win.webContents, 'agent:event', event)
     }
     forwardRemoteEvent('agent:event', event)
   }
@@ -10235,7 +10236,7 @@ export class ChatEngine {
   /** Broadcast a transient toast message to every renderer window. */
   private broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('app:toast', { message, type })
+      sendToRenderer(win.webContents, 'app:toast', { message, type })
     }
   }
 
@@ -11489,7 +11490,7 @@ export class ChatEngine {
   /** Broadcast a notification toast when the agent suggests a memory entry. */
   private broadcastMemoryProposal(projectId: string, threadId: string): void {
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('app:toast', {
+      sendToRenderer(win.webContents, 'app:toast', {
         message: `${APP_NAME} found a preference worth remembering. Review it before saving.`,
         type: 'info',
         action: { label: 'Review Memory', projectId, threadId }

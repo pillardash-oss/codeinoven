@@ -4,6 +4,7 @@ import { CuaBridgeService } from './cua-bridge-service'
 import { StdioMcpClient, type McpClient } from './mcp-stdio-client'
 import type { StorageEngine } from './storage-engine'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
 
 const POLL_INTERVAL_MS = 1_000
 const MAX_MISSES = 6
@@ -181,7 +182,7 @@ export class ComputerUsePipService {
   ): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send(channel, payload)
+        sendToRenderer(win.webContents, channel, payload)
       }
     }
   }
