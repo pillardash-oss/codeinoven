@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, nativeTheme, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, screen, session, shell } from 'electron'
 import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -29,6 +29,7 @@ import type { ComputerUsePipService } from './computer-use-pip-service'
 import type { UpdaterService } from './updater-service'
 import type { PowerWakeService } from './power-wake-service'
 import type { RetrySchedulerService } from './retry-scheduler-service'
+import type { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import type { PtyService } from './pty-service'
 import type { ProviderConnectionService } from './provider-connection'
 import type { HarnessUpdateService } from './harness-update-service'
@@ -39,6 +40,7 @@ import type { DeviceCredentialService } from './remote/device-credential-service
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
 import { sendToRenderer } from './renderer-delivery'
+import { hasNativeSplashHandoff, signalNativeSplashReady } from './native-splash-handoff'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -77,7 +79,10 @@ registerSignalHandlers()
 // telemetry histogram captures the whole boot window, including module
 // evaluation and Electron's ready handshake.
 startupTelemetry.startEventLoopMonitor()
-// The very first phase: process entry. Marked exactly once at module scope.
+// Packaged launches record that the dependency-free parent already painted;
+// direct Electron launches intentionally begin at process entry instead.
+if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
+// Electron process entry is marked exactly once at module scope.
 startupTelemetry.mark('process:entry')
 // Privacy-preserving process-wide crash policy: uncaught exceptions and
 // unhandled rejections are logged and exit nonzero instead of leaving a
@@ -320,6 +325,7 @@ let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
+let threadCreation: ThreadCreationCoordinator = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
@@ -381,9 +387,14 @@ function createSplashWindow(): {
   splash: BrowserWindow
   visualReady: Promise<SplashVisualOutcome>
 } {
+  const width = 420
+  const height = 320
+  const displayBounds = screen.getPrimaryDisplay().bounds
   const splash = new BrowserWindow({
-    width: 420,
-    height: 320,
+    width,
+    height,
+    x: Math.round(displayBounds.x + (displayBounds.width - width) / 2),
+    y: Math.round(displayBounds.y + (displayBounds.height - height) / 2),
     frame: false,
     resizable: false,
     movable: false,
@@ -462,7 +473,7 @@ async function bootPostPaintServices(): Promise<void> {
   installFilePreviewProtocol(projectFilesService)
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
-  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService)
+  chatEngine = new ChatEngine(storage, database, computerUsePipService, harnessManifestService, threadCreation)
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
@@ -473,6 +484,7 @@ async function bootPostPaintServices(): Promise<void> {
     powerWakeService,
     retryScheduler,
     harnessManifestService,
+    threadCreation,
     hydrationHandlersRegistered: true
   })
   chatEngine.register()
@@ -796,6 +808,10 @@ void app
     if (splashOutcome === 'ready') {
       startupTelemetry.mark('splash:visualReady')
     }
+    // A launcher must never remain topmost forever if the Chromium splash
+    // fails. The normal path releases it after the first rendered frame; the
+    // bounded failure path releases it after the splash barrier resolves.
+    signalNativeSplashReady()
 
     // Only after the splash is visibly rendered, wire the durable log sink
     // before any fallible startup work. The error
@@ -841,7 +857,7 @@ void app
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
-    registerHydrationIpcHandlers(storage, database)
+    registerHydrationIpcHandlers(storage, database, threadCreation)
 
     // Deny every permission request from the renderer (camera, microphone,
     // notifications, geolocation, fullscreen, etc.). No desktop feature relies

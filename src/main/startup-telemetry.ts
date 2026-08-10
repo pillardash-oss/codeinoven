@@ -16,6 +16,7 @@ import { Logger } from './logger'
  * diagnostics.
  */
 export type StartupPhase =
+  | 'nativeSplash:active'
   | 'process:entry'
   | 'electron:ready'
   | 'splash:created'

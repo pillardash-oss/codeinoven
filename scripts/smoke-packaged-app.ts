@@ -179,6 +179,7 @@ async function runIteration(
       fail(`iteration ${iteration} produced an invalid startup proof`)
     }
     const requiredPhases = new Set([
+      'nativeSplash:active',
       'splash:visualReady',
       'renderer:documentLoaded',
       'window:visualReady',

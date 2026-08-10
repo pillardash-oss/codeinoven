@@ -8,6 +8,7 @@ publish:
   owner: pillardash-oss
   repo: codeinoven
   releaseType: release
+afterPack: scripts/native-splash/after-pack.js
 files:
   - out/**/*
   - '!out/**/.DS_Store'
@@ -19,22 +20,9 @@ files:
 # produce unsigned artifacts. Local macOS package scripts opt into ad-hoc
 # signing after fuses are applied so integrity-protected builds remain runnable.
 forceCodeSigning: false
-electronFuses:
-  # CodeInOven intentionally keeps RunAsNode enabled because the packaged
-  # Electron binary hosts the stdio utility gateway. The remaining production
-  # escape hatches are disabled and app.asar is integrity-bound before signing.
-  runAsNode: true
-  enableCookieEncryption: true
-  enableNodeOptionsEnvironmentVariable: false
-  enableNodeCliInspectArguments: false
-  enableEmbeddedAsarIntegrityValidation: true
-  onlyLoadAppFromAsar: true
-  # Electron 43 packages do not ship browser_v8_context_snapshot.bin; enabling
-  # this fuse makes the signed app abort before main-process startup.
-  loadBrowserProcessSpecificV8Snapshot: false
-  # The desktop renderer still loads from file://; remove this compatibility
-  # fuse only after migrating the main document to a custom app protocol.
-  grantFileProtocolExtraPrivileges: true
+# The native Stage 0 hook applies these same security fuses directly to the
+# renamed Electron child before electron-builder signs it. Declaring them here
+# would make electron-builder target the public native launcher instead.
 mac:
   hardenedRuntime: true
   notarize: true

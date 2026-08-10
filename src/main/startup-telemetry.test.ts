@@ -51,6 +51,7 @@ describe('StartupTelemetry phase timestamps', () => {
     let now = 10_000
     const telemetry = new StartupTelemetry({ now: () => now })
     for (const phase of [
+      'nativeSplash:active',
       'process:entry',
       'electron:ready',
       'splash:created',
@@ -70,14 +71,14 @@ describe('StartupTelemetry phase timestamps', () => {
     }
 
     const phases = telemetry.recordedPhases
-    expect(phases).toHaveLength(13)
+    expect(phases).toHaveLength(14)
     for (let index = 1; index < phases.length; index++) {
       expect(phases[index]!.atMs).toBeGreaterThan(phases[index - 1]!.atMs)
       expect(phases[index]!.deltaMs).toBeGreaterThan(0)
     }
     // atMs is relative to origin, never an absolute clock value.
     expect(phases[0]!.atMs).toBe(0)
-    expect(phases[phases.length - 1]!.atMs).toBe(1200)
+    expect(phases[phases.length - 1]!.atMs).toBe(1300)
   })
 
   it('reset() clears recorded phases and the marked set', () => {
