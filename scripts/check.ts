@@ -1,6 +1,5 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { extname, isAbsolute, join, relative, resolve } from 'node:path'
 
 const projectRoot = process.cwd()
 const requestedPaths = Bun.argv.slice(2)
@@ -8,7 +7,6 @@ const supportedExtensions = new Set(['.svelte', '.ts'])
 
 interface CheckScope {
   files: string[]
-  workspace: string
 }
 
 function fail(message: string): never {
@@ -36,8 +34,7 @@ async function createCheckScope(inputPath: string): Promise<CheckScope> {
       fail(`Unsupported check file type: ${inputPath}. Expected a .ts or .svelte file.`)
     }
     return {
-      files: [absolutePath],
-      workspace: dirname(absolutePath)
+      files: [absolutePath]
     }
   }
 
@@ -51,8 +48,7 @@ async function createCheckScope(inputPath: string): Promise<CheckScope> {
     files.push(file)
   }
   return {
-    files,
-    workspace: absolutePath
+    files
   }
 }
 
@@ -61,6 +57,7 @@ async function runSvelteCheck(tsconfigPath: string, workspace = projectRoot): Pr
     [
       process.execPath,
       'node_modules/svelte-check/bin/svelte-check',
+      '--tsgo',
       '--workspace',
       workspace,
       '--config',
@@ -90,7 +87,9 @@ if (checkedFiles.length === 0) {
   fail('No .ts or .svelte files were found in the requested paths.')
 }
 
-const temporaryDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-check-'))
+const checkOutputDirectory = join(projectRoot, 'agent-out')
+await mkdir(checkOutputDirectory, { recursive: true })
+const temporaryDirectory = await mkdtemp(join(checkOutputDirectory, '.check-'))
 
 try {
   let exitCode = 0
@@ -102,21 +101,23 @@ try {
       `${JSON.stringify(
         {
           compilerOptions: {
-            typeRoots: [join(projectRoot, 'node_modules/@types')]
+            typeRoots: [join(projectRoot, 'node_modules/@types')],
+            types: ['bun', 'node']
           },
           extends: join(projectRoot, 'tsconfig.json'),
           exclude: [],
-          files: scope.files,
+          files: scope.files.map((file) => relative(temporaryDirectory, file)),
           include: []
         },
         null,
         2
       )}\n`
     )
-    exitCode ||= await runSvelteCheck(scopedTsconfigPath, scope.workspace)
+    exitCode ||= await runSvelteCheck(scopedTsconfigPath)
   }
 
   process.exitCode = exitCode
 } finally {
   await rm(temporaryDirectory, { force: true, recursive: true })
+  await rm(join(projectRoot, '.svelte-check'), { force: true, recursive: true })
 }

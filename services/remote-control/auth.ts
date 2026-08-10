@@ -2,7 +2,6 @@ import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { Database } from 'bun:sqlite'
 import { betterAuth } from 'better-auth'
-import { getMigrations } from 'better-auth/db/migration'
 
 const production = process.env['NODE_ENV'] === 'production'
 
@@ -21,7 +20,17 @@ const baseURL = environmentValue('BETTER_AUTH_URL', 'http://localhost:8877')
 const baseOrigin = new URL(baseURL).origin
 mkdirSync(dirname(authDatabasePath), { recursive: true })
 const authDatabase = new Database(authDatabasePath)
-authDatabase.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;')
+authDatabase.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA synchronous = NORMAL;
+  PRAGMA foreign_keys = ON;
+  PRAGMA busy_timeout = 5000;
+  PRAGMA temp_store = MEMORY;
+  PRAGMA cache_size = -16384;
+  PRAGMA mmap_size = 134217728;
+  PRAGMA wal_autocheckpoint = 1000;
+  PRAGMA journal_size_limit = 33554432;
+`)
 
 export const auth = betterAuth({
   appName: 'CodeInOven',
@@ -72,11 +81,6 @@ export interface RemoteAuthSession {
   email: string
   displayName: string
   image: string | null
-}
-
-export async function migrateAuthSchema(): Promise<void> {
-  const migrations = await getMigrations(auth.options)
-  await migrations.runMigrations()
 }
 
 export async function remoteAuthSession(request: Request): Promise<RemoteAuthSession | null> {

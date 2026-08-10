@@ -16,31 +16,6 @@ interface GrantableMessage {
   createdAt: number
 }
 
-interface PersistedUserMessageRow {
-  id: string
-  thread_id: string
-  parts: string
-  created_at: number
-}
-
-const ATTACHMENT_GRANTS_BACKFILL_KEY = 'attachment_grants_backfilled_v1'
-
-const ATTACHMENT_GRANTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS attachment_grants (
-  message_id      TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
-  thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  canonical_path  TEXT NOT NULL,
-  created_at      INTEGER NOT NULL,
-  PRIMARY KEY (message_id, canonical_path)
-)`
-
-const ATTACHMENT_GRANTS_PATH_INDEX_SQL =
-  'CREATE INDEX IF NOT EXISTS idx_attachment_grants_canonical_path ON attachment_grants(canonical_path)'
-
-export function ensureAttachmentGrantSchema(executor: AttachmentGrantExecutor): void {
-  executor.run(ATTACHMENT_GRANTS_TABLE_SQL)
-  executor.run(ATTACHMENT_GRANTS_PATH_INDEX_SQL)
-}
-
 function pathFromFileUrl(url: string): string | null {
   if (!url.startsWith('file://')) return null
   try {
@@ -106,10 +81,7 @@ export function syncAttachmentGrants(
 
 /** Durable exact-file grants derived only from persisted user-authored attachments. */
 export class AttachmentGrantRepo {
-  constructor(private readonly db: Database) {
-    ensureAttachmentGrantSchema(db)
-    this.backfillPersistedUserAttachments()
-  }
+  constructor(private readonly db: Database) {}
 
   isApproved(canonicalPath: string): boolean {
     return (
@@ -118,37 +90,5 @@ export class AttachmentGrantRepo {
         canonicalPath
       )?.approved === 1
     )
-  }
-
-  private backfillPersistedUserAttachments(): void {
-    const complete =
-      this.db.get<{ value: string }>(
-        'SELECT value FROM db_meta WHERE key = ?',
-        ATTACHMENT_GRANTS_BACKFILL_KEY
-      )?.value === '1'
-    if (complete) return
-
-    const rows = this.db.all<PersistedUserMessageRow>(
-      `SELECT id, thread_id, parts, created_at
-       FROM agent_messages
-       WHERE role = 'user' AND session_id IS NULL AND parts LIKE '%"type":"file"%'`
-    )
-    this.db.transaction(() => {
-      for (const row of rows) {
-        syncAttachmentGrants(this.db, {
-          id: row.id,
-          threadId: row.thread_id,
-          sessionId: null,
-          role: 'user',
-          partsJson: row.parts,
-          createdAt: row.created_at
-        })
-      }
-      this.db.run(
-        'INSERT OR REPLACE INTO db_meta(key, value) VALUES(?, ?)',
-        ATTACHMENT_GRANTS_BACKFILL_KEY,
-        '1'
-      )
-    })
   }
 }

@@ -5,19 +5,7 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../logger'
-import {
-  SCHEMA_SQL,
-  PROJECT_FTS_SQL,
-  THREADS_SQL,
-  HISTORY_SQL,
-  HISTORY_FTS_SQL,
-  AGENT_MESSAGES_SQL,
-  AGENT_MESSAGES_FTS_SQL,
-  AGENT_MESSAGES_FTS_TRIGGERS_SQL,
-  MISC_TABLES_SQL,
-  PERSISTENCE_SQL,
-  HARNESS_USAGE_SQL
-} from './schema'
+import { DATABASE_SCHEMA_SQL } from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -35,15 +23,11 @@ import {
 } from './database-worker'
 import {
   runProviderDeltaSync,
-  partsToSearchText,
-  hashPersistedRow,
   type ProviderDeltaSyncResult
 } from './repositories/agent-message-repo'
 import { runHistoryAppend } from './repositories/history-repo'
 import type { AgentMessage } from '../../lib/types'
 
-const SCHEMA_VERSION_KEY = 'schema_version'
-const CURRENT_SCHEMA_VERSION = 6
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
 
@@ -79,22 +63,9 @@ export class Database {
 
     this.db = new DatabaseConstructor(this.path)
 
-    this.db.pragma('journal_mode = WAL')
-    this.db.pragma('busy_timeout = 5000')
-    this.db.pragma('foreign_keys = ON')
-
-    // The app has never shipped, so there is no legacy data to migrate. The full
-    // DDL is applied idempotently on a fresh database.
+    this.configureConnection()
     this.applySchema()
-    this.ensureAssignmentStoppedSchema()
-    this.ensureThreadWorkflowSchema()
-    this.ensureThreadPinnedAtSchema()
-    this.backfillAssignmentThreadLineage()
-    this.ensureThreadSearchSchema()
-    this.ensureAgentMessageCreditsSchema()
-    this.ensureHarnessUsageSchema()
-    this.ensureProjectDeploymentsSchema()
-    this.setSchemaVersion(CURRENT_SCHEMA_VERSION)
+    this.db.pragma('optimize = 0x10002')
 
     this.startMaintenanceWorker()
 
@@ -627,291 +598,23 @@ export class Database {
     return this.db
   }
 
+  /** Configure each primary connection for bounded latency and WAL concurrency. */
+  private configureConnection(): void {
+    const connection = this.requireDb()
+    connection.pragma('journal_mode = WAL')
+    connection.pragma('synchronous = NORMAL')
+    connection.pragma('foreign_keys = ON')
+    connection.pragma('busy_timeout = 5000')
+    connection.pragma('temp_store = MEMORY')
+    connection.pragma('cache_size = -32768')
+    connection.pragma('mmap_size = 268435456')
+    connection.pragma('wal_autocheckpoint = 1000')
+    connection.pragma('journal_size_limit = 67108864')
+  }
+
   private applySchema(): void {
-    this.db?.exec(SCHEMA_SQL)
-    this.db?.exec(PROJECT_FTS_SQL)
-    this.db?.exec(THREADS_SQL)
-    this.db?.exec(HISTORY_SQL)
-    this.db?.exec(HISTORY_FTS_SQL)
-    this.db?.exec(AGENT_MESSAGES_SQL)
-    this.db?.exec(MISC_TABLES_SQL)
-    this.db?.exec(PERSISTENCE_SQL)
-    this.db?.exec(HARNESS_USAGE_SQL)
-  }
-
-  private ensureThreadWorkflowSchema(): void {
-    const columns = this.all<{ name: string }>('PRAGMA table_info(threads)')
-    const names = new Set(columns.map((column) => column.name))
-    if (!names.has('achievement_role')) {
-      this.db?.exec(
-        "ALTER TABLE threads ADD COLUMN achievement_role TEXT CHECK(achievement_role IN ('coordinator','auditor'))"
-      )
-    }
-    if (!names.has('auditor_thread_id')) {
-      this.db?.exec('ALTER TABLE threads ADD COLUMN auditor_thread_id TEXT')
-    }
-    if (!names.has('context_usage')) {
-      this.db?.exec('ALTER TABLE threads ADD COLUMN context_usage TEXT')
-    }
-  }
-
-  /**
-   * Add the `pinned_at` timestamp used to order pinned threads (newest pinned
-   * first) and backfill existing pinned rows from their last activity so they
-   * sort deterministically before the user next reorders them.
-   */
-  private ensureThreadPinnedAtSchema(): void {
-    const columns = this.all<{ name: string }>('PRAGMA table_info(threads)')
-    const names = new Set(columns.map((column) => column.name))
-    if (!names.has('pinned_at')) {
-      this.db?.exec('ALTER TABLE threads ADD COLUMN pinned_at INTEGER')
-    }
-    this.db?.exec(
-      'UPDATE threads SET pinned_at = last_activity WHERE pinned = 1 AND pinned_at IS NULL'
-    )
-  }
-
-  /** Expand pre-existing Assignment status constraints with the terminal stopped state. */
-  private ensureAssignmentStoppedSchema(): void {
-    const workflowSql = this.get<{ sql: string }>(
-      "SELECT sql FROM sqlite_master WHERE type='table' AND name='assignment_workflow'"
-    )?.sql
-    if (!workflowSql || workflowSql.includes("'stopped'")) return
-
-    this.db?.exec(`
-      DROP INDEX IF EXISTS idx_assignment_versions_coordinator;
-
-      ALTER TABLE assignment_versions RENAME TO assignment_versions_before_stopped;
-      CREATE TABLE assignment_versions (
-        assignment_id         TEXT NOT NULL,
-        version               INTEGER NOT NULL,
-        project_id            TEXT NOT NULL,
-        coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-        spec_id               TEXT NOT NULL,
-        spec_version          INTEGER NOT NULL,
-        status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
-        data                  TEXT NOT NULL,
-        created_at            INTEGER NOT NULL,
-        updated_at            INTEGER NOT NULL,
-        PRIMARY KEY (assignment_id, version)
-      );
-      INSERT INTO assignment_versions SELECT * FROM assignment_versions_before_stopped;
-      DROP TABLE assignment_versions_before_stopped;
-      CREATE INDEX idx_assignment_versions_coordinator
-        ON assignment_versions(project_id, coordinator_thread_id);
-
-      ALTER TABLE assignment_workflow RENAME TO assignment_workflow_before_stopped;
-      CREATE TABLE assignment_workflow (
-        project_id            TEXT NOT NULL,
-        coordinator_thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-        assignment_id         TEXT NOT NULL,
-        active_version        INTEGER NOT NULL,
-        approved_version      INTEGER,
-        status                TEXT NOT NULL CHECK(status IN ('draft','approved','running','attention','completed','failed','stopped')),
-        updated_at            INTEGER NOT NULL,
-        PRIMARY KEY (project_id, coordinator_thread_id)
-      );
-      INSERT INTO assignment_workflow SELECT * FROM assignment_workflow_before_stopped;
-      DROP TABLE assignment_workflow_before_stopped;
-    `)
-  }
-
-  /**
-   * Older Assignment retries cleared every orchestration field from retired
-   * workers, which made those children indistinguishable from public threads.
-   * Successful assign-task operations retain the authoritative worker and
-   * coordinator IDs, so restore only that durable lineage. Current workers
-   * and coordinator threads are left untouched.
-   */
-  private backfillAssignmentThreadLineage(): void {
-    const result = this.db
-      ?.prepare(
-        `WITH worker_lineage AS (
-          SELECT
-            json_extract(result, '$.thread.id') AS thread_id,
-            json_extract(result, '$.assignment.coordinatorThreadId') AS coordinator_thread_id
-          FROM assignment_operations
-          WHERE tool_name = 'assign_task'
-            AND result != 'null'
-            AND json_extract(result, '$.task.owner') = 'worker'
-        )
-        UPDATE threads
-        SET coordinator_thread_id = (
-          SELECT worker_lineage.coordinator_thread_id
-          FROM worker_lineage
-          WHERE worker_lineage.thread_id = threads.id
-          LIMIT 1
-        )
-        WHERE coordinator_thread_id IS NULL
-          AND EXISTS (
-            SELECT 1
-            FROM worker_lineage
-            WHERE worker_lineage.thread_id = threads.id
-              AND worker_lineage.coordinator_thread_id IS NOT NULL
-          )`
-      )
-      .run()
-    if (result && result.changes > 0) {
-      Logger.info('Backfilled Assignment worker coordinator lineage', {
-        count: result.changes
-      })
-    }
-  }
-
-  private ensureAgentMessageCreditsSchema(): void {
-    const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
-    const hasContentHash = columns.some((column) => column.name === 'content_hash')
-    if (!hasContentHash) {
-      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN content_hash TEXT')
-    }
-    if (!columns.some((column) => column.name === 'usage_credits_json')) {
-      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN usage_credits_json TEXT')
-    }
-    if (!columns.some((column) => column.name === 'context_window')) {
-      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN context_window INTEGER')
-    }
-    if (!columns.some((column) => column.name === 'context_used')) {
-      this.db?.exec('ALTER TABLE agent_messages ADD COLUMN context_used INTEGER')
-    }
-
-    // Backfill content_hash once so the delta-sync equality check never treats
-    // every pre-upgrade row as changed on the first sync. Rows added later are
-    // hashed by the upsert/delta paths directly.
-    if (hasContentHash) {
-      const backfilled =
-        this.get<{ value: string }>(
-          "SELECT value FROM db_meta WHERE key = 'content_hash_backfilled'"
-        )?.value === '1'
-      if (!backfilled) {
-        const rows = this.all<{
-          rowid: number
-          role: string
-          origin: string
-          visibility: string
-          parts: string
-          search_text: string
-          transport_parts: string | null
-          transport_origin: string | null
-          model_id: string | null
-          provider_id: string | null
-          harness_id: string | null
-          references_json: string | null
-          project_references_json: string | null
-          created_at: number
-          completed_at: number | null
-          cost: number | null
-          tokens_json: string | null
-          rate_limits_json: string | null
-          usage_credits_json: string | null
-          context_window: number | null
-          context_used: number | null
-          error: string | null
-          structured_output: string | null
-        }>(
-          'SELECT rowid, role, origin, visibility, parts, search_text, transport_parts, transport_origin, model_id, provider_id, harness_id, references_json, project_references_json, created_at, completed_at, cost, tokens_json, rate_limits_json, usage_credits_json, context_window, context_used, error, structured_output FROM agent_messages WHERE content_hash IS NULL'
-        )
-        if (rows.length > 0) {
-          const update = this.prepare('UPDATE agent_messages SET content_hash = ? WHERE rowid = ?')
-          this.transaction(() => {
-            for (const row of rows) {
-              update.run(hashPersistedRow(row), row.rowid)
-            }
-          })
-        }
-        this.run(
-          "INSERT OR REPLACE INTO db_meta(key, value) VALUES('content_hash_backfilled', '1')"
-        )
-      }
-    }
-  }
-
-  /** Fresh DBs already carry the harness_usage table; older dev DBs add it now. */
-  private ensureHarnessUsageSchema(): void {
-    if (!this.tableExists('harness_usage')) {
-      this.db?.exec(HARNESS_USAGE_SQL)
-    }
-  }
-
-  /**
-   * Idempotent guard for the `projects.has_deployments` flag introduced after
-   * the base schema shipped. New columns are non-null with a default so the
-   * flag can be written independently of a full project upsert.
-   */
-  private ensureProjectDeploymentsSchema(): void {
-    const columns = this.all<{ name: string }>('PRAGMA table_info(projects)')
-    if (!columns.some((column) => column.name === 'has_deployments')) {
-      this.db?.exec('ALTER TABLE projects ADD COLUMN has_deployments INTEGER NOT NULL DEFAULT 0')
-    }
-  }
-
-  /**
-   * Idempotent guard for thread full-text search. Fresh databases already carry
-   * the `search_text` column (schema.ts); databases created by earlier dev
-   * builds lack it, so add it first. The FTS table is created before backfilling,
-   * but its sync triggers are added only afterwards — an update trigger firing
-   * on a row that is not yet in the index corrupts the external-content table.
-   *
-   * The backfill pass re-reads every `parts` blob and rewrites `search_text`,
-   * so it is gated behind a `db_meta` flag: it runs once when the column is
-   * first introduced (or to repair rows left empty by a legacy build) and is
-   * skipped on every subsequent launch. Afterwards the upsert path keeps the
-   * column populated, so a full-table pass would be pure O(total-db) waste.
-   */
-  private ensureThreadSearchSchema(): void {
-    const columns = this.all<{ name: string }>('PRAGMA table_info(agent_messages)')
-    const columnAdded = !columns.some((column) => column.name === 'search_text')
-    if (columnAdded) {
-      this.db?.exec("ALTER TABLE agent_messages ADD COLUMN search_text TEXT NOT NULL DEFAULT ''")
-    }
-
-    const ftsExisted = this.tableExists('agent_messages_fts')
-    this.db?.exec(AGENT_MESSAGES_FTS_SQL)
-
-    const backfilled =
-      this.get<{ value: string }>("SELECT value FROM db_meta WHERE key = 'search_text_backfilled'")
-        ?.value === '1'
-    if (!backfilled) {
-      const rows = this.all<{ rowid: number; parts: string }>(
-        columnAdded
-          ? 'SELECT rowid, parts FROM agent_messages'
-          : "SELECT rowid, parts FROM agent_messages WHERE search_text = ''"
-      )
-      if (rows.length > 0) {
-        this.transaction(() => {
-          for (const row of rows) {
-            let parts: unknown[] = []
-            try {
-              const parsed: unknown = JSON.parse(row.parts)
-              if (Array.isArray(parsed)) parts = parsed
-            } catch {
-              parts = []
-            }
-            const text = partsToSearchText(parts as Parameters<typeof partsToSearchText>[0])
-            if (text) {
-              this.run('UPDATE agent_messages SET search_text = ? WHERE rowid = ?', text, row.rowid)
-            }
-          }
-        })
-      }
-      this.run("INSERT OR REPLACE INTO db_meta(key, value) VALUES('search_text_backfilled', '1')")
-    }
-
-    // Rebuild the external-content index only when it was just created or the
-    // backfill repopulated search_text. Afterwards the sync triggers keep it in
-    // lockstep, so skipping the rebuild on steady-state launches avoids a
-    // full-table pass (O(total-db)) that grows with the database.
-    if (!ftsExisted || !backfilled) {
-      this.db?.exec("INSERT INTO agent_messages_fts(agent_messages_fts) VALUES('rebuild')")
-    }
-    this.db?.exec(AGENT_MESSAGES_FTS_TRIGGERS_SQL)
-  }
-
-  private setSchemaVersion(version: number): void {
-    this.run(
-      'INSERT OR REPLACE INTO db_meta(key, value) VALUES(?, ?)',
-      SCHEMA_VERSION_KEY,
-      String(version)
-    )
+    const connection = this.requireDb()
+    connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
   }
 }
 

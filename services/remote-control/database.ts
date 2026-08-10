@@ -20,9 +20,62 @@ export type AuditEventKind =
   | 'relay.desktop-disconnected'
 
 const SCHEMA = `
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
+-- Better Auth schema generated from the current auth configuration.
+CREATE TABLE IF NOT EXISTS "user" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "name" TEXT NOT NULL,
+  "email" TEXT NOT NULL UNIQUE,
+  "emailVerified" INTEGER NOT NULL,
+  "image" TEXT,
+  "createdAt" DATE NOT NULL,
+  "updatedAt" DATE NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "session" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "expiresAt" DATE NOT NULL,
+  "token" TEXT NOT NULL UNIQUE,
+  "createdAt" DATE NOT NULL,
+  "updatedAt" DATE NOT NULL,
+  "ipAddress" TEXT,
+  "userAgent" TEXT,
+  "userId" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS "session_userId_idx" ON "session"("userId");
+
+CREATE TABLE IF NOT EXISTS "account" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "accountId" TEXT NOT NULL,
+  "providerId" TEXT NOT NULL,
+  "userId" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+  "accessToken" TEXT,
+  "refreshToken" TEXT,
+  "idToken" TEXT,
+  "accessTokenExpiresAt" DATE,
+  "refreshTokenExpiresAt" DATE,
+  "scope" TEXT,
+  "password" TEXT,
+  "createdAt" DATE NOT NULL,
+  "updatedAt" DATE NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "account_userId_idx" ON "account"("userId");
+
+CREATE TABLE IF NOT EXISTS "verification" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "identifier" TEXT NOT NULL,
+  "value" TEXT NOT NULL,
+  "expiresAt" DATE NOT NULL,
+  "createdAt" DATE NOT NULL,
+  "updatedAt" DATE NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "verification_identifier_idx" ON "verification"("identifier");
+
+CREATE TABLE IF NOT EXISTS "rateLimit" (
+  "id" TEXT NOT NULL PRIMARY KEY,
+  "key" TEXT NOT NULL UNIQUE,
+  "count" INTEGER NOT NULL,
+  "lastRequest" BIGINT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -91,6 +144,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS audit_events_user_idx ON audit_events(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
 `
 
 export class RemoteControlDatabase {
@@ -98,12 +152,19 @@ export class RemoteControlDatabase {
 
   constructor(path: string) {
     this.db = new Database(path)
-    this.db.exec(SCHEMA)
-    // Destructive migration required by the product's permanently free model.
-    // This removes tier data left by builds that briefly introduced it.
-    this.db.exec('DROP TABLE IF EXISTS account_entitlements')
-    this.ensureLanEndpointColumn()
-    this.ensureEnrollmentGrantColumns()
+    this.db.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA busy_timeout = 5000;
+      PRAGMA temp_store = MEMORY;
+      PRAGMA cache_size = -16384;
+      PRAGMA mmap_size = 134217728;
+      PRAGMA wal_autocheckpoint = 1000;
+      PRAGMA journal_size_limit = 33554432;
+    `)
+    this.db.transaction(() => this.db.exec(SCHEMA))()
+    this.db.exec('PRAGMA optimize = 0x10002;')
   }
 
   close(): void {
@@ -417,27 +478,6 @@ export class RemoteControlDatabase {
           'DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events ORDER BY created_at DESC LIMIT -1 OFFSET ?)'
         )
         .run(maxEvents)
-    }
-  }
-
-  private ensureLanEndpointColumn(): void {
-    const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(desktops)').all()
-    if (!columns.some((column) => column.name === 'lan_endpoint')) {
-      this.db.exec('ALTER TABLE desktops ADD COLUMN lan_endpoint TEXT')
-    }
-  }
-
-  private ensureEnrollmentGrantColumns(): void {
-    const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(enrollments)').all()
-    const names = new Set(columns.map((column) => column.name))
-    const additions = [
-      ['mobile_device_id', 'TEXT'],
-      ['mobile_public_key', 'TEXT'],
-      ['grant_ciphertext', 'TEXT'],
-      ['desktop_public_key', 'TEXT']
-    ] as const
-    for (const [name, type] of additions) {
-      if (!names.has(name)) this.db.exec(`ALTER TABLE enrollments ADD COLUMN ${name} ${type}`)
     }
   }
 }
