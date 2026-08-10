@@ -990,8 +990,8 @@ export class ChatEngine {
 
   /**
    * Per-session watchdog timers. Each timer is set after a prompt is sent and
-   * reset on every SSE activity for that session. When the timer fires the
-   * session is treated as silently dead and cleaned up with a user-facing error.
+   * reset on every SSE activity for that session. When the timer fires, provider
+   * history is checked for an explicit failure; silence alone is never terminal.
    */
   private sessionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -1012,7 +1012,7 @@ export class ChatEngine {
   private releasedProjects = new Set<string>()
   private idleReaperTimer: ReturnType<typeof setInterval> | null = null
 
-  /** How long to wait without any SSE events before declaring a session dead. */
+  /** How long to wait without SSE activity before checking provider history. */
   private static readonly SESSION_ACTIVITY_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
   /** How long a session that is demonstrably still working (an in-flight shell
@@ -11149,7 +11149,7 @@ export class ChatEngine {
   /**
    * Start (or restart) the inactivity watchdog for a session.
    * The timer is reset on every SSE event — if it fires, no events arrived
-   * within the timeout window and the session is treated as dead.
+   * within the window and provider history is checked for a terminal failure.
    */
   private startSessionWatchdog(
     sessionId: string,
@@ -11183,7 +11183,7 @@ export class ChatEngine {
   }
 
   /**
-   * Called when the watchdog fires — the session has been silent for too long.
+   * Called when the watchdog fires — the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
    * a running sub-agent), the silence is legitimate and the window is extended
    * instead of aborting. Otherwise we try to fetch the conversation history
@@ -11210,6 +11210,20 @@ export class ChatEngine {
     }
 
     const issue = await this.recoverWatchdogIssue(sessionId, info)
+    if (!issue) {
+      // Stream silence is not a terminal signal. Providers may spend an
+      // unbounded amount of time reasoning or running a tool without emitting
+      // another event, while their harness process remains healthy. Keep the
+      // canonical working state and re-check later; driver lifecycle events
+      // remain authoritative for completion and transport failures.
+      Logger.info('Session remains silent without an explicit provider failure — preserving turn', {
+        sessionId,
+        projectId: info.projectId,
+        threadId: info.threadId
+      })
+      this.startSessionWatchdog(sessionId, ChatEngine.SILENT_WORK_GRACE_MS)
+      return
+    }
 
     // Surface the issue to every renderer bound to the thread so the user sees
     // the real failure (with a Retry affordance) instead of a silent fail.
@@ -11235,22 +11249,22 @@ export class ChatEngine {
   }
 
   /**
-   * Build the most accurate provider issue the watchdog can recover for a
-   * silent session. The driver's last assistant message error is authoritative;
-   * when nothing usable is stored we fall back to an actionable message that
-   * names the harness and the most likely causes of a silent stream drop.
+   * Recover an explicit provider issue for a silent session. Silence itself is
+   * never promoted to an error: only the latest provider message may prove the
+   * active turn failed. Older assistant errors belong to earlier turns and must
+   * not poison a later, still-running turn.
    */
   private async recoverWatchdogIssue(
     sessionId: string,
     info: SessionInfo
-  ): Promise<AgentProviderIssue> {
+  ): Promise<AgentProviderIssue | null> {
     const harnessId = info.driverId
     try {
       const driver = this.drivers.get(harnessId)
       if (driver) {
         const messages = await driver.loadMessages(info.projectPath, sessionId)
-        const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-        const recovered = lastAssistant?.error?.trim()
+        const latest = messages.at(-1)
+        const recovered = latest?.role === 'assistant' ? latest.error?.trim() : undefined
         if (recovered) {
           return {
             kind: classifyProviderIssue(recovered),
@@ -11262,17 +11276,9 @@ export class ChatEngine {
         }
       }
     } catch {
-      /* fall through to the fallback issue */
+      /* A failed health read is not proof that the active turn failed. */
     }
-    return {
-      kind: 'network',
-      message:
-        `The ${harnessId} agent stopped responding while working. The provider connection may have been interrupted, ` +
-        'the model may have stalled, or the endpoint became temporarily unavailable. ' +
-        'Check your network or provider status and try again.',
-      harnessId,
-      retryable: true
-    }
+    return null
   }
 
   // ─── Completion waiter — used by ephemeral sessions ─────────────────────
