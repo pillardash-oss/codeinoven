@@ -165,7 +165,7 @@ export class Database {
       Logger.error('Database.run failed', { sql, error: String(error) })
       throw error
     } finally {
-      this.reportSlowMainThreadOperation('run', startedAt)
+      this.reportSlowMainThreadOperation('run', startedAt, sql)
     }
   }
 
@@ -180,7 +180,7 @@ export class Database {
       Logger.error('Database.get failed', { sql, error: String(error) })
       throw error
     } finally {
-      this.reportSlowMainThreadOperation('get', startedAt)
+      this.reportSlowMainThreadOperation('get', startedAt, sql)
     }
   }
 
@@ -195,7 +195,7 @@ export class Database {
       Logger.error('Database.all failed', { sql, error: String(error) })
       throw error
     } finally {
-      this.reportSlowMainThreadOperation('all', startedAt)
+      this.reportSlowMainThreadOperation('all', startedAt, sql)
     }
   }
 
@@ -226,13 +226,18 @@ export class Database {
     return Math.round(durationMs * 10) / 10
   }
 
-  /** Log only operation class and duration; SQL text and user data are omitted. */
-  private reportSlowMainThreadOperation(operation: string, startedAt: number): void {
+  /**
+   * Log only operation class, duration, and the statement text (params and
+   * user data are never logged). The SQL is attributed verbatim so a slow op
+   * can be traced to its caller; very long statements are bounded.
+   */
+  private reportSlowMainThreadOperation(operation: string, startedAt: number, sql?: string): void {
     const durationMs = performance.now() - startedAt
     if (durationMs < MAIN_THREAD_DATABASE_WARNING_MS) return
     Logger.info('Slow synchronous SQLite operation on Electron main', {
       operation,
-      durationMs: this.roundDuration(durationMs)
+      durationMs: this.roundDuration(durationMs),
+      sql: sql ? truncateSqlForLog(sql) : undefined
     })
   }
 
@@ -908,6 +913,16 @@ export class Database {
       String(version)
     )
   }
+}
+
+/** Statement text attributed in slow-op logs; capped and normalized to a single line. */
+const MAX_SLOW_OP_SQL_LENGTH = 240
+
+function truncateSqlForLog(sql: string): string {
+  const singleLine = sql.replace(/\s+/gu, ' ').trim()
+  return singleLine.length > MAX_SLOW_OP_SQL_LENGTH
+    ? `${singleLine.slice(0, MAX_SLOW_OP_SQL_LENGTH)}…`
+    : singleLine
 }
 
 /**

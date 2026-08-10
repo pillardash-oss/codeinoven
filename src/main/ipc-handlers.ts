@@ -18,6 +18,7 @@ import { GitHubProvider, ProviderHttpError } from './providers/github-provider'
 import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
+import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { DiagnosticsService } from './diagnostics-service'
 import { resolveFavicons } from './favicon-service'
 import { MemoryService, validateMemoryConfig } from './memory-service'
@@ -963,6 +964,8 @@ export interface RegisterIpcHandlersOptions {
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
   hydrationHandlersRegistered?: boolean
+  /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
+  threadCreation?: ThreadCreationCoordinator
 }
 
 export function registerIpcHandlers(
@@ -974,6 +977,7 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
+  const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const threadManager = new ThreadManager(
     database,
@@ -3420,20 +3424,36 @@ export function registerIpcHandlers(
         ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
       }
     }
-    const thread = await threadManager.createThread(validated)
-    if (thread.workingDirectory) {
-      const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-      if (branch) {
-        await threadManager.setBranch(thread.projectId, thread.id, branch)
-        thread.branch = branch
+    // Optimistic create: the thread object (with its stable id) is returned
+    // immediately while persistence, lazy capacity eviction, and branch
+    // detection finalize in the background. Session/message entry points await
+    // `threadCreation.awaitReady`, so a message sent in this window renders
+    // instantly and is queued behind the finalization before reaching the
+    // harness — thread creation never waits on the database.
+    const { thread, finalize } = threadManager.prepareCreateThread(validated, {
+      onEvictionError: (error) =>
+        Logger.error('Thread capacity eviction failed', {
+          threadId: thread.id,
+          error: String(error)
+        })
+    })
+    threadCreation.begin(thread.id, async () => {
+      await finalize()
+      if (thread.workingDirectory) {
+        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branch) {
+          await threadManager.setBranch(thread.projectId, thread.id, branch)
+          thread.branch = branch
+        }
       }
-    }
+    })
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
-    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-      threadManager.getThread(projectId, threadId)
-    )
+    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+      await threadCreation.awaitReady(threadId)
+      return threadManager.getThread(projectId, threadId)
+    })
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
@@ -3499,7 +3519,7 @@ export function registerIpcHandlers(
   // Mirror-only transcript read — fast disk access, never touches a harness driver.
   ipcMain.handle(
     'thread:loadMessages',
-    (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
+    async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
       let safeBefore: ThreadMessageCursor | undefined
       if (before !== undefined) {
         if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
@@ -3513,9 +3533,12 @@ export function registerIpcHandlers(
           id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
         }
       }
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      await threadCreation.awaitReady(safeThreadId)
       return threadManager.loadMessagePage(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+        safeProjectId,
+        safeThreadId,
         safeBefore,
         validateBoundedInteger(limit, 'Message page limit', 1, 100)
       )
@@ -3534,12 +3557,12 @@ export function registerIpcHandlers(
     }
   )
   // Lightweight full user-message history for the header quick-jump list.
-  ipcMain.handle('thread:loadUserMessages', (_, projectId: unknown, threadId: unknown) =>
-    threadManager.loadUserMessages(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.loadUserMessages(safeProjectId, safeThreadId)
+  })
   ipcMain.handle('thread:update', (_, projectId: string, threadId: string, input) =>
     threadManager.updateThread(
       validateEntityId(projectId, 'Project ID'),
@@ -3600,15 +3623,16 @@ export function registerIpcHandlers(
       )
     }
   )
-  ipcMain.handle('thread:harnessUsage', (_, projectId: unknown, threadId: unknown) =>
-    threadManager.harnessUsageFor(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
-  ipcMain.handle('thread:markRead', (_, projectId: string, threadId: string) =>
-    threadManager.markRead(projectId, threadId)
-  )
+  ipcMain.handle('thread:harnessUsage', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.harnessUsageFor(safeProjectId, safeThreadId)
+  })
+  ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
+    await threadCreation.awaitReady(threadId)
+    return threadManager.markRead(projectId, threadId)
+  })
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
     threadManager.reorderThreads(
       validateEntityId(projectId, 'Project ID'),

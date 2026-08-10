@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
 import { Logger } from './logger'
+import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { sendToRenderer } from './renderer-delivery'
 import { RepositoryService } from './repository-service'
 import { ProjectFilesService } from './project-files-service'
@@ -1070,8 +1071,10 @@ export class ChatEngine {
     private storage: StorageEngine,
     private database: Database,
     private computerUsePip?: import('./computer-use-pip-service').ComputerUsePipService,
-    private harnessManifest?: import('./harness-manifest-service').HarnessManifestService
+    private harnessManifest?: import('./harness-manifest-service').HarnessManifestService,
+    private threadCreation?: ThreadCreationCoordinator
   ) {
+    this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.checkpointManager = new CheckpointManager(database)
@@ -2406,6 +2409,10 @@ export class ChatEngine {
   ): Promise<string> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // A thread created optimistically may still be finalizing; the renderer
+    // shows the user's message instantly while the send waits here for the
+    // thread's persisted row before it reaches the harness.
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
@@ -2615,6 +2622,7 @@ export class ChatEngine {
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     if (!thread.sessionId) {
@@ -3311,6 +3319,9 @@ export class ChatEngine {
     if (origin === 'user') this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
+    // Queue behind an in-flight optimistic create so a just-created thread can
+    // accept its first prompt as soon as its row is persisted.
+    await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 1, 200_000)
     this.markProjectActive(projectId)
