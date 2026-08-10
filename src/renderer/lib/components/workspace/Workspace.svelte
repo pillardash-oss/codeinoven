@@ -1486,7 +1486,7 @@
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const orderedIds = projects.filter((p) => !p.hidden).map((p) => p.id)
+    const orderedIds = visibleProjects.map((p) => p.id)
     const fromIdx = orderedIds.indexOf(draggedId)
     const toIdx = orderedIds.indexOf(targetId)
     if (fromIdx === -1 || toIdx === -1) return
