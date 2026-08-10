@@ -3,6 +3,12 @@ import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$share
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
 const AUDIT_SESSION_INACTIVITY_MS = 24 * 60 * 60 * 1000
+
+/** Default prompt for the "Explain" temporary chat — pre-filled into the
+ *  composer so the user can review and edit it before sending. */
+export const ELABORATE_PROMPT =
+  'Explain this selection in detail. Do not perform any execution, do not make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!'
+
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
@@ -110,7 +116,6 @@ export interface TemporaryChatContextTab {
   draft: string
   selectionAttached: boolean
   selectionMessageId: string | null
-  autoPromptSent: boolean
   sessionStarted: boolean
   expired: boolean
   expiresAt: number
@@ -635,10 +640,9 @@ class ContextSidebarState {
       messages: [],
       busy: false,
       error: '',
-      draft: '',
+      draft: mode === 'elaborate' ? ELABORATE_PROMPT : '',
       selectionAttached,
       selectionMessageId: null,
-      autoPromptSent: false,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
@@ -683,7 +687,6 @@ class ContextSidebarState {
       draft: '',
       selectionAttached: false,
       selectionMessageId: null,
-      autoPromptSent: true,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + AUDIT_SESSION_INACTIVITY_MS
@@ -725,12 +728,11 @@ class ContextSidebarState {
     tab.messages = []
     tab.busy = false
     tab.error = ''
-    tab.draft = ''
+    tab.draft = tab.mode === 'elaborate' ? ELABORATE_PROMPT : ''
     // Re-attach the selection on restart only when there is one — a quick chat
     // opened from the last agent turn has no selection attached.
     tab.selectionAttached = tab.selection.length > 0
     tab.selectionMessageId = null
-    tab.autoPromptSent = false
     tab.sessionStarted = false
     tab.expired = false
     tab.expiresAt =

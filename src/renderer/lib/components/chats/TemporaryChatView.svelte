@@ -327,18 +327,6 @@
 
   function restart(): void {
     contextSidebarState.restartTemporaryChat(tab)
-    if (tab.mode === 'elaborate') {
-      tab.autoPromptSent = true
-      void sendElaboratePrompt()
-    }
-  }
-
-  function sendElaboratePrompt(): Promise<void> {
-    return send(
-      'Explain this selection in detail. Do not perform any execution, do not make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
-      [],
-      '*Elaborate.*'
-    )
   }
 
   async function send(
@@ -428,10 +416,6 @@
           contextSidebarState.touchTemporaryChat(tab, status.expiresAt)
         }
       })
-    }
-    if (tab.mode === 'elaborate' && !tab.autoPromptSent) {
-      tab.autoPromptSent = true
-      void sendElaboratePrompt()
     }
     return () => {
       unsubscribeExpiry()
