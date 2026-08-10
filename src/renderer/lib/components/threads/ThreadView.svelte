@@ -3242,11 +3242,24 @@
     void revealCitationFile(thread.projectId, path)
   }
 
-  function openFilePart(url: string): void {
+  async function openFilePart(url: string): Promise<void> {
     const projectPath = workspaceState.activeProject?.path
-    if (projectPath && url.startsWith('file://')) {
-      const absPath = fileUrlToPath(url)
-      void revealFileInAppTree(thread.projectId, absPath)
+    if (!projectPath || !url.startsWith('file://')) return
+
+    const absolutePath = fileUrlToPath(url)
+    const normalizedProjectPath = projectPath.replace(/\\/gu, '/').replace(/\/$/u, '')
+    const normalizedFilePath = absolutePath.replace(/\\/gu, '/')
+    if (
+      normalizedFilePath === normalizedProjectPath ||
+      normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
+    ) {
+      await revealFileInAppTree(thread.projectId, absolutePath)
+      return
+    }
+
+    const revealed = await invoke('shell:revealPath', absolutePath)
+    if (!revealed) {
+      toast.error('This local file is outside the active project or no longer exists.')
     }
   }
 
@@ -5773,10 +5786,15 @@
                           <MarkdownView
                             text={explicitPresentation.body}
                             onCiteFile={openFileCitation}
+                            onOpenLocalFile={(url) => void openFilePart(url)}
                           />
                         {/if}
                       {:else}
-                        <MarkdownView text={messageText(msg)} onCiteFile={openFileCitation} />
+                        <MarkdownView
+                          text={messageText(msg)}
+                          onCiteFile={openFileCitation}
+                          onOpenLocalFile={(url) => void openFilePart(url)}
+                        />
                       {/if}
                       {#if msg.parts.some((p) => p.type === 'file')}
                         <div class="mt-2 flex flex-wrap gap-1.5 border-t border-border pt-2">
@@ -6016,6 +6034,7 @@
                             <MarkdownView
                               text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
                               onCiteFile={openFileCitation}
+                              onOpenLocalFile={(url) => void openFilePart(url)}
                             />
                           </div>
                         {/if}
