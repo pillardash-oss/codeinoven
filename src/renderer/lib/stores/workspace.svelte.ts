@@ -8,6 +8,7 @@ import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
+import { notificationPanelState } from './notification-panel.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
 
@@ -127,6 +128,9 @@ class WorkspaceState {
     this.activeProjectIconUrl = iconUrl ?? null
     contextSidebarState.activateThread(thread.projectId, thread.id)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
+    // The moment a thread is opened its notifications are stale — drop them so
+    // an error/completion that was already seen never lingers in the panel.
+    notificationPanelState.dismissForThread(thread.projectId, thread.id)
   }
 
   openThreadStudio(

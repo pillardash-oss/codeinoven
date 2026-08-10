@@ -10578,6 +10578,16 @@ export class ChatEngine {
       // `interrupted` and never surface the abort error as a session failure.
       const userAborted = this.userAbortedSessions.has(sessionId)
       if (userAborted) failure = failure ?? 'Interrupted by user'
+      // A session that already errored during this turn (watchdog abort, session
+      // error, failed dispatch) must never be flipped back to `completed` by the
+      // idle finalization. The transcript is truncated by the abort, so the last
+      // assistant message usually carries no error — recover the recorded issue
+      // instead, keeping the thread `failed` and preventing a bogus "done"
+      // notification right after the real error notification.
+      const erroredSession = this.sessionStatuses.get(sessionId)
+      if (!userAborted && erroredSession?.state === 'error' && !failure) {
+        failure = erroredSession.issue?.message ?? 'Agent session failed'
+      }
       const awaitingUser =
         [...this.pendingQuestions.values()].some(
           (pending) => pending.request.sessionId === sessionId
@@ -10626,18 +10636,23 @@ export class ChatEngine {
           this.broadcastToast(`Brainstorm update failed: ${failure}`)
         }
       }
-      await this.threadManager.setStatus(
-        info.projectId,
-        info.threadId,
-        userAborted
-          ? 'interrupted'
-          : failure
-            ? 'failed'
-            : revisedSpec || revisedBrainstorm || awaitingUser
-              ? 'awaiting_approval'
-              : 'completed',
-        { read: userAborted }
-      )
+      // Race-safe guard: if the persisted thread is already `failed` (an
+      // earlier session-error path marked it) and this finalization would
+      // otherwise claim success, keep it failed so a terminal "done"
+      // notification can never shadow the real error.
+      const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
+      const finalStatus = userAborted
+        ? 'interrupted'
+        : failure
+          ? 'failed'
+          : revisedSpec || revisedBrainstorm || awaitingUser
+            ? 'awaiting_approval'
+            : threadBeforeFinalize?.status === 'failed'
+              ? 'failed'
+              : 'completed'
+      await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
+        read: userAborted
+      })
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
       if (!failure && !awaitingUser && finishedThread) {
         try {
