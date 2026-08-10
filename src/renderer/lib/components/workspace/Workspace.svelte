@@ -201,9 +201,6 @@
   }
 
   async function revealThreadInSidebar(threadId: string): Promise<void> {
-    // The scope-board project view has its own per-stage lists and scrolling;
-    // leave it alone and only reveal for the regular Projects/Threads/Chats.
-    if (isScopeBoardView) return
     const active = selectedThread
     remoteLog.dev(
       `[sidebar-reveal] reveal ${threadId} mode=${mode} scopeBoard=${isScopeBoardView} active=${
