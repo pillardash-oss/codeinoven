@@ -11,9 +11,18 @@ interface EncryptedSecretRecord {
 
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 
-/** Deterministic SecretVault ref under which a deployment provider's token is stored. */
-function providerTokenRef(kind: CloudDeploymentProviderKind): string {
-  return `deployment_provider_${kind}`
+/**
+ * Deterministic SecretVault ref under which a deployment provider's token is
+ * stored. The ref is scoped by both the owning project and the account within
+ * that project so one project (or account) storing, rotating, or removing its
+ * credential never touches another's.
+ */
+function providerTokenRef(
+  projectId: string,
+  kind: CloudDeploymentProviderKind,
+  accountId: string
+): string {
+  return `deployment_provider_${projectId}_${kind}_${accountId}`
 }
 
 /**
@@ -63,10 +72,18 @@ export class SecretVault {
    * deliberately does not degrade to plaintext storage, so a provider token can
    * never be persisted outside the secure store.
    *
+   * The ref is scoped to `projectId` + `accountId`, so credentials stored for
+   * one project (or one account within a project) never collide with another's.
+   *
    * @returns the opaque ref under which the encrypted token was persisted.
    */
-  async saveProviderToken(kind: CloudDeploymentProviderKind, token: string): Promise<string> {
-    return this.save(token, providerTokenRef(kind))
+  async saveProviderToken(
+    projectId: string,
+    kind: CloudDeploymentProviderKind,
+    accountId: string,
+    token: string
+  ): Promise<string> {
+    return this.save(token, providerTokenRef(projectId, kind, accountId))
   }
 
   /**
@@ -76,18 +93,30 @@ export class SecretVault {
    * throws rather than exposing stored ciphertext, keeping token access bound to
    * a working secure store.
    */
-  async resolveProviderToken(kind: CloudDeploymentProviderKind): Promise<string> {
-    return this.resolve(providerTokenRef(kind))
+  async resolveProviderToken(
+    projectId: string,
+    kind: CloudDeploymentProviderKind,
+    accountId: string
+  ): Promise<string> {
+    return this.resolve(providerTokenRef(projectId, kind, accountId))
   }
 
-  /** Whether a deployment provider token is currently stored for the kind. */
-  async hasProviderToken(kind: CloudDeploymentProviderKind): Promise<boolean> {
-    return this.exists(providerTokenRef(kind))
+  /** Whether a deployment provider token is stored for the project/account. */
+  async hasProviderToken(
+    projectId: string,
+    kind: CloudDeploymentProviderKind,
+    accountId: string
+  ): Promise<boolean> {
+    return this.exists(providerTokenRef(projectId, kind, accountId))
   }
 
-  /** Remove the stored deployment provider token for the kind. */
-  async removeProviderToken(kind: CloudDeploymentProviderKind): Promise<void> {
-    await this.remove(providerTokenRef(kind))
+  /** Remove the stored deployment provider token for the project/account. */
+  async removeProviderToken(
+    projectId: string,
+    kind: CloudDeploymentProviderKind,
+    accountId: string
+  ): Promise<void> {
+    await this.remove(providerTokenRef(projectId, kind, accountId))
   }
 
   async resolve(ref: string): Promise<string> {
