@@ -95,6 +95,7 @@
 </script>
 
 <div
+  data-find-exclude
   class={[
     'flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-border bg-surface px-2 shadow-xl',
     floating ? 'absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]' : 'w-full'

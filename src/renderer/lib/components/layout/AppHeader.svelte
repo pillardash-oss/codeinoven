@@ -43,7 +43,6 @@
     Pin,
     PinOff,
     PanelRight,
-    Search,
     SquareTerminal,
     Timeline,
     Trash2,
@@ -78,7 +77,6 @@
     navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
-    onCommandPaletteOpen: () => void
     onProjectCreated?: (project: Project) => void | Promise<void>
     onScopeThreadOpen?: (thread: Thread) => void | Promise<void>
   }
@@ -88,7 +86,6 @@
     navigate,
     goBack,
     goForward,
-    onCommandPaletteOpen,
     onProjectCreated = () => undefined,
     onScopeThreadOpen = () => undefined
   }: Props = $props()
@@ -1313,15 +1310,6 @@
           </button>
         {/if}
       {/if}
-    {:else}
-      <button
-        class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label="Open command palette"
-        title="Open command palette (Ctrl+K)"
-        onclick={onCommandPaletteOpen}
-      >
-        <Search size={14} aria-hidden="true" />
-      </button>
     {/if}
 
     <!-- Notification bell — available in all views -->
