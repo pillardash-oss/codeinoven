@@ -262,12 +262,14 @@ const SPEC_MEMORY_MAX_LESSONS = 12
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
+  'editfile',
   'filechange',
   'multiedit',
   'multireplacefilecontent',
   'notebookedit',
   'patch',
   'replacefilecontent',
+  'writefile',
   'writetofile',
   'write'
 ])
