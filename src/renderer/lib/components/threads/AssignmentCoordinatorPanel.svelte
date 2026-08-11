@@ -174,9 +174,12 @@
 
   function taskTooltip(task: AssignmentTask, linkedWorker: Thread | undefined): string {
     const worker = workerLabel(task)
-    const destination = task.threadId
-      ? `Open ${linkedWorker?.title ?? worker}`
-      : 'Open this task in Assignment Studio'
+    const destination =
+      task.owner === 'senior'
+        ? 'Open the Sr. Engineer thread'
+        : task.threadId
+          ? `Open ${linkedWorker?.title ?? worker}`
+          : 'Open this task in Assignment Studio'
     return `${task.title} · ${worker} · ${statusLabel(task.status)}. ${destination}`
   }
 

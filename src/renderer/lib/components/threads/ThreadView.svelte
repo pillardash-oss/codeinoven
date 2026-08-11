@@ -4296,6 +4296,11 @@
   }
 
   function openAssignmentTask(task: AssignmentTask): void {
+    if (task.owner === 'senior') {
+      assignmentFocusTaskId = task.id
+      void openAssignmentTaskThread(assignment?.coordinatorThreadId ?? thread.id)
+      return
+    }
     if (task.threadId) {
       void openAssignmentTaskThread(task.threadId)
       return
