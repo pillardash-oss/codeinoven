@@ -171,6 +171,7 @@ const INVOKE_CHANNELS = [
   'git:removeCredential',
   'git:merge',
   'git:rebase',
+  'git:preparePrResolve',
   'git:stash',
   'git:ignore',
   'git:discard',
@@ -383,7 +384,7 @@ const INVOKE_CHANNELS = [
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>
-const allInvokeChannelsRegistered: MissingInvokeChannel extends never ? true : never = true
+const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true : never = true
 void allInvokeChannelsRegistered
 
 const SEND_CHANNELS = ['pty:resize', 'pty:write'] as const

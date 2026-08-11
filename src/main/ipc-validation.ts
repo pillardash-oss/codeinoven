@@ -309,6 +309,21 @@ export function validatePullIntegrateOptions(value: unknown): {
   return options
 }
 
+/** Validate options for preparing a local PR conflict resolution. */
+export function validatePrResolveOptions(value: unknown): {
+  remote: string
+  pullNumber: number
+  baseBranch: string
+} {
+  const input = assertRecord(value, 'PR resolve options')
+  rejectUnknownFields(input, new Set(['remote', 'pullNumber', 'baseBranch']), 'PR resolve options')
+  return {
+    remote: validateRemoteName(input.remote),
+    pullNumber: validateBoundedInteger(input.pullNumber, 'Pull request number', 1, 1_000_000_000),
+    baseBranch: validateBranchName(input.baseBranch, 'PR base branch')
+  }
+}
+
 /** Validate a PR list state filter. */
 export function validatePrState(value: unknown): import('../lib/types').PrState {
   return assertEnum(value, PR_STATES, 'PR state')

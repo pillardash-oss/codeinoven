@@ -528,6 +528,28 @@ export class GitState {
     }
   }
 
+  /**
+   * Prepare to resolve a PR's online conflicts locally: checks out the PR head
+   * as `pr-<number>` and merges the base in so the conflicts land in the working
+   * tree. A conflicted result is normal and is not reported as an error — the
+   * panel hands over to the conflict UI.
+   */
+  async preparePrResolve(
+    projectId: string,
+    options: { remote: string; pullNumber: number; baseBranch: string }
+  ): Promise<void> {
+    this.markBusy('merge', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:preparePrResolve', projectId, options)
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Could not prepare PR conflict resolution')
+    } finally {
+      this.markBusy('merge', false)
+    }
+  }
+
   async stash(projectId: string, message?: string, paths?: string[]): Promise<void> {
     this.markBusy('stash', true)
     this.error = null

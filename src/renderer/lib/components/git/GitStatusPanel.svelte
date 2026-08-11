@@ -406,6 +406,85 @@
     ].join('\n')
   }
 
+  /**
+   * Resolve a PR's online conflicts manually: check out the PR head locally,
+   * merge the base in, and hand the resulting conflicts to the changes-tab
+   * conflict UI so the user can fix each file, commit, and push.
+   */
+  async function resolveConflictsLocally(pr: PullRequestSummary): Promise<void> {
+    const remote = primaryRemote?.name ?? 'origin'
+    await gitState.preparePrResolve(projectId, {
+      remote,
+      pullNumber: pr.number,
+      baseBranch: pr.baseRef
+    })
+    if (gitState.error) return
+    selectedPullRequest = null
+    activeTab = 'changes'
+    void refreshStatus()
+  }
+
+  /**
+   * Resolve a PR's online conflicts with the agent's help: check out the PR head
+   * and merge the base in (so conflicts land in the tree), then hand the agent a
+   * thread to resolve the conflict markers and commit. The agent never pushes —
+   * the user finishes with the app's authenticated push to update the PR.
+   */
+  async function startConflictResolution(pr: PullRequestSummary): Promise<void> {
+    const project = await invoke('project:get', projectId).catch(() => null)
+    if (!project) return
+    const remote = primaryRemote?.name ?? 'origin'
+    await gitState.preparePrResolve(projectId, {
+      remote,
+      pullNumber: pr.number,
+      baseBranch: pr.baseRef
+    })
+    if (gitState.error) return
+    const conflictedPaths = [...gitState.conflicted]
+
+    const thread = await invoke('thread:create', {
+      projectId,
+      providerId: 'opencode',
+      title: `Resolve conflicts in PR #${pr.number}`,
+      workingDirectory: project.path,
+      settings: { ...threadSettings.lastUsed }
+    }).catch(() => null)
+    if (!thread) return
+
+    selectedPullRequest = null
+    activeTab = 'changes'
+    rendererRecovery.setDraft(
+      projectId,
+      thread.id,
+      conflictResolutionPrompt(pr, conflictedPaths),
+      [],
+      []
+    )
+    workspaceState.openThread(thread, project)
+  }
+
+  /** The first message the conflict-resolution agent receives. */
+  function conflictResolutionPrompt(pr: PullRequestSummary, conflictedPaths: string[]): string {
+    return [
+      `Resolve the merge conflicts in pull request #${pr.number} — "${pr.title}" (${pr.headRef} → ${pr.baseRef}).`,
+      `The head branch \`pr-${pr.number}\` is already checked out and \`${pr.baseRef}\` has been merged into it, so the conflicts are in the working tree.`,
+      '',
+      conflictedPaths.length > 0
+        ? `Conflicted files: ${conflictedPaths.map((path) => `\`${path}\``).join(', ')}`
+        : 'There are no conflicted files remaining in the working tree.',
+      '',
+      'For each conflicted file:',
+      '1. Read it and resolve the `<<<<<<<`, `=======`, and `>>>>>>>` conflict markers, keeping the correct merged content.',
+      '2. Run the relevant project checks/tests to make sure the resolution is sound.',
+      '',
+      'Then stage and commit the resolutions:',
+      '1. `git add -A`',
+      `2. \`git commit -m "Resolve merge conflicts with ${pr.baseRef}"\``,
+      '',
+      'Do NOT push — finish in the Git panel with the app push, which uses your stored GitHub credentials.'
+    ].join('\n')
+  }
+
   /** Open a just-created PR inside the git panel's PR detail view. */
   function viewCreatedPullRequest(created: {
     reference: PullRequestReference
@@ -2248,6 +2327,8 @@
               onBack={() => (selectedPullRequest = null)}
               onAgentReview={(pr) => void startAgentReview(pr)}
               onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
+              onResolveWithAgent={(pr) => void startConflictResolution(pr)}
             />
           {:else}
             <GitPullRequestList

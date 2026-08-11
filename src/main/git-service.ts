@@ -709,6 +709,43 @@ export class GitService {
     })
   }
 
+  /**
+   * Prepare to resolve a PR's online merge conflicts locally: check out the PR
+   * head as a local branch (`pr-<number>`) and merge the current base into it
+   * so the conflicts land in the working tree for the conflict UI to resolve.
+   *
+   * A conflicted merge is a normal, expected state — not an error — so the
+   * refreshed status (with `conflicted` paths and `conflictState: 'merge'`) is
+   * returned for the renderer to hand over to the conflict-resolution UI.
+   */
+  async preparePrResolve(
+    projectPath: string,
+    options: { remote: string; pullNumber: number; baseBranch: string }
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const git = this.client(directory)
+      const localBranch = `pr-${options.pullNumber}`
+      const baseRef = `${options.remote}/${options.baseBranch}`
+      await this.wrapError(projectPath, 'mutation', async () => {
+        // Check out the PR head as a local branch (force-refresh the ref so a
+        // stale `pr-<n>` from an earlier attempt always tracks the latest head).
+        await git.raw([
+          'fetch',
+          options.remote,
+          `+pull/${options.pullNumber}/head:refs/heads/${localBranch}`
+        ])
+        await git.raw(['checkout', localBranch])
+        // Fetch the latest base and merge it in to reproduce the PR's conflict.
+        await git.raw(['fetch', options.remote, options.baseBranch])
+        // A conflicted merge rejects; the refreshed status below still reports
+        // the conflict state, so this is expected and swallowed.
+        await git.merge([baseRef]).catch(() => {})
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async stash(projectPath: string, message?: string, paths?: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
