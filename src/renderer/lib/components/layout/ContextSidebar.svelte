@@ -6,6 +6,7 @@
     Bot,
     BrainCircuit,
     Bug,
+    Cloud,
     FileDiff,
     Files,
     GitBranch,
@@ -228,6 +229,8 @@
                 <BrainCircuit size={12} class="shrink-0" />
               {:else if tab.kind === 'git'}
                 <GitBranch size={12} class="shrink-0" />
+              {:else if tab.kind === 'cloud-deployment'}
+                <Cloud size={12} class="shrink-0" />
               {:else}
                 <Bot size={12} class="shrink-0 text-info" />
               {/if}
@@ -320,6 +323,8 @@
                     <Bug size={14} class="shrink-0 text-muted" />
                   {:else if action.id === 'sources'}
                     <Info size={14} class="shrink-0 text-muted" />
+                  {:else if action.id === 'cloud-deployments'}
+                    <Cloud size={14} class="shrink-0 text-muted" />
                   {/if}
                   <span class="min-w-0">
                     <span class="block text-xs font-medium text-foreground">
