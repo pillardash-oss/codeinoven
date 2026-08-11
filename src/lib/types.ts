@@ -1293,6 +1293,74 @@ export interface AgentTokenUsage {
   total: number
 }
 
+/** Model or utility operation responsible for one persisted usage event. */
+export type UsageEventFeature =
+  'main' | 'title' | 'memory' | 'image_descriptor' | 'computer_use' | 'web' | 'audit' | 'assignment'
+
+/** Whether and how a provider-reported total can be interpreted. */
+export type UsageTotalSemantics =
+  | 'includes_cache'
+  | 'excludes_cache'
+  | 'categories_may_overlap'
+  | 'provider_defined'
+  | 'unavailable'
+
+/** Source used to calculate or verify an event's monetary cost. */
+export interface UsagePricingProvenance {
+  source: 'provider' | 'model_catalog' | 'utility_catalog' | 'manual'
+  sourceId?: string
+  currency: 'USD'
+  capturedAt: number
+}
+
+/** Provider-neutral token categories. Null means the provider did not report the category. */
+export interface NormalizedUsageTokens {
+  uncachedInput: number | null
+  cachedInput: number | null
+  cacheWrite: number | null
+  output: number | null
+  reasoning: number | null
+}
+
+/** Cost fields preserve the difference between a true zero and missing pricing data. */
+export type UsageEventCost =
+  | {
+      costStatus: 'known' | 'estimated'
+      costUsd: number
+      pricingProvenance: UsagePricingProvenance
+    }
+  | {
+      costStatus: 'unavailable'
+      costUsd: null
+      pricingProvenance: null
+    }
+
+/** Stable identity and measurements for one model or utility usage attempt. */
+export interface UsageEventDetails {
+  id: string
+  threadId: string
+  parentTurnId: string
+  /** Stable caller-provided identity that separates multiple calls of the same feature. */
+  featureCallId: string
+  attempt: number
+  feature: UsageEventFeature
+  harnessId: string | null
+  providerId: string | null
+  modelId: string | null
+  utilityId: string | null
+  rawProviderUsage: Record<string, unknown>
+  tokens: NormalizedUsageTokens
+  rawTotal: number | null
+  totalSemantics: UsageTotalSemantics
+  toolFeeUsd: number | null
+  success: boolean
+  retryCause: string | null
+  createdAt: number
+}
+
+/** Durable, replay-safe accounting record for one attempt. */
+export type UsageEvent = UsageEventDetails & UsageEventCost
+
 /** Optional account quota telemetry exposed by a provider. */
 export interface AgentRateLimitWindow {
   id: string

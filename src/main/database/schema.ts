@@ -599,7 +599,51 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
   ON harness_usage_models(thread_id);
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
-  ON harness_usage_models(harness_id);`
+  ON harness_usage_models(harness_id);
+
+-- Event-level source of truth for model and utility usage. Every nullable token
+-- category means "not reported" rather than zero. The caller-provided
+-- feature_call_id separates distinct calls of the same feature, while attempt
+-- keeps legitimate retries distinct and makes replayed writes idempotent.
+CREATE TABLE IF NOT EXISTS usage_events (
+  id                    TEXT PRIMARY KEY NOT NULL,
+  thread_id             TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  parent_turn_id        TEXT NOT NULL REFERENCES agent_messages(id) ON DELETE CASCADE,
+  feature_call_id       TEXT NOT NULL,
+  attempt               INTEGER NOT NULL CHECK(attempt >= 1),
+  feature               TEXT NOT NULL CHECK(feature IN ('main','title','memory','image_descriptor','computer_use','web','audit','assignment')),
+  harness_id            TEXT,
+  provider_id           TEXT,
+  model_id              TEXT,
+  utility_id            TEXT,
+  raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
+  tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
+  tokens_cached_input   INTEGER CHECK(tokens_cached_input IS NULL OR tokens_cached_input >= 0),
+  tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
+  tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
+  tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
+  raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
+  total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
+  cost_usd              REAL,
+  cost_status           TEXT NOT NULL CHECK(cost_status IN ('known','estimated','unavailable')),
+  pricing_provenance_json TEXT,
+  tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
+  success               INTEGER NOT NULL CHECK(success IN (0, 1)),
+  retry_cause           TEXT,
+  created_at            INTEGER NOT NULL,
+  CHECK(
+    (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
+    OR
+    (cost_status IN ('known','estimated') AND cost_usd IS NOT NULL AND cost_usd >= 0 AND pricing_provenance_json IS NOT NULL)
+  ),
+  UNIQUE (parent_turn_id, feature, feature_call_id, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_thread
+  ON usage_events(thread_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
+  ON usage_events(parent_turn_id, feature, created_at);`
 
 /** Canonical fresh-install schema. There are no historical migrations. */
 export const DATABASE_SCHEMA_SQL = [
