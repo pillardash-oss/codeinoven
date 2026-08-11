@@ -15,6 +15,9 @@ import type {
   ThreadTitleSource
 } from '../lib/types'
 
+/** GitHub's opaque numeric IDs are not constrained to signed 32-bit integers. */
+export const MAX_GITHUB_NUMERIC_ID = Number.MAX_SAFE_INTEGER
+
 const SAFE_ENTITY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const THREAD_STATUSES = new Set<ThreadStatus>([
   'created',
@@ -258,7 +261,7 @@ export function validatePrCreateInput(value: unknown): import('../lib/types').Pr
 
 /** Validate a pull request number. */
 export function validatePrNumber(value: unknown): number {
-  return validateBoundedInteger(value, 'Pull request number', 1, 2_147_483_647)
+  return validateBoundedInteger(value, 'Pull request number', 1, MAX_GITHUB_NUMERIC_ID)
 }
 
 /** Validate a merge/rebase target branch or ref. */
