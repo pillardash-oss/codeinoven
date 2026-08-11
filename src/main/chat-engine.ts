@@ -1505,7 +1505,7 @@ export class ChatEngine {
         settings: ThreadSettings,
         text: string,
         attachments: PromptAttachment[],
-        selection?: string,
+        selections?: string[],
         initialContext?: string
       ) =>
         this.sendTemporaryPrompt(
@@ -1515,7 +1515,7 @@ export class ChatEngine {
           settings,
           text,
           attachments,
-          selection,
+          selections,
           initialContext
         )
     )
@@ -4277,7 +4277,7 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     attachments: PromptAttachment[],
-    selection?: string,
+    selections?: string[],
     initialContext?: string
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
@@ -4300,9 +4300,13 @@ export class ChatEngine {
           : {})
       }
     })
-    const selectedText = selection
-      ? validateBoundedString(selection, 'Selected response text', 1, 100_000)
-      : ''
+    const selectedTexts = Array.isArray(selections)
+      ? selections
+          .map((selection) =>
+            validateBoundedString(selection, 'Selected response text', 1, 100_000)
+          )
+          .filter(Boolean)
+      : []
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
       : ''
@@ -4368,8 +4372,10 @@ export class ChatEngine {
     const driver = this.drivers.get(temporary.driverId)
     if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
-    const promptText = selectedText
-      ? `Referenced response selection:\n<selection>\n${selectedText}\n</selection>\n\nUser request:\n${text}`
+    const promptText = selectedTexts.length
+      ? `Referenced response selections:\n${selectedTexts
+          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
+          .join('\n\n')}\n\nUser request:\n${text}`
       : text
     const completion = this.waitForSessionCompletion(temporary.sessionId, 180_000, 'Temporary chat')
     try {

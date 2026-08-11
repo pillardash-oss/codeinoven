@@ -640,7 +640,7 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selection: string | undefined,
+      selections: string[],
       initialContext: string | undefined
     ],
     AgentMessage
