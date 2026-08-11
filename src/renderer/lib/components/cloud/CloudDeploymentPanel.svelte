@@ -74,7 +74,7 @@
   const containers = $derived.by(() => {
     const byKey: Record<string, CloudDeploymentContainer> = {}
     for (const kind of providers) {
-      const cached = cloudDeployState.overviews[CloudDeployState.overviewKey(kind)]
+      const cached = cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)]
       for (const container of cached?.value.containers ?? []) {
         byKey[`${container.providerKind}/${container.id}`] = container
       }
@@ -89,7 +89,8 @@
     const result: Record<string, string> = {}
     for (const kind of providers) {
       const accessError =
-        cloudDeployState.overviews[CloudDeployState.overviewKey(kind)]?.value?.accessError
+        cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)]?.value
+          ?.accessError
       if (accessError) result[kind] = accessError
     }
     return result
@@ -199,7 +200,7 @@
     if (!container) return ''
     const cached =
       cloudDeployState.containerLogs[
-        CloudDeployState.containerKey(container.providerKind, container.id)
+        CloudDeployState.containerKey(projectId, container.providerKind, container.id)
       ]
     return cached?.value.log ?? container.log ?? ''
   }
@@ -278,7 +279,7 @@
       {projectId}
       container={selectedContainer}
       onBack={() => (selectedContainer = null)}
-      onUpdated={(updated) => cloudDeployState.setContainerStatus(updated)}
+      onUpdated={(updated) => cloudDeployState.setContainerStatus(projectId, updated)}
       onRemediate={() => void startAgentRemediation()}
     />
   {:else}
