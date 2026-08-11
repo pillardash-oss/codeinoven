@@ -1635,6 +1635,44 @@
     }
   }
 
+  /**
+   * Manual reorder of the global pinned section in Threads view. Rewrites
+   * pinned_at across every project so the first thread is most-recently
+   * pinned, applied optimistically so the section reorders the moment the
+   * user drops. This is the only thing that changes pin order.
+   */
+  async function handleTimelinePinnedMove(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    const pinnedIds = pinnedTimelineThreads.map((t) => t.id)
+    const fromIdx = pinnedIds.indexOf(draggedId)
+    const toIdx = pinnedIds.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) return
+
+    pinnedIds.splice(fromIdx, 1)
+    const adjustedTo = pinnedIds.indexOf(targetId)
+    if (adjustedTo === -1) return
+    pinnedIds.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, draggedId)
+
+    // Optimistic: assign new pinned_at immediately so the pinned section
+    // reorders on drop, before the persisted result returns.
+    const base = Date.now()
+    allThreads = allThreads.map((t) => {
+      const index =
+        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID
+          ? pinnedIds.indexOf(t.id)
+          : -1
+      return index !== -1 ? { ...t, pinnedAt: base - index } : t
+    })
+
+    const updated = await invoke('thread:reorderPinnedGlobal', pinnedIds)
+    for (const t of updated) {
+      upsertThreadInList(t)
+    }
+  }
+
   // ─── Thread actions ──────────────────────────────────────────────────────
 
   /** Create a project task using the user's last mode; fresh installs default to engineering. */
@@ -2333,6 +2371,8 @@
                       onTogglePin={togglePin}
                       onDelete={handleDelete}
                       onFork={forkThread}
+                      onMoveThread={(draggedId, targetId, pos) =>
+                        handleTimelinePinnedMove(draggedId, targetId, pos)}
                     />
                   {/each}
                 </div>
