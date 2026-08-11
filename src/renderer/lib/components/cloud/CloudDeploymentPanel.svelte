@@ -205,12 +205,15 @@
   function selectedProviderContext(): string {
     const container = selectedContainer
     if (!container) return ''
-    const credential = config?.credentials?.[container.providerKind]
+    const providerCredentials = config?.credentials?.[container.providerKind]
+    const activeAccount = providerCredentials?.accounts.find(
+      (account) => account.id === providerCredentials.activeAccountId
+    )
     return [
       `Container: ${container.label}`,
       `Container ID: ${container.id}`,
       `Provider: ${PROVIDER_LABELS[container.providerKind]} (${container.providerKind})`,
-      ...(credential?.baseUrl ? [`Base URL: ${credential.baseUrl}`] : []),
+      ...(activeAccount?.baseUrl ? [`Base URL: ${activeAccount.baseUrl}`] : []),
       ...(container.url ? [`Deployed URL: ${container.url}`] : [])
     ].join('\n')
   }
