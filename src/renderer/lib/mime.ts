@@ -72,6 +72,13 @@ export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
 }
 
+/** SVG is `image/svg+xml` but it must NOT be served through the privileged
+ *  `appfile://` scheme (project-controlled active XML). It is rendered natively
+ *  in the renderer via a blob URL instead. */
+export function isSvgMime(mime: string): boolean {
+  return mime === 'image/svg+xml'
+}
+
 /** Convert an absolute local file path into a `file://` URL for renderer use. */
 export function pathToFileUrl(path: string): string {
   const normalized = path.replace(/\\/g, '/')
