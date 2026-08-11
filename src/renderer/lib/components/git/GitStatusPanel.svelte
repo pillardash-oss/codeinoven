@@ -2173,7 +2173,7 @@
                             {/if}
                           </span>
                         {/if}
-                        <div class="relative h-6 w-6 shrink-0">
+                        <div class="relative h-6 w-16 shrink-0">
                           <DropdownMenu.Root>
                             <DropdownMenu.Trigger
                               class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
