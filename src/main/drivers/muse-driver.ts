@@ -41,6 +41,10 @@ import type { StorageEngine } from '../storage-engine'
  *   - `run.terminal.completed` → `payload.terminal` (`completed`|`error`),
  *     `payload.text` (final), `payload.reason`
  *   - `run.model.configured` → `payload.provider_id` / `payload.model_id`
+ *   - `task.lifecycle.proposed` → tool call announced (`event.task_kind` `tool.*`)
+ *   - `task.lifecycle.side_effect_intent` → tool running + provider call id
+ *   - `task.lifecycle.output` → tool chunk (bash `{command,description,output}`)
+ *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
  * The run/session id shared by every record is `payload.run_stream.id`
  * (== `payload.command_id`). Despite the `--session-id` flag, separate `exec`
  * invocations do NOT resume prior context (each run is a fresh session whose id
@@ -256,6 +260,22 @@ function museIssue(error: string): AgentProviderIssue {
   }
 }
 
+/** In-flight tool-call record correlated across Muse's task lifecycle events. */
+interface MuseToolState {
+  /** Muse task id shared by `proposed` / `side_effect_intent` / `output`. */
+  taskId: string
+  /** Provider tool call id, learned from `side_effect_intent` / `tool.result`. */
+  callId?: string
+  /** Tool name, e.g. `bash`, `write_file`, `read_file`. */
+  tool: string
+  status: 'pending' | 'running' | 'completed' | 'error'
+  input: Record<string, unknown>
+  output?: string
+  title?: string
+  start: number
+  end?: number
+}
+
 /** Turn-scoped state correlating the streamed records of one assistant message. */
 interface MuseTurnState {
   turnIndex: number
@@ -265,6 +285,10 @@ interface MuseTurnState {
   parts: AgentPart[]
   /** True once any assistant part has been emitted (message exists on disk). */
   started: boolean
+  /** In-flight tool calls keyed by Muse `task_id`. */
+  tools: Map<string, MuseToolState>
+  /** Reverse map: provider `call_id` → `task_id`, for `tool.result` correlation. */
+  toolByCall: Map<string, string>
 }
 
 function museMessage(state: MuseTurnState): AgentMessage {
@@ -294,6 +318,41 @@ function textPart(state: MuseTurnState): Extract<AgentPart, { type: 'text' }> {
   }
 }
 
+/** Build a `tool` part from an in-flight Muse tool-call record. */
+function museToolPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
+  return {
+    type: 'tool',
+    id: `muse-tool-${tool.taskId}`,
+    messageID: state.messageId,
+    callID: tool.callId ?? `muse-task-${tool.taskId}`,
+    tool: tool.tool,
+    state: {
+      status: tool.status,
+      input: tool.input,
+      ...(tool.title ? { title: tool.title } : {}),
+      ...(tool.output ? { output: tool.output } : {}),
+      time: { start: tool.start, ...(tool.end ? { end: tool.end } : {}) }
+    }
+  }
+}
+
+/** Emit a `message.part.updated` event for the given tool's current state. */
+function museToolEvent(context: CliLineParseContext, state: MuseTurnState, tool: MuseToolState) {
+  const part = museToolPart(state, tool)
+  upsertPart(state, part)
+  return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
+}
+
+/** Normalize a Muse `tool.<name>` task kind / `tool:<name>` operation into a name. */
+function museToolName(value: unknown, strip: 'task_kind' | 'operation'): string | undefined {
+  const raw = stringValue(value)
+  if (!raw) return undefined
+  const prefix = strip === 'task_kind' ? 'tool.' : 'tool:'
+  if (!raw.startsWith(prefix)) return undefined
+  const name = raw.slice(prefix.length)
+  return name.length > 0 ? name : undefined
+}
+
 /**
  * Map one `muse exec --json` envelope into CodeInOven's stable shapes.
  *
@@ -320,6 +379,88 @@ export function mapMuseRecord(
   const base: CliLineParseResult = nativeSessionId ? { nativeSessionId } : {}
 
   const payloadType = stringValue(entry['payload_type'])
+  const taskId = stringValue(payload['task_id'])
+
+  // Tool call proposed — announce a pending tool card in the working trace.
+  if (payloadType === 'task.lifecycle.proposed') {
+    const event = record(payload['event'])
+    const taskKind = museToolName(event?.['task_kind'], 'task_kind')
+    if (taskId && taskKind) {
+      const tool: MuseToolState = {
+        taskId,
+        tool: taskKind,
+        status: 'pending',
+        input: {},
+        start: Date.now()
+      }
+      state.tools.set(taskId, tool)
+      return { ...base, events: [museToolEvent(context, state, tool)] }
+    }
+    return base
+  }
+
+  // Tool call accepted for execution — flip to running and record the provider
+  // call id (also the key used later by `tool.result`).
+  if (payloadType === 'task.lifecycle.side_effect_intent') {
+    const tool = taskId ? state.tools.get(taskId) : undefined
+    if (!tool) return base
+    const event = record(payload['event'])
+    const idempotencyKey = stringValue(event?.['idempotency_key'])
+    const foundCallId = idempotencyKey?.split(':').find((segment) => segment.startsWith('call_'))
+    if (foundCallId && taskId) {
+      tool.callId = foundCallId
+      state.toolByCall.set(foundCallId, taskId)
+    }
+    tool.status = 'running'
+    return { ...base, events: [museToolEvent(context, state, tool)] }
+  }
+
+  // Tool output chunk — for bash it is a JSON `{command, description, output}`;
+  // for write/read it is the human-readable result. Prefer `tool.result` for the
+  // authoritative completion; this fills the input/title early so the card is
+  // meaningful while still running.
+  if (payloadType === 'task.lifecycle.output') {
+    const tool = taskId ? state.tools.get(taskId) : undefined
+    if (!tool) return base
+    const chunk = stringValue(record(payload['event'])?.['chunk'])
+    if (!chunk) return base
+    let parsed: Record<string, unknown> | null = null
+    if (chunk.startsWith('{')) {
+      try {
+        parsed = record(JSON.parse(chunk) as unknown)
+      } catch {
+        parsed = null
+      }
+    }
+    if (parsed) {
+      const command = stringValue(parsed['command'])
+      const description = stringValue(parsed['description'])
+      const output = stringValue(parsed['output'])
+      if (command) tool.input = { command }
+      if (description) tool.title = description
+      if (output) tool.output = output
+    } else {
+      tool.output = chunk
+      if (!tool.title) tool.title = tool.tool
+    }
+    return { ...base, events: [museToolEvent(context, state, tool)] }
+  }
+
+  // Tool result — authoritative completion; correlate by provider call id.
+  if (payloadType === 'tool.result') {
+    const callId = stringValue(payload['call_id'])
+    const taskIdFromCall = callId ? state.toolByCall.get(callId) : undefined
+    const tool = taskIdFromCall ? state.tools.get(taskIdFromCall) : undefined
+    if (!tool) return base
+    const facts = record(payload['correlation_facts'])
+    const outcome = stringValue(facts?.['outcome'])
+    const text = stringValue(payload['text'])
+    const failed = outcome === 'failure' || outcome === 'error'
+    tool.status = failed ? 'error' : 'completed'
+    if (text) tool.output = text
+    tool.end = Date.now()
+    return { ...base, events: [museToolEvent(context, state, tool)] }
+  }
 
   // Streaming assistant text — `payload.text` is an incremental delta.
   if (payloadType === 'run.output.delta') {
@@ -471,7 +612,9 @@ export class MuseDriver extends PersistentCliDriver {
       createdAt: Date.now(),
       text: '',
       parts: [],
-      started: false
+      started: false,
+      tools: new Map(),
+      toolByCall: new Map()
     })
     return { command: 'muse', args, env: buildHarnessEnvironment() }
   }
