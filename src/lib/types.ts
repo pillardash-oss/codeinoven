@@ -2435,6 +2435,8 @@ export type AssignmentAuditCycleStatus =
 /** Persisted hand-off between Assignment implementation and its independent audit. */
 export interface AssignmentAuditCycle {
   status: AssignmentAuditCycleStatus
+  /** True when the reviewable rework version repairs an unfinished Assignment's signed scope. */
+  scopeRepair?: boolean
   statusBeforeStop?: Exclude<AssignmentAuditCycleStatus, 'stopped'>
   availableAt?: number
   startedAt?: number
