@@ -1,5 +1,7 @@
 import { execFile, spawn } from 'child_process'
-import { mkdir, writeFile } from 'fs/promises'
+import { createHash } from 'crypto'
+import { mkdir, readFile, writeFile } from 'fs/promises'
+import { homedir } from 'os'
 import { join } from 'path'
 import type {
   AgentMessage,
@@ -42,7 +44,7 @@ const CLINE_THINKING_LEVELS: Record<string, string> = {
 }
 
 const CLINE_CATALOG_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended-models'
-const CLINE_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const CLINE_CATALOG_CACHE_TTL_MS = 60 * 60 * 1000
 const CLINE_PASS_PROVIDER_ID = 'cline-pass'
 
 const CLINE_THINKING_PRESETS: ThinkingPreset[] = [
@@ -134,6 +136,11 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
 
 let clineCatalogCache: { cachedAt: number; catalogs: ProviderCatalog[] } | null = null
 let clineFreeModelIds: string[] = []
+let clinePassEntitlementCache: {
+  checkedAt: number
+  tokenFingerprint: string
+  subscribed: boolean
+} | null = null
 
 function cloneCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
   return catalogs.map((catalog) => ({ ...catalog, models: [...catalog.models] }))
@@ -203,6 +210,82 @@ function mapRemoteClineCatalog(value: unknown): ProviderCatalog[] {
     })
   }
   return catalogs
+}
+
+/** Read the OAuth access token Cline itself owns without copying or mutating it. */
+async function readClineAccessToken(): Promise<string | undefined> {
+  try {
+    const content = await readFile(
+      join(homedir(), '.cline', 'data', 'settings', 'providers.json'),
+      'utf8'
+    )
+    const store = record(JSON.parse(content) as unknown)
+    const providers = record(store?.['providers'])
+    const cline = record(providers?.['cline'])
+    const settings = record(cline?.['settings'])
+    const auth = record(settings?.['auth'])
+    return stringValue(auth?.['accessToken'])
+  } catch {
+    return undefined
+  }
+}
+
+/** Only expose subscription-gated models when Cline confirms an active plan. */
+async function hasClinePassSubscription(): Promise<boolean> {
+  const accessToken = await readClineAccessToken()
+  if (!accessToken) return false
+  const tokenFingerprint = createHash('sha256').update(accessToken).digest('hex')
+  if (
+    clinePassEntitlementCache?.tokenFingerprint === tokenFingerprint &&
+    Date.now() - clinePassEntitlementCache.checkedAt < 5 * 60 * 1000
+  ) {
+    return clinePassEntitlementCache.subscribed
+  }
+  let subscribed = false
+  try {
+    const response = await fetch('https://api.cline.bot/api/v1/users/me/plan', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (response.ok) {
+      const envelope = record(await response.json())
+      const currentPlan = record(envelope?.['data'])
+      subscribed = record(currentPlan?.['plan']) !== null
+    }
+  } catch {
+    // A plan that cannot be confirmed must not expose subscription-only models.
+  }
+  clinePassEntitlementCache = { checkedAt: Date.now(), tokenFingerprint, subscribed }
+  return subscribed
+}
+
+/**
+ * Cline allows its free models through both the Cline and ClinePass providers.
+ * Keep those visible for every signed-in account, while filtering the paid
+ * ClinePass set unless the account API confirms an active subscription.
+ */
+function filterClineCatalogForAccount(
+  catalogs: ProviderCatalog[],
+  hasClinePass: boolean
+): ProviderCatalog[] {
+  const cline = catalogs.find((catalog) => catalog.id === 'cline')
+  const clinePass = catalogs.find((catalog) => catalog.id === CLINE_PASS_PROVIDER_ID)
+  const freeIds = new Set(clineFreeModelIds)
+  const freeModels = (cline?.models ?? [])
+    .filter((model) => freeIds.has(model.id))
+    .map((model) => ({ ...model, providerId: CLINE_PASS_PROVIDER_ID }))
+  const subscriptionModels = hasClinePass ? (clinePass?.models ?? []) : []
+  const availableClinePassModels = uniqueModels([...freeModels, ...subscriptionModels])
+  const available = catalogs.filter((catalog) => catalog.id !== CLINE_PASS_PROVIDER_ID)
+  if (availableClinePassModels.length > 0) {
+    available.push({
+      id: CLINE_PASS_PROVIDER_ID,
+      name: 'ClinePass',
+      harnessId: 'cline',
+      models: availableClinePassModels
+    })
+  }
+  return available
 }
 
 async function fetchClineCatalog(): Promise<ProviderCatalog[]> {
@@ -773,18 +856,15 @@ export class ClineDriver extends PersistentCliDriver {
     if (!(await isClineAvailable())) {
       return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
     }
-    // A cached remote catalog (fetched on a previous open) is returned as-is.
-    if (clineCatalogCache && Date.now() - clineCatalogCache.cachedAt < CLINE_CATALOG_CACHE_TTL_MS) {
-      return appendCustom(cloneCatalogs(clineCatalogCache.catalogs))
-    }
-    // Otherwise never block the caller on the network: hand back the fallback
-    // immediately and enrich the cache in the background. When the remote list
-    // lands, a `catalog.updated` event lets the chat engine re-merge and push
-    // the fresher catalog to open pickers.
-    void refreshClineCatalogOnce().then((remote) => {
-      if (remote.length > 0) this.emit({ type: 'catalog.updated', harnessId: 'cline' })
-    })
-    return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
+    // The chat engine already gives slow driver probes a background enrichment
+    // path. Await Cline's live feed here so that enrichment persists the real
+    // free-model list instead of persisting the baked-in fallback for a day.
+    const [remote, hasClinePass] = await Promise.all([
+      refreshClineCatalogOnce(),
+      hasClinePassSubscription()
+    ])
+    const discovered = remote.length > 0 ? remote : cloneCatalogs(CLINE_FALLBACK_CATALOG)
+    return appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -885,10 +965,26 @@ export class ClineDriver extends PersistentCliDriver {
     })
 
     const customProvider = await this.resolveCustomProvider(options.settings.providerId)
-    const modelId =
+    let modelId =
       options.settings.modelId && options.settings.modelId !== 'default'
         ? options.settings.modelId
         : (customProvider?.models[0]?.id ?? options.settings.modelId)
+
+    if (
+      !customProvider &&
+      options.settings.providerId === CLINE_PASS_PROVIDER_ID &&
+      modelId?.startsWith(`${CLINE_PASS_PROVIDER_ID}/`) &&
+      !(await hasClinePassSubscription())
+    ) {
+      // Existing threads may still point at a subscription model saved before
+      // account-aware discovery was introduced. Route those turns to a live
+      // free model so retry works immediately without another setup step.
+      await fetchClineCatalog()
+      modelId =
+        clineFreeModelIds.find((id) => /deepseek.*flash/iu.test(id)) ??
+        clineFreeModelIds[0] ??
+        modelId
+    }
 
     if (customProvider) {
       // Cline keeps a single `openai-compatible` slot, so a custom endpoint is

@@ -183,10 +183,10 @@ const MEMORY_SYSTEM_INSTRUCTION = [
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
   'You cannot see images. When the user (or a discovered file) provides an image, call the image_descriptor tool to obtain a text description of it before proceeding — pass each image as an entry with a unique id, its file path or URL as the source and type "path", or base64 image data as the source and type "binary". The tool accepts several images per call, so you can describe them in batches. If the attachment is a video file you cannot read directly, first check whether ffmpeg is available on the user\'s system and use it to extract representative frames, then pass those frames to image_descriptor as multiple image entries.'
 
-const PROVIDER_CATALOG_TTL_MS = 24 * 60 * 60 * 1000
+const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
 
 interface PersistedProviderCatalog {
-  schemaVersion: 2
+  schemaVersion: 3
   discoveredAt: number
   catalogs: ProviderCatalog[]
 }
@@ -2163,7 +2163,7 @@ export class ChatEngine {
         .map((entry) => entry.catalogs as ProviderCatalog[])
         .flat()
     )
-    this.sharedProviderCatalog = { schemaVersion: 2, discoveredAt: Date.now(), catalogs: merged }
+    this.sharedProviderCatalog = { schemaVersion: 3, discoveredAt: Date.now(), catalogs: merged }
     this.providerCache.set(projectId, merged)
     void this.persistProviders(projectId, merged)
     // Drivers still probing when the budget expired keep working in the
@@ -2197,7 +2197,7 @@ export class ChatEngine {
       }
       if (Array.isArray(stored)) {
         this.sharedProviderCatalog = {
-          schemaVersion: 2,
+          schemaVersion: 3,
           discoveredAt: Date.now(),
           catalogs: stored
         }
@@ -2205,7 +2205,7 @@ export class ChatEngine {
         return stored
       }
       if (
-        stored?.schemaVersion === 2 &&
+        stored?.schemaVersion === 3 &&
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
@@ -2245,7 +2245,7 @@ export class ChatEngine {
       const snapshot =
         this.sharedProviderCatalog ??
         ({
-          schemaVersion: 2,
+          schemaVersion: 3,
           discoveredAt: Date.now(),
           catalogs
         } satisfies PersistedProviderCatalog)
@@ -2309,7 +2309,7 @@ export class ChatEngine {
       ...catalogs.flat()
     ])
     this.sharedProviderCatalog = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
