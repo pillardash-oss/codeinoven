@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import { StorageEngine } from '../storage-engine'
 import type { ThreadSettings } from '../../lib/types'
-import { AntigravityDriver } from './antigravity-driver'
+import { AntigravityDriver, mapAntigravityUsage } from './antigravity-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', () => ({ spawn: spawnMock }))
@@ -203,5 +203,128 @@ describe('AntigravityDriver', () => {
     })
 
     expect(probeCount).toBe(1)
+  })
+})
+
+describe('Antigravity token usage normalization', () => {
+  it('maps reported categories and preserves the verbatim provider total', () => {
+    const { legacy, usage } = mapAntigravityUsage({
+      input_tokens: 100,
+      output_tokens: 30,
+      thinking_tokens: 10,
+      cache_read_tokens: 40,
+      cache_write_tokens: 5,
+      total_tokens: 175
+    })
+    expect(legacy).toEqual({
+      input: 100,
+      output: 30,
+      reasoning: 10,
+      cacheRead: 40,
+      cacheWrite: 5,
+      total: 175
+    })
+    expect(usage).toEqual({
+      uncachedInput: 60,
+      cachedInput: 40,
+      cacheWrite: 5,
+      output: 30,
+      reasoning: 10,
+      rawProviderUsage: {
+        input_tokens: 100,
+        output_tokens: 30,
+        thinking_tokens: 10,
+        cache_read_tokens: 40,
+        cache_write_tokens: 5,
+        total_tokens: 175
+      },
+      rawTotal: 175,
+      totalSemantics: 'categories_may_overlap'
+    })
+  })
+
+  it('does not synthesize a comparable total when the provider reports none', () => {
+    const { legacy, usage } = mapAntigravityUsage({
+      input_tokens: 100,
+      output_tokens: 30,
+      thinking_tokens: 10,
+      cache_read_tokens: 40
+    })
+    expect(legacy).toBeUndefined()
+    expect(usage).toEqual({
+      uncachedInput: 60,
+      cachedInput: 40,
+      cacheWrite: null,
+      output: 30,
+      reasoning: 10,
+      rawProviderUsage: {
+        input_tokens: 100,
+        output_tokens: 30,
+        thinking_tokens: 10,
+        cache_read_tokens: 40
+      },
+      rawTotal: null,
+      totalSemantics: 'unavailable'
+    })
+  })
+
+  it('clamps uncached input at zero when cached input exceeds total input', () => {
+    const { legacy, usage } = mapAntigravityUsage({
+      input_tokens: 10,
+      cache_read_tokens: 40,
+      total_tokens: 50
+    })
+    expect(legacy).toEqual({
+      input: 10,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 40,
+      cacheWrite: 0,
+      total: 50
+    })
+    expect(usage).toEqual({
+      uncachedInput: 0,
+      cachedInput: 40,
+      cacheWrite: null,
+      output: null,
+      reasoning: null,
+      rawProviderUsage: {
+        input_tokens: 10,
+        cache_read_tokens: 40,
+        total_tokens: 50
+      },
+      rawTotal: 50,
+      totalSemantics: 'categories_may_overlap'
+    })
+  })
+
+  it('keeps unreported categories null while preserving a reported total', () => {
+    const { legacy, usage } = mapAntigravityUsage({
+      inputTokens: 50,
+      totalTokens: 50
+    })
+    expect(legacy).toEqual({
+      input: 50,
+      output: 0,
+      reasoning: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 50
+    })
+    expect(usage).toEqual({
+      uncachedInput: 50,
+      cachedInput: null,
+      cacheWrite: null,
+      output: null,
+      reasoning: null,
+      rawProviderUsage: { inputTokens: 50, totalTokens: 50 },
+      rawTotal: 50,
+      totalSemantics: 'categories_may_overlap'
+    })
+  })
+
+  it('attaches no usage metadata when the provider reports no tokens', () => {
+    expect(mapAntigravityUsage({})).toEqual({ legacy: undefined, usage: undefined })
+    expect(mapAntigravityUsage(null)).toEqual({ legacy: undefined, usage: undefined })
   })
 })

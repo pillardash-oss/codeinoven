@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import { StorageEngine } from '../storage-engine'
-import { CodexDriver, mapCodexRateLimits } from './codex-driver'
+import { CodexDriver, mapCodexRateLimits, mapCodexUsage } from './codex-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', async (importOriginal) => {
@@ -219,6 +219,245 @@ describe('CodexDriver', () => {
         attachments: [{ mime: 'image/png', url: join(root, 'missing.png') }]
       })
     ).rejects.toThrow('readable local file')
+  })
+})
+
+describe('Codex token usage normalization', () => {
+  it('maps reported categories into normalized usage and preserves the raw total', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input_tokens: 100,
+            output_tokens: 30,
+            reasoning_output_tokens: 10,
+            cached_input_tokens: 40,
+            cache_write_tokens: 5,
+            total_tokens: 130
+          },
+          model_context_window: 200_000
+        }
+      })
+    ).toEqual({
+      legacy: {
+        input: 100,
+        output: 30,
+        reasoning: 10,
+        cacheRead: 40,
+        cacheWrite: 5,
+        total: 130
+      },
+      usage: {
+        uncachedInput: 60,
+        cachedInput: 40,
+        cacheWrite: 5,
+        output: 30,
+        reasoning: 10,
+        rawProviderUsage: {
+          input_tokens: 100,
+          output_tokens: 30,
+          reasoning_output_tokens: 10,
+          cached_input_tokens: 40,
+          cache_write_tokens: 5,
+          total_tokens: 130
+        },
+        rawTotal: 130,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: 100,
+      contextWindow: 200_000
+    })
+  })
+
+  it('does not synthesize a comparable total when the provider reports none', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input_tokens: 100,
+            output_tokens: 30,
+            cached_input_tokens: 40
+          }
+        }
+      })
+    ).toEqual({
+      legacy: undefined,
+      usage: {
+        uncachedInput: 60,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 30,
+        reasoning: null,
+        rawProviderUsage: {
+          input_tokens: 100,
+          output_tokens: 30,
+          cached_input_tokens: 40
+        },
+        rawTotal: null,
+        totalSemantics: 'unavailable'
+      },
+      contextUsed: 100
+    })
+  })
+
+  it('keeps unreported categories null while preserving a reported total', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input_tokens: 50,
+            total_tokens: 50
+          }
+        }
+      })
+    ).toEqual({
+      legacy: { input: 50, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 50 },
+      usage: {
+        uncachedInput: 50,
+        cachedInput: null,
+        cacheWrite: null,
+        output: null,
+        reasoning: null,
+        rawProviderUsage: { input_tokens: 50, total_tokens: 50 },
+        rawTotal: 50,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: 50
+    })
+  })
+
+  it('attaches no usage metadata when the provider reports no tokens', () => {
+    expect(mapCodexUsage({ tokenUsage: { last: {} } })).toBeUndefined()
+  })
+
+  it('derives uncached input as input minus cached input', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input_tokens: 100,
+            cached_input_tokens: 40,
+            output_tokens: 20,
+            total_tokens: 120
+          }
+        }
+      })
+    ).toEqual({
+      legacy: { input: 100, output: 20, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 120 },
+      usage: {
+        uncachedInput: 60,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 20,
+        reasoning: null,
+        rawProviderUsage: {
+          input_tokens: 100,
+          cached_input_tokens: 40,
+          output_tokens: 20,
+          total_tokens: 120
+        },
+        rawTotal: 120,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: 100
+    })
+  })
+
+  it('clamps uncached input to zero when cached input exceeds provider input', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input_tokens: 30,
+            cached_input_tokens: 40,
+            total_tokens: 30
+          }
+        }
+      })
+    ).toEqual({
+      legacy: { input: 30, output: 0, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 30 },
+      usage: {
+        uncachedInput: 0,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: null,
+        reasoning: null,
+        rawProviderUsage: {
+          input_tokens: 30,
+          cached_input_tokens: 40,
+          total_tokens: 30
+        },
+        rawTotal: 30,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: 30
+    })
+  })
+
+  it('leaves uncached input null when provider input is absent', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            cached_input_tokens: 40,
+            output_tokens: 20,
+            total_tokens: 60
+          }
+        }
+      })
+    ).toEqual({
+      legacy: { input: 0, output: 20, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 60 },
+      usage: {
+        uncachedInput: null,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 20,
+        reasoning: null,
+        rawProviderUsage: {
+          cached_input_tokens: 40,
+          output_tokens: 20,
+          total_tokens: 60
+        },
+        rawTotal: 60,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: undefined
+    })
+  })
+
+  it('reads generic input/output/reasoning aliases alongside camel and snake casing', () => {
+    expect(
+      mapCodexUsage({
+        tokenUsage: {
+          last: {
+            input: 100,
+            output: 30,
+            reasoning: 10,
+            cached_input_tokens: 40,
+            total_tokens: 130
+          }
+        }
+      })
+    ).toEqual({
+      legacy: { input: 100, output: 30, reasoning: 10, cacheRead: 40, cacheWrite: 0, total: 130 },
+      usage: {
+        uncachedInput: 60,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 30,
+        reasoning: 10,
+        rawProviderUsage: {
+          input: 100,
+          output: 30,
+          reasoning: 10,
+          cached_input_tokens: 40,
+          total_tokens: 130
+        },
+        rawTotal: 130,
+        totalSemantics: 'includes_cache'
+      },
+      contextUsed: 100
+    })
   })
 })
 
