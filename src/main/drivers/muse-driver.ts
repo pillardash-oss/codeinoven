@@ -1,10 +1,13 @@
 import { spawn } from 'child_process'
+import { readFile, readdir } from 'node:fs/promises'
+import { homedir } from 'os'
+import { join } from 'path'
 import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
-  AgentTokenUsage,
   ProviderCatalog,
+  ProviderModel,
   SessionAgentEvent,
   ThinkingLevel,
   ThinkingPreset
@@ -29,14 +32,21 @@ import type { StorageEngine } from '../storage-engine'
  *
  * Muse is a terminal-only coding agent whose programmatic surface is
  * `muse exec --json` — a one-shot, headless run that streams newline-delimited
- * JSON on stdout and exits when the turn is done. A prior session can be
- * resumed with `--session-id <uuid>`.
+ * JSON on stdout and exits when the turn is done. A prior session is resumed
+ * with `--session-id <uuid>`.
  *
- * The official docs (developer.meta.com / dev.meta.ai) block automated fetches,
- * so the exact `exec --json` wire schema below is reconstructed from secondary
- * sources and is intentionally parsed defensively. Every record maps through
- * the pure `mapMuseRecord` function so the schema can be corrected in a single
- * place once it is confirmed against the live CLI.
+ * Wire schema (confirmed against Muse Code 0.1.0-R708.1): every line is an
+ * envelope `{ record_type, payload_type, payload }`. Meaningful payloads:
+ *   - `run.output.delta`  → `payload.text` (incremental assistant text)
+ *   - `run.terminal.completed` → `payload.terminal` (`completed`|`error`),
+ *     `payload.text` (final), `payload.reason`
+ *   - `run.model.configured` → `payload.provider_id` / `payload.model_id`
+ * The run/session id shared by every record is `payload.run_stream.id`
+ * (== `payload.command_id`). Despite the `--session-id` flag, separate `exec`
+ * invocations do NOT resume prior context (each run is a fresh session whose id
+ * is never surfaced in the JSONL), so multi-turn context is replayed into the
+ * prompt instead of relying on native resume.
+ * There is no per-record token/usage telemetry.
  */
 
 const MUSE_PROBE_TIMEOUT_MS = 15_000
@@ -67,7 +77,10 @@ const MUSE_REASONING_EFFORT: Record<ThinkingLevel, string> = {
 
 /**
  * Static fallback catalog for the Meta provider. Muse exposes no documented
- * model-list subcommand, so the known default model is advertised directly.
+ * model-list subcommand, so the account's observed default model is advertised
+ * directly. The contributor-tier id (`-contributor`) matches what `muse exec`
+ * reports via `run.model.configured` on a contributor account; a standard-tier
+ * account will need this updated to its own model id.
  */
 const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
@@ -76,7 +89,7 @@ const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
     harnessId: 'muse',
     models: [
       {
-        id: 'muse-spark-1.2',
+        id: 'muse-spark-1.2-contributor',
         providerId: MUSE_PROVIDER_ID,
         name: 'Muse Spark 1.2',
         reasoning: true,
@@ -87,6 +100,95 @@ const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
     ]
   }
 ]
+
+/**
+ * Muse caches the provider's model catalog locally at
+ * `~/.local/share/muse/model-catalog/*.json`, keyed by provider/profile. Read it
+ * so the picker reflects the account's real models (id, display label, context
+ * limit) instead of the static fallback. Returns the static fallback when the
+ * cache is missing or unreadable (e.g. before the first logged-in run).
+ */
+async function readMuseModelCatalog(): Promise<ProviderCatalog[]> {
+  const directory = join(homedir(), '.local', 'share', 'muse', 'model-catalog')
+  let files: string[]
+  try {
+    files = (await readdir(directory)).filter((file) => file.endsWith('.json'))
+  } catch {
+    return []
+  }
+  const catalogs = new Map<string, ProviderCatalog>()
+  for (const file of files) {
+    let raw: string
+    try {
+      raw = await readFile(join(directory, file), 'utf8')
+    } catch {
+      continue
+    }
+    let catalog: unknown
+    try {
+      catalog = JSON.parse(raw) as unknown
+    } catch {
+      continue
+    }
+    const root = record(catalog)
+    if (!root) continue
+    const providerId = stringValue(root['provider_id']) ?? MUSE_PROVIDER_ID
+    const rows = Array.isArray(root['rows']) ? root['rows'] : []
+    interface CatalogRow {
+      model: ProviderModel
+      current: boolean
+      default: boolean
+      order: number
+    }
+    const catalogRows: CatalogRow[] = []
+    for (const rawRow of rows) {
+      const row = record(rawRow)
+      if (!row) continue
+      const modelId = stringValue(row['model_id'])
+      if (!modelId) continue
+      const contextLimit = numberValue(row['context_limit'])
+      catalogRows.push({
+        model: {
+          id: modelId,
+          providerId,
+          name: stringValue(row['display_label']) ?? modelId,
+          reasoning: true,
+          thinkingPresets: MUSE_THINKING_PRESETS,
+          attachment: false,
+          toolcall: true,
+          ...(contextLimit === undefined ? {} : { contextWindow: contextLimit })
+        },
+        current: row['is_current'] === true,
+        default: row['is_default'] === true,
+        order: numberValue(row['display_order']) ?? 0
+      })
+    }
+    if (catalogRows.length === 0) continue
+    // Advertise the account's default model first so a fresh thread picks the
+    // discounted default rather than the standard tier. `is_default` is stable;
+    // `is_current` reflects the last-used model and is only a secondary hint.
+    const models = catalogRows
+      .sort(
+        (left, right) =>
+          Number(right.default) - Number(left.default) ||
+          Number(right.current) - Number(left.current) ||
+          left.order - right.order
+      )
+      .map((catalogRow) => catalogRow.model)
+    const existing = catalogs.get(providerId)
+    if (existing) {
+      existing.models.push(...models)
+    } else {
+      catalogs.set(providerId, {
+        id: providerId,
+        name: providerId === MUSE_PROVIDER_ID ? 'Meta' : providerId,
+        harnessId: 'muse',
+        models
+      })
+    }
+  }
+  return catalogs.size > 0 ? [...catalogs.values()] : []
+}
 
 /**
  * Muse CLI reads its stdin and hangs when that pipe stays open without EOF or a
@@ -139,22 +241,6 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function stringProperty(value: Record<string, unknown>, ...keys: string[]): string | undefined {
-  for (const key of keys) {
-    const resolved = stringValue(value[key])
-    if (resolved !== undefined) return resolved
-  }
-  return undefined
-}
-
-function numberProperty(value: Record<string, unknown>, ...keys: string[]): number | undefined {
-  for (const key of keys) {
-    const resolved = numberValue(value[key])
-    if (resolved !== undefined) return resolved
-  }
-  return undefined
-}
-
 function museIssue(error: string): AgentProviderIssue {
   const normalized = error.toLowerCase()
   const quota =
@@ -168,21 +254,6 @@ function museIssue(error: string): AgentProviderIssue {
     harnessId: 'muse',
     retryable: quota
   }
-}
-
-/** Map one Muse token-accounting object into the shared usage shape, if any. */
-function mapMuseUsage(value: unknown): AgentTokenUsage | undefined {
-  const usage = record(value)
-  if (!usage) return undefined
-  const input = numberProperty(usage, 'inputTokens', 'input_tokens', 'promptTokens') ?? 0
-  const output = numberProperty(usage, 'outputTokens', 'output_tokens', 'completionTokens') ?? 0
-  const reasoning = numberProperty(usage, 'reasoningTokens', 'thinkingTokens') ?? 0
-  const cacheRead = numberProperty(usage, 'cacheReadTokens', 'cacheReadInputTokens') ?? 0
-  const cacheWrite = numberProperty(usage, 'cacheWriteTokens', 'cacheCreationInputTokens') ?? 0
-  const total =
-    numberProperty(usage, 'totalTokens', 'total_tokens') ??
-    input + output + reasoning + cacheRead + cacheWrite
-  return { input, output, reasoning, cacheRead, cacheWrite, total }
 }
 
 /** Turn-scoped state correlating the streamed records of one assistant message. */
@@ -224,15 +295,16 @@ function textPart(state: MuseTurnState): Extract<AgentPart, { type: 'text' }> {
 }
 
 /**
- * Map one `muse exec --json` record into CodeInOven's stable shapes.
+ * Map one `muse exec --json` envelope into CodeInOven's stable shapes.
  *
- * The exact Muse wire schema is unverified (docs block bots), so this parser
- * is intentionally tolerant: it never throws, accumulates any recognizable
- * text into the assistant message, surfaces tool activity when a tool is
- * reported, and closes the turn when a terminal status arrives. Unknown record
- * shapes are ignored so a schema drift degrades to a silent turn rather than a
- * broken session. Keeping this boundary pure makes the schema easy to correct
- * and unit-testable once it is confirmed.
+ * Every line is `{ record_type, payload_type, payload }`; the meaningful
+ * payloads are `run.output.delta` (streaming text), `run.terminal.completed`
+ * (turn end), and `run.model.configured` (provenance). The run id carried by
+ * every record (`payload.run_stream.id` / `payload.command_id`) is surfaced as
+ * the native session id so the next turn can resume via `--session-id`.
+ *
+ * Unknown record types are ignored so schema drift degrades to a silent turn
+ * rather than a broken session. Keeping this boundary pure makes it testable.
  */
 export function mapMuseRecord(
   value: unknown,
@@ -240,93 +312,74 @@ export function mapMuseRecord(
   state: MuseTurnState
 ): CliLineParseResult | null {
   const entry = record(value)
-  if (!entry) return null
+  const payload = record(entry?.['payload'])
+  if (!entry || !payload) return null
 
-  const nativeSessionId = stringProperty(entry, 'session_id', 'sessionId', 'session')
+  const runStream = record(payload['run_stream'])
+  const nativeSessionId = stringValue(runStream?.['id']) ?? stringValue(payload['command_id'])
   const base: CliLineParseResult = nativeSessionId ? { nativeSessionId } : {}
 
-  // ── Terminal status (run finished, possibly with an error) ──────────────
-  const status =
-    stringProperty(entry, 'status', 'state', 'finish_reason', 'finishReason', 'result') ??
-    stringValue(entry['done'] === true ? 'done' : entry['complete'] === true ? 'done' : undefined)
-  const terminal = status !== undefined && !/pending|running|working|stream|init/iu.test(status)
-  const failed = /error|fail|exception|cancel/iu.test(status ?? '')
+  const payloadType = stringValue(entry['payload_type'])
 
-  const text = stringProperty(entry, 'text', 'content', 'message', 'output', 'response', 'delta')
-  if (text) {
-    state.text = text
-    upsertPart(state, textPart(state))
-  }
-
-  const usage = mapMuseUsage(entry['usage'] ?? entry['tokens'])
-  const events: SessionAgentEvent[] = []
-
-  // ── Tool activity ────────────────────────────────────────────────────────
-  const toolName = stringProperty(entry, 'tool', 'toolName', 'tool_name', 'name')
-  if (toolName && /^[a-z_]/iu.test(toolName)) {
-    const callId = `${state.messageId}:tool:${state.parts.length}`
-    const errorText = stringProperty(entry, 'error', 'errorMessage')
-    const part: AgentPart = {
-      type: 'tool',
-      id: callId,
-      messageID: state.messageId,
-      callID: callId,
-      tool: toolName,
-      state: {
-        status: errorText ? 'error' : terminal ? (failed ? 'error' : 'completed') : 'running',
-        input: record(entry['input'] ?? entry['parameters']) ?? {},
-        ...(text ? { output: text } : {}),
-        ...(errorText ? { error: errorText } : {})
+  // Streaming assistant text — `payload.text` is an incremental delta.
+  if (payloadType === 'run.output.delta') {
+    const delta = stringValue(payload['text'])
+    if (delta) {
+      state.text += delta
+      upsertPart(state, textPart(state))
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [
+          { type: 'message.part.updated', sessionId: context.sessionId, part: textPart(state) }
+        ]
       }
     }
-    upsertPart(state, part)
-    events.push({ type: 'message.part.updated', sessionId: context.sessionId, part })
-  } else if (text) {
-    events.push({
-      type: 'message.part.updated',
-      sessionId: context.sessionId,
-      part: textPart(state)
-    })
+    return base
   }
 
-  if (usage && state.started) {
-    events.push({
-      type: 'usage.updated',
-      sessionId: context.sessionId,
-      messageId: state.messageId,
-      tokens: usage
-    })
+  // Turn end — `payload.terminal` is `completed` on success, anything else is an
+  // error. `payload.text` is the authoritative final text.
+  if (payloadType === 'run.terminal.completed') {
+    const terminal = stringValue(payload['terminal'])
+    const finalText = stringValue(payload['text'])
+    const reason = stringValue(payload['reason'])
+    if (finalText) {
+      state.text = finalText
+      upsertPart(state, textPart(state))
+    }
+    const failed = terminal !== 'completed'
+    const error = failed ? (reason ?? finalText ?? 'Muse run failed') : undefined
+
+    if (state.started) {
+      const events: SessionAgentEvent[] = []
+      if (finalText) {
+        events.push({
+          type: 'message.part.updated',
+          sessionId: context.sessionId,
+          part: textPart(state)
+        })
+      }
+      events.push({
+        type: 'message.completed',
+        sessionId: context.sessionId,
+        messageId: state.messageId,
+        ...(error ? { error, issue: museIssue(error) } : {})
+      })
+      return { ...base, messages: [museMessage(state)], events }
+    }
+    if (error) {
+      return {
+        ...base,
+        events: [
+          { type: 'session.error', sessionId: context.sessionId, error, issue: museIssue(error) }
+        ]
+      }
+    }
+    return base
   }
 
-  // ── Close the turn ───────────────────────────────────────────────────────
-  if (terminal && state.started) {
-    const error = failed
-      ? (stringProperty(entry, 'error', 'errorMessage', 'message') ??
-        `${status ?? 'Muse'} turn failed`)
-      : undefined
-    events.push({
-      type: 'message.completed',
-      sessionId: context.sessionId,
-      messageId: state.messageId,
-      ...(usage ? { tokens: usage } : {}),
-      ...(error ? { error, issue: museIssue(error) } : {})
-    })
-    return { ...base, messages: [museMessage(state)], events }
-  }
-
-  if (terminal && !state.started && failed) {
-    const error = stringProperty(entry, 'error', 'errorMessage', 'message') ?? 'Muse run failed'
-    events.push({
-      type: 'session.error',
-      sessionId: context.sessionId,
-      error,
-      issue: museIssue(error)
-    })
-    return { ...base, events }
-  }
-
-  if (events.length === 0) return base
-  return { ...base, messages: [museMessage(state)], events }
+  return base
 }
 
 /** Process-per-turn bridge for Muse Code's `muse exec --json`. */
@@ -336,14 +389,14 @@ export class MuseDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     streaming: true,
     steering: false,
-    nativeResume: true,
+    nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: false,
     attachments: false,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
-    contextUsage: true,
+    contextUsage: false,
     compaction: false,
     subagents: false,
     nativeUtilities: []
@@ -364,7 +417,8 @@ export class MuseDriver extends PersistentCliDriver {
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {
-    return MUSE_FALLBACK_CATALOG
+    const discovered = await readMuseModelCatalog()
+    return discovered.length > 0 ? discovered : MUSE_FALLBACK_CATALOG
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -393,19 +447,21 @@ export class MuseDriver extends PersistentCliDriver {
     if (effort) args.push('--reasoning-effort', effort)
 
     if (options.readOnly) {
-      // Inspection chats must not mutate the workspace or stall on approval.
-      args.push('--approval-mode', 'never')
+      // Inspection chats must not mutate the workspace.
+      args.push('--disable-write')
     } else if (options.settings.permissionLevel === 'full_access') {
+      // Full Access trusts the workspace and bypasses approval and the sandbox.
       args.push('--yolo')
     } else {
-      // Headless exec cannot render approval cards; Auto Review therefore runs
-      // the turn autonomously (Muse's `--yolo`) so it is not cut off waiting on
-      // a prompt nobody can see. Full Access is the identical flag — the app
-      // still governs which tools each turn may reach at the policy layer.
-      args.push('--yolo')
+      // Auto Review runs the turn autonomously inside Muse's OS sandbox,
+      // disabling approval prompts so headless exec is not left waiting on a
+      // card nobody can see. Full Access (above) additionally drops the sandbox.
+      args.push('--disable-approval')
     }
 
-    const prompt = [options.systemPrompt, options.text].filter(Boolean).join('\n\n')
+    const prompt = [options.systemPrompt, this.buildHistoryBlock(session), options.text]
+      .filter(Boolean)
+      .join('\n\n')
     args.push(prompt)
 
     const turnIndex = session.messages.filter((message) => message.role === 'assistant').length + 1
@@ -418,6 +474,26 @@ export class MuseDriver extends PersistentCliDriver {
       started: false
     })
     return { command: 'muse', args, env: buildHarnessEnvironment() }
+  }
+
+  /**
+   * Muse's `exec` does not resume prior context across invocations, so prior
+   * turns are replayed into the prompt as a clearly delimited transcript.
+   * `session.messages` at this point holds only completed prior turns (the
+   * current user message is appended by the base class after this runs).
+   */
+  private buildHistoryBlock(session: PersistentCliSession): string {
+    if (session.messages.length === 0) return ''
+    const transcript = session.messages
+      .map((message) => {
+        const text = message.parts
+          .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+          .map((part) => part.text)
+          .join('\n')
+        return `[${message.role}]\n${text}`
+      })
+      .join('\n\n')
+    return `Previous conversation:\n${transcript}`
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {

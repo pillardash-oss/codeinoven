@@ -315,8 +315,9 @@ async function readPiStatus(): Promise<HarnessAuthStatus> {
  * Muse keeps OAuth credentials in `~/.config/muse/auth.json` (or
  * `$XDG_CONFIG_HOME/muse/auth.json`) and honors a `META_API_KEY` env var that
  * takes priority over a logged-in session. The CLI exposes no `auth status`
- * subcommand, so presence of an access token or the env var indicates an
- * authenticated Meta account.
+ * subcommand, so the auth file is read directly. Its shape is
+ * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }` —
+ * a provider is authenticated when it carries an `access_token` or `api_key`.
  */
 async function readMuseStatus(): Promise<HarnessAuthStatus> {
   if (process.env['META_API_KEY']) {
@@ -325,23 +326,45 @@ async function readMuseStatus(): Promise<HarnessAuthStatus> {
       accounts: [{ id: 'meta', label: 'Meta', method: 'api-key', active: true }]
     }
   }
+  let stored: Record<string, unknown>
   try {
     const raw = await readFile(MUSE_AUTH_PATH, 'utf8')
-    const stored = JSON.parse(raw) as Record<string, unknown>
-    const hasToken =
-      typeof stored?.['accessToken'] === 'string' ||
-      typeof stored?.['access_token'] === 'string' ||
-      typeof stored?.['token'] === 'string'
-    if (hasToken) {
-      return {
-        state: 'authenticated',
-        accounts: [{ id: 'meta', label: 'Meta', method: 'oauth', active: true }]
-      }
-    }
+    stored = JSON.parse(raw) as Record<string, unknown>
   } catch {
-    // Missing or malformed auth file — fall through to unauthenticated.
+    return { state: 'unauthenticated', accounts: [] }
   }
-  return { state: 'unauthenticated', accounts: [] }
+  const providers = stored['providers']
+  if (typeof providers !== 'object' || providers === null || Array.isArray(providers)) {
+    return { state: 'unauthenticated', accounts: [] }
+  }
+  const accounts: HarnessAuthAccount[] = []
+  let signedIn = 0
+  for (const [providerId, rawEntry] of Object.entries(providers as Record<string, unknown>)) {
+    const entry = rawEntry as Record<string, unknown> | null
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const token = typeof entry['access_token'] === 'string' ? entry['access_token'] : undefined
+    const apiKey = typeof entry['api_key'] === 'string' ? entry['api_key'] : undefined
+    const authenticated = Boolean((token && token.length > 0) || (apiKey && apiKey.length > 0))
+    const method =
+      typeof entry['mechanism'] === 'string'
+        ? entry['mechanism']
+        : typeof entry['obtained_via'] === 'string'
+          ? entry['obtained_via']
+          : authenticated
+            ? 'oauth'
+            : undefined
+    accounts.push({
+      id: accountId(providerId),
+      label: (typeof entry['user_full_name'] === 'string' && entry['user_full_name']) || providerId,
+      ...(method === undefined ? {} : { method }),
+      active: authenticated
+    })
+    if (authenticated) signedIn += 1
+  }
+  return {
+    state: signedIn > 0 ? 'authenticated' : 'unauthenticated',
+    accounts
+  }
 }
 
 /** Provider ids listed under `disabled_providers` in OpenCode's global config. */
