@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Check, ChevronDown, ChevronRight, Folder, FolderOpen } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
-  import type { GitDiff, GitFileChange } from '$shared/types'
+  import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
+  import FileDiffView from '../files/FileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
 
   interface Props {
@@ -140,6 +141,23 @@
   function fileKey(change: GitFileChange): string {
     return `${change.staged ? 's:' : 'w:'}${change.path}`
   }
+
+  function viewDiffFor(change: GitFileChange, diff: GitDiff | null): TurnCheckpointFileDiff | null {
+    if (!diff) return null
+    return {
+      path: diff.path,
+      kind:
+        change.status === 'added' || change.status === 'untracked'
+          ? 'created'
+          : change.status === 'deleted'
+            ? 'deleted'
+            : 'modified',
+      binary: diff.binary,
+      before: diff.before,
+      after: diff.after,
+      truncated: diff.truncated
+    }
+  }
 </script>
 
 {#snippet dirActions(node: TreeNode)}
@@ -228,6 +246,7 @@
 
 {#snippet fileRow(change: GitFileChange)}
   {@const key = fileKey(change)}
+  {@const viewDiff = viewDiffFor(change, diffs[key] ?? null)}
   <ContextMenu.Root>
     <ContextMenu.Trigger
       class="block w-full"
@@ -327,8 +346,13 @@
         <p class="px-3 py-4 text-[10px] text-dimmed">Loading diff…</p>
       {:else if diffErrors[key]}
         <p class="px-3 py-4 text-[10px] text-danger" role="alert">{diffErrors[key]}</p>
-      {:else if diffs[key]}
-        <p class="px-3 py-4 text-[10px] text-dimmed">Diff available in list view.</p>
+      {:else if viewDiff}
+        <FileDiffView diff={viewDiff} maxHeight="18rem" />
+        {#if viewDiff.truncated}
+          <p class="border-t border-border px-3 py-1 text-[9px] text-dimmed">
+            Diff truncated to a bounded preview
+          </p>
+        {/if}
       {:else}
         <p class="px-3 py-4 text-[10px] text-dimmed">No diff available.</p>
       {/if}
