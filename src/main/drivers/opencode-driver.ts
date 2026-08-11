@@ -1773,6 +1773,12 @@ export class OpenCodeDriver implements HarnessDriver {
             process: child,
             abortController: new AbortController()
           }
+          // The terminal's interrupt reaches the whole foreground process
+          // group in development, so OpenCode may exit before Electron's
+          // graceful disposal reaches this handle. Tie the SSE subscription
+          // to the child lifecycle itself; otherwise its reconnect timer keeps
+          // the Electron process alive after the server has gone away.
+          child.once('exit', () => handle.abortController.abort())
           Logger.dev(`isolated opencode server up for ${projectPath} on :${port}`)
           this.subscribeEvents(handle)
           resolve(handle)
