@@ -255,6 +255,121 @@ describe('mapOpenCodePart', () => {
   })
 })
 
+describe('OpenCode token usage normalization', () => {
+  it('maps reported categories into normalized usage and preserves the raw total', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 100, output: 30, reasoning: 10, total: 130, cache: { read: 40, write: 5 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: {
+        input: 100,
+        output: 30,
+        reasoning: 10,
+        cacheRead: 40,
+        cacheWrite: 5,
+        total: 130
+      },
+      usage: {
+        uncachedInput: 55,
+        cachedInput: 40,
+        cacheWrite: 5,
+        output: 30,
+        reasoning: 10,
+        rawProviderUsage: {
+          input: 100,
+          output: 30,
+          reasoning: 10,
+          total: 130,
+          cache: { read: 40, write: 5 }
+        },
+        rawTotal: 130,
+        totalSemantics: 'includes_cache'
+      }
+    })
+  })
+
+  it('does not synthesize a comparable total when the provider reports none', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 100, output: 30, cache: { read: 40 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      usage: {
+        uncachedInput: 60,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 30,
+        reasoning: null,
+        rawProviderUsage: { input: 100, output: 30, cache: { read: 40 } },
+        rawTotal: null,
+        totalSemantics: 'unavailable'
+      }
+    })
+  })
+
+  it('keeps unreported categories null while preserving a reported total', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 50, total: 50 }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: { input: 50, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 50 },
+      usage: {
+        uncachedInput: 50,
+        cachedInput: null,
+        cacheWrite: null,
+        output: null,
+        reasoning: null,
+        rawProviderUsage: { input: 50, total: 50 },
+        rawTotal: 50,
+        totalSemantics: 'includes_cache'
+      }
+    })
+  })
+
+  it('attaches no usage metadata when the provider reports no tokens', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: {}
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop'
+    })
+  })
+})
+
 describe('mapOpenCodeEvent', () => {
   it('maps updated parts and derives the session ID from the part', () => {
     expect(
