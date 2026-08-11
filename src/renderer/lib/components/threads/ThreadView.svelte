@@ -2944,7 +2944,7 @@
     const pendingProjectReferences = queuedProjectReferences
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
-    if (!pending) return
+    if (!pending && !queuedHasContent) return
     clearQueuedState()
     await sendMessage(
       pending,
@@ -2975,13 +2975,14 @@
     queuedProjectReferences = []
     queuedPresentation = undefined
     queuedTaskReferences = []
+    queuedHasContent = false
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
 
   /** Bring a persisted queued message back after a reload or thread remount. */
   function restoreQueuedMessage(): void {
     const entry = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
-    if (!entry || queuedMessage) return
+    if (!entry || queuedMessage || queuedHasContent) return
     queuedMessage = entry.text
     queuedAttachments = entry.attachments
     queuedPromptContext = entry.promptContext
@@ -2989,6 +2990,13 @@
     queuedProjectReferences = entry.projectReferences
     queuedPresentation = entry.presentation
     queuedTaskReferences = entry.taskReferences
+    queuedHasContent =
+      entry.text !== '' ||
+      entry.attachments.length > 0 ||
+      Boolean(entry.promptContext) ||
+      entry.promptReferences.length > 0 ||
+      entry.projectReferences.length > 0 ||
+      entry.taskReferences.length > 0
     if (entry.promptReferences.length > 0) {
       responseReferencesState.setForThread(thread.projectId, thread.id, entry.promptReferences)
       scheduleResponseHighlightRestore(entry.promptReferences)
@@ -3016,6 +3024,9 @@
   let queuedProjectReferences = $state<PromptProjectReference[]>([])
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
+  /** True when a queued payload exists even though the message text is empty
+   *  (e.g. a selection carrying only a user comment). */
+  let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
@@ -3039,7 +3050,7 @@
       (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
       compactionInterruptedNotice !== ''
       ? '-1.125rem'
-      : (queuedMessage !== '' && !specFormulating && !isAssignmentAuditorThread) ||
+      : ((queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread) ||
           (pendingImageDescriptorError !== null && !achievementAutonomous)
         ? '-0.625rem'
         : '-2.75rem'
@@ -3087,7 +3098,23 @@
     restorable?: boolean
   ): Promise<void> {
     const msg = text.trim()
-    if (!msg) return
+    const hasAttachments = (attachments?.length ?? 0) > 0
+    const hasProjectReferences = (projectReferences?.length ?? 0) > 0
+    const hasTaskReferences = (taskReferences?.length ?? 0) > 0
+    const hasPromptReferences = (promptReferences?.length ?? 0) > 0
+    const hasPromptContext = Boolean(promptContext)
+    // Allow an empty message when there is attached context — a user comment on
+    // a response selection, files, or references — so those alone can be sent.
+    if (
+      !msg &&
+      !hasAttachments &&
+      !hasProjectReferences &&
+      !hasTaskReferences &&
+      !hasPromptReferences &&
+      !hasPromptContext
+    ) {
+      return
+    }
     if (specFormulating && specAction !== 'request') return
     if (busy && !direct) {
       queuedMessage = msg
@@ -3097,6 +3124,7 @@
       queuedProjectReferences = projectReferences
       queuedPresentation = presentation
       queuedTaskReferences = taskReferences
+      queuedHasContent = true
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
         attachments,
@@ -3339,7 +3367,7 @@
     const projectReferences = queuedProjectReferences
     const presentation = queuedPresentation
     const taskReferences = queuedTaskReferences
-    if (!msg || !busy || specFormulating) return
+    if ((!msg && !queuedHasContent) || !busy || specFormulating) return
     clearQueuedState()
     showQueueMenu = false
     // Snap to bottom — the steer message just appeared
@@ -3366,7 +3394,7 @@
       if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
     } catch (error) {
-      if (!queuedMessage) {
+      if (!queuedMessage && !queuedHasContent) {
         queuedMessage = msg
         queuedAttachments = attachments
         queuedPromptContext = promptContext
@@ -3374,6 +3402,7 @@
         queuedProjectReferences = projectReferences
         queuedPresentation = presentation
         queuedTaskReferences = taskReferences
+        queuedHasContent = true
         rendererRecovery.setQueuedMessage(projectId, id, {
           text: msg,
           attachments,
@@ -3395,7 +3424,7 @@
   /** Return the queued message to the composer for editing. */
   function editQueuedMessage(): void {
     showQueueMenu = false
-    if (!queuedMessage) return
+    if (!queuedMessage && !queuedHasContent) return
     rendererRecovery.setDraft(
       thread.projectId,
       thread.id,
@@ -6710,7 +6739,7 @@
         {/if}
 
         <!-- Queued message card — attached to the top of the composer -->
-        {#if queuedMessage && !specFormulating && !isAssignmentAuditorThread}
+        {#if (queuedMessage || queuedHasContent) && !specFormulating && !isAssignmentAuditorThread}
           <div class="conversation-gutter shrink-0 px-6 pt-2">
             <div class="mx-auto max-w-3xl">
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">

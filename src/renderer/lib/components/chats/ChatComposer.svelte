@@ -601,8 +601,15 @@
   let savedValue = $state('')
   let hasText = $derived(value.trim().length > 0)
 
-  /** Whether the button should show the stop icon (agent working, no text typed). */
-  let canStop = $derived(working && !hasText)
+  /** True when an attached selection carries a user comment, so an otherwise
+   *  empty message can still be sent (the comment is the payload). */
+  let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
+
+  /** Whether there is anything to send: text or a commented selection. */
+  let hasSendableContent = $derived(hasText || hasCommentReference)
+
+  /** Whether the button should show the stop icon (agent working, nothing to send). */
+  let canStop = $derived(working && !hasSendableContent)
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -687,13 +694,13 @@
       return
     }
     if (disabled) return
-    if (working && !hasText) {
+    if (working && !hasSendableContent) {
       confirmStop()
       return
     }
     cancelStop()
     const msg = value.trim()
-    if (!msg) return
+    if (!msg && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
     const slashCommand = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(msg)
@@ -2087,7 +2094,7 @@
           : working
             ? 'Queue — message sends when the agent finishes'
             : 'Send'}
-      disabled={disabled || (!working && !hasText)}
+      disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
     >
       {#if pendingStop}
