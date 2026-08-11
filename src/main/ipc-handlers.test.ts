@@ -57,6 +57,21 @@ import { ThreadRepo } from './database/repositories/thread-repo'
 
 let database: Database
 
+/**
+ * Every registered handler is wrapped by `trustedIpcMain`, which rejects a
+ * sender frame that is not the app's own renderer document. Build an event
+ * that mirrors `appRendererNavigationTargets()` so channel invocation is
+ * accepted in tests.
+ */
+function trustedEvent(): { senderFrame: { url: string; parent: null } } {
+  return {
+    senderFrame: {
+      url: appRendererNavigationTargets()[0],
+      parent: null
+    }
+  }
+}
+
 const defaultConfig: AppConfig = {
   theme: 'system',
   threadLimit: 70,
@@ -219,12 +234,12 @@ describe('config IPC', () => {
     expect(updateHandler).toBeDefined()
     expect(syncAgentRoleHandler).toBeDefined()
 
-    await expect(getHandler?.({})).resolves.toEqual({
+    await expect(getHandler?.(trustedEvent())).resolves.toEqual({
       ...defaultConfig,
       lastFolderDialogPath: '/projects'
     })
     await expect(
-      updateHandler?.({}, { theme: 'dark', slashCommandMode: 'passthrough' })
+      updateHandler?.(trustedEvent(), { theme: 'dark', slashCommandMode: 'passthrough' })
     ).resolves.toEqual({
       ...defaultConfig,
       theme: 'dark',
@@ -245,7 +260,7 @@ describe('config IPC', () => {
       agentDefaults: { syncFromThreadChanges: true }
     })
     await expect(
-      syncAgentRoleHandler?.({}, 'worker', {
+      syncAgentRoleHandler?.(trustedEvent(), 'worker', {
         harnessId: 'opencode',
         providerId: 'openai',
         modelId: 'gpt-5.6'
@@ -274,9 +289,9 @@ describe('config IPC', () => {
     registerIpcHandlers(storage, database)
 
     const updateHandler = handlers.get('config:update')
-    await expect(updateHandler?.({}, { keybindings: { quit: 'cmd+q' } })).rejects.toThrow(
-      'Unsupported config field'
-    )
+    await expect(
+      updateHandler?.(trustedEvent(), { keybindings: { quit: 'cmd+q' } })
+    ).rejects.toThrow('Unsupported config field')
     expect(saveConfig).not.toHaveBeenCalled()
   })
 
@@ -298,7 +313,7 @@ describe('config IPC', () => {
     registerIpcHandlers(storage, database)
 
     const createHandler = handlers.get('project:create')
-    await createHandler?.({}, { name: 'CodeInOven', path: '/projects/codeinoven' })
+    await createHandler?.(trustedEvent(), { name: 'CodeInOven', path: '/projects/codeinoven' })
 
     expect(createProject).toHaveBeenCalledWith({
       name: 'CodeInOven',
@@ -394,27 +409,34 @@ describe('brainstorm IPC', () => {
     seedSpecThread(storageRoot)
     registerIpcHandlers(storage, database)
 
-    expect(handlers.get('brainstorm:ensureWorkflow')?.({}, 'project-1', 'thread-1')).toMatchObject({
+    expect(
+      handlers.get('brainstorm:ensureWorkflow')?.(trustedEvent(), 'project-1', 'thread-1')
+    ).toMatchObject({
       stage: 'choice_pending'
     })
     expect(
-      handlers.get('brainstorm:chooseEntry')?.({}, 'project-1', 'thread-1', 'brainstorm')
+      handlers.get('brainstorm:chooseEntry')?.(
+        trustedEvent(),
+        'project-1',
+        'thread-1',
+        'brainstorm'
+      )
     ).toMatchObject({ entryChoice: 'brainstorm', stage: 'drafting' })
     const draft = (await handlers.get('brainstorm:createDraft')?.(
-      {},
+      trustedEvent(),
       'project-1',
       'thread-1',
       validBrainstormContent,
       { source: 'agent', actor: 'Sr. Engineer' }
     )) as BrainstormDocument
     await expect(
-      handlers.get('brainstorm:getActive')?.({}, 'project-1', 'thread-1')
+      handlers.get('brainstorm:getActive')?.(trustedEvent(), 'project-1', 'thread-1')
     ).resolves.toEqual(draft)
     expect(
-      handlers.get('brainstorm:listVersions')?.({}, 'project-1', 'thread-1', draft.id)
+      handlers.get('brainstorm:listVersions')?.(trustedEvent(), 'project-1', 'thread-1', draft.id)
     ).toEqual([draft])
     expect(() =>
-      handlers.get('brainstorm:chooseEntry')?.({}, 'project-1', 'thread-1', 'invalid')
+      handlers.get('brainstorm:chooseEntry')?.(trustedEvent(), 'project-1', 'thread-1', 'invalid')
     ).toThrow('brainstorm or spec')
   })
 })
@@ -430,25 +452,31 @@ describe('specification IPC', () => {
     const createDraft = handlers.get('spec:createDraft')
     const getActive = handlers.get('spec:getActive')
     const listVersions = handlers.get('spec:listVersions')
-    const created = (await createDraft?.({}, 'project-1', 'thread-1', validSpecContent, {
-      source: 'manual',
-      actor: 'tester'
-    })) as EngineeringSpec
+    const created = (await createDraft?.(
+      trustedEvent(),
+      'project-1',
+      'thread-1',
+      validSpecContent,
+      {
+        source: 'manual',
+        actor: 'tester'
+      }
+    )) as EngineeringSpec
 
     expect(created.status).toBe('draft')
-    await expect(getActive?.({}, 'project-1', 'thread-1')).resolves.toEqual(created)
-    await expect(listVersions?.({}, 'project-1', 'thread-1', created.id)).resolves.toEqual([
-      created
-    ])
+    await expect(getActive?.(trustedEvent(), 'project-1', 'thread-1')).resolves.toEqual(created)
+    await expect(
+      listVersions?.(trustedEvent(), 'project-1', 'thread-1', created.id)
+    ).resolves.toEqual([created])
     expect(() =>
-      createDraft?.({}, '../escape', 'thread-1', validSpecContent, {
+      createDraft?.(trustedEvent(), '../escape', 'thread-1', validSpecContent, {
         source: 'manual',
         actor: 'tester'
       })
     ).toThrow('Project ID')
     expect(() =>
       createDraft?.(
-        {},
+        trustedEvent(),
         'project-1',
         'thread-1',
         { ...validSpecContent, phases: 'bad' },
@@ -488,7 +516,7 @@ describe('specification IPC', () => {
     registerIpcHandlers(storage, database)
 
     const imported = (await handlers.get('spec:importMarkdown')?.(
-      {},
+      trustedEvent(),
       'project-1',
       'thread-1'
     )) as EngineeringSpec
@@ -496,7 +524,9 @@ describe('specification IPC', () => {
       source: 'markdown_import',
       importedFilename: 'import.md'
     })
-    await expect(handlers.get('spec:exportMarkdown')?.({}, imported)).resolves.toBe(exportPath)
+    await expect(handlers.get('spec:exportMarkdown')?.(trustedEvent(), imported)).resolves.toBe(
+      exportPath
+    )
     await expect(readFile(exportPath, 'utf-8')).resolves.toContain('## Success Criteria')
     expect(showOpenDialog).toHaveBeenCalledOnce()
     expect(showSaveDialog).toHaveBeenCalledOnce()
@@ -548,7 +578,9 @@ describe('git IPC', () => {
 
     const checkoutHandler = handlers.get('git:checkout')
     expect(checkoutHandler).toBeDefined()
-    await expect(checkoutHandler?.({}, 'git-project', 'feature/git')).resolves.toMatchObject({
+    await expect(
+      checkoutHandler?.(trustedEvent(), 'git-project', 'feature/git')
+    ).resolves.toMatchObject({
       branch: 'feature/git'
     })
 
@@ -573,19 +605,21 @@ describe('git IPC', () => {
     registerIpcHandlers(storage, database)
 
     const setHandler = handlers.get('git:setCredential')
-    await expect(setHandler?.({}, 'cred-project', 'ghp_plaintext_secret')).resolves.toMatchObject({
+    await expect(
+      setHandler?.(trustedEvent(), 'cred-project', 'ghp_plaintext_secret')
+    ).resolves.toMatchObject({
       configured: true,
       secureStorageAvailable: true
     })
 
     const statusHandler = handlers.get('git:getCredentialStatus')
-    await expect(statusHandler?.({}, 'cred-project')).resolves.toEqual({
+    await expect(statusHandler?.(trustedEvent(), 'cred-project')).resolves.toEqual({
       configured: true,
       secureStorageAvailable: true
     })
 
     const removeHandler = handlers.get('git:removeCredential')
-    await expect(removeHandler?.({}, 'cred-project')).resolves.toEqual({
+    await expect(removeHandler?.(trustedEvent(), 'cred-project')).resolves.toEqual({
       configured: false,
       secureStorageAvailable: true
     })
@@ -604,13 +638,13 @@ describe('git IPC', () => {
     registerIpcHandlers(storage, database)
 
     const statusHandler = handlers.get('git:getCredentialStatus')
-    await expect(statusHandler?.({}, 'cred-project')).resolves.toEqual({
+    await expect(statusHandler?.(trustedEvent(), 'cred-project')).resolves.toEqual({
       configured: false,
       secureStorageAvailable: false
     })
 
     const setHandler = handlers.get('git:setCredential')
-    await expect(setHandler?.({}, 'cred-project', 'token')).rejects.toThrow(
+    await expect(setHandler?.(trustedEvent(), 'cred-project', 'token')).rejects.toThrow(
       'Secure credential storage is unavailable'
     )
 
@@ -619,21 +653,6 @@ describe('git IPC', () => {
 })
 
 describe('cloudDeploy IPC', () => {
-  /**
-   * Every registered handler is wrapped by `trustedIpcMain`, which rejects a
-   * sender frame that is not the app's own renderer document. Build an event
-   * that mirrors `appRendererNavigationTargets()` so channel invocation is
-   * accepted in tests.
-   */
-  function trustedEvent(): { senderFrame: { url: string; parent: null } } {
-    return {
-      senderFrame: {
-        url: appRendererNavigationTargets()[0],
-        parent: null
-      }
-    }
-  }
-
   async function setupStorage(): Promise<string> {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-clouddeploy-ipc-'))
     const storage = new StorageEngine(storageRoot)
