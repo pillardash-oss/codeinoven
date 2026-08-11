@@ -5452,6 +5452,26 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
     await this.ensureAssignmentApi()
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
+
+    // Engineering planning deliberately restricts the harness session to
+    // read-only research tools. OpenCode persists that policy on the session,
+    // so omitting an allowed-tools override on the first implementation prompt
+    // does not restore shell/edit access. Retire the planning session before
+    // approval is persisted: every signed Assignment must start execution in a
+    // fresh harness session, while the durable thread mirror carries its full
+    // conversation into the replacement session.
+    if (coordinator.sessionId) {
+      const planningSessionId = coordinator.sessionId
+      this.retireSessionState(planningSessionId)
+      await this.threadManager.clearSessionId(projectId, coordinatorThreadId)
+      Logger.info('Retired the planning session before Assignment execution', {
+        projectId,
+        threadId: coordinatorThreadId,
+        sessionId: planningSessionId
+      })
+    }
     const assignment = await this.assignmentEngine.approveWithSpec(
       projectId,
       coordinatorThreadId,
@@ -5460,8 +5480,6 @@ export class ChatEngine {
     if (assignment.status === 'stopped') {
       throw new AssignmentEngineError('invalid_transition', 'The Assignment has been stopped')
     }
-    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
-    if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
     const achievementMode = coordinator.settings.loopMode === true
     const coordinatorSettings: ThreadSettings = {
       ...coordinator.settings,
