@@ -3632,7 +3632,15 @@ export class ChatEngine {
     const activeBrainstorm = this.activeBrainstormSessions.get(brainstormKey)
     const activeSessionId = activeBrainstorm?.sessionId ?? thread.sessionId
     if (!activeSessionId) throw new Error('This thread has no active harness session to steer')
-    if (thread.userInputLocked && thread.assignmentRole !== 'coordinator') {
+    // Assignment workers remain locked against starting independent user turns,
+    // but an already-running worker may be steered from its own conversation.
+    // The active-session check below keeps this narrowly scoped to a live turn;
+    // auditors and every other locked orchestration task stay non-interactive.
+    if (
+      thread.userInputLocked &&
+      thread.assignmentRole !== 'coordinator' &&
+      thread.assignmentRole !== 'worker'
+    ) {
       throw new Error('This Assignment task is locked. Return to its coordinator to continue.')
     }
     if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
