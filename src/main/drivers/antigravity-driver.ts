@@ -282,14 +282,17 @@ export function mapAntigravityUsage(value: unknown): {
     cacheWrite !== undefined ||
     rawTotal !== undefined
   if (!reported) return { legacy: undefined, usage: undefined }
-  // Antigravity reports thinking as a subset of output and cache reads as a
-  // subset of input, so the provider total's categories overlap when one is
-  // reported. A synthesized input+output total would hide cache or reasoning
-  // usage, so no comparable total is fabricated and the semantics are declared
-  // explicitly: `categories_may_overlap` when the provider reports a total and
-  // `unavailable` when it does not.
+  // Antigravity reports thinking as a subset of output, cache reads as a subset
+  // of input, and its total as covering every category, so the provider total's
+  // categories overlap when one is reported. A synthesized input+output total
+  // would hide cache or reasoning usage, so no comparable total is fabricated
+  // and the semantics are declared explicitly: `categories_may_overlap` when
+  // the provider reports a total and `unavailable` when it does not. Because
+  // the reported input already contains cached reads, uncached input is the
+  // remainder after subtracting them, clamped at zero so an inconsistent
+  // cache>input payload never produces a negative normalized category.
   const normalized: AntigravityNormalizedUsage = {
-    uncachedInput: input ?? null,
+    uncachedInput: input === undefined ? null : Math.max(0, input - (cachedInput ?? 0)),
     cachedInput: cachedInput ?? null,
     cacheWrite: cacheWrite ?? null,
     output: output ?? null,
