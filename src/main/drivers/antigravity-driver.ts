@@ -231,10 +231,14 @@ function mapAntigravityUsage(value: unknown): AgentTokenUsage | undefined {
   const reasoning = numberProperty(usage, 'thinking_tokens', 'thinkingTokens') ?? 0
   const cacheRead = numberProperty(usage, 'cache_read_tokens', 'cacheReadTokens') ?? 0
   const cacheWrite = numberProperty(usage, 'cache_write_tokens', 'cacheWriteTokens') ?? 0
-  // Antigravity's provider total is input + output. Thinking is a subset of
-  // output and cache reads are a subset of input, so adding every category
-  // double-counts the turn when total_tokens is absent.
-  const total = numberProperty(usage, 'total_tokens', 'totalTokens') ?? input + output
+  // Only a provider-reported total is trustworthy. Antigravity reports total
+  // with thinking as a subset of output and cache reads as a subset of input,
+  // so the overlap between categories is unknown and a synthesized input+output
+  // total would hide cache or reasoning usage. When total_tokens is absent the
+  // semantics are unavailable, so no comparable total is fabricated and the
+  // payload is left without token accounting rather than emit a misleading one.
+  const total = numberProperty(usage, 'total_tokens', 'totalTokens')
+  if (total === undefined) return undefined
   return { input, output, reasoning, cacheRead, cacheWrite, total }
 }
 
