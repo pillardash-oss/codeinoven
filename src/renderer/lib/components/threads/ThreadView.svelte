@@ -1551,6 +1551,49 @@
     assignmentVersions.find((candidate) => candidate.version === selectedAssignmentVersion) ??
       assignment
   )
+  type StudioTemporaryChatDocument = 'brainstorm' | 'spec' | 'assignment' | 'audit'
+  const STUDIO_TEMPORARY_CONTEXT_LIMIT = 90_000
+
+  function studioTemporaryChatContext(
+    document: StudioTemporaryChatDocument,
+    markdown: string
+  ): string {
+    const label =
+      document === 'brainstorm'
+        ? 'Brainstorm'
+        : document === 'spec'
+          ? 'Specification'
+          : document === 'assignment'
+            ? 'Assignment'
+            : 'Audit report'
+    const boundedMarkdown =
+      markdown.length <= STUDIO_TEMPORARY_CONTEXT_LIMIT
+        ? markdown
+        : `${markdown.slice(0, STUDIO_TEMPORARY_CONTEXT_LIMIT)}\n\n[Document truncated for context limit]`
+    return [
+      `The user is viewing this ${label} in Spec Studio. Treat it as read-only project context for questions about the attached selection.`,
+      `<spec-studio-document type="${document}">`,
+      boundedMarkdown,
+      '</spec-studio-document>'
+    ].join('\n\n')
+  }
+
+  function openStudioSelectionChat(
+    document: StudioTemporaryChatDocument,
+    mode: 'elaborate' | 'quick',
+    selection: string,
+    documentContext: string
+  ): void {
+    const context = studioTemporaryChatContext(document, documentContext)
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      mode,
+      selection,
+      context,
+      settings
+    )
+  }
   let auditReportActionsAvailable = $derived.by(() => {
     const report = auditReport
     if (!report) return false
@@ -5907,6 +5950,10 @@
           onAddAnnotation={addBrainstormAnnotation}
           onUpdateAnnotation={updateBrainstormAnnotation}
           onResolveAnnotation={resolveBrainstormAnnotation}
+          onExplainSelection={(selection, documentContext) =>
+            openStudioSelectionChat('brainstorm', 'elaborate', selection, documentContext)}
+          onQuickChatSelection={(selection, documentContext) =>
+            openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
           onSubmit={submitBrainstormDecision}
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
@@ -5934,6 +5981,10 @@
           onAddAnnotation={addAuditAnnotation}
           onUpdateAnnotation={updateAuditAnnotation}
           onResolveAnnotation={resolveAuditAnnotation}
+          onExplainSelection={(selection, documentContext) =>
+            openStudioSelectionChat('audit', 'elaborate', selection, documentContext)}
+          onQuickChatSelection={(selection, documentContext) =>
+            openStudioSelectionChat('audit', 'quick', selection, documentContext)}
           onReview={reviewAudit}
           onComplete={completeAudit}
           onOpenInEditor={openAuditInEditor}
@@ -5984,6 +6035,10 @@
           onAddAnnotation={addAssignmentAnnotation}
           onUpdateAnnotation={updateAssignmentAnnotation}
           onResolveAnnotation={resolveAssignmentAnnotation}
+          onExplainSelection={(selection, documentContext) =>
+            openStudioSelectionChat('assignment', 'elaborate', selection, documentContext)}
+          onQuickChatSelection={(selection, documentContext) =>
+            openStudioSelectionChat('assignment', 'quick', selection, documentContext)}
         />
       {/key}
     {:else if spec}
@@ -6012,6 +6067,10 @@
         onAddAnnotation={addSpecAnnotation}
         onUpdateAnnotation={updateSpecAnnotation}
         onResolveAnnotation={resolveSpecAnnotation}
+        onExplainSelection={(selection, documentContext) =>
+          openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
+        onQuickChatSelection={(selection, documentContext) =>
+          openStudioSelectionChat('spec', 'quick', selection, documentContext)}
         onDismissValidationIssue={dismissSpecValidationIssue}
         onSearchContext={searchSpecContext}
         onAddContext={addSpecContext}
