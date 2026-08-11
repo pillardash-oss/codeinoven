@@ -1277,6 +1277,52 @@ function validateProviderBaseUrl(value: unknown, kind: CloudDeploymentProviderKi
   return result.baseUrl
 }
 
+/**
+ * Fold a provider's live container results into the project's configured
+ * container mappings for one provider kind. Only containers the user has mapped
+ * are returned; each keeps the configured id and the user's custom label
+ * (overriding whatever the provider reports). A mapped container the provider
+ * has not returned yet is still represented with an unknown/available status so
+ * configured containers always appear in the panel.
+ */
+function mergeCloudDeploymentContainers(
+  providerContainers: CloudDeploymentContainer[],
+  mappedContainers: CloudDeploymentContainer[],
+  kind: CloudDeploymentProviderKind
+): CloudDeploymentContainer[] {
+  const byId = new Map<string, CloudDeploymentContainer>()
+  for (const container of providerContainers) byId.set(container.id, container)
+
+  const merged: CloudDeploymentContainer[] = []
+  for (const mapping of mappedContainers) {
+    if (mapping.providerKind !== kind) continue
+    const live = byId.get(mapping.id)
+    if (!live) {
+      merged.push({ ...mapping, status: 'unknown' })
+      continue
+    }
+    merged.push({
+      id: mapping.id,
+      label: mapping.label,
+      providerKind: kind,
+      status: live.status,
+      ...(live.url === undefined ? {} : { url: live.url }),
+      ...(live.createdAt === undefined
+        ? mapping.createdAt === undefined
+          ? {}
+          : { createdAt: mapping.createdAt }
+        : { createdAt: live.createdAt }),
+      ...(live.updatedAt === undefined
+        ? mapping.updatedAt === undefined
+          ? {}
+          : { updatedAt: mapping.updatedAt }
+        : { updatedAt: live.updatedAt }),
+      ...(live.log === undefined ? {} : { log: live.log })
+    })
+  }
+  return merged
+}
+
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
@@ -3854,7 +3900,15 @@ export function registerIpcHandlers(
         kind,
         await resolveDeploymentContext(safeProjectId, kind)
       )
-      const containers = await provider.listContainers()
+      const [liveContainers, config] = await Promise.all([
+        provider.listContainers(),
+        loadOrCreateCloudDeploymentConfig(safeProjectId)
+      ])
+      const containers = mergeCloudDeploymentContainers(
+        liveContainers,
+        config.project.containers,
+        kind
+      )
       return { containers, fetchedAt: Date.now(), hasDeployments }
     } catch (error) {
       return {

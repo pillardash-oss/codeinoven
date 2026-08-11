@@ -20,13 +20,11 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { DEFAULT_THREAD_TITLE } from '$shared/types'
   import EmptyState from '../ui/EmptyState.svelte'
-  import SideSheet from '../ui/SideSheet.svelte'
   import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
   import Switch from '../ui/Switch.svelte'
+  import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
   import {
-    CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
-    CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES,
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
     type CloudDeploymentProviderKind
@@ -58,17 +56,25 @@
   /** Auto-revalidate statuses while mounted. */
   let liveUpdates = $state(true)
 
-  // Add-provider sheet state.
-  let showConfigSheet = $state(false)
-  let selectedKind = $state<CloudDeploymentProviderKind>('coolify')
-  let baseUrl = $state('')
-  let token = $state('')
-  let savingProvider = $state(false)
-  let configError = $state('')
+  // Configuration sheet state. Both the add-provider and add-container flows
+  // live in the shared CloudDeploymentConfigSheet; the panel only picks which
+  // mode it opens in.
+  let configSheetOpen = $state(false)
+  let configSheetMode = $state<'provider' | 'container'>('provider')
 
   const providers = $derived(config?.project.providers ?? [])
 
   const configured = $derived(providers.length > 0)
+
+  function openConfigSheet(mode: 'provider' | 'container'): void {
+    configSheetMode = mode
+    configSheetOpen = true
+  }
+
+  async function handleConfigSaved(): Promise<void> {
+    await loadConfig()
+    if (configured) await refreshAll()
+  }
 
   /** All configured containers, flattened across providers and deduped by key. */
   const containers = $derived.by(() => {
@@ -139,6 +145,9 @@
   }
 
   $effect(() => {
+    // Re-scope the store to the active project so switching projects never
+    // renders another project's cached overviews/statuses/logs.
+    cloudDeployState.ensureProject(projectId)
     void loadConfig()
   })
 
@@ -154,41 +163,6 @@
     }, 60_000)
     return () => clearInterval(timer)
   })
-
-  function pickKind(kind: CloudDeploymentProviderKind): void {
-    selectedKind = kind
-    configError = ''
-    if (CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(kind)) {
-      void cloudDeployState.ensureOverview(projectId, kind)
-    }
-  }
-
-  async function saveProvider(): Promise<void> {
-    if (selectedKind === 'coolify' && (!token.trim() || !baseUrl.trim())) {
-      configError = 'A base URL and token are required to connect Coolify.'
-      return
-    }
-    savingProvider = true
-    configError = ''
-    try {
-      await invoke(
-        'cloudDeploy:setCredential',
-        projectId,
-        selectedKind,
-        token.trim(),
-        baseUrl.trim() || undefined
-      )
-      showConfigSheet = false
-      baseUrl = ''
-      token = ''
-      await loadConfig()
-      if (configured) await refreshAll()
-    } catch (reason) {
-      configError = message(reason)
-    } finally {
-      savingProvider = false
-    }
-  }
 
   function openContainer(container: CloudDeploymentContainer): void {
     selectedContainer = container
@@ -309,15 +283,9 @@
       <button
         type="button"
         class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Configure providers"
-        aria-label="Configure providers"
-        onclick={() => {
-          selectedKind = 'coolify'
-          baseUrl = ''
-          token = ''
-          configError = ''
-          showConfigSheet = true
-        }}
+        title="Configure cloud deployments"
+        aria-label="Configure cloud deployments"
+        onclick={() => openConfigSheet('provider')}
       >
         <Plus size={14} />
       </button>
@@ -338,7 +306,7 @@
           <button
             type="button"
             class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
-            onclick={() => (showConfigSheet = true)}
+            onclick={() => openConfigSheet('provider')}
           >
             Add provider
           </button>
@@ -358,6 +326,15 @@
           <Cloud size={11} class="text-dimmed" />
           <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">Containers</h3>
           <span class="ml-auto text-[9px] tabular-nums text-dimmed">{containers.length}</span>
+          <button
+            type="button"
+            class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Add container"
+            aria-label="Add container"
+            onclick={() => openConfigSheet('container')}
+          >
+            <Plus size={11} />
+          </button>
         </div>
         {#each providers as kind (kind)}
           {@const kindContainers = containers.filter((c) => c.providerKind === kind)}
@@ -448,81 +425,11 @@
   {/if}
 </div>
 
-<SideSheet open={showConfigSheet} title="Add provider" onClose={() => (showConfigSheet = false)}>
-  {#snippet footer()}
-    <button
-      type="button"
-      class="h-8 rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
-      onclick={() => (showConfigSheet = false)}
-    >
-      Cancel
-    </button>
-    <button
-      type="button"
-      class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-      disabled={savingProvider}
-      onclick={() => void saveProvider()}
-    >
-      {savingProvider ? 'Saving…' : 'Save provider'}
-    </button>
-  {/snippet}
-
-  <div class="space-y-4">
-    <div>
-      <label class="mb-1 block text-[10px] font-medium text-muted" for="cloud-provider-kind">
-        Provider
-      </label>
-      <select
-        id="cloud-provider-kind"
-        class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 text-[11px] text-foreground outline-none focus:border-primary"
-        value={selectedKind}
-        onchange={(event) => pickKind(event.currentTarget.value as CloudDeploymentProviderKind)}
-      >
-        {#each CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES as kind (kind)}
-          <option value={kind}>{PROVIDER_LABELS[kind]}</option>
-        {/each}
-      </select>
-      {#if CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(selectedKind)}
-        <p class="mt-1 text-[9px] text-dimmed">
-          This provider isn't supported yet — selecting it shows a notice and makes no network call.
-        </p>
-      {/if}
-    </div>
-
-    {#if selectedKind === 'coolify'}
-      <div>
-        <label class="mb-1 block text-[10px] font-medium text-muted" for="cloud-base-url">
-          Base URL
-        </label>
-        <input
-          id="cloud-base-url"
-          type="url"
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="https://your-coolify-instance.example"
-          value={baseUrl}
-          oninput={(event) => (baseUrl = event.currentTarget.value)}
-        />
-        <p class="mt-1 text-[9px] text-dimmed">
-          A verified, explicit URL. Localhost is allowed only for local development.
-        </p>
-      </div>
-      <div>
-        <label class="mb-1 block text-[10px] font-medium text-muted" for="cloud-token">
-          API token
-        </label>
-        <input
-          id="cloud-token"
-          type="password"
-          class="h-8 w-full rounded-lg border border-border bg-elevated px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          placeholder="Coolify API token"
-          value={token}
-          oninput={(event) => (token = event.currentTarget.value)}
-        />
-      </div>
-    {/if}
-
-    {#if configError}
-      <p class="rounded-md bg-danger/10 px-2 py-1.5 text-[10px] text-danger">{configError}</p>
-    {/if}
-  </div>
-</SideSheet>
+<CloudDeploymentConfigSheet
+  open={configSheetOpen}
+  {projectId}
+  initialMode={configSheetMode}
+  configuredProviders={providers}
+  onClose={() => (configSheetOpen = false)}
+  onSaved={() => void handleConfigSaved()}
+/>

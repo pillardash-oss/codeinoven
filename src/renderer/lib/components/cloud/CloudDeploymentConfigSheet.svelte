@@ -17,9 +17,20 @@
     onClose: () => void
     /** Provider kinds already configured for this project, scoping container choices. */
     configuredProviders?: CloudDeploymentProviderKind[]
+    /** The flow the sheet opens in. */
+    initialMode?: Mode
+    /** Called after a successful save so the caller can refresh its view. */
+    onSaved?: () => void
   }
 
-  let { open, projectId, onClose, configuredProviders = [] }: Props = $props()
+  let {
+    open,
+    projectId,
+    onClose,
+    configuredProviders = [],
+    initialMode = 'provider',
+    onSaved
+  }: Props = $props()
 
   type Mode = 'provider' | 'container'
 
@@ -45,6 +56,7 @@
 
   let mode = $state<Mode>('provider')
   let selectedKind = $state<CloudDeploymentProviderKind | null>(null)
+  let accountLabel = $state('')
   let baseUrl = $state('')
   let token = $state('')
   let containerProviderKind = $state<CloudDeploymentProviderKind | ''>('')
@@ -52,6 +64,8 @@
   let containerLabel = $state('')
   let saving = $state(false)
   let error = $state('')
+  /** All accounts for the currently selected provider, when known. */
+  let accounts = $state<CloudDeploymentConfig['credentials']>({})
 
   let canAddContainer = $derived(configuredProviders.length > 0)
 
@@ -64,20 +78,29 @@
   let canSave = $derived(
     mode === 'provider'
       ? selectedKind === WORKING_KIND &&
+          accountLabel.trim() !== '' &&
           baseUrl.trim() !== '' &&
           baseUrlValidation.ok &&
           token.trim() !== ''
       : containerProviderKind !== '' && containerId.trim() !== '' && containerLabel.trim() !== ''
   )
 
+  /** The accounts configured for the provider currently being configured. */
+  const providerAccounts = $derived(
+    selectedKind === null ? [] : (accounts[selectedKind]?.accounts ?? [])
+  )
+
   // Reset every field when the sheet reopens so no stale value leaks across uses.
   function resetSheet(): void {
+    mode = initialMode
     selectedKind = null
+    accountLabel = ''
     baseUrl = ''
     token = ''
     containerProviderKind = ''
     containerId = ''
     containerLabel = ''
+    accounts = {}
     error = ''
     saving = false
   }
@@ -85,6 +108,12 @@
   $effect(() => {
     if (!open) return
     resetSheet()
+    // Load the current config once so account switching reflects what exists.
+    void invoke('cloudDeploy:getConfig', projectId)
+      .then((config) => {
+        accounts = config?.credentials ?? {}
+      })
+      .catch(() => undefined)
   })
 
   function selectProvider(kind: CloudDeploymentProviderKind): void {
@@ -97,11 +126,13 @@
       return
     }
     selectedKind = kind
+    const existing = providerAccounts[0]
+    accountLabel = existing?.configured ? existing.label : 'Default'
   }
 
   function emptyConfig(projectIdValue: string): CloudDeploymentConfig {
     return {
-      version: 1,
+      version: 2,
       projectId: projectIdValue,
       credentials: {},
       project: { providers: [], containers: [] },
@@ -111,12 +142,32 @@
 
   function resetForm(): void {
     selectedKind = null
+    accountLabel = ''
     baseUrl = ''
     token = ''
     containerProviderKind = ''
     containerId = ''
     containerLabel = ''
     error = ''
+  }
+
+  /** Make an account the active account for its provider. */
+  async function switchAccount(
+    kind: CloudDeploymentProviderKind,
+    accountId: string
+  ): Promise<void> {
+    saving = true
+    error = ''
+    try {
+      await invoke('cloudDeploy:switchAccount', projectId, kind, accountId)
+      const config = await invoke('cloudDeploy:getConfig', projectId)
+      accounts = config?.credentials ?? {}
+      toast.success('Switched the active account.')
+    } catch (saveError) {
+      error = saveError instanceof Error ? saveError.message : 'The account could not be switched.'
+    } finally {
+      saving = false
+    }
   }
 
   async function saveProvider(): Promise<void> {
@@ -130,6 +181,10 @@
       error = 'Enter your Coolify API token.'
       return
     }
+    if (accountLabel.trim() === '') {
+      error = 'Enter a name for this account.'
+      return
+    }
     saving = true
     error = ''
     try {
@@ -137,12 +192,14 @@
         'cloudDeploy:setCredential',
         projectId,
         selectedKind,
+        accountLabel.trim(),
         token.trim(),
         validation.baseUrl
       )
       toast.success(`${PROVIDER_DISPLAY_NAMES[selectedKind]} configured.`)
       resetForm()
       onClose()
+      onSaved?.()
     } catch (saveError) {
       error =
         saveError instanceof Error ? saveError.message : 'The provider could not be configured.'
@@ -168,6 +225,9 @@
     try {
       const existing = await invoke('cloudDeploy:getConfig', projectId)
       let config = existing ?? emptyConfig(projectId)
+      if (config.version !== 2) {
+        config = emptyConfig(projectId)
+      }
       if (!config.project.providers.includes(containerProviderKind)) {
         config = {
           ...config,
@@ -195,6 +255,7 @@
       toast.success(`Added container “${label}”.`)
       resetForm()
       onClose()
+      onSaved?.()
     } catch (saveError) {
       error = saveError instanceof Error ? saveError.message : 'The container could not be added.'
     } finally {
@@ -395,6 +456,16 @@
       {#if selectedKind === WORKING_KIND}
         <div class="space-y-3">
           <label class="block space-y-1 text-xs font-medium">
+            <span>Account name</span>
+            <input
+              class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+              placeholder="e.g. Personal or Company"
+              autocomplete="off"
+              spellcheck="false"
+              bind:value={accountLabel}
+            />
+          </label>
+          <label class="block space-y-1 text-xs font-medium">
             <span>Base URL</span>
             <input
               class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
@@ -421,6 +492,35 @@
               bind:value={token}
             />
           </label>
+          {#if providerAccounts.length > 0}
+            <div class="space-y-1.5">
+              <p class="text-[11px] font-medium text-muted">Accounts</p>
+              {#each providerAccounts as account (account.id)}
+                <div
+                  class="flex items-center justify-between gap-2 rounded-lg border bg-elevated px-3 py-1.5"
+                >
+                  <span class="min-w-0 truncate text-xs">{account.label}</span>
+                  <span class="text-[10px] text-dimmed">
+                    {account.id === accounts[selectedKind ?? 'coolify']?.activeAccountId
+                      ? 'Active'
+                      : account.configured
+                        ? 'Configured'
+                        : 'No token'}
+                  </span>
+                  {#if account.id !== accounts[selectedKind ?? 'coolify']?.activeAccountId}
+                    <button
+                      type="button"
+                      class="rounded text-[11px] font-medium text-primary hover:underline disabled:opacity-50"
+                      disabled={saving}
+                      onclick={() => void switchAccount(selectedKind ?? 'coolify', account.id)}
+                    >
+                      Switch
+                    </button>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/if}
     </div>
