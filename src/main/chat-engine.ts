@@ -7154,7 +7154,8 @@ export class ChatEngine {
           reviewNotes ? `Review notes:\n${reviewNotes}` : ''
         ]
           .filter(Boolean)
-          .join('\n\n')
+          .join('\n\n'),
+        { includeConversationContext: false }
       )
       let revised = await this.brainstormEngine.createVersion({
         projectId,
@@ -7453,7 +7454,8 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     settings: ThreadSettings,
-    instructions: string
+    instructions: string,
+    options: { includeConversationContext?: boolean } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
@@ -7463,12 +7465,20 @@ export class ChatEngine {
       projectPath,
       'brainstorm'
     )
-    const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
-    const transcript = formatConversationTranscript(
-      messages.filter((message) => !message.id.startsWith('brainstorm-research-')),
-      { maxCharacters: 80_000 }
+    const validatedInstructions = validateBoundedString(
+      instructions,
+      'Brainstorm instructions',
+      1,
+      80_000
     )
-    const source = `${validateBoundedString(instructions, 'Brainstorm instructions', 1, 80_000)}\n\nConversation context:\n${transcript}`
+    const source =
+      options.includeConversationContext === false
+        ? validatedInstructions
+        : await this.brainstormSourceWithConversationContext(
+            projectId,
+            threadId,
+            validatedInstructions
+          )
     await this.beginBrainstormConversationTurn(projectId, threadId, source)
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
@@ -7538,7 +7548,7 @@ export class ChatEngine {
                   source,
                   'The previous JSON response failed validation.',
                   `Validation error: ${lastError?.message ?? 'invalid Brainstorm shape'}`,
-                  `Return this exact object shape with complete content: ${BRAINSTORM_JSON_SHAPE}`
+                  'Correct the reported violation and return the complete Brainstorm object using the contract already supplied in this request.'
                 ].join('\n\n')
               : source,
           attachments: [],
@@ -7637,6 +7647,19 @@ export class ChatEngine {
     const failure = lastError ?? new Error('The Brainstorm agent failed.')
     await this.failBrainstormConversationTurn(projectId, threadId, failure, settings)
     throw failure
+  }
+
+  private async brainstormSourceWithConversationContext(
+    projectId: string,
+    threadId: string,
+    instructions: string
+  ): Promise<string> {
+    const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
+    const transcript = formatConversationTranscript(
+      messages.filter((message) => !message.id.startsWith('brainstorm-research-')),
+      { maxCharacters: 80_000 }
+    )
+    return transcript ? `${instructions}\n\nConversation context:\n${transcript}` : instructions
   }
 
   /** Generate structured spec content in an isolated read-only harness session. */
@@ -8176,9 +8199,8 @@ export class ChatEngine {
               ? prompt
               : [
                   'Your previous audit response was not valid JSON.',
-                  'Convert that audit into exactly one JSON object matching the required audit-report contract. Return JSON only: no Markdown fences, headings, or commentary.',
+                  'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
                   `Previous validation error: ${lastError?.message ?? 'unknown format error'}`,
-                  `Required JSON schema: ${JSON.stringify(AUDIT_REPORT_SCHEMA)}`,
                   prompt
                 ].join('\n\n'),
           attachments: [],
@@ -8734,7 +8756,6 @@ export class ChatEngine {
       'Audit the current project implementation against the approved specification and completed Assignment:',
       `Specification: ${specPath}`,
       `Assignment: ${assignmentPath}`,
-      `Assignment ${assignment.id} v${assignment.version} — ${assignment.content.title}`,
       `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     let lastError: Error | null = null
@@ -8754,10 +8775,8 @@ export class ChatEngine {
           ? basePrompt
           : [
               'Your previous audit response was not valid JSON.',
-              'Convert that audit into exactly one JSON object matching the required audit-report contract. Return JSON only: no Markdown fences, headings, or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`,
-              `Required JSON schema: ${JSON.stringify(AUDIT_REPORT_SCHEMA)}`,
-              basePrompt
+              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
             ].join('\n\n')
       await this.persistOutboundMessage(
         projectId,
@@ -8922,10 +8941,8 @@ export class ChatEngine {
           ? basePrompt
           : [
               'Your previous audit response was not valid JSON.',
-              'Convert that audit into exactly one JSON object matching the required audit-report contract. Return JSON only: no Markdown fences, headings, or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`,
-              `Required JSON schema: ${JSON.stringify(AUDIT_REPORT_SCHEMA)}`,
-              basePrompt
+              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
             ].join('\n\n')
       await this.persistOutboundMessage(
         projectId,
