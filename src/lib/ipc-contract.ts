@@ -720,6 +720,7 @@ export interface IpcInvokeContract {
   'git:status': Contract<[projectId: string], GitStatus>
   'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:commit': Contract<[projectId: string, message: string], GitStatus>
   'git:init': Contract<[projectId: string], GitStatus>

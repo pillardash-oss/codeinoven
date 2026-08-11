@@ -230,6 +230,65 @@ describe('GitService', () => {
     expect(statusAfterAbort.conflictState).toBe('none')
   })
 
+  it('marks a conflicted file resolved once its conflict markers are removed', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'base')
+
+    await simpleGit(directory).checkoutLocalBranch('feature')
+    await writeFile(join(directory, 'conflict.txt'), 'feature\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'feature change')
+
+    await simpleGit(directory).checkout('main')
+    await writeFile(join(directory, 'conflict.txt'), 'main\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'main change')
+
+    const summary = await service.merge(directory, 'feature')
+    expect(summary.conflicted.some((entry) => entry.path === 'conflict.txt')).toBe(true)
+
+    const statusAfterConflict = await service.getStatus(directory)
+    expect(statusAfterConflict.conflicted).toContain('conflict.txt')
+
+    // A file that still contains markers must NOT be marked resolved.
+    await writeFile(
+      join(directory, 'conflict.txt'),
+      '<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\n',
+      'utf-8'
+    )
+    const stillConflicted = await service.resolveConflicted(directory, 'conflict.txt')
+    expect(stillConflicted.conflicted).toContain('conflict.txt')
+
+    // Once the markers are gone, resolution stages the path and clears it.
+    await writeFile(join(directory, 'conflict.txt'), 'resolved\n', 'utf-8')
+    const resolved = await service.resolveConflicted(directory, 'conflict.txt')
+    expect(resolved.conflicted).not.toContain('conflict.txt')
+    expect(resolved.conflictState).toBe('merge')
+    expect(resolved.changes.some((change) => change.path === 'conflict.txt' && change.staged)).toBe(
+      true
+    )
+  })
+
+  it('leaves non-conflicted paths untouched during resolution', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'plain.txt'), 'hello\n', 'utf-8')
+    await service.stage(directory, ['plain.txt'])
+    await service.commit(directory, 'plain')
+
+    await writeFile(join(directory, 'plain.txt'), 'edited\n', 'utf-8')
+    const status = await service.resolveConflicted(directory, 'plain.txt')
+    expect(status.conflicted).toHaveLength(0)
+    expect(status.changes.some((change) => change.path === 'plain.txt' && change.staged)).toBe(
+      false
+    )
+  })
+
   it('surfaces rebase conflicts and aborts the rebase', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
