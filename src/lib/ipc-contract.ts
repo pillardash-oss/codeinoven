@@ -842,22 +842,60 @@ export interface IpcInvokeContract {
   /** Remove a project's cloud deployment config and clear its has-deployments flag. */
   'cloudDeploy:clearConfig': Contract<[projectId: string], void>
   /**
-   * Store or rotate a provider credential. The plaintext token is vaulted by
-   * main via `safeStorage` and never crosses back to the renderer; only an
-   * opaque ref is recorded in the project config. Returns the updated config.
+   * Store or rotate an account-scoped provider credential for a project.
+   * `accountLabel` selects an existing account to rotate or names a new account
+   * to create. The plaintext token is vaulted by main via `safeStorage` under
+   * the project+account key and never crosses back to the renderer; only an
+   * opaque ref is recorded in the account. Returns the updated config.
    */
   'cloudDeploy:setCredential': Contract<
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
+      accountLabel: string,
       token: string,
       baseUrl?: string
     ],
     import('./types').CloudDeploymentConfig
   >
-  /** Remove a stored provider credential and drop the provider from the project config. */
+  /** Add an empty account (no credential yet) for a provider in a project. */
+  'cloudDeploy:addAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountLabel: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove an account and drop its stored token for the project. */
+  'cloudDeploy:removeAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Switch which account is active for a provider within a project. */
+  'cloudDeploy:switchAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /**
+   * Remove only that project+account's stored token and drop its credential
+   * from that project's config. The account shell is retained but left
+   * unconfigured. Returns the updated config.
+   */
   'cloudDeploy:removeCredential': Contract<
-    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
     import('./types').CloudDeploymentConfig
   >
   /**
