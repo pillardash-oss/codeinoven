@@ -22,6 +22,8 @@
     onReveal?: () => void
     /** Called when the user stops hovering the indicator. */
     onHide?: () => void
+    /** Whether live account usage is currently being fetched from the harness. */
+    refreshing?: boolean
   }
 
   let {
@@ -31,7 +33,8 @@
     compacting = false,
     onCompact,
     onReveal,
-    onHide
+    onHide,
+    refreshing = false
   }: Props = $props()
 
   const boundedPercent = $derived(
@@ -288,6 +291,16 @@
     role="dialog"
     aria-label="Context and provider usage"
   >
+    {#if refreshing}
+      <div
+        class="mb-3 h-0.5 overflow-hidden rounded-full bg-overlay"
+        role="progressbar"
+        aria-label="Fetching live usage"
+        aria-valuetext="Fetching live usage"
+      >
+        <div class="usage-loading-bar h-full w-1/3 rounded-full bg-info"></div>
+      </div>
+    {/if}
     <div class="flex items-start justify-between gap-3">
       <div>
         <p class="text-xs font-semibold text-foreground">Usage</p>
@@ -385,6 +398,19 @@
 </div>
 
 <style>
+  .usage-loading-bar {
+    animation: usage-loading 1.1s ease-in-out infinite;
+  }
+
+  @keyframes usage-loading {
+    0% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(420%);
+    }
+  }
+
   @container (max-width: 520px) {
     .context-usage-label {
       display: none;

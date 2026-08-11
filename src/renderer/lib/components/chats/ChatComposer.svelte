@@ -177,6 +177,8 @@
     onRevealUsage?: () => void
     /** Called when the user stops hovering the usage indicator. */
     onHideUsage?: () => void
+    /** Whether live account usage is currently being fetched from the harness. */
+    usageRefreshing?: boolean
     /** Whether this harness can explicitly compact conversation context. */
     canCompact?: boolean
     compacting?: boolean
@@ -242,6 +244,7 @@
     harnessUsage = [],
     onRevealUsage,
     onHideUsage,
+    usageRefreshing = false,
     canCompact = false,
     compacting = false,
     onCompact,
@@ -2067,6 +2070,7 @@
       {onCompact}
       onReveal={onRevealUsage}
       onHide={onHideUsage}
+      refreshing={usageRefreshing}
     />
 
     <!-- Send / Queue / Stop button.
