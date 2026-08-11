@@ -222,9 +222,17 @@ export class AssignmentRepo {
     return capabilities
   }
 
-  /** Drop capability tokens once an Assignment reaches a terminal state. */
+  /** Drop every capability token when an Assignment is explicitly stopped. */
   removeApiCapabilitiesForAssignment(assignmentId: string): void {
     this.db.run('DELETE FROM assignment_api_capabilities WHERE assignment_id=?', assignmentId)
+  }
+
+  /** Drop completed workers while preserving the coordinator through the audit lifecycle. */
+  removeWorkerApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.db.run(
+      "DELETE FROM assignment_api_capabilities WHERE assignment_id=? AND role='worker'",
+      assignmentId
+    )
   }
 
   /** Drop every capability issued to one worker thread after it is replaced. */

@@ -6898,6 +6898,7 @@ export class ChatEngine {
             this.apiTaskReview(body.review),
             this.apiString(body.operationId, 'operationId')
           )
+          let automaticReaudit = false
           if (
             result.assignment.status === 'completed' &&
             result.assignment.auditCycle?.status === 'available'
@@ -6917,6 +6918,7 @@ export class ChatEngine {
               'awaiting_approval',
               { read: false }
             )
+            automaticReaudit = Boolean(result.assignment.auditCycle.reworkCycle)
             if (coordinator?.settings?.loopMode === true) {
               void this.continueLoop(
                 result.assignment.projectId,
@@ -6933,9 +6935,20 @@ export class ChatEngine {
                 }
               )
             }
-            this.revokeAssignmentCapabilities(result.assignment.id)
+            this.revokeAllAssignmentWorkerCapabilities(result.assignment.id)
           }
-          this.writeAssignmentApiResponse(response, 200, result)
+          this.writeAssignmentApiResponse(response, 200, {
+            ...result,
+            ...(automaticReaudit
+              ? {
+                  nextAction: {
+                    status: 'reaudit_started_automatically',
+                    message:
+                      'All rework tasks passed. The independent re-audit started automatically; do not call request-reaudit.'
+                  }
+                }
+              : {})
+          })
           return
         }
         if (path === '/v1/assignments/reopen-task') {
@@ -7007,6 +7020,21 @@ export class ChatEngine {
             .listVersions(this.apiString(body.assignmentId, 'assignmentId'))
             .at(-1)
           if (!current) throw new AssignmentApiRequestError(404, 'Assignment not found')
+          if (
+            current.auditCycle?.status === 'running' ||
+            current.auditCycle?.status === 'report_ready'
+          ) {
+            this.writeAssignmentApiResponse(response, 200, {
+              assignment: current,
+              status:
+                current.auditCycle.status === 'running' ? 'audit_running' : 'audit_report_ready',
+              message:
+                current.auditCycle.status === 'running'
+                  ? 'The independent re-audit is already running.'
+                  : 'The independent re-audit is complete and its report is ready for review.'
+            })
+            return
+          }
           const assignment =
             current.auditCycle?.status === 'available'
               ? current
@@ -7347,6 +7375,15 @@ export class ChatEngine {
       }
     }
     this.assignmentEngine.removeApiCapabilitiesForThread(assignmentId, threadId)
+  }
+
+  private revokeAllAssignmentWorkerCapabilities(assignmentId: string): void {
+    for (const [token, capability] of this.assignmentApiCapabilities) {
+      if (capability.assignmentId === assignmentId && capability.role === 'worker') {
+        this.assignmentApiCapabilities.delete(token)
+      }
+    }
+    this.assignmentEngine.removeWorkerApiCapabilitiesForAssignment(assignmentId)
   }
 
   private revokeAssignmentCapabilities(assignmentId: string): void {

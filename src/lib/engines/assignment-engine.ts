@@ -259,9 +259,14 @@ export class AssignmentEngine {
     return this.repo.loadApiCapabilities()
   }
 
-  /** Drop capability tokens once an Assignment reaches a terminal state. */
+  /** Drop every capability token when an Assignment is explicitly stopped. */
   removeApiCapabilitiesForAssignment(assignmentId: string): void {
     this.repo.removeApiCapabilitiesForAssignment(assignmentId)
+  }
+
+  /** Revoke completed workers while the coordinator continues into independent audit. */
+  removeWorkerApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.repo.removeWorkerApiCapabilitiesForAssignment(assignmentId)
   }
 
   /** Revoke the durable capability of a worker that is no longer assigned. */
@@ -1316,7 +1321,7 @@ export class AssignmentEngine {
     this.repo.save(updated, active.version)
     await this.writeMarkdown(updated)
     if (allComplete) {
-      this.removeApiCapabilitiesForAssignment(active.id)
+      this.removeWorkerApiCapabilitiesForAssignment(active.id)
     }
     const result: AssignmentToolResult = {
       assignment: updated,
