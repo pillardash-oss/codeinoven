@@ -196,6 +196,9 @@ interface PersistedProviderCatalog {
   catalogs: ProviderCatalog[]
 }
 
+const AUDIT_REPORT_JSON_CONTRACT =
+  'Use exactly this JSON shape and property spelling: {"executiveSummary":"string","findings":[{"id":"string","title":"string","severity":"critical|high|medium|low|info","description":"string","evidence":"string"}],"resolutionRecommendation":"string","conclusion":"string"}. Do not rename, omit, or add properties; in particular, the required key is resolutionRecommendation, not resolutionAndRecommendation or resolution_and_recommendation.'
+
 const AUDIT_GENERATION_SYSTEM_PROMPT = [
   `You are an independent ${APP_NAME} audit agent.`,
   'Audit the completed implementation strictly against the supplied approved specification.',
@@ -204,12 +207,14 @@ const AUDIT_GENERATION_SYSTEM_PROMPT = [
   'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
   'Report concrete evidence. Do not modify files.',
   'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
+  AUDIT_REPORT_JSON_CONTRACT,
   'Return only the requested structured audit report.'
 ].join(' ')
 
 const AUDIT_REPAIR_SYSTEM_PROMPT = [
   `You repair a persisted ${APP_NAME} audit-report JSON file after deterministic validation fails.`,
   'Read only the supplied audit-attempt file and correct only the listed validation errors.',
+  AUDIT_REPORT_JSON_CONTRACT,
   'Preserve the existing findings and evidence, do not inspect the project again, and return exactly one complete corrected JSON object.'
 ].join(' ')
 
