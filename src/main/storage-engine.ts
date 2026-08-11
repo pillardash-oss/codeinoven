@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../lib/utils'
 import type { AppConfig } from '../lib/types'
+import type { CloudDeploymentConfig } from '../lib/types'
 import type { Project } from '../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../lib/project-artifacts'
 import {
@@ -279,5 +280,38 @@ export class StorageEngine {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
       throw error
     }
+  }
+
+  /**
+   * Resolve the per-project cloud deployment config path, always under the
+   * CodeInOven config directory — never inside the user's repository.
+   */
+  private cloudDeploymentConfigPath(projectId: string): string {
+    return join('projects', projectId, 'cloud-deployment.json')
+  }
+
+  /** Read a project's cloud deployment config, or null when none exists. */
+  async getCloudDeploymentConfig(projectId: string): Promise<CloudDeploymentConfig | null> {
+    return this.read<CloudDeploymentConfig>(this.cloudDeploymentConfigPath(projectId))
+  }
+
+  /** Persist a project's cloud deployment config atomically under the config dir. */
+  async saveCloudDeploymentConfig(projectId: string, config: CloudDeploymentConfig): Promise<void> {
+    await this.write(this.cloudDeploymentConfigPath(projectId), config)
+  }
+
+  /**
+   * Whether a project has at least one configured provider. Mirrors the
+   * `setHasDeployments` precedent so a project without configured providers is
+   * flagged and the Cloud Deployments panel stays hidden.
+   */
+  async hasCloudDeployments(projectId: string): Promise<boolean> {
+    const config = await this.getCloudDeploymentConfig(projectId)
+    return config !== null && config.project.providers.length > 0
+  }
+
+  /** Remove a project's cloud deployment config, flagging it as having none. */
+  async clearCloudDeploymentConfig(projectId: string): Promise<void> {
+    await this.remove(this.cloudDeploymentConfigPath(projectId))
   }
 }

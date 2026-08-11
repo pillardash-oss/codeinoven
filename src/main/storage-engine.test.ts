@@ -2,6 +2,7 @@ import { access, mkdir, mkdtemp, readFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
+import type { CloudDeploymentConfig } from '../lib/types'
 import { StorageEngine } from './storage-engine'
 
 async function setup(): Promise<{
@@ -72,5 +73,55 @@ describe('StorageEngine project boundary', () => {
     await expect(
       storage.writeProjectSpecRaw('project-1', '../escape', 'spec.md', 'unsafe')
     ).rejects.toThrow('Invalid feature slug')
+  })
+
+  it('persists and reads a per-project cloud deployment config under the config dir', async () => {
+    const { storage, configRoot, projectRoot } = await setup()
+    const config: CloudDeploymentConfig = {
+      version: 1,
+      projectId: 'project-1',
+      credentials: {
+        vercel: {
+          providerKind: 'vercel',
+          secretRef: 'vault:vercel-token',
+          configured: true,
+          updatedAt: 1_700_000_000_000
+        }
+      },
+      project: {
+        providers: ['vercel'],
+        containers: [{ id: 'app-1', label: 'My App', providerKind: 'vercel', status: 'success' }]
+      },
+      updatedAt: 1_700_000_000_000
+    }
+
+    await storage.saveCloudDeploymentConfig('project-1', config)
+    await expect(storage.getCloudDeploymentConfig('project-1')).resolves.toEqual(config)
+    await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(true)
+
+    await expect(
+      access(join(configRoot, 'projects', 'project-1', 'cloud-deployment.json'))
+    ).resolves.toBeUndefined()
+    await expect(access(join(projectRoot, 'cloud-deployment.json'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+  })
+
+  it('flags a project without configured providers as having no deployments', async () => {
+    const { storage } = await setup()
+    await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
+
+    await storage.saveCloudDeploymentConfig('project-1', {
+      version: 1,
+      projectId: 'project-1',
+      credentials: {},
+      project: { providers: [], containers: [] },
+      updatedAt: 1_700_000_000_000
+    })
+    await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
+
+    await storage.clearCloudDeploymentConfig('project-1')
+    await expect(storage.getCloudDeploymentConfig('project-1')).resolves.toBeNull()
+    await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
   })
 })
