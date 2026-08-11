@@ -5,6 +5,7 @@ import type {
   DeploymentProviderContext
 } from '../deployment-provider.interface'
 import { NotImplementedProvider } from './not-implemented-provider'
+import { createCoolifyProvider } from './coolify-provider'
 
 /** Constructs a `DeploymentProvider` adapter for a resolved credential/URL context. */
 export type DeploymentProviderFactory = (context: DeploymentProviderContext) => DeploymentProvider
@@ -20,6 +21,8 @@ const registry = new Map<CloudDeploymentProviderKind, DeploymentProviderFactory>
     (kind) => [kind, () => new NotImplementedProvider(kind)] as const
   )
 )
+
+registerDeploymentProvider('coolify', createCoolifyProvider)
 
 /** Register (or replace) the adapter factory for a provider kind. */
 export function registerDeploymentProvider(
