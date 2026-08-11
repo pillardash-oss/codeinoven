@@ -45,6 +45,7 @@
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
+  import Modal from '../ui/Modal.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import AgentTodoCard from './AgentTodoCard.svelte'
@@ -74,6 +75,7 @@
   import BrainstormStudio from '../specs/BrainstormStudio.svelte'
   import AssignmentStudio from '../specs/AssignmentStudio.svelte'
   import AuditStudio from '../specs/AuditStudio.svelte'
+  import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
@@ -1438,6 +1440,11 @@
   let auditBusy = $state(false)
   let auditError = $state('')
   let studioDocument = $state<'brainstorm' | 'spec' | 'assignment' | 'audit'>('spec')
+  const brainstormStudioHistories = new StudioDocumentHistoryCollection<BrainstormDocument>()
+  const specStudioHistories = new StudioDocumentHistoryCollection<EngineeringSpec>()
+  const assignmentStudioHistories = new StudioDocumentHistoryCollection<AssignmentPlanContent>()
+  const auditStudioHistories = new StudioDocumentHistoryCollection<AuditReport>()
+  let studioExitConfirmationOpen = $state(false)
   let assignmentWorkerAttentionItems = $derived.by(() => {
     if (!assignment || assignment.coordinatorThreadId !== thread.id) return []
     return assignment.content.tasks.flatMap((task) => {
@@ -1929,6 +1936,11 @@
     workspaceState.specStudioFormulating = specFormulating
     workspaceState.specStudioError = specError
     if (!showSpecStudio) {
+      brainstormStudioHistories.clear()
+      specStudioHistories.clear()
+      assignmentStudioHistories.clear()
+      auditStudioHistories.clear()
+      studioExitConfirmationOpen = false
       workspaceState.specAgentSidebarOpen = false
       findNavState.closeStudioFind()
     }
@@ -1938,7 +1950,7 @@
   $effect(() => {
     workspaceState.toggleSpecStudio = () => {
       if (showSpecStudio) {
-        showSpecStudio = false
+        closeSpecStudio()
       } else if (auditReport) {
         openAuditStudio()
       } else if (assignment) {
@@ -4247,6 +4259,19 @@
   }
 
   function closeSpecStudio(): void {
+    const hasUnsavedChanges =
+      brainstormStudioHistories.hasUnsavedChanges() ||
+      specStudioHistories.hasUnsavedChanges() ||
+      assignmentStudioHistories.hasUnsavedChanges() ||
+      auditStudioHistories.hasUnsavedChanges()
+    if (hasUnsavedChanges) {
+      studioExitConfirmationOpen = true
+      return
+    }
+    finishCloseSpecStudio()
+  }
+
+  function finishCloseSpecStudio(): void {
     workspaceState.specAgentSidebarOpen = false
     findNavState.closeStudioFind()
     studioDocument = 'spec'
@@ -5973,6 +5998,9 @@
         <BrainstormStudio
           brainstorm={studioBrainstorm}
           versions={brainstormVersions}
+          history={brainstormStudioHistories.forDocument(
+            `${studioBrainstorm.id}:${studioBrainstorm.version}`
+          )}
           busy={brainstormBusy || busy}
           error={brainstormError}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
@@ -6004,6 +6032,7 @@
         <AuditStudio
           report={auditReport}
           versions={auditVersions}
+          history={auditStudioHistories.forDocument(`${auditReport.id}:${auditReport.version}`)}
           busy={auditBusy || busy}
           error={auditError}
           assignmentAvailable={assignment !== null}
@@ -6036,6 +6065,9 @@
         <AssignmentStudio
           assignment={studioAssignment}
           versions={assignmentVersions}
+          history={assignmentStudioHistories.forDocument(
+            `${studioAssignment.id}:${studioAssignment.version}`
+          )}
           {providers}
           harnessId={settings.harnessId}
           fallbackModel={workerModelForThread()}
@@ -6082,41 +6114,44 @@
         />
       {/key}
     {:else if spec}
-      <SpecStudio
-        {spec}
-        validation={specValidation}
-        versions={specVersions}
-        busy={specBusy || busy}
-        error={specError}
-        agentMessagesOpen={workspaceState.specAgentSidebarOpen}
-        assignmentAvailable={assignment !== null}
-        assignmentMode={settings.assignmentMode === true}
-        auditAvailable={auditReport !== null}
-        brainstormAvailable={brainstorm !== null}
-        onBack={closeSpecStudio}
-        onOpenBrainstorm={openBrainstormStudio}
-        onOpenInEditor={openSpecInEditor}
-        onRevealInAppFile={revealSpecInAppFile}
-        onToggleAgentMessages={() =>
-          (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
-        onOpenAssignment={openAssignmentStudio}
-        onGenerateAssignment={() => generateAssignmentDraft()}
-        onOpenAudit={openAuditStudio}
-        onSave={saveSpec}
-        onSelectVersion={selectSpecVersion}
-        onAddAnnotation={addSpecAnnotation}
-        onUpdateAnnotation={updateSpecAnnotation}
-        onResolveAnnotation={resolveSpecAnnotation}
-        onExplainSelection={(selection, documentContext) =>
-          openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
-        onQuickChatSelection={(selection, documentContext) =>
-          openStudioSelectionChat('spec', 'quick', selection, documentContext)}
-        onDismissValidationIssue={dismissSpecValidationIssue}
-        onSearchContext={searchSpecContext}
-        onAddContext={addSpecContext}
-        onRemoveContext={removeSpecContext}
-        onSubmit={submitSpecDecision}
-      />
+      {#key `${spec.id}:${spec.version}`}
+        <SpecStudio
+          {spec}
+          history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
+          validation={specValidation}
+          versions={specVersions}
+          busy={specBusy || busy}
+          error={specError}
+          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+          assignmentAvailable={assignment !== null}
+          assignmentMode={settings.assignmentMode === true}
+          auditAvailable={auditReport !== null}
+          brainstormAvailable={brainstorm !== null}
+          onBack={closeSpecStudio}
+          onOpenBrainstorm={openBrainstormStudio}
+          onOpenInEditor={openSpecInEditor}
+          onRevealInAppFile={revealSpecInAppFile}
+          onToggleAgentMessages={() =>
+            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+          onOpenAssignment={openAssignmentStudio}
+          onGenerateAssignment={() => generateAssignmentDraft()}
+          onOpenAudit={openAuditStudio}
+          onSave={saveSpec}
+          onSelectVersion={selectSpecVersion}
+          onAddAnnotation={addSpecAnnotation}
+          onUpdateAnnotation={updateSpecAnnotation}
+          onResolveAnnotation={resolveSpecAnnotation}
+          onExplainSelection={(selection, documentContext) =>
+            openStudioSelectionChat('spec', 'elaborate', selection, documentContext)}
+          onQuickChatSelection={(selection, documentContext) =>
+            openStudioSelectionChat('spec', 'quick', selection, documentContext)}
+          onDismissValidationIssue={dismissSpecValidationIssue}
+          onSearchContext={searchSpecContext}
+          onAddContext={addSpecContext}
+          onRemoveContext={removeSpecContext}
+          onSubmit={submitSpecDecision}
+        />
+      {/key}
     {:else}
       <div class="flex flex-1 items-center justify-center text-sm text-dimmed">
         {specBusy ? 'Loading specification…' : specError || 'No specification is available.'}
@@ -7234,6 +7269,34 @@
   onContinue={(project) => continueChatInProject(project)}
   onProjectCreated={(project) => void onProjectCreated?.(project)}
 />
+
+<Modal
+  open={studioExitConfirmationOpen}
+  title="Leave Spec Studio?"
+  onClose={() => (studioExitConfirmationOpen = false)}
+>
+  <p class="text-sm text-muted">
+    You have unsaved changes in Spec Studio. Leaving will discard those edits and clear this
+    session's undo and redo history.
+  </p>
+  {#snippet footer()}
+    <button
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={() => (studioExitConfirmationOpen = false)}
+    >
+      Stay
+    </button>
+    <button
+      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
+      onclick={() => {
+        studioExitConfirmationOpen = false
+        finishCloseSpecStudio()
+      }}
+    >
+      Discard changes
+    </button>
+  {/snippet}
+</Modal>
 
 <style>
   .thread-view {

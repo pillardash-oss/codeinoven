@@ -19,6 +19,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import {
@@ -27,6 +28,7 @@
     rangeForAnnotation,
     waitForScrollSettle
   } from './studio-annotation-anchors'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     BrainstormAnnotation,
     BrainstormDecisionAction,
@@ -61,6 +63,7 @@
     specAvailable?: boolean
     assignmentAvailable?: boolean
     auditAvailable?: boolean
+    history: StudioDocumentHistory<BrainstormDocument>
     onBack: () => void
     onToggleAgentMessages: () => void
     onOpenSpec?: () => void
@@ -95,6 +98,7 @@
     specAvailable = false,
     assignmentAvailable = false,
     auditAvailable = false,
+    history,
     onBack,
     onToggleAgentMessages,
     onOpenSpec,
@@ -125,7 +129,7 @@
   // This component is keyed by document identity in ThreadView. The effect below only reconciles
   // a newly selected or persisted version while retaining intentional local edit buffers.
   // svelte-ignore state_referenced_locally
-  let draft = $state<BrainstormDocument>($state.snapshot(brainstorm))
+  let draft = $state<BrainstormDocument>(history.attach($state.snapshot(brainstorm)))
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
@@ -133,7 +137,8 @@
   let selectedSection = $state<BrainstormSectionId>('context')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
-  let dirty = $state(false)
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let savePending = $state(false)
   let pendingAction = $state<BrainstormDecisionAction | null>(null)
   let additionalNotes = $state('')
@@ -170,8 +175,10 @@
   $effect(() => {
     const nextKey = `${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`
     if (nextKey === loadedKey) return
-    draft = $state.snapshot(brainstorm)
     loadedKey = nextKey
+    if (history.dirty) return
+    history.markSaved($state.snapshot(brainstorm))
+    draft = $state.snapshot(brainstorm)
     dirty = false
     pendingAction = null
     closePendingAnnotation()
@@ -199,8 +206,29 @@
   }
 
   function markDirty(): void {
-    dirty = true
     draft.updatedAt = Date.now()
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
+    void refreshAnnotationMarkers()
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = $state.snapshot(previous)
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = $state.snapshot(next)
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
     void refreshAnnotationMarkers()
   }
 
@@ -344,6 +372,7 @@
   }
 
   function applyDocument(updated: BrainstormDocument): void {
+    history.markSaved($state.snapshot(updated))
     draft = $state.snapshot(updated)
     loadedKey = `${updated.id}:${updated.version}:${updated.updatedAt}`
     dirty = false
@@ -598,6 +627,12 @@
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         <span>Updated {formatDate(draft.updatedAt)}</span>
         <span
           class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass()}"

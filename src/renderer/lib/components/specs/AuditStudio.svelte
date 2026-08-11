@@ -23,7 +23,9 @@
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
 
   type CallbackResult = void | Promise<void>
@@ -45,6 +47,7 @@
   interface Props {
     report: AuditReport
     versions: AuditReport[]
+    history: StudioDocumentHistory<AuditReport>
     busy?: boolean
     error?: string
     brainstormAvailable?: boolean
@@ -76,6 +79,7 @@
   let {
     report,
     versions,
+    history,
     busy = false,
     error,
     brainstormAvailable = false,
@@ -100,8 +104,9 @@
     onRevealInAppFile
   }: Props = $props()
   // svelte-ignore state_referenced_locally
-  let draft = $state<AuditReport>($state.snapshot(report))
-  let dirty = $state(false)
+  let draft = $state<AuditReport>(history.attach($state.snapshot(report)))
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let reviewOpen = $state(false)
   let reviewNotes = $state('')
   let reviewSubmitting = $state(false)
@@ -120,6 +125,8 @@
   let sectionsOpen = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
   let syncedReportUpdatedAt = $state(0)
+  // svelte-ignore state_referenced_locally
+  let syncedReportKey = $state(`${report.id}:${report.version}`)
   let markerResizeObserver: ResizeObserver | null = null
 
   const findingSeverities: AuditFindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
@@ -155,9 +162,21 @@
   }
 
   $effect(() => {
+    const reportKey = `${report.id}:${report.version}`
+    if (reportKey !== syncedReportKey) {
+      syncedReportKey = reportKey
+      syncedReportUpdatedAt = report.updatedAt
+      draft = history.attach($state.snapshot(report))
+      dirty = history.dirty
+      return
+    }
     if (report.updatedAt === syncedReportUpdatedAt) return
     syncedReportUpdatedAt = report.updatedAt
-    if (!dirty) draft = $state.snapshot(report)
+    if (!dirty) {
+      history.markSaved($state.snapshot(report))
+      draft = $state.snapshot(report)
+      dirty = history.dirty
+    }
   })
 
   $effect(() => {
@@ -169,14 +188,38 @@
   })
 
   function changed(): void {
-    dirty = true
     draft.updatedAt = Date.now()
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
   }
 
   function applyReport(updated: AuditReport): void {
+    history.markSaved($state.snapshot(updated))
     draft = $state.snapshot(updated)
     syncedReportUpdatedAt = updated.updatedAt
     dirty = false
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = previous
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
+    severityEditingId = null
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = next
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
+    severityEditingId = null
+    void refreshAnnotationMarkers()
   }
 
   async function save(): Promise<AuditReport | null> {
@@ -650,6 +693,12 @@
             <option value={version.version}>Version {version.version}</option>
           {/each}
         </select>
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         {#if dirty && workflowActionsVisible}
           <button
             class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-xs"
