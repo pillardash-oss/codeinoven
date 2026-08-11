@@ -17,7 +17,8 @@ import type {
   ProviderCatalog,
   ProviderModel,
   ThinkingPreset,
-  ThreadSettings
+  ThreadSettings,
+  UsageTotalSemantics
 } from '../../lib/types'
 import type {
   AgentEventCallback,
@@ -391,30 +392,98 @@ function extractQuestionAnswer(output: unknown): string | undefined {
   return stringValue(output)
 }
 
-function mapOpenCodeTokens(raw: unknown): AgentTokenUsage | undefined {
+/**
+ * Provider-normalized accounting carried alongside the legacy `AgentTokenUsage`
+ * on the driver result path. Every category is nullable because OpenCode does
+ * not report every field for every provider; `rawProviderUsage` and `rawTotal`
+ * keep the provider's own numbers verbatim so normalization never fabricates or
+ * destroys evidence.
+ */
+export interface OpenCodeNormalizedUsage {
+  uncachedInput: number | null
+  cachedInput: number | null
+  cacheWrite: number | null
+  output: number | null
+  reasoning: number | null
+  /** Untouched provider token payload as reported by OpenCode. */
+  rawProviderUsage: Record<string, unknown>
+  /** Provider-reported total verbatim; null when OpenCode did not report one. */
+  rawTotal: number | null
+  /** Whether the raw provider total includes cache or its categories overlap. */
+  totalSemantics: UsageTotalSemantics
+}
+
+/**
+ * Distinct, optional normalized usage metadata attached to messages and
+ * step-finish parts. Keeping it separate from the legacy `AgentTokenUsage`
+ * guarantees a synthesized number is never mistaken for the raw provider total.
+ */
+interface OpenCodeUsageCarrier {
+  usage?: OpenCodeNormalizedUsage
+}
+
+/** AgentPart that may also carry normalized usage metadata. */
+type OpenCodeAgentPart = AgentPart & OpenCodeUsageCarrier
+
+/** AgentMessage that may also carry normalized usage metadata. */
+type OpenCodeAgentMessage = AgentMessage & OpenCodeUsageCarrier
+
+/**
+ * Map one OpenCode token-accounting payload into both the legacy chat-engine
+ * shape and the distinct normalized usage metadata. The legacy shape is only
+ * populated when OpenCode reports a total, so the chat engine's `rawTotal` is
+ * always a verbatim provider number and never a synthesized comparable total.
+ */
+function mapOpenCodeUsage(raw: unknown): {
+  legacy: AgentTokenUsage | undefined
+  usage: OpenCodeNormalizedUsage | undefined
+} {
   const tokens = recordValue(raw)
-  if (!tokens) return undefined
+  if (!tokens) return { legacy: undefined, usage: undefined }
   const cache = recordValue(tokens['cache'])
-  const input = numberValue(tokens['input']) ?? 0
-  const output = numberValue(tokens['output']) ?? 0
-  const reasoning = numberValue(tokens['reasoning']) ?? 0
-  const cacheRead = numberValue(cache?.['read']) ?? 0
-  const cacheWrite = numberValue(cache?.['write']) ?? 0
+  const input = numberValue(tokens['input'])
+  const output = numberValue(tokens['output'])
+  const reasoning = numberValue(tokens['reasoning'])
+  const cachedInput = numberValue(cache?.['read'])
+  const cacheWrite = numberValue(cache?.['write'])
+  const rawTotal = numberValue(tokens['total'])
+  const reported =
+    input !== undefined ||
+    output !== undefined ||
+    reasoning !== undefined ||
+    cachedInput !== undefined ||
+    cacheWrite !== undefined ||
+    rawTotal !== undefined
+  if (!reported) return { legacy: undefined, usage: undefined }
   // OpenCode reports `input` as the total input token count, which already
-  // contains any cached read/write tokens, and `reasoning` as a subset of
-  // `output`. The raw provider total is preserved verbatim when reported.
-  // Only when it is absent is a cache-inclusive total synthesized as
-  // `input + output`: input already carries the cached tokens and reasoning is
-  // counted once inside output, so nothing overlapping is added on top.
-  const total = numberValue(tokens['total']) ?? input + output
-  return {
-    input,
-    output,
-    reasoning,
-    cacheRead,
-    cacheWrite,
-    total
+  // contains cached read and cached write tokens, so uncached input is the
+  // remainder after the reported cache portions are removed. `reasoning` is a
+  // subset of `output` and stays separate.
+  const uncachedInput = input === undefined ? null : input - (cachedInput ?? 0) - (cacheWrite ?? 0)
+  const usage: OpenCodeNormalizedUsage = {
+    uncachedInput,
+    cachedInput: cachedInput ?? null,
+    cacheWrite: cacheWrite ?? null,
+    output: output ?? null,
+    reasoning: reasoning ?? null,
+    rawProviderUsage: { ...tokens },
+    rawTotal: rawTotal ?? null,
+    // OpenCode totals its cache-inclusive input, so a reported total includes
+    // cached tokens. When no total is reported its semantics are unavailable.
+    totalSemantics: rawTotal === undefined ? 'unavailable' : 'includes_cache'
   }
+  const legacy: AgentTokenUsage | undefined =
+    rawTotal === undefined
+      ? undefined
+      : {
+          input: input ?? 0,
+          output: output ?? 0,
+          reasoning: reasoning ?? 0,
+          cacheRead: cachedInput ?? 0,
+          cacheWrite: cacheWrite ?? 0,
+          total: rawTotal
+        }
+  return { legacy, usage }
 }
 
 interface OpenCodeTaskEnvelope {
@@ -545,7 +614,7 @@ function isOpenCodeCompactionContinuePart(part: Record<string, unknown>): boolea
 }
 
 /** Convert one OpenCode wire-format message part into the shared harness shape. */
-export function mapOpenCodePart(raw: unknown): AgentPart | null {
+export function mapOpenCodePart(raw: unknown): OpenCodeAgentPart | null {
   const part = recordValue(raw)
   if (!part) return null
   if (isOpenCodeCompactionContinuePart(part)) return null
@@ -653,15 +722,18 @@ export function mapOpenCodePart(raw: unknown): AgentPart | null {
       }
     case 'step-start':
       return { type: 'step-start', id, messageID }
-    case 'step-finish':
+    case 'step-finish': {
+      const { legacy, usage } = mapOpenCodeUsage(part['tokens'])
       return {
         type: 'step-finish',
         id,
         messageID,
         reason: stringValue(part['reason']) ?? '',
         cost: typeof part['cost'] === 'number' ? part['cost'] : undefined,
-        tokens: mapOpenCodeTokens(part['tokens'])
+        tokens: legacy,
+        ...(usage ? { usage } : {})
       }
+    }
     case 'compaction':
       return {
         type: 'compaction',
@@ -2118,7 +2190,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private mapMessage(
     info: Record<string, unknown>,
     parts: Array<Record<string, unknown>>
-  ): AgentMessage | null {
+  ): OpenCodeAgentMessage | null {
     const role = info['role']
     if (role !== 'user' && role !== 'assistant') return null
 
@@ -2133,6 +2205,7 @@ export class OpenCodeDriver implements HarnessDriver {
       compactionSummary && isOpenCodeAbortError(info['error'])
         ? undefined
         : (stringValue(errorData?.['message']) ?? stringValue(error?.['message']))
+    const { legacy, usage } = mapOpenCodeUsage(info['tokens'])
     const hiddenTransportParts = parts
       .filter(isOpenCodeCompactionContinuePart)
       .map((part, index): AgentPart => ({
@@ -2183,7 +2256,8 @@ export class OpenCodeDriver implements HarnessDriver {
       createdAt: time?.created ?? 0,
       completedAt: time?.completed,
       cost: numberValue(info['cost']),
-      tokens: mapOpenCodeTokens(info['tokens']),
+      ...(usage ? { usage } : {}),
+      tokens: legacy,
       error: errorMessage,
       structuredOutput: info['structured'] ?? info['structured_output']
     }
