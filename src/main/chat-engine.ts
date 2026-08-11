@@ -3193,14 +3193,77 @@ export class ChatEngine {
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+      const assignmentChanged = thread ? await this.reconcileWorkingAssignmentState(thread) : false
       if (thread && thread.status !== expectedStatus) {
         await this.threadManager.setStatus(info.projectId, info.threadId, expectedStatus)
+      } else if (thread && assignmentChanged) {
+        // Assignment state is persisted separately from its linked threads.
+        // Rebroadcast after reconciliation so mounted coordinators immediately
+        // reload the authoritative task status instead of retaining attention.
+        broadcastThreadUpdate(thread)
       }
     })().finally(() => {
       this.workingStatusReconciliations.delete(sessionId)
     })
     this.workingStatusReconciliations.set(sessionId, reconciliation)
     return reconciliation
+  }
+
+  /**
+   * Live provider work is authoritative for Assignment recovery. Retry can
+   * originate from the worker, the coordinator, or the provider itself; once
+   * a linked worker is genuinely active, clear its stale failure state.
+   */
+  private async reconcileWorkingAssignmentState(thread: Thread): Promise<boolean> {
+    try {
+      if (thread.assignmentRole === 'worker' && thread.assignmentId && thread.coordinatorThreadId) {
+        const assignment = this.assignmentEngine.getActive(
+          thread.projectId,
+          thread.coordinatorThreadId
+        )
+        const task = assignment?.content.tasks.find(
+          (candidate) => candidate.owner === 'worker' && candidate.threadId === thread.id
+        )
+        if (
+          !assignment ||
+          assignment.id !== thread.assignmentId ||
+          !task ||
+          task.status !== 'attention' ||
+          task.report?.status !== 'failed'
+        ) {
+          return false
+        }
+        await this.assignmentEngine.markWorkerSteered(assignment.id, thread.id)
+        return true
+      }
+
+      if (thread.assignmentRole !== 'coordinator' || !thread.assignmentId) return false
+      let assignment = this.assignmentEngine.getActive(thread.projectId, thread.id)
+      if (!assignment || assignment.id !== thread.assignmentId) return false
+      let changed = false
+      for (const task of assignment.content.tasks) {
+        if (
+          task.owner !== 'worker' ||
+          !task.threadId ||
+          task.status !== 'attention' ||
+          task.report?.status !== 'failed'
+        ) {
+          continue
+        }
+        const worker = await this.threadManager.getThread(thread.projectId, task.threadId)
+        if (!worker || (worker.status !== 'planning' && worker.status !== 'executing')) continue
+        assignment = await this.assignmentEngine.markWorkerSteered(assignment.id, worker.id)
+        changed = true
+      }
+      return changed
+    } catch (error) {
+      Logger.error('Working Assignment retry reconciliation failed', {
+        threadId: thread.id,
+        assignmentId: thread.assignmentId,
+        error: rawErrorMessage(error)
+      })
+      return false
+    }
   }
 
   /** A project is doing live work — reset its idle/released state. */

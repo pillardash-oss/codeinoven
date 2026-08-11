@@ -1210,24 +1210,36 @@ export class AssignmentEngine {
       (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
     )
     if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
-    if (task.status === 'running' && active.status === 'running') return active
+    if (
+      task.status === 'running' &&
+      active.status === 'running' &&
+      task.report === undefined &&
+      task.review === undefined
+    ) {
+      return active
+    }
+    const tasks = active.content.tasks.map((candidate) =>
+      candidate.id === task.id
+        ? {
+            ...candidate,
+            status: 'running' as const,
+            report: undefined,
+            review: undefined,
+            startedAt: this.now(),
+            completedAt: undefined
+          }
+        : candidate
+    )
+    const status = tasks.some((candidate) =>
+      ['attention', 'failed', 'stopped'].includes(candidate.status)
+    )
+      ? 'attention'
+      : 'running'
     const updated: AssignmentPlan = {
       ...active,
-      status: 'running',
+      status,
       completedAt: undefined,
-      content: {
-        ...active.content,
-        tasks: active.content.tasks.map((candidate) =>
-          candidate.id === task.id
-            ? {
-                ...candidate,
-                status: 'running',
-                startedAt: this.now(),
-                completedAt: undefined
-              }
-            : candidate
-        )
-      },
+      content: { ...active.content, tasks },
       updatedAt: this.now()
     }
     this.repo.save(updated, active.version)
