@@ -116,6 +116,7 @@ import type {
   Thread,
   ThreadContextUsage,
   AgentAccountUsage,
+  AttachmentStorageScope,
   ThreadMessageCursor,
   ThreadMessagePage,
   UserMessageSummary,
@@ -697,13 +698,10 @@ export interface IpcInvokeContract {
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
-  'clipboard:saveImage': Contract<
-    [scope: { kind: 'project' | 'chat'; projectId: string; threadId: string }],
-    string | null
-  >
+  'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
-  'dialog:pickFile': Contract<[], string | null>
+  'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>

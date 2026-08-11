@@ -76,7 +76,8 @@
     AgentHarnessUsage,
     PromptReference,
     AssignmentTask,
-    AgentModelSelection
+    AgentModelSelection,
+    AttachmentStorageScope
   } from '$shared/types'
 
   interface Props {
@@ -113,12 +114,8 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
-    /** App-config location for pasted/ephemeral attachment files. */
-    attachmentStorage?: {
-      kind: 'project' | 'chat'
-      projectId: string
-      threadId: string
-    }
+    /** Project or app scratch destination for pasted/ephemeral attachment files. */
+    attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
     onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
@@ -1062,7 +1059,7 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const path = await invoke('dialog:pickFile')
+    const path = await invoke('dialog:pickFile', attachmentStorage)
     if (!path) return
     await addFileAttachment(path)
   }
@@ -1096,15 +1093,15 @@
     return false
   }
 
-  function handleDropFiles(dt: DataTransfer | null): void {
+  async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
     if (!dt) return
     const files = dt.files
     if (!files || files.length === 0) return
     for (const file of Array.from(files)) {
       try {
-        const filePath = window.api.getPathForFile(file)
-        if (filePath) addFileAttachment(filePath, file)
+        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+        if (filePath) await addFileAttachment(filePath, file)
       } catch {
         // Not a local file (e.g., image dragged from a web page); skip.
       }
@@ -1140,7 +1137,7 @@
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false
-      handleDropFiles(e.dataTransfer)
+      void handleDropFiles(e.dataTransfer)
     }
 
     document.addEventListener('dragover', onDragOver)
@@ -1165,7 +1162,7 @@
         const file = item.getAsFile()
         if (file) {
           try {
-            const filePath = await window.api.registerFileSelection(file)
+            const filePath = await window.api.registerFileSelection(file, attachmentStorage)
             if (filePath) {
               await addFileAttachment(filePath, file)
               hasFileAttachment = true
