@@ -15,6 +15,7 @@ import { GitService } from './git-service'
 import { SecretVault } from './secret-vault'
 import { GitHubAuthService } from './github-auth-service'
 import { GitHubProvider, ProviderHttpError } from './providers/github-provider'
+import { isDevelopmentEnvironment, validateBaseUrl } from './providers/base-url'
 import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
@@ -144,8 +145,14 @@ import type {
   SpecValidationCode,
   SpecValidationIssue,
   Thread,
-  ThreadMessageCursor
+  ThreadMessageCursor,
+  CloudDeploymentConfig,
+  CloudDeploymentContainer,
+  CloudDeploymentCredentialRef,
+  CloudDeploymentProviderKind,
+  CloudDeploymentStatus
 } from '../lib/types'
+import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../lib/types'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
@@ -1019,6 +1026,153 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   }
 
   return patch
+}
+
+const CLOUD_DEPLOYMENT_PROVIDER_KINDS = new Set<string>(CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES)
+const CLOUD_DEPLOYMENT_STATUSES = new Set<string>(['building', 'success', 'failed', 'unknown'])
+const CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH = 16_384
+
+function validateCloudDeploymentProviderKind(
+  value: unknown,
+  label = 'Provider kind'
+): CloudDeploymentProviderKind {
+  if (typeof value !== 'string' || !CLOUD_DEPLOYMENT_PROVIDER_KINDS.has(value)) {
+    throw new TypeError(
+      `${label} must be one of: ${CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES.join(', ')}`
+    )
+  }
+  return value as CloudDeploymentProviderKind
+}
+
+function validateCloudDeploymentStatus(value: unknown, label: string): CloudDeploymentStatus {
+  if (typeof value !== 'string' || !CLOUD_DEPLOYMENT_STATUSES.has(value)) {
+    throw new TypeError(`${label} status must be building, success, failed, or unknown`)
+  }
+  return value as CloudDeploymentStatus
+}
+
+function validateCloudDeploymentContainer(value: unknown, index: number): CloudDeploymentContainer {
+  if (!isRecord(value)) throw new TypeError(`Cloud deployment container ${index} must be an object`)
+  return {
+    id: requireString(value.id, `Cloud deployment container ${index} ID`, true),
+    label: requireString(value.label, `Cloud deployment container ${index} label`),
+    providerKind: validateCloudDeploymentProviderKind(
+      value.providerKind,
+      `Cloud deployment container ${index} provider kind`
+    ),
+    status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(typeof value.url === 'string' ? { url: value.url } : {}),
+    ...(value.createdAt === undefined
+      ? {}
+      : {
+          createdAt: requireTimestamp(
+            value.createdAt,
+            `Cloud deployment container ${index} creation`
+          )
+        }),
+    ...(value.updatedAt === undefined
+      ? {}
+      : {
+          updatedAt: requireTimestamp(value.updatedAt, `Cloud deployment container ${index} update`)
+        }),
+    ...(typeof value.log === 'string' ? { log: value.log } : {})
+  }
+}
+
+function validateCloudDeploymentCredentialRef(
+  value: unknown,
+  kind: CloudDeploymentProviderKind
+): CloudDeploymentCredentialRef {
+  if (!isRecord(value)) throw new TypeError(`Credential reference for ${kind} must be an object`)
+  if (typeof value.configured !== 'boolean') {
+    throw new TypeError(`Credential reference for ${kind} configured flag must be a boolean`)
+  }
+  return {
+    providerKind: validateCloudDeploymentProviderKind(
+      value.providerKind,
+      'Credential provider kind'
+    ),
+    secretRef: requireString(value.secretRef, `Credential reference for ${kind} secret ref`),
+    ...(typeof value.baseUrl === 'string' ? { baseUrl: value.baseUrl } : {}),
+    configured: value.configured,
+    updatedAt: requireTimestamp(value.updatedAt, `Credential reference for ${kind} update`)
+  }
+}
+
+/**
+ * Validate a renderer-supplied cloud deployment config at the IPC boundary.
+ * `projectId` is pinned to the channel argument so the renderer cannot persist
+ * a config for a different project by passing a mismatched body.
+ */
+function validateCloudDeploymentConfig(value: unknown, projectId: string): CloudDeploymentConfig {
+  if (!isRecord(value)) throw new TypeError('Cloud deployment config must be an object')
+  if (value.version !== 1) throw new TypeError('Unsupported cloud deployment config schema')
+  if (validateEntityId(value.projectId, 'Config project ID') !== projectId) {
+    throw new TypeError('Config project ID does not match the requested project')
+  }
+  if (!isRecord(value.credentials)) {
+    throw new TypeError('Cloud deployment credentials must be an object')
+  }
+  if (!isRecord(value.project)) {
+    throw new TypeError('Cloud deployment project config must be an object')
+  }
+  if (!Array.isArray(value.project.providers)) {
+    throw new TypeError('Cloud deployment providers must be an array')
+  }
+  if (!Array.isArray(value.project.containers)) {
+    throw new TypeError('Cloud deployment containers must be an array')
+  }
+
+  const credentials: CloudDeploymentConfig['credentials'] = {}
+  for (const key of Object.keys(value.credentials)) {
+    const kind = validateCloudDeploymentProviderKind(key)
+    credentials[kind] = validateCloudDeploymentCredentialRef(value.credentials[key], kind)
+  }
+
+  const providers: CloudDeploymentProviderKind[] = value.project.providers.map((provider, index) =>
+    validateCloudDeploymentProviderKind(provider, `Provider ${index}`)
+  )
+  const seen = new Set<CloudDeploymentProviderKind>()
+  for (const provider of providers) {
+    if (seen.has(provider)) throw new TypeError(`Duplicate cloud deployment provider: ${provider}`)
+    seen.add(provider)
+  }
+
+  return {
+    version: 1,
+    projectId,
+    credentials,
+    project: {
+      providers,
+      containers: value.project.containers.map((container, index) =>
+        validateCloudDeploymentContainer(container, index)
+      )
+    },
+    updatedAt: requireTimestamp(value.updatedAt, 'Cloud deployment config update')
+  }
+}
+
+function validateProviderToken(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH ||
+    value.includes('\0')
+  ) {
+    throw new TypeError(
+      `Provider token must be a string of at most ${CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH} characters`
+    )
+  }
+  return value
+}
+
+function validateProviderBaseUrl(value: unknown, kind: CloudDeploymentProviderKind): string {
+  if (typeof value !== 'string') throw new TypeError(`${kind} base URL must be a string`)
+  const result = validateBaseUrl(value, { development: isDevelopmentEnvironment() })
+  if (!result.ok || result.baseUrl === null) {
+    throw new TypeError(`Invalid ${kind} base URL: ${result.reason ?? 'unsupported value'}`)
+  }
+  return result.baseUrl
 }
 
 export interface RegisterIpcHandlersOptions {
@@ -3326,6 +3480,95 @@ export function registerIpcHandlers(
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
         jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
+    }
+  )
+
+  // ─── Cloud deployment config & credentials ────────────────────────────
+  // The provider token is vaulted by main via `safeStorage` and never crosses
+  // IPC; only an opaque ref is recorded in the per-project config. The
+  // project's has-deployments flag is refreshed so the Cloud Deployments panel
+  // only appears for projects that actually have a configured provider.
+  const syncCloudDeploymentsFlag = async (projectId: string): Promise<void> => {
+    const hasDeployments = await storage.hasCloudDeployments(projectId)
+    await projectManager.setHasDeployments(projectId, hasDeployments).catch(() => undefined)
+  }
+
+  const loadOrCreateCloudDeploymentConfig = async (
+    projectId: string
+  ): Promise<CloudDeploymentConfig> => {
+    const existing = await storage.getCloudDeploymentConfig(projectId)
+    if (existing) return existing
+    return {
+      version: 1,
+      projectId,
+      credentials: {},
+      project: { providers: [], containers: [] },
+      updatedAt: Date.now()
+    }
+  }
+
+  ipcMain.handle('cloudDeploy:getConfig', async (_, projectId: unknown) =>
+    storage.getCloudDeploymentConfig(validateEntityId(projectId, 'Project ID'))
+  )
+
+  ipcMain.handle('cloudDeploy:saveConfig', async (_, projectId: unknown, rawConfig: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeConfig = validateCloudDeploymentConfig(rawConfig, safeProjectId)
+    await storage.saveCloudDeploymentConfig(safeProjectId, safeConfig)
+    await syncCloudDeploymentsFlag(safeProjectId)
+    return safeConfig
+  })
+
+  ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    await storage.clearCloudDeploymentConfig(safeProjectId)
+    await syncCloudDeploymentsFlag(safeProjectId)
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:setCredential',
+    async (_, projectId: unknown, providerKind: unknown, token: unknown, rawBaseUrl?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeToken = validateProviderToken(token)
+      const baseUrl =
+        rawBaseUrl === undefined ? undefined : validateProviderBaseUrl(rawBaseUrl, kind)
+
+      // Store (or rotate) the token in the secure vault and record only its ref.
+      const secretRef = await vault.saveProviderToken(kind, safeToken)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      config.credentials[kind] = {
+        providerKind: kind,
+        secretRef,
+        ...(baseUrl === undefined ? {} : { baseUrl }),
+        configured: true,
+        updatedAt: Date.now()
+      }
+      if (!config.project.providers.includes(kind)) {
+        config.project.providers = [...config.project.providers, kind]
+      }
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:removeCredential',
+    async (_, projectId: unknown, providerKind: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      await vault.removeProviderToken(kind)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      delete config.credentials[kind]
+      config.project.providers = config.project.providers.filter((provider) => provider !== kind)
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
     }
   )
 

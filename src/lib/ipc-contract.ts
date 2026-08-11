@@ -819,6 +819,45 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, jobId: number],
     GitHubDeploymentJobLog
   >
+  /**
+   * Read a project's cloud deployment config, or null when none exists. The
+   * config is persisted by main under the CodeInOven config directory; the
+   * renderer never touches the filesystem or Node APIs for it.
+   */
+  'cloudDeploy:getConfig': Contract<
+    [projectId: string],
+    import('./types').CloudDeploymentConfig | null
+  >
+  /**
+   * Persist a project's cloud deployment config (selected providers + labelled
+   * containers with credential references) and refresh the project's
+   * has-deployments flag for panel visibility. Returns the stored config.
+   */
+  'cloudDeploy:saveConfig': Contract<
+    [projectId: string, config: import('./types').CloudDeploymentConfig],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove a project's cloud deployment config and clear its has-deployments flag. */
+  'cloudDeploy:clearConfig': Contract<[projectId: string], void>
+  /**
+   * Store or rotate a provider credential. The plaintext token is vaulted by
+   * main via `safeStorage` and never crosses back to the renderer; only an
+   * opaque ref is recorded in the project config. Returns the updated config.
+   */
+  'cloudDeploy:setCredential': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      token: string,
+      baseUrl?: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove a stored provider credential and drop the provider from the project config. */
+  'cloudDeploy:removeCredential': Contract<
+    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    import('./types').CloudDeploymentConfig
+  >
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
