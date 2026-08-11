@@ -16,6 +16,8 @@ import { SecretVault } from './secret-vault'
 import { GitHubAuthService } from './github-auth-service'
 import { GitHubProvider, ProviderHttpError } from './providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from './providers/base-url'
+import { resolveDeploymentProvider } from './providers/registry'
+import type { DeploymentProviderContext } from './deployment-provider.interface'
 import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
@@ -3569,6 +3571,78 @@ export function registerIpcHandlers(
       await storage.saveCloudDeploymentConfig(safeProjectId, config)
       await syncCloudDeploymentsFlag(safeProjectId)
       return config
+    }
+  )
+
+  // ─── Cloud deployment monitoring ──────────────────────────────────────
+  // The provider adapter is resolved by kind through the registry, and its
+  // credential context (verified base URL + vaulted token) is assembled here
+  // in main so plaintext tokens never cross the IPC boundary. A provider with
+  // no configured credential is rejected up front rather than silently
+  // resolving to the not-implemented stub.
+  const resolveDeploymentContext = async (
+    projectId: string,
+    kind: CloudDeploymentProviderKind
+  ): Promise<DeploymentProviderContext> => {
+    const config = await storage.getCloudDeploymentConfig(projectId)
+    const credential = config?.credentials[kind]
+    if (!credential?.configured) {
+      throw new TypeError(`Cloud deployment provider ${kind} is not configured for this project`)
+    }
+    const token = await vault.resolveProviderToken(kind)
+    return {
+      ...(credential.baseUrl === undefined ? {} : { baseUrl: credential.baseUrl }),
+      token
+    }
+  }
+
+  ipcMain.handle('cloudDeploy:overview', async (_, projectId: unknown, providerKind: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const kind = validateCloudDeploymentProviderKind(providerKind)
+    const hasDeployments = await storage.hasCloudDeployments(safeProjectId)
+    try {
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      const containers = await provider.listContainers()
+      return { containers, fetchedAt: Date.now(), hasDeployments }
+    } catch (error) {
+      return {
+        containers: [],
+        fetchedAt: Date.now(),
+        hasDeployments,
+        accessError: error instanceof Error ? error.message : 'Provider request failed'
+      }
+    }
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:containerStatus',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      return provider.getStatus(safeContainerId)
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:containerLog',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      const log = await provider.getLogs(safeContainerId)
+      return { containerId: safeContainerId, log }
     }
   )
 

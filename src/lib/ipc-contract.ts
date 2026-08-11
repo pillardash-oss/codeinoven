@@ -858,6 +858,37 @@ export interface IpcInvokeContract {
     [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
     import('./types').CloudDeploymentConfig
   >
+  /**
+   * Fetch a provider-agnostic snapshot of a configured provider's containers.
+   * The adapter is resolved by kind via the registry; `hasDeployments` drives
+   * whether the Cloud Deployments panel is shown at all. Provider/credential
+   * failures are returned as `accessError` rather than rejecting IPC.
+   */
+  'cloudDeploy:overview': Contract<
+    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    import('./types').CloudDeploymentResult
+  >
+  /**
+   * Latest snapshot for one configured container, or null when the provider
+   * cannot resolve it.
+   */
+  'cloudDeploy:containerStatus': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('./types').CloudDeploymentContainer | null
+  >
+  /** Capped raw log text for a configured container's latest deployment. */
+  'cloudDeploy:containerLog': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    { containerId: string; log: string }
+  >
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
