@@ -18,6 +18,7 @@
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import {
@@ -74,6 +75,8 @@
     ) => Promise<BrainstormDocument | null>
     onUpdateAnnotation: (annotationId: string, body: string) => Promise<BrainstormDocument | null>
     onResolveAnnotation: (annotationId: string) => Promise<BrainstormDocument | null>
+    onExplainSelection?: (selection: string, documentContext: string) => void
+    onQuickChatSelection?: (selection: string, documentContext: string) => void
     onSubmit: (
       action: BrainstormDecisionAction,
       brainstorm: BrainstormDocument,
@@ -102,6 +105,8 @@
     onAddAnnotation,
     onUpdateAnnotation,
     onResolveAnnotation,
+    onExplainSelection,
+    onQuickChatSelection,
     onSubmit,
     onOpenInEditor,
     onRevealInAppFile
@@ -272,7 +277,7 @@
   }
 
   function captureDocumentSelection(): void {
-    if (!canEdit) return
+    if (!canEdit && (!onExplainSelection || !onQuickChatSelection)) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
     const range = selection.getRangeAt(0)
@@ -291,8 +296,8 @@
       quote,
       ...markdownLineForQuote(quote, section),
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
       sectionLevel: false
     }
     annotationBody = ''
@@ -319,8 +324,8 @@
       quote: title,
       ...markdownLineForQuote(title, sectionId),
       ...offsetsForQuote(sectionElement, title),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
       sectionLevel: true
     }
     annotationBody = ''
@@ -374,6 +379,15 @@
     window.getSelection()?.removeAllRanges()
     pendingAnnotation = null
     annotationBody = ''
+  }
+
+  function openSelectionChat(mode: 'explain' | 'quick'): void {
+    const selection = pendingAnnotation
+    if (!selection || selection.sectionLevel) return
+    const documentContext = exportMarkdown()
+    if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
+    else onQuickChatSelection?.(selection.quote, documentContext)
+    closePendingAnnotation()
   }
 
   async function refreshAnnotationMarkers(): Promise<void> {
@@ -878,39 +892,59 @@
 
 {#if pendingAnnotation}
   <div
-    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
     style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
     style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
-    aria-label={pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+    aria-label={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : canEdit
+        ? 'Comment on selection'
+        : 'Actions for selection'}
   >
     <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+      {pendingAnnotation.sectionLevel
+        ? 'Annotate section'
+        : canEdit
+          ? 'Comment on selection'
+          : 'Selection'}
     </p>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
       “{pendingAnnotation.quote}”
     </blockquote>
-    <RichMarkdownEditor
-      class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-      bind:value={annotationBody}
-      placeholder="Leave your review note…"
-      ariaLabel="Brainstorm annotation"
-      onSubmit={() => void submitAnnotation()}
-    />
-    <div class="mt-2 flex justify-end gap-1.5">
-      <button
-        class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-        title="Cancel annotation"
-        onclick={closePendingAnnotation}>Cancel</button
-      >
-      <button
-        class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={busy || !annotationBody.trim()}
-        title="Add annotation"
-        onclick={() => void submitAnnotation()}>Comment</button
-      >
+    {#if canEdit}
+      <RichMarkdownEditor
+        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
+        bind:value={annotationBody}
+        placeholder="Leave your review note…"
+        ariaLabel="Brainstorm annotation"
+        onSubmit={() => void submitAnnotation()}
+      />
+    {/if}
+    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+      {#if !pendingAnnotation.sectionLevel && onExplainSelection && onQuickChatSelection}
+        <StudioSelectionActions
+          onExplain={() => openSelectionChat('explain')}
+          onQuickChat={() => openSelectionChat('quick')}
+        />
+      {/if}
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
+          title="Cancel annotation"
+          onclick={closePendingAnnotation}>Cancel</button
+        >
+        {#if canEdit}
+          <button
+            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+            disabled={busy || !annotationBody.trim()}
+            title="Add annotation"
+            onclick={() => void submitAnnotation()}>Comment</button
+          >
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
