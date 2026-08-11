@@ -46,9 +46,6 @@ export const MEMORY_EXTRACTION_LIMITS = {
   cheapModelTokenBudget: 4_096
 } as const
 
-/** Approximate per-million-input-token cost of the auxiliary cheap model. */
-export const CHEAP_MODEL_COST_PER_MILLION_TOKENS = 0.15
-
 /** Standing-preference vocabulary that makes a user turn a durable candidate. */
 const STANDING_PREFERENCE_PATTERN =
   /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you))\b/iu
@@ -208,7 +205,9 @@ export interface AuxiliaryUsageEntry {
   feature: AuxiliaryFeature
   inputChars: number
   inputTokens: number
+  outputTokens: number
   estimatedCost: number
+  unavailableCost: boolean
   timestamp: number
 }
 
@@ -216,7 +215,15 @@ export interface AuxiliaryUsageTotals {
   calls: number
   inputChars: number
   inputTokens: number
+  outputTokens?: number
   estimatedCost: number
+  unavailableCalls?: number
+}
+
+export interface AuxiliaryUsageMeasurement {
+  outputTokens: number
+  costUsd: number | null
+  costStatus: 'known' | 'estimated' | 'unavailable'
 }
 
 const VALID_CATEGORIES: MemoryCategory[] = ['behavioral', 'project-rule', 'identity', 'preference']
@@ -1006,13 +1013,24 @@ export class MemoryService {
     }
   }
 
-  /** Record auxiliary (memory/title) input accounting for separate reporting. */
-  recordAuxiliaryUsage(feature: AuxiliaryFeature, inputTokens: number, inputChars: number): void {
+  /** Record measured auxiliary usage without assuming a model or token price. */
+  recordAuxiliaryUsage(
+    feature: AuxiliaryFeature,
+    inputTokens: number,
+    inputChars: number,
+    measurement: AuxiliaryUsageMeasurement = {
+      outputTokens: 0,
+      costUsd: null,
+      costStatus: 'unavailable'
+    }
+  ): void {
     const entry: AuxiliaryUsageEntry = {
       feature,
       inputTokens,
       inputChars,
-      estimatedCost: (inputTokens / 1_000_000) * CHEAP_MODEL_COST_PER_MILLION_TOKENS,
+      outputTokens: measurement.outputTokens,
+      estimatedCost: measurement.costStatus === 'estimated' ? (measurement.costUsd ?? 0) : 0,
+      unavailableCost: measurement.costStatus === 'unavailable',
       timestamp: Date.now()
     }
     this.auxiliaryUsage.push(entry)
@@ -1022,15 +1040,31 @@ export class MemoryService {
   /** Aggregate auxiliary token input and estimated cost separately by feature. */
   auxiliaryUsageByFeature(): Record<AuxiliaryFeature, AuxiliaryUsageTotals> {
     const totals: Record<AuxiliaryFeature, AuxiliaryUsageTotals> = {
-      memory: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 },
-      title: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
+      memory: {
+        calls: 0,
+        inputChars: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
+        unavailableCalls: 0
+      },
+      title: {
+        calls: 0,
+        inputChars: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
+        unavailableCalls: 0
+      }
     }
     for (const entry of this.auxiliaryUsage) {
       const feature = totals[entry.feature]
       feature.calls += 1
       feature.inputChars += entry.inputChars
       feature.inputTokens += entry.inputTokens
+      feature.outputTokens = (feature.outputTokens ?? 0) + entry.outputTokens
       feature.estimatedCost += entry.estimatedCost
+      if (entry.unavailableCost) feature.unavailableCalls = (feature.unavailableCalls ?? 0) + 1
     }
     return totals
   }
