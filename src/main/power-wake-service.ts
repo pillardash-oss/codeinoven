@@ -9,14 +9,17 @@ import type { StorageEngine } from './storage-engine'
 const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
 /**
- * PowerWakeService — prevents the display (and system) from sleeping while
+ * PowerWakeService — prevents the system and display from sleeping while
  * work is in progress or while a live remote (phone) session is using the
  * desktop. The thread side is gated by the General settings toggle
  * ("Keep device on while work is in progress"); the remote side is always on
  * so a connected phone session never gets dropped by the display sleeping.
  */
 export class PowerWakeService {
-  private blockerId: number | null = null
+  /** Blocker that keeps the whole system (CPU) from sleeping. */
+  private systemBlockerId: number | null = null
+  /** Blocker that keeps the display from sleeping. */
+  private displayBlockerId: number | null = null
   private enabled = false
   private remoteSessionActive = false
 
@@ -56,10 +59,15 @@ export class PowerWakeService {
 
   private refresh(): void {
     const shouldBlock = this.remoteSessionActive || (this.enabled && this.hasActiveThread())
-    if (shouldBlock && this.blockerId === null) {
-      this.blockerId = powerSaveBlocker.start('prevent-display-sleep')
-      Logger.info('Power wake: preventing display sleep')
-    } else if (!shouldBlock && this.blockerId !== null) {
+    if (shouldBlock && this.systemBlockerId === null) {
+      // 'prevent-app-suspension' keeps the whole system awake (the CPU does not
+      // go to sleep); 'prevent-display-sleep' separately keeps the screen on.
+      // Using only the display blocker lets the system sleep timer still fire,
+      // which is exactly the bug this fix addresses.
+      this.systemBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+      this.displayBlockerId = powerSaveBlocker.start('prevent-display-sleep')
+      Logger.info('Power wake: preventing system + display sleep')
+    } else if (!shouldBlock && this.systemBlockerId !== null) {
       this.release()
     }
   }
@@ -77,9 +85,14 @@ export class PowerWakeService {
   }
 
   private release(): void {
-    if (this.blockerId === null) return
-    powerSaveBlocker.stop(this.blockerId)
-    this.blockerId = null
-    Logger.info('Power wake: display sleep re-enabled')
+    if (this.systemBlockerId !== null) {
+      powerSaveBlocker.stop(this.systemBlockerId)
+      this.systemBlockerId = null
+    }
+    if (this.displayBlockerId !== null) {
+      powerSaveBlocker.stop(this.displayBlockerId)
+      this.displayBlockerId = null
+    }
+    Logger.info('Power wake: system + display sleep re-enabled')
   }
 }
