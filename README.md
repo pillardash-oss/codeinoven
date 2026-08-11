@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
 
-CodeInOven is a control plane that sits on top of your existing AI coding CLIs — OpenCode, Claude Code, Codex, Pi, Cline, and Antigravity — and coordinates them through a clear, reviewable lifecycle:
+CodeInOven is a control plane that sits on top of the AI coding CLIs you already use — OpenCode, Codex, Claude Code, Pi, Cline, Antigravity, Muse Code, and more — and coordinates them through a clear, reviewable lifecycle:
 
 ```
 specify → review → approve → implement
@@ -21,7 +21,7 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 
 ## Features
 
-- **Multi-harness support.** One interface over OpenCode, Codex CLI, Claude Code, Pi, Cline, and Antigravity. Pick a provider/model per thread.
+- **Multi-harness support.** One interface over OpenCode, Codex CLI, Claude Code, Pi, Cline, Antigravity, Muse Code, and any other coding harness. Pick a provider/model per thread.
 - **Engineering specs.** Structured, versioned specifications (`Problem`, `Resolution` with phases, `Success Criteria`, `Test Strategy`, `Documentation`, `Commit Pattern`, `Constraints & Risks`). Annotate sections inline and via comments; nothing implements until you approve.
 - **Approval gate.** Specs require explicit approval before any agent work starts.
 - **Plan engine.** Approved specs become executable plans with per-phase checkpoints and file operations.
@@ -58,8 +58,9 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 | Pi          | `pi`        | Supports custom base-URL providers |
 | Cline       | `cline`     | Supports custom base-URL providers |
 | Antigravity | `agy`       |                                    |
+| Muse Code   | `muse`      |                                    |
 
-Each harness has its own install channel (npm, Homebrew, or a native installer). CodeInOven's **Providers** page links to the official install docs for each harness and offers interactive login terminals.
+CodeInOven is harness-agnostic: this list is the currently shipped set, and new harnesses plug in through the driver contract (`driver.interface.ts`) without changing the app. Each harness has its own install channel (npm, Homebrew, or a native installer). CodeInOven's **Providers** page links to the official install docs for each harness and offers interactive login terminals.
 
 ---
 
@@ -117,7 +118,7 @@ All connection settings come from **public environment variables** — never har
 Make sure at least one supported CLI is installed and working in your shell:
 
 ```bash
-opencode --version   # or: codex --version | claude --version | pi --version | cline --version | agy --version
+opencode --version   # or: codex --version | claude --version | pi --version | cline --version | agy --version | muse --version
 ```
 
 Open **Settings → Providers** (or the **Providers** view) in CodeInOven. If a harness isn't detected, the UI links to its official install instructions. Authenticate the harness either in your terminal (`opencode auth login`, `codex login`, `claude`, etc.) or through the app's interactive login terminal.
