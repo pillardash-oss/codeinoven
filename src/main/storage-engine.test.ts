@@ -78,14 +78,22 @@ describe('StorageEngine project boundary', () => {
   it('persists and reads a per-project cloud deployment config under the config dir', async () => {
     const { storage, configRoot, projectRoot } = await setup()
     const config: CloudDeploymentConfig = {
-      version: 1,
+      version: 2,
       projectId: 'project-1',
       credentials: {
         vercel: {
-          providerKind: 'vercel',
-          secretRef: 'vault:vercel-token',
-          configured: true,
-          updatedAt: 1_700_000_000_000
+          accounts: [
+            {
+              id: 'account-vercel',
+              label: 'Default',
+              providerKind: 'vercel',
+              secretRef: 'vault:vercel-token',
+              configured: true,
+              createdAt: 1_700_000_000_000,
+              updatedAt: 1_700_000_000_000
+            }
+          ],
+          activeAccountId: 'account-vercel'
         }
       },
       project: {
@@ -112,7 +120,7 @@ describe('StorageEngine project boundary', () => {
     await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
 
     await storage.saveCloudDeploymentConfig('project-1', {
-      version: 1,
+      version: 2,
       projectId: 'project-1',
       credentials: {},
       project: { providers: [], containers: [] },

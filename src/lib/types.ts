@@ -3308,20 +3308,6 @@ export interface CloudDeploymentContainer {
   log?: string
 }
 
-/** Reference to a securely vaulted provider credential; never carries plaintext. */
-export interface CloudDeploymentCredentialRef {
-  /** Provider this credential authenticates. */
-  providerKind: CloudDeploymentProviderKind
-  /** Opaque SecretVault reference for the stored token. */
-  secretRef: string
-  /** Verified base URL the provider is reached at (e.g. the Coolify host). */
-  baseUrl?: string
-  /** Whether a credential is currently configured for this provider. */
-  configured: boolean
-  /** Epoch ms the credential was last stored or rotated. */
-  updatedAt: number
-}
-
 /**
  * One account configured for a cloud deployment provider within a single
  * project. A project may hold several accounts per provider (e.g. a personal
@@ -3366,12 +3352,8 @@ export interface CloudDeploymentProjectConfig {
 /**
  * Per-project cloud deployment configuration, persisted by main, never in the
  * repo. Credentials are isolated per project and support multiple accounts per
- * provider with an active, switchable account.
- *
- * Migration from version 1: v1 stored a single `CloudDeploymentCredentialRef`
- * per provider kind. On upgrade each provider's v1 ref (when configured) is
- * folded into a single account under the new multi-account shape. Empty or
- * missing accounts default to no active account (`activeAccountId: null`).
+ * provider with an active, switchable account. Empty or missing accounts
+ * default to no active account (`activeAccountId: null`).
  */
 export interface CloudDeploymentConfig {
   version: 2

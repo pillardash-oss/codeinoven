@@ -151,7 +151,6 @@ import type {
   CloudDeploymentConfig,
   CloudDeploymentContainer,
   CloudDeploymentCredentialAccount,
-  CloudDeploymentCredentialRef,
   CloudDeploymentProviderCredentials,
   CloudDeploymentProviderKind,
   CloudDeploymentStatus
@@ -1202,15 +1201,30 @@ function validateCloudDeploymentConfig(value: unknown, projectId: string): Cloud
     seen.add(provider)
   }
 
+  const containers = value.project.containers.map((container, index) =>
+    validateCloudDeploymentContainer(container, index)
+  )
+  const containerKeys = new Set<string>()
+  for (const container of containers) {
+    if (!providers.includes(container.providerKind)) {
+      throw new TypeError(
+        `Container ${container.id} references provider ${container.providerKind} that is not selected`
+      )
+    }
+    const key = `${container.providerKind}/${container.id}`
+    if (containerKeys.has(key)) {
+      throw new TypeError(`Duplicate cloud deployment container mapping: ${key}`)
+    }
+    containerKeys.add(key)
+  }
+
   return {
     version: 2,
     projectId,
     credentials,
     project: {
       providers,
-      containers: value.project.containers.map((container, index) =>
-        validateCloudDeploymentContainer(container, index)
-      )
+      containers
     },
     updatedAt: requireTimestamp(value.updatedAt, 'Cloud deployment config update')
   }
@@ -1232,40 +1246,6 @@ function validateProviderToken(value: unknown): string {
 
 function validateAccountLabel(value: unknown): string {
   return requireString(value, 'Account label')
-}
-
-/**
- * Fold a version-1 (single credential per provider) config into the version-2
- * multi-account shape. Each configured provider's v1 ref becomes a single
- * default account and is made active so existing projects keep resolving.
- */
-function migrateCloudDeploymentConfig(config: CloudDeploymentConfig): CloudDeploymentConfig {
-  if (config.version === 2) return config
-  const credentials: CloudDeploymentConfig['credentials'] = {}
-  for (const key of Object.keys(config.credentials)) {
-    const kind = validateCloudDeploymentProviderKind(key)
-    const ref = config.credentials[kind] as CloudDeploymentCredentialRef | undefined
-    if (!ref?.configured || !ref.secretRef) continue
-    const accountId = `account-${kind}`
-    const account: CloudDeploymentCredentialAccount = {
-      id: accountId,
-      label: 'Default',
-      providerKind: kind,
-      secretRef: ref.secretRef,
-      ...(ref.baseUrl === undefined ? {} : { baseUrl: ref.baseUrl }),
-      configured: true,
-      createdAt: ref.updatedAt,
-      updatedAt: ref.updatedAt
-    }
-    credentials[kind] = { accounts: [account], activeAccountId: accountId }
-  }
-  return {
-    version: 2,
-    projectId: config.projectId,
-    credentials,
-    project: config.project,
-    updatedAt: config.updatedAt
-  }
 }
 
 function validateProviderBaseUrl(value: unknown, kind: CloudDeploymentProviderKind): string {
@@ -3662,7 +3642,7 @@ export function registerIpcHandlers(
     projectId: string
   ): Promise<CloudDeploymentConfig> => {
     const existing = await storage.getCloudDeploymentConfig(projectId)
-    if (existing) return migrateCloudDeploymentConfig(existing)
+    if (existing) return existing
     return {
       version: 2,
       projectId,
@@ -3686,6 +3666,16 @@ export function registerIpcHandlers(
 
   ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const config = await storage.getCloudDeploymentConfig(safeProjectId)
+    if (config) {
+      for (const [kind, credentials] of Object.entries(config.credentials)) {
+        const providerKind = validateCloudDeploymentProviderKind(kind)
+        for (const account of credentials.accounts) {
+          if (!account.secretRef) continue
+          await vault.removeProviderToken(safeProjectId, providerKind, account.id)
+        }
+      }
+    }
     await storage.clearCloudDeploymentConfig(safeProjectId)
     await syncCloudDeploymentsFlag(safeProjectId)
   })

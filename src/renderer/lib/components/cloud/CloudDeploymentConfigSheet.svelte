@@ -194,7 +194,7 @@
         selectedKind,
         accountLabel.trim(),
         token.trim(),
-        validation.baseUrl
+        validation.baseUrl ?? undefined
       )
       toast.success(`${PROVIDER_DISPLAY_NAMES[selectedKind]} configured.`)
       resetForm()
@@ -236,6 +236,13 @@
             providers: [...config.project.providers, containerProviderKind]
           }
         }
+      }
+      const alreadyConfigured = config.project.containers.some(
+        (mapping) => mapping.providerKind === containerProviderKind && mapping.id === id
+      )
+      if (alreadyConfigured) {
+        error = 'A container with this provider and ID is already configured.'
+        return
       }
       const now = Date.now()
       const container: CloudDeploymentContainer = {

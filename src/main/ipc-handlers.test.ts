@@ -1006,4 +1006,105 @@ describe('cloudDeploy IPC', () => {
 
     await rm(storageRoot, { recursive: true, force: true })
   })
+
+  it('clearConfig removes every referenced account vault secret', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const clear = handlers.get('cloudDeploy:clearConfig')
+    const get = handlers.get('cloudDeploy:getConfig')
+
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Company',
+      'company-token',
+      'http://localhost:8080'
+    )
+
+    let vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).toContain('deployment_provider_proj-a_coolify_')
+
+    await clear?.(trustedEvent(), 'proj-a')
+
+    vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).not.toContain('deployment_provider_proj-a_coolify_')
+    await expect(get?.(trustedEvent(), 'proj-a')).resolves.toBeNull()
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('rejects container mappings whose provider is not selected', async () => {
+    const storageRoot = await setupStorage()
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const now = Date.now()
+    const config: CloudDeploymentConfig = {
+      version: 2,
+      projectId: 'proj-a',
+      credentials: {},
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-1',
+            label: 'My App',
+            providerKind: 'netlify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    }
+
+    await expect(save?.(trustedEvent(), 'proj-a', config)).rejects.toThrow(/not selected/i)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('rejects duplicate container mappings for the same provider and id', async () => {
+    const storageRoot = await setupStorage()
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const now = Date.now()
+    const config: CloudDeploymentConfig = {
+      version: 2,
+      projectId: 'proj-a',
+      credentials: {},
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-1',
+            label: 'First',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: 'app-1',
+            label: 'Second',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    }
+
+    await expect(save?.(trustedEvent(), 'proj-a', config)).rejects.toThrow(/Duplicate/i)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
 })
