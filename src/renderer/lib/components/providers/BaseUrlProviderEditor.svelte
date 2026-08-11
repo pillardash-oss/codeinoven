@@ -60,7 +60,8 @@
 
   const NPM_OPTIONS = [
     { value: '@ai-sdk/openai-compatible', label: 'OpenAI-compatible (/v1/chat/completions)' },
-    { value: '@ai-sdk/openai', label: 'OpenAI (/v1/responses)' }
+    { value: '@ai-sdk/openai', label: 'OpenAI (/v1/responses)' },
+    { value: '@ai-sdk/anthropic', label: 'Anthropic (/v1/messages)' }
   ] as const
 
   const THINKING_LEVELS: ThinkingLevel[] = [

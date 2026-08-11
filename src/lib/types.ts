@@ -570,7 +570,7 @@ export interface BaseUrlProvider {
   id: string
   /** Harness this provider applies to (e.g. 'opencode'). */
   harnessId: string
-  /** AI SDK npm package to use (e.g. '@ai-sdk/openai-compatible' or '@ai-sdk/openai'). */
+  /** AI SDK npm package to use (e.g. '@ai-sdk/openai-compatible', '@ai-sdk/openai', or '@ai-sdk/anthropic'). */
   npm: string
   /** Display name shown in the model picker. */
   name: string
