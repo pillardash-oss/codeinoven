@@ -124,6 +124,7 @@ import type {
 } from '../lib/types'
 import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
+import { estimateTokenCostUsd } from './pricing'
 import {
   budgetTurnLayers,
   composeBudgetedSend,
@@ -13200,24 +13201,56 @@ export class ChatEngine {
       retryCause: input.failure ?? input.response?.error ?? null,
       createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
     }
-    if (cost === null) {
+    const estimated =
+      cost === null
+        ? estimateTokenCostUsd(
+            input.settings.modelId,
+            input.settings.providerId,
+            reported ??
+              (inputTokens > 0 || outputTokens > 0
+                ? {
+                    input: inputTokens,
+                    output: outputTokens,
+                    reasoning: 0,
+                    cacheRead: 0,
+                    cacheWrite: 0,
+                    total: inputTokens + outputTokens
+                  }
+                : undefined)
+          )
+        : null
+    if (cost !== null) {
       this.usageRepo.recordEvent({
         ...details,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
+        costStatus: 'known',
+        costUsd: cost,
+        pricingProvenance: {
+          source: 'provider',
+          currency: 'USD',
+          capturedAt: details.createdAt
+        }
+      })
+      return
+    }
+    if (estimated !== null) {
+      this.usageRepo.recordEvent({
+        ...details,
+        costStatus: 'estimated',
+        costUsd: estimated,
+        pricingProvenance: {
+          source: 'model_catalog',
+          sourceId: input.settings.modelId,
+          currency: 'USD',
+          capturedAt: details.createdAt
+        }
       })
       return
     }
     this.usageRepo.recordEvent({
       ...details,
-      costStatus: 'known',
-      costUsd: cost,
-      pricingProvenance: {
-        source: 'provider',
-        currency: 'USD',
-        capturedAt: details.createdAt
-      }
+      costStatus: 'unavailable',
+      costUsd: null,
+      pricingProvenance: null
     })
   }
 
