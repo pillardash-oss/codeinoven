@@ -40,6 +40,7 @@ import type {
   AppConfig,
   BrainstormContent,
   BrainstormDocument,
+  CloudDeploymentConfig,
   EngineeringSpec,
   EngineeringSpecContent
 } from '../lib/types'
@@ -47,6 +48,7 @@ import { ProjectManager } from '../lib/engines/project-manager'
 import { exportEngineeringSpecMarkdown } from '../lib/spec/spec-markdown'
 import { StorageEngine } from './storage-engine'
 import { registerIpcHandlers, validateAppConfigPatch } from './ipc-handlers'
+import { appRendererNavigationTargets } from './trusted-ipc-main'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
@@ -610,6 +612,204 @@ describe('git IPC', () => {
     await expect(setHandler?.({}, 'cred-project', 'token')).rejects.toThrow(
       'Secure credential storage is unavailable'
     )
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+})
+
+describe('cloudDeploy IPC', () => {
+  /**
+   * Every registered handler is wrapped by `trustedIpcMain`, which rejects a
+   * sender frame that is not the app's own renderer document. Build an event
+   * that mirrors `appRendererNavigationTargets()` so channel invocation is
+   * accepted in tests.
+   */
+  function trustedEvent(): { senderFrame: { url: string; parent: null } } {
+    return {
+      senderFrame: {
+        url: appRendererNavigationTargets()[0],
+        parent: null
+      }
+    }
+  }
+
+  async function setupStorage(): Promise<string> {
+    const storageRoot = await mkdtemp(join(tmpdir(), 'codeinoven-clouddeploy-ipc-'))
+    const storage = new StorageEngine(storageRoot)
+    registerIpcHandlers(storage, database)
+    return storageRoot
+  }
+
+  it('isolates account credentials per project and never shares a token', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const remove = handlers.get('cloudDeploy:removeCredential')
+
+    await expect(
+      set?.(trustedEvent(), 'proj-a', 'coolify', 'Personal', 'token-a', 'http://localhost:8080')
+    ).resolves.toMatchObject({ version: 2, projectId: 'proj-a' })
+    await expect(
+      set?.(trustedEvent(), 'proj-b', 'coolify', 'Personal', 'token-b', 'http://localhost:8080')
+    ).resolves.toMatchObject({ projectId: 'proj-b' })
+
+    const configA = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const configB = (await get?.(trustedEvent(), 'proj-b')) as CloudDeploymentConfig
+    const refA = configA.credentials['coolify']?.accounts[0]?.secretRef
+    const refB = configB.credentials['coolify']?.accounts[0]?.secretRef
+    expect(refA).toBeTruthy()
+    expect(refB).toBeTruthy()
+    expect(refA).not.toBe(refB)
+
+    const accountIdA = configA.credentials['coolify']?.accounts[0]?.id
+    await expect(remove?.(trustedEvent(), 'proj-a', 'coolify', accountIdA)).resolves.toMatchObject({
+      credentials: { coolify: { accounts: [{ configured: false }] } }
+    })
+
+    const configANow = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const configBNow = (await get?.(trustedEvent(), 'proj-b')) as CloudDeploymentConfig
+    expect(configANow.credentials['coolify']?.accounts[0]?.configured).toBe(false)
+    expect(configBNow.credentials['coolify']?.accounts[0]?.configured).toBe(true)
+
+    const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).not.toContain('token-a')
+    expect(vaultRaw).not.toContain('token-b')
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('rejects an invented base URL on saveConfig', async () => {
+    const storageRoot = await setupStorage()
+    const now = Date.now()
+    const badConfig: CloudDeploymentConfig = {
+      version: 2,
+      projectId: 'proj-a',
+      credentials: {
+        coolify: {
+          accounts: [
+            {
+              id: 'acc-1',
+              label: 'Personal',
+              providerKind: 'coolify',
+              secretRef: 'ref',
+              baseUrl: 'https://example.com',
+              configured: true,
+              createdAt: now,
+              updatedAt: now
+            }
+          ],
+          activeAccountId: 'acc-1'
+        }
+      },
+      project: { providers: ['coolify'], containers: [] },
+      updatedAt: now
+    }
+    const save = handlers.get('cloudDeploy:saveConfig')
+    await expect(save?.(trustedEvent(), 'proj-a', badConfig)).rejects.toThrow(/base URL/i)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('accepts a verified development localhost base URL on saveConfig', async () => {
+    const storageRoot = await setupStorage()
+    const now = Date.now()
+    const goodConfig: CloudDeploymentConfig = {
+      version: 2,
+      projectId: 'proj-a',
+      credentials: {
+        coolify: {
+          accounts: [
+            {
+              id: 'acc-1',
+              label: 'Personal',
+              providerKind: 'coolify',
+              secretRef: 'ref',
+              baseUrl: 'http://localhost:8080',
+              configured: true,
+              createdAt: now,
+              updatedAt: now
+            }
+          ],
+          activeAccountId: 'acc-1'
+        }
+      },
+      project: { providers: ['coolify'], containers: [] },
+      updatedAt: now
+    }
+    const save = handlers.get('cloudDeploy:saveConfig')
+    await expect(save?.(trustedEvent(), 'proj-a', goodConfig)).resolves.toMatchObject({
+      version: 2
+    })
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('switches the active account and resolves its token + base URL on overview', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const switchAccount = handlers.get('cloudDeploy:switchAccount')
+    const overview = handlers.get('cloudDeploy:overview')
+
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Company',
+      'company-token',
+      'http://localhost:8080'
+    )
+
+    const config = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const company = config.credentials['coolify']?.accounts.find(
+      (account) => account.label === 'Company'
+    )
+    expect(company?.id).toBeTruthy()
+
+    await expect(
+      switchAccount?.(trustedEvent(), 'proj-a', 'coolify', company?.id)
+    ).resolves.toMatchObject({
+      credentials: { coolify: { activeAccountId: company?.id } }
+    })
+
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
+        new Response(
+          JSON.stringify([
+            {
+              uuid: 'app-1',
+              name: 'My App',
+              status: 'running',
+              fqdn: 'https://app.example-host.dev'
+            }
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = (await overview?.(trustedEvent(), 'proj-a', 'coolify')) as {
+        containers: { id: string }[]
+        hasDeployments: boolean
+      }
+      expect(result).toMatchObject({ hasDeployments: true })
+      expect(result.containers[0]).toMatchObject({ id: 'app-1' })
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(String(url)).toContain('http://localhost:8080')
+      expect((init as RequestInit).headers).toMatchObject({
+        Authorization: 'Bearer company-token'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
 
     await rm(storageRoot, { recursive: true, force: true })
   })
