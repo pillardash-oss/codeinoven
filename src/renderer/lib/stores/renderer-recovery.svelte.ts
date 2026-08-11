@@ -3,6 +3,7 @@ import type {
   PromptAttachment,
   PromptProjectReference
 } from '$shared/types'
+import { parseModelKey } from '$lib/model-keys'
 import { setDraftLabelCookie } from './draft-label'
 import {
   MAX_DRAFT_LENGTH,
@@ -460,9 +461,9 @@ export class RendererRecoveryStore {
 
   setAuditModel(modelKey: string): void {
     this.auditModelKey = modelKey
-    const [, providerId, modelId] = modelKey.split(':')
-    if (providerId && modelId && !this.isFavorite(`${providerId}:${modelId}`)) {
-      this.addRecentModel(`${providerId}:${modelId}`)
+    const { providerId, modelId } = parseModelKey(modelKey)
+    if (providerId && modelId && !this.isFavorite(modelKey)) {
+      this.addRecentModel(modelKey)
       return
     }
     this.persist()

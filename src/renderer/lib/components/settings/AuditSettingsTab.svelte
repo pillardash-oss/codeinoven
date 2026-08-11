@@ -3,6 +3,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import WorkerNamesSettings from './WorkerNamesSettings.svelte'
@@ -99,7 +100,7 @@
       [role]: { harnessId, providerId, modelId }
     }
     defaults = next
-    rendererRecovery.addRecentModel(`${providerId}:${modelId}`)
+    rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
     await updateConfig({ agentDefaults: next })
   }
 
@@ -127,7 +128,7 @@
       imageDescriptor: { harnessId, providerId, modelId }
     }
     defaults = next
-    rendererRecovery.addRecentModel(`${providerId}:${modelId}`)
+    rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
     await updateConfig({ agentDefaults: next })
   }
 
@@ -184,8 +185,8 @@
                 disabled={!settingsReady || loading || providers.length === 0}
                 onSelect={(providerId, modelId, harnessId) =>
                   void selectModel(role.id, providerId, modelId, harnessId)}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
@@ -265,8 +266,8 @@
             disabled={!settingsReady || loading || providers.length === 0}
             onSelect={(providerId, modelId, harnessId) =>
               void selectImageDescriptor(providerId, modelId, harnessId)}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
             onReorderFavorite={(draggedKey, targetKey, position) =>
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />

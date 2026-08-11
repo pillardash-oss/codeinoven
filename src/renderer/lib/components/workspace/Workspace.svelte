@@ -75,6 +75,7 @@
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
     threadSort,
@@ -1661,9 +1662,7 @@
     const base = Date.now()
     allThreads = allThreads.map((t) => {
       const index =
-        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID
-          ? pinnedIds.indexOf(t.id)
-          : -1
+        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID ? pinnedIds.indexOf(t.id) : -1
       return index !== -1 ? { ...t, pinnedAt: base - index } : t
     })
 
@@ -2879,8 +2878,8 @@
                     }}
                     harnessId={chatComposerSettings.harnessId}
                     favoriteModels={rendererRecovery.chatFavoriteModels}
-                    onToggleFavorite={(providerId, modelId) =>
-                      rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
                     onReorderFavorite={(draggedKey, targetKey, position) =>
                       rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
                     recentModels={rendererRecovery.chatRecentModels}

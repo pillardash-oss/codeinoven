@@ -16,6 +16,7 @@
     X
   } from '@lucide/svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { modelKey, parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
@@ -43,7 +44,7 @@
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
     onReorderFavorite?: (
       draggedKey: string,
@@ -116,7 +117,7 @@
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
-        provider.models.map((model) => modelKey(provider.id, model.id))
+        provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
       )
     )
   )
@@ -136,9 +137,7 @@
       .map(([id, name]) => ({ id, name }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
-  let effectiveHarnessCount = $derived(
-    showAllHarnesses ? 0 : selectedHarnesses.size || 0
-  )
+  let effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
   let harnessFilterActive = $derived(effectiveHarnessCount > 0)
   let harnessFilterLabel = $derived(
     harnessFilterActive
@@ -163,7 +162,7 @@
         .map((key) => {
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId)
+          const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
           return entry && passesVisionFilter(entry.model) ? entry : null
         })
         .filter((entry): entry is ModelEntry => entry !== null),
@@ -176,7 +175,7 @@
         .map((key) => {
           const parsed = parseModelKey(key)
           if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId)
+          const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
           return entry &&
             passesHarnessFilter(entry.provider.harnessId) &&
             passesVisionFilter(entry.model)
@@ -230,10 +229,6 @@
     return merged
   }
 
-  function modelKey(nextProviderId: string, nextModelId: string): string {
-    return `${nextProviderId}:${nextModelId}`
-  }
-
   /**
    * Whether a row is the currently selected model. The selected model is fully
    * identified by the (harnessId, providerId, modelId) triple — never by modelId
@@ -248,16 +243,9 @@
     )
   }
 
-  /** Render identity is harness-scoped even though legacy favorite keys are not. */
+  /** Render identity is harness-scoped. */
   function modelEntryKey(entry: ModelEntry): string {
-    return `${entry.provider.harnessId}:${entry.provider.id}:${entry.model.id}`
-  }
-
-  function parseModelKey(key: string): { providerId: string; modelId: string } {
-    const separator = key.indexOf(':')
-    return separator === -1
-      ? { providerId: '', modelId: key }
-      : { providerId: key.slice(0, separator), modelId: key.slice(separator + 1) }
+    return modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)
   }
 
   function searchWords(value: string): string[] {
@@ -328,23 +316,37 @@
         )
   }
 
-  /** Resolve a model key against the current catalog first, then cached catalogs. */
-  function resolveModel(providerId: string, modelId: string): ModelEntry | null {
+  /** Resolve a model key against the current catalog first, then cached catalogs.
+   *  When the key is harness-scoped, only the matching harness is considered;
+   *  legacy keys fall back to the current harness, then any harness. */
+  function resolveModel(
+    providerId: string,
+    modelId: string,
+    keyHarnessId?: string
+  ): ModelEntry | null {
     return (
-      findModelEntry(displayProviders, providerId, modelId) ??
-      findModelEntry(cachedProviders, providerId, modelId)
+      findModelEntry(displayProviders, providerId, modelId, keyHarnessId) ??
+      findModelEntry(cachedProviders, providerId, modelId, keyHarnessId)
     )
   }
 
   function findModelEntry(
     catalogs: ProviderCatalog[],
     providerId: string,
-    modelId: string
+    modelId: string,
+    keyHarnessId?: string
   ): ModelEntry | null {
-    const provider =
-      catalogs.find(
-        (candidate) => candidate.id === providerId && candidate.harnessId === harnessId
-      ) ?? catalogs.find((candidate) => candidate.id === providerId)
+    let provider: ProviderCatalog | undefined
+    if (keyHarnessId) {
+      provider = catalogs.find(
+        (candidate) => candidate.harnessId === keyHarnessId && candidate.id === providerId
+      )
+    } else {
+      provider =
+        catalogs.find(
+          (candidate) => candidate.id === providerId && candidate.harnessId === harnessId
+        ) ?? catalogs.find((candidate) => candidate.id === providerId)
+    }
     if (!provider) return null
     const model = provider.models.find((candidate) => candidate.id === modelId)
     return model ? { provider, model } : null
@@ -410,7 +412,7 @@
     | {
         kind: 'unavailable-model'
         key: string
-        favorite: { modelKey: string; providerId: string; modelId: string }
+        favorite: { modelKey: string; harnessId?: string; providerId: string; modelId: string }
       }
     | {
         kind: 'model'
@@ -443,7 +445,7 @@
             kind: 'model',
             key: `fav-${modelEntryKey(entry)}`,
             entry,
-            favoriteKey: modelKey(entry.provider.id, entry.model.id),
+            favoriteKey: modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id),
             draggable: Boolean(onReorderFavorite)
           })
         }
@@ -948,7 +950,12 @@
           class="shrink-0 transition-colors hover:text-foreground"
           title="Remove unavailable favorite"
           aria-label={`Remove ${item.favorite.modelId} from favorites`}
-          onclick={() => onToggleFavorite(item.favorite.providerId, item.favorite.modelId)}
+          onclick={() =>
+            onToggleFavorite(
+              item.favorite.providerId,
+              item.favorite.modelId,
+              item.favorite.harnessId ?? ''
+            )}
         >
           <X size={11} />
         </button>
@@ -999,7 +1006,7 @@
 {/snippet}
 
 {#snippet modelRow(entry: ModelEntry, rowKey: string)}
-  {@const key = modelKey(entry.provider.id, entry.model.id)}
+  {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   <button
     class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
@@ -1055,12 +1062,12 @@
             title={favoriteModelsSet.has(key) ? 'Remove from favorites' : 'Add to favorites'}
             onclick={(event: MouseEvent) => {
               event.stopPropagation()
-              onToggleFavorite(entry.provider.id, entry.model.id)
+              onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
             }}
             onkeydown={(event: KeyboardEvent) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.stopPropagation()
-                onToggleFavorite(entry.provider.id, entry.model.id)
+                onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
               }
             }}
           >

@@ -37,6 +37,7 @@
   } from '$shared/fast-inference'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
+  import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -157,7 +158,7 @@
     /** Model keys (providerId:modelId) the user has favorited. */
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Called when the user reorders a favorite relative to another favorite. */
     onReorderFavorite?: (
       draggedKey: string,
@@ -943,8 +944,8 @@
 
   function selectModel(providerId: string, modelId: string, nextHarnessId?: string): void {
     modelMenuOpen = false
-    onModelUsed?.(`${providerId}:${modelId}`)
     const nextHarness = nextHarnessId ?? resolved.harnessId
+    onModelUsed?.(modelKey(nextHarness, providerId, modelId))
     const provider = providers.find(
       (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
     )

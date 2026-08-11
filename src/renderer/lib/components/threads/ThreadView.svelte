@@ -96,6 +96,7 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -414,7 +415,9 @@
 
     for (const provider of providers) {
       for (const model of provider.models) {
-        const favorite = rendererRecovery.isFavorite(`${provider.id}:${model.id}`)
+        const favorite = rendererRecovery.isFavorite(
+          modelKey(provider.harnessId, provider.id, model.id)
+        )
         modelActions.push({
           id: actionId(`model:${provider.harnessId}:${provider.id}:${model.id}`),
           title: `Use ${model.name}`,
@@ -4546,7 +4549,9 @@
     auditTab.busy = true
     auditTab.error = ''
     auditSettings = selected
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     try {
       const session = await invoke(
         'agent:ensureAuditSession',
@@ -4592,7 +4597,9 @@
     errorMessage = ''
     auditState = 'running'
     auditSettings = selected
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     try {
       assignmentAuditThread = await invoke(
         'agent:ensureAssignmentAuditorThread',
@@ -4647,7 +4654,9 @@
     errorMessage = ''
     auditState = 'running'
     auditSettings = selected
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     try {
       achievementAuditThread = await invoke(
         'agent:ensureAchievementAuditorThread',
@@ -4699,7 +4708,9 @@
       providerId: selected.providerId,
       modelId: selected.modelId
     }
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     if (isAssignmentAuditorThread) {
       updateSettings({
         ...settings,
@@ -4718,13 +4729,17 @@
   }
 
   function changeSpecModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     updateSettings({ ...settings, ...selected })
   }
 
   /** Switch the thread's text model from the provider-error card's picker. */
   function changeThreadModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(`${selected.providerId}:${selected.modelId}`)
+    rendererRecovery.addRecentModel(
+      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    )
     updateSettings({ ...settings, ...selected })
   }
 
@@ -6101,8 +6116,8 @@
           onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
           onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
-          onToggleFavorite={(providerId, modelId) =>
-            rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+          onToggleFavorite={(providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
           onReorderFavorite={(draggedKey, targetKey, position) =>
             rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           onAddAnnotation={addAssignmentAnnotation}
@@ -6522,8 +6537,10 @@
                             recentModels={rendererRecovery.recentModels}
                             onRetry={retryAssignmentAuditFromAuditor}
                             onModelChange={changeAuditModel}
-                            onToggleFavorite={(providerId, modelId) =>
-                              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                            onToggleFavorite={(providerId, modelId, harnessId) =>
+                              rendererRecovery.toggleFavorite(
+                                modelKey(harnessId, providerId, modelId)
+                              )}
                             onReorderFavorite={(draggedKey, targetKey, position) =>
                               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                             onViewReport={() => openCoordinatorAuditReport(turnAuditReport)}
@@ -6709,8 +6726,8 @@
                 retrying={assignmentWorkerRetryingId === item.worker.id}
                 onModelChange={(selected) =>
                   void changeAssignmentWorkerModel(item.worker, selected)}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onRetry={() => void retryAssignmentWorker(item.worker)}
@@ -6739,10 +6756,10 @@
                   ? rendererRecovery.chatRecentModels
                   : rendererRecovery.recentModels}
                 onModelChange={changeThreadModel}
-                onToggleFavorite={(providerId, modelId) =>
+                onToggleFavorite={(providerId, modelId, harnessId) =>
                   chatMode
-                    ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
-                    : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                    ? rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))
+                    : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   chatMode
                     ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
@@ -6901,8 +6918,8 @@
                   onRetry={(requestId, selection) =>
                     replyImageDescriptor(requestId, 'retry', selection)}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
-                  onToggleFavorite={(providerId, modelId) =>
-                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
@@ -6924,8 +6941,8 @@
                 busy={auditBusy || busy}
                 onRetry={retryAssignmentAuditFromAuditor}
                 onModelChange={changeAuditModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
@@ -6943,8 +6960,8 @@
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
                 onModelChange={changeSpecModel}
                 onCancel={cancelBrainstormEntryRetry}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
@@ -6987,8 +7004,8 @@
                 busy={auditBusy}
                 onRetry={() => void openAssignmentAuditWork()}
                 onModelChange={changeAuditModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
@@ -7009,8 +7026,8 @@
                 busy={auditBusy}
                 onRetry={() => void openAssignmentAuditWork()}
                 onModelChange={changeAuditModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
@@ -7028,8 +7045,8 @@
                 onCancel={completeAudit}
                 onAudit={generateAudit}
                 onModelChange={changeAuditModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
@@ -7047,8 +7064,8 @@
                 onCancel={returnAuditToOffer}
                 onReaudit={reaudit}
                 onModelChange={changeAuditModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
@@ -7078,8 +7095,8 @@
                   onOpenFullscreen={openAssignmentStudio}
                   onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
                   onSeniorModelChange={updateAssignmentSeniorModel}
-                  onToggleFavorite={(providerId, modelId) =>
-                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
@@ -7100,8 +7117,8 @@
                 onGenerateAssignment={generateAssignmentDraft}
                 onOpenAssignment={openAssignmentStudio}
                 onModelChange={changeSpecModel}
-                onToggleFavorite={(providerId, modelId) =>
-                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
@@ -7202,10 +7219,12 @@
                   favoriteModels={chatMode
                     ? rendererRecovery.chatFavoriteModels
                     : rendererRecovery.favoriteModels}
-                  onToggleFavorite={(providerId, modelId) =>
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
                     chatMode
-                      ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
-                      : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                      ? rendererRecovery.toggleChatFavorite(
+                          modelKey(harnessId, providerId, modelId)
+                        )
+                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                   onReorderFavorite={(draggedKey, targetKey, position) =>
                     chatMode
                       ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
@@ -7269,8 +7288,8 @@
         onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
         onResume={resumeAchievementCoordination}
         onModelChange={changeAuditModel}
-        onToggleFavorite={(providerId, modelId) =>
-          rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+        onToggleFavorite={(providerId, modelId, harnessId) =>
+          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
         onReorderFavorite={(draggedKey, targetKey, position) =>
           rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
         onWidthChange={(width) => (assignmentPanelWidth = width)}
