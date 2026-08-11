@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { AlertTriangle, Clock3, Code2, LogIn, RotateCcw, Square, X } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    Clock3,
+    Code2,
+    Loader2,
+    LogIn,
+    RotateCcw,
+    Square,
+    X
+  } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentProviderIssueKind,
@@ -31,6 +40,10 @@
     onStop?: () => void
     onRetry?: () => void
     onDismiss?: () => void
+    sourceLabel?: string
+    sourceDetail?: string
+    retryLabel?: string
+    retrying?: boolean
     /** Whether the app auto-resumes this thread once the reset time passes. */
     autoRetryEnabled?: boolean
   }
@@ -49,6 +62,10 @@
     onStop,
     onRetry,
     onDismiss,
+    sourceLabel,
+    sourceDetail,
+    retryLabel = 'Retry',
+    retrying = false,
     autoRetryEnabled = true
   }: Props = $props()
   let now = $state(Date.now())
@@ -179,11 +196,22 @@
 
     <div class="min-w-0 flex-1">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <p class="text-sm font-semibold text-foreground">{issueTitle(issue.kind)}</p>
+        <p class="text-sm font-semibold text-foreground">
+          {sourceLabel ? 'Worker output error' : issueTitle(issue.kind)}
+        </p>
         <span class="rounded-full bg-raised px-2 py-0.5 text-[10px] font-semibold text-muted">
           {providerName}
         </span>
+        {#if sourceLabel}
+          <span class="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger">
+            Worker · {sourceLabel}
+          </span>
+        {/if}
       </div>
+
+      {#if sourceDetail}
+        <p class="mt-1 text-xs font-medium text-foreground">Task · {sourceDetail}</p>
+      {/if}
 
       <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
 
@@ -235,10 +263,15 @@
         {:else if !waiting && issue.kind !== 'authentication' && onRetry}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            disabled={retrying}
             onclick={onRetry}
           >
-            <RotateCcw size={13} />
-            Retry
+            {#if retrying}
+              <Loader2 size={13} class="animate-spin" />
+            {:else}
+              <RotateCcw size={13} />
+            {/if}
+            {retrying ? 'Retrying…' : retryLabel}
           </button>
         {/if}
         {#if !waiting && settings && providers.length > 0 && onModelChange}

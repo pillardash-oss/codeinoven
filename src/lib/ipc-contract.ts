@@ -451,6 +451,14 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, sessionId: string],
     void
   >
+  'agent:retryAssignmentWorker': Contract<
+    [projectId: string, coordinatorThreadId: string, workerThreadId: string],
+    AssignmentPlan
+  >
+  'agent:resumeAssignmentAttention': Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentPlan
+  >
   'agent:abortChildSession': Contract<
     [projectId: string, threadId: string, sessionId: string],
     void

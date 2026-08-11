@@ -1356,6 +1356,16 @@ export class ChatEngine {
         this.retryChildSession(projectId, threadId, sessionId)
     )
     ipcMain.handle(
+      'agent:retryAssignmentWorker',
+      (_, projectId: string, coordinatorThreadId: string, workerThreadId: string) =>
+        this.retryAssignmentWorker(projectId, coordinatorThreadId, workerThreadId)
+    )
+    ipcMain.handle(
+      'agent:resumeAssignmentAttention',
+      (_, projectId: string, coordinatorThreadId: string) =>
+        this.resumeAssignmentAttention(projectId, coordinatorThreadId)
+    )
+    ipcMain.handle(
       'agent:abortChildSession',
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.abortChildSession(projectId, threadId, sessionId)
@@ -2924,6 +2934,155 @@ export class ChatEngine {
       this.broadcast({ type: 'session.error', sessionId, error: message, issue })
       throw error
     }
+  }
+
+  /** Retry one failed Assignment worker without redirecting the action through its coordinator. */
+  async retryAssignmentWorker(
+    projectId: string,
+    coordinatorThreadId: string,
+    workerThreadId: string
+  ): Promise<AssignmentPlan> {
+    this.touchUserActivity()
+    return this.retryAssignmentWorkerInternal(projectId, coordinatorThreadId, workerThreadId)
+  }
+
+  private async retryAssignmentWorkerInternal(
+    projectId: string,
+    coordinatorThreadId: string,
+    workerThreadId: string
+  ): Promise<AssignmentPlan> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    workerThreadId = validateEntityId(workerThreadId, 'Worker thread ID')
+    const assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const task = assignment.content.tasks.find(
+      (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
+    )
+    if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
+    if (task.status !== 'attention' || task.report?.status !== 'failed') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        `Worker task ${task.id} does not have a retryable harness failure`
+      )
+    }
+    const worker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (
+      !worker?.settings ||
+      worker.assignmentId !== assignment.id ||
+      worker.assignmentRole !== 'worker' ||
+      worker.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      throw new AssignmentEngineError('not_found', 'Assignment worker thread not found')
+    }
+
+    const failureSummary = task.report.summary
+    await this.sendPrompt(
+      projectId,
+      workerThreadId,
+      worker.settings,
+      [
+        `Retry Assignment task “${task.title}” after the provider interruption.`,
+        'Continue from the existing durable worker context, preserve completed work, finish the task, and submit the required Assignment report.'
+      ].join(' '),
+      [],
+      undefined,
+      createMessageId(),
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      { action: `Retry worker · ${task.workerName ?? worker.title}`.slice(0, 120) }
+    )
+    const updated = await this.assignmentEngine.markWorkerSteered(assignment.id, workerThreadId)
+    const refreshedWorker = await this.threadManager.getThread(projectId, workerThreadId)
+    if (refreshedWorker) broadcastThreadUpdate(refreshedWorker)
+
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    const coordinatorStatus = coordinator?.sessionId
+      ? this.sessionStatuses.get(coordinator.sessionId)
+      : undefined
+    if (
+      coordinator?.sessionId &&
+      coordinatorStatus?.state === 'error' &&
+      this.issueMatchesAssignmentFailure(coordinatorStatus.issue, failureSummary)
+    ) {
+      await this.dismissSessionError(projectId, coordinatorThreadId, coordinator.sessionId)
+    }
+    return updated
+  }
+
+  private issueMatchesAssignmentFailure(
+    issue: AgentProviderIssue,
+    failureSummary: string
+  ): boolean {
+    const issueText = (issue.rawError ?? issue.message).trim()
+    const summary = failureSummary.trim()
+    return (
+      issueText === summary ||
+      issue.message.trim() === summary ||
+      (issueText.length > 0 && summary.includes(issueText)) ||
+      (summary.length > 0 && issueText.includes(summary))
+    )
+  }
+
+  /** Retry every failed worker first, then wake the coordinator only if work remains actionable. */
+  async resumeAssignmentAttention(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<AssignmentPlan> {
+    this.touchUserActivity()
+    return this.resumeAssignmentAttentionInternal(projectId, coordinatorThreadId)
+  }
+
+  private async resumeAssignmentAttentionInternal(
+    projectId: string,
+    coordinatorThreadId: string
+  ): Promise<AssignmentPlan> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    let assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const retryableWorkerIds = assignment.content.tasks
+      .filter(
+        (task) =>
+          task.owner === 'worker' &&
+          task.status === 'attention' &&
+          task.report?.status === 'failed' &&
+          task.threadId
+      )
+      .map((task) => task.threadId)
+      .filter((threadId): threadId is string => threadId !== undefined)
+
+    for (const workerThreadId of retryableWorkerIds) {
+      try {
+        assignment = await this.retryAssignmentWorkerInternal(
+          projectId,
+          coordinatorThreadId,
+          workerThreadId
+        )
+      } catch (error) {
+        Logger.error('Assignment worker retry failed', {
+          assignmentId: assignment.id,
+          workerThreadId,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+
+    assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId) ?? assignment
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (coordinator?.settings && (await this.assignmentNeedsCoordinatorTurn(assignment))) {
+      await this.ensureAssignmentApi()
+      await this.sendAssignmentCoordinatorPrompt(
+        assignment,
+        coordinator.settings,
+        this.coordinatorAssignmentPrompt(assignment),
+        { action: 'Resume Assignment coordination' },
+        true
+      )
+    }
+    return this.assignmentEngine.getActive(projectId, coordinatorThreadId) ?? assignment
   }
 
   /** Stop only the selected child without cancelling its parent thread. */
@@ -9050,22 +9209,7 @@ export class ChatEngine {
         }
         if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
           assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
-          if (!(await this.assignmentNeedsCoordinatorTurn(assignment))) continue
-          if (!thread.settings) continue
-          await this.ensureAssignmentApi()
-          const dispatched = await this.sendAssignmentCoordinatorPrompt(
-            assignment,
-            thread.settings,
-            this.coordinatorAssignmentPrompt(assignment),
-            undefined,
-            true
-          )
-          if (!dispatched) {
-            Logger.info('Assignment recovery skipped because its snapshot is unchanged', {
-              assignmentId: assignment.id,
-              threadId: thread.id
-            })
-          }
+          await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
           continue
         }
         if (thread.settings?.loopMode !== true) continue
@@ -11157,6 +11301,20 @@ export class ChatEngine {
     if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
     const current = this.sessionStatuses.get(sessionId)
     if (current?.state === 'working' || current?.state === 'waiting') return
+    if (thread.assignmentRole === 'coordinator' && thread.assignmentId) {
+      const assignment = this.assignmentEngine.getActive(projectId, threadId)
+      const hasFailedWorker = assignment?.content.tasks.some(
+        (task) =>
+          task.owner === 'worker' &&
+          task.status === 'attention' &&
+          task.report?.status === 'failed' &&
+          task.threadId
+      )
+      if (assignment && hasFailedWorker) {
+        await this.resumeAssignmentAttentionInternal(projectId, threadId)
+        return
+      }
+    }
     const driverId = record.harnessId || thread.settings?.harnessId || 'opencode'
     const settings = validateThreadSettings(
       thread.settings ?? {
@@ -11927,7 +12085,7 @@ export class ChatEngine {
           thread.assignmentTaskId,
           thread.id,
           report,
-          `worker-session-failed-${sessionId}`
+          `worker-session-failed-${sessionId}-${info.activeTurnId ?? 'unbound-turn'}`
         )
         if (!result.idempotent) {
           await this.promptCoordinatorForAudit(result.assignment, thread.assignmentTaskId, report)

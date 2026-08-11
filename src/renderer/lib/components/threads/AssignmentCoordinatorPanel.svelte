@@ -385,7 +385,9 @@
             type="button"
             class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
               ? 'border-primary bg-elevated'
-              : 'border-transparent'}"
+              : ['attention', 'failed', 'stopped'].includes(task.status)
+                ? 'border-danger bg-danger/5'
+                : 'border-transparent'}"
             title={taskTooltip(task, linkedWorker)}
             aria-label={taskTooltip(task, linkedWorker)}
             aria-current={active ? 'true' : undefined}

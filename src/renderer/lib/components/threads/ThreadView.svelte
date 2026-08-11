@@ -1423,6 +1423,7 @@
   let assignmentError = $state('')
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
+  let assignmentWorkerRetryingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
   // Intentional mounted-thread snapshot; live changes are reconciled from persisted thread state.
@@ -1431,6 +1432,27 @@
   let auditBusy = $state(false)
   let auditError = $state('')
   let studioDocument = $state<'brainstorm' | 'spec' | 'assignment' | 'audit'>('spec')
+  let assignmentWorkerAttentionItems = $derived.by(() => {
+    if (!assignment || assignment.coordinatorThreadId !== thread.id) return []
+    return assignment.content.tasks.flatMap((task) => {
+      if (
+        task.owner !== 'worker' ||
+        task.status !== 'attention' ||
+        task.report?.status !== 'failed' ||
+        !task.threadId
+      ) {
+        return []
+      }
+      const worker = assignmentThreads.find((candidate) => candidate.id === task.threadId)
+      return worker ? [{ task, worker }] : []
+    })
+  })
+  let coordinatorErrorMatchesAssignmentWorker = $derived.by(() => {
+    if (visibleProviderStatus?.state !== 'error') return false
+    return assignmentWorkerAttentionItems.some(({ task }) =>
+      providerIssueMatchesFailure(visibleProviderStatus.issue, task.report?.summary ?? '')
+    )
+  })
   let studioBrainstorm = $derived(
     brainstormVersions.find((candidate) => candidate.version === selectedBrainstormVersion) ??
       brainstorm
@@ -4151,21 +4173,115 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
-  function resumeAssignmentCoordination(): void {
-    void sendMessage(
-      [
-        'Resume Assignment coordination.',
-        'Inspect every blocked, failed, attention, ready, and incomplete task plus its worker thread.',
-        'If work can continue safely, assign or steer the appropriate worker. If user input is required, explain the exact blocker and ask a focused question. Do not silently skip or relabel blocked work.'
-      ].join(' '),
-      [],
-      undefined,
-      true,
-      undefined,
-      [],
-      [],
-      { action: 'Resume Assignment coordination' }
+  function harnessDisplayName(harnessId: string): string {
+    if (harnessId === 'opencode') return 'OpenCode'
+    if (harnessId === 'claude-code') return 'Claude Code'
+    if (harnessId === 'codex') return 'Codex'
+    if (harnessId === 'cline') return 'Cline'
+    if (harnessId === 'pi') return 'Pi'
+    if (harnessId === 'antigravity') return 'Antigravity'
+    return harnessId
+  }
+
+  function assignmentWorkerAttentionStatus(
+    task: AssignmentTask,
+    worker: Thread
+  ): Extract<AgentSessionStatus, { state: 'error' }> {
+    const message = task.report?.summary ?? 'The Assignment worker needs attention.'
+    return {
+      state: 'error',
+      issue: {
+        kind: 'unknown',
+        message,
+        rawError: message,
+        harnessId: worker.settings?.harnessId ?? 'unknown',
+        retryable: true
+      }
+    }
+  }
+
+  function providerIssueMatchesFailure(issue: AgentProviderIssue, failureSummary: string): boolean {
+    const issueText = (issue.rawError ?? issue.message).trim()
+    const summary = failureSummary.trim()
+    return (
+      summary === issueText ||
+      summary === issue.message.trim() ||
+      (issueText.length > 0 && summary.includes(issueText)) ||
+      (summary.length > 0 && issueText.includes(summary))
     )
+  }
+
+  async function changeAssignmentWorkerModel(
+    worker: Thread,
+    selected: ThreadSettings
+  ): Promise<void> {
+    try {
+      const updatedWorker = await invoke(
+        'thread:updateSettings',
+        worker.projectId,
+        worker.id,
+        selected
+      )
+      assignmentThreads = assignmentThreads.map((candidate) =>
+        candidate.id === updatedWorker.id ? updatedWorker : candidate
+      )
+      scopeState.updateThread(updatedWorker)
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The worker model could not be updated.'
+    }
+  }
+
+  async function retryAssignmentWorker(worker: Thread): Promise<void> {
+    const current = assignment
+    if (!current || assignmentWorkerRetryingId) return
+    const task = current.content.tasks.find((candidate) => candidate.threadId === worker.id)
+    const clearBubbledCoordinatorError =
+      visibleProviderStatus?.state === 'error' &&
+      providerIssueMatchesFailure(visibleProviderStatus.issue, task?.report?.summary ?? '')
+    assignmentWorkerRetryingId = worker.id
+    try {
+      assignment = await invoke(
+        'agent:retryAssignmentWorker',
+        current.projectId,
+        current.coordinatorThreadId,
+        worker.id
+      )
+      if (clearBubbledCoordinatorError) {
+        errorMessage = ''
+        providerStatus = null
+      }
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The worker could not be retried.'
+    } finally {
+      assignmentWorkerRetryingId = null
+    }
+  }
+
+  function resumeAssignmentCoordination(): void {
+    const current = assignment
+    if (!current || assignmentBusy) return
+    assignmentBusy = true
+    assignmentError = ''
+    const clearBubbledCoordinatorError = coordinatorErrorMatchesAssignmentWorker
+    void invoke('agent:resumeAssignmentAttention', current.projectId, current.coordinatorThreadId)
+      .then(async (updated) => {
+        assignment = updated
+        if (clearBubbledCoordinatorError) {
+          errorMessage = ''
+          providerStatus = null
+        }
+        await reconcileReadySpec()
+      })
+      .catch((error) => {
+        assignmentError =
+          error instanceof Error ? error.message : 'Assignment coordination could not resume.'
+        errorMessage = assignmentError
+      })
+      .finally(() => {
+        assignmentBusy = false
+      })
   }
 
   async function stopAssignment(): Promise<void> {
@@ -6365,8 +6481,37 @@
       </div>
     </div>
 
-    <!-- Provider status — between messages and composer, always visible -->
-    {#if visibleProviderStatus}
+    <!-- Assignment worker failures stay visible on the coordinator, but their
+         actions target the owning durable worker rather than this thread. -->
+    {#each assignmentWorkerAttentionItems as item (item.task.id)}
+      <div class="conversation-gutter shrink-0 px-6 pb-2">
+        <div class="mx-auto max-w-3xl">
+          <AgentProviderStatusCard
+            status={assignmentWorkerAttentionStatus(item.task, item.worker)}
+            providerName={harnessDisplayName(item.worker.settings?.harnessId ?? 'unknown')}
+            settings={item.worker.settings}
+            {providers}
+            projectId={thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            sourceLabel={item.task.workerName ?? item.worker.title}
+            sourceDetail={item.task.title}
+            retryLabel="Retry worker"
+            retrying={assignmentWorkerRetryingId === item.worker.id}
+            onModelChange={(selected) => void changeAssignmentWorkerModel(item.worker, selected)}
+            onToggleFavorite={(providerId, modelId) =>
+              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onRetry={() => void retryAssignmentWorker(item.worker)}
+          />
+        </div>
+      </div>
+    {/each}
+
+    <!-- Provider status — between messages and composer, always visible. A
+         matching bubbled worker error is replaced by the attributed card above. -->
+    {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
       <div class="conversation-gutter shrink-0 px-6 pb-2">
         <div class="mx-auto max-w-3xl">
           <AgentProviderStatusCard
