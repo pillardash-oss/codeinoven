@@ -26,6 +26,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import {
@@ -34,6 +35,7 @@
     rangeForAnnotation,
     waitForScrollSettle
   } from './studio-annotation-anchors'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
@@ -76,6 +78,7 @@
     assignmentAvailable?: boolean
     assignmentMode?: boolean
     auditAvailable?: boolean
+    history: StudioDocumentHistory<EngineeringSpec>
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
     onRevealInAppFile: (spec: EngineeringSpec) => CallbackResult
@@ -167,6 +170,7 @@
     assignmentAvailable = false,
     assignmentMode = false,
     auditAvailable = false,
+    history,
     onBack,
     onOpenInEditor,
     onRevealInAppFile,
@@ -197,7 +201,7 @@
   let sectionsOpen = $state(false)
   // The effect below reconciles later prop versions; these are intentional local edit buffers.
   // svelte-ignore state_referenced_locally
-  let draft = $state<EngineeringSpec>($state.snapshot(spec))
+  let draft = $state<EngineeringSpec>(history.attach($state.snapshot(spec)))
   const sections = $derived(
     allSections.filter(
       (section) => section.id !== 'additional_info' || draft.content.additionalInfo !== undefined
@@ -206,7 +210,8 @@
   const decisionComments = $derived(draft.decisionComments ?? [])
   // svelte-ignore state_referenced_locally
   let loadedSpecKey = $state(`${spec.id}:${spec.version}:${spec.updatedAt}`)
-  let dirty = $state(false)
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let savePending = $state(false)
   let pendingAction = $state<SpecDecisionAction | null>(null)
   let additionalNotes = $state('')
@@ -263,8 +268,10 @@
   $effect(() => {
     const nextKey = `${spec.id}:${spec.version}:${spec.updatedAt}`
     if (nextKey !== loadedSpecKey) {
-      draft = $state.snapshot(spec)
       loadedSpecKey = nextKey
+      if (history.dirty) return
+      history.markSaved($state.snapshot(spec))
+      draft = $state.snapshot(spec)
       dirty = false
       pendingAnnotation = null
       editingAnnotation = null
@@ -283,8 +290,31 @@
   })
 
   function markDirty(): void {
-    dirty = true
     draft.updatedAt = Date.now()
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
+    void refreshAnnotationMarkers()
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = $state.snapshot(previous)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    closeContextPicker()
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = $state.snapshot(next)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    closeContextPicker()
     void refreshAnnotationMarkers()
   }
 
@@ -689,6 +719,7 @@
   }
 
   function applySpec(updated: EngineeringSpec): void {
+    history.markSaved($state.snapshot(updated))
     draft = $state.snapshot(updated)
     loadedSpecKey = `${updated.id}:${updated.version}:${updated.updatedAt}`
     dirty = false
@@ -822,7 +853,9 @@
     if (!dirty || busy || savePending) return null
     savePending = true
     try {
-      return await onSave($state.snapshot(draft))
+      const saved = await onSave($state.snapshot(draft))
+      if (saved) applySpec(saved)
+      return saved
     } finally {
       savePending = false
     }
@@ -962,6 +995,12 @@
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         <span>Updated {formatDate(draft.updatedAt)}</span>
         <span
           class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass(

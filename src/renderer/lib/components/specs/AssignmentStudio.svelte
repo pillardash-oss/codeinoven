@@ -15,6 +15,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
@@ -27,6 +28,7 @@
     rangeForAnnotation,
     waitForScrollSettle
   } from './studio-annotation-anchors'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import type {
     AssignmentAnnotation,
     AssignmentModelSelection,
@@ -55,6 +57,7 @@
     auditAvailable?: boolean
     auditActive?: boolean
     finalComplete?: boolean
+    history: StudioDocumentHistory<AssignmentPlanContent>
     onBack: () => void
     onOpenBrainstorm?: () => void
     onOpenSpec: () => void
@@ -72,7 +75,7 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -111,6 +114,7 @@
     auditAvailable = false,
     auditActive = false,
     finalComplete = false,
+    history,
     onBack,
     onOpenBrainstorm,
     onOpenSpec,
@@ -141,10 +145,11 @@
   let sectionsOpen = $state(false)
   // The effect reconciles a saved assignment version with the local editing buffer.
   // svelte-ignore state_referenced_locally
-  let draft = $state<AssignmentPlanContent>($state.snapshot(assignment.content))
+  let draft = $state<AssignmentPlanContent>(history.attach($state.snapshot(assignment.content)))
   // svelte-ignore state_referenced_locally
   let loadedAssignmentKey = $state(`${assignment.id}:${assignment.version}:${assignment.updatedAt}`)
-  let dirty = $state(false)
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let savePending = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
   let documentContent = $state<HTMLElement | null>(null)
@@ -206,9 +211,11 @@
   $effect(() => {
     const nextKey = `${assignment.id}:${assignment.version}:${assignment.updatedAt}`
     if (nextKey !== loadedAssignmentKey) {
-      draft = $state.snapshot(assignment.content)
-      annotations = $state.snapshot(assignment.annotations ?? [])
       loadedAssignmentKey = nextKey
+      annotations = $state.snapshot(assignment.annotations ?? [])
+      if (history.dirty) return
+      history.markSaved($state.snapshot(assignment.content))
+      draft = $state.snapshot(assignment.content)
       dirty = false
     }
   })
@@ -229,7 +236,30 @@
 
   function updateDraft(content: AssignmentPlanContent): void {
     draft = content
-    dirty = true
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
+    void refreshAnnotationMarkers()
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = $state.snapshot(previous)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    editingAnnotationPosition = null
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = $state.snapshot(next)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    editingAnnotationPosition = null
     void refreshAnnotationMarkers()
   }
 
@@ -238,7 +268,10 @@
     savePending = true
     try {
       const saved = await onSave($state.snapshot(draft))
-      if (saved) dirty = false
+      if (saved) {
+        history.markSaved($state.snapshot(draft))
+        dirty = history.dirty
+      }
     } finally {
       savePending = false
     }
@@ -535,6 +568,12 @@
             {/each}
           </select>
         {/if}
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         <span>Updated {formatDate(assignment.updatedAt)}</span>
         <span
           class="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
