@@ -108,6 +108,16 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Antigravity reads AGENTS.md and GEMINI.md rule files natively.
     manifest: manifest({ loadsAgentsMd: true })
+  },
+  {
+    id: 'muse',
+    name: 'Muse Code',
+    command: 'muse',
+    versionArgs: ['--version'],
+    integration: 'ready',
+    supportsCustomProviders: false,
+    // Muse reads AGENTS.md natively, falling back to CLAUDE.md.
+    manifest: manifest({ loadsAgentsMd: true })
   }
 ]
 

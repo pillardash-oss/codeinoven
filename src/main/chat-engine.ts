@@ -19,6 +19,7 @@ import { ClaudeCodeDriver } from './drivers/claude-code-driver'
 import { CodexDriver } from './drivers/codex-driver'
 import { ClineDriver } from './drivers/cline-driver'
 import { AntigravityDriver } from './drivers/antigravity-driver'
+import { MuseDriver } from './drivers/muse-driver'
 import { PiDriver } from './drivers/pi-driver'
 import { CheckpointManager } from './checkpoint-manager'
 import { harnessLoadsAgentsMd, listHarnesses } from './harness-registry'
@@ -1231,7 +1232,8 @@ export class ChatEngine {
       'claude-code': () => new ClaudeCodeDriver(storage, this.baseUrlProviders, this.secretVault),
       pi: () => new PiDriver(storage, this.baseUrlProviders, this.secretVault),
       cline: () => new ClineDriver(storage, this.baseUrlProviders, this.secretVault),
-      antigravity: () => new AntigravityDriver(storage)
+      antigravity: () => new AntigravityDriver(storage),
+      muse: () => new MuseDriver(storage)
     }
     for (const harness of listHarnesses()) {
       const create = driverFactories[harness.id]

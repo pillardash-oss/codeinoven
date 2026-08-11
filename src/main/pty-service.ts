@@ -213,6 +213,7 @@ export class PtyService {
       'cline',
       'pi',
       'agy',
+      'muse',
       'npm',
       'bun',
       'brew',

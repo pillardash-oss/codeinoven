@@ -1208,7 +1208,9 @@ export function registerIpcHandlers(
               ? 'Pi'
               : thread?.settings?.harnessId === 'antigravity'
                 ? 'Antigravity'
-                : 'OpenCode'
+                : thread?.settings?.harnessId === 'muse'
+                  ? 'Muse Code'
+                  : 'OpenCode'
     const harnessId = thread?.settings?.harnessId ?? 'opencode'
     const loadsAgentsMd =
       options.harnessManifestService === undefined
