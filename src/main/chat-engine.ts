@@ -39,6 +39,7 @@ import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { HarnessDriver, SendPromptOptions } from './drivers/driver.interface'
 import type { PreparedUtilityRuntime } from './drivers/driver.interface'
 import type { Database } from './database/database'
+import { HarnessUsageRepo } from './database/repositories/harness-usage-repo'
 import type { StorageEngine } from './storage-engine'
 import type { PendingRetryRecord, RetrySchedulerService } from './retry-scheduler-service'
 import { SecretVault } from './secret-vault'
@@ -116,7 +117,9 @@ import type {
   ScopedHarnessCommand,
   ThreadStatus,
   Thread,
-  ThreadSettings
+  ThreadSettings,
+  UsageEventDetails,
+  UsageEventFeature
 } from '../lib/types'
 import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
@@ -1231,6 +1234,7 @@ export class ChatEngine {
       async (threads) => {
         for (const thread of threads) broadcastThreadDeleted(thread)
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+  private usageRepo: HarnessUsageRepo
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
       }
@@ -1250,6 +1254,7 @@ export class ChatEngine {
       this.utilityOrchestration.onCuaActivity((pid, threadId) => {
         void this.computerUsePip?.track(pid, threadId)
       })
+    this.usageRepo = new HarnessUsageRepo(database)
     }
     this.specEngine = new SpecEngine(storage, database, {
       validateForApproval: validateEngineeringSpec
@@ -3884,7 +3889,7 @@ export class ChatEngine {
     // startup serialization belongs inside its driver; ClaudeCodeDriver gates
     // only OAuth startup and releases that gate on the process's first output.
     const scheduleAutoTitle = createAutoTitleLauncher(shouldAutoTitle, () =>
-      this.autoTitleThread(projectId, threadId, driverId, settings, text)
+      this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
     )
     void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
@@ -4759,7 +4764,12 @@ export class ChatEngine {
     try {
       const results: ImageDescriptorResult[] = []
       for (const image of request.images) {
-        const outcome = await this.describeWithImageDescriptorRecovery(request, selection, image)
+        const outcome = await this.describeWithImageDescriptorRecovery(
+          request,
+          selection,
+          image,
+          parentTurnId
+        )
         results.push(outcome)
       }
       return results
@@ -4779,7 +4789,8 @@ export class ChatEngine {
   private async describeWithImageDescriptorRecovery(
     request: ImageDescriptorExecutorRequest,
     initialSelection: AgentModelSelection,
-    image: ResolvedImageEntry
+    image: ResolvedImageEntry,
+    parentTurnId?: string
   ): Promise<ImageDescriptorResult> {
     let selection = initialSelection
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -4793,7 +4804,8 @@ export class ChatEngine {
           request.projectPath,
           selection,
           image,
-          attempt
+          attempt,
+          parentTurnId
         )
         return { id: image.id, source: image.source, type: image.type, description }
       } catch (error) {
@@ -4934,7 +4946,8 @@ export class ChatEngine {
     projectPath: string,
     selection: AgentModelSelection,
     image: ResolvedImageEntry,
-    attempt: number
+    attempt: number,
+    parentTurnId?: string
   ): Promise<string> {
     const { driver } = await this.resolve(projectId, selection.harnessId, threadId)
     const settings: ThreadSettings = {
@@ -4996,7 +5009,7 @@ export class ChatEngine {
         isolated && driver instanceof OpenCodeDriver
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
-      const response = [...messages].reverse().find((message) => message.role === 'assistant')
+      response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error('The vision model returned no description')
       if (response.error) throw new Error(response.error)
       const text = response.parts
@@ -5104,6 +5117,12 @@ export class ChatEngine {
       transportParts: [
         {
           type: 'text',
+      const parentTurnId = this.database.get<{ id: string }>(
+        `SELECT id FROM agent_messages
+         WHERE thread_id = ? AND role = 'user'
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        request.threadId
+      )?.id
           id: `${messageId}-transport-text`,
           messageID: messageId,
           text: transportText
@@ -5232,7 +5251,8 @@ export class ChatEngine {
     threadId: string,
     driverId: string,
     settings: ThreadSettings,
-    text: string
+    text: string,
+    parentTurnId: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual') return
@@ -5240,7 +5260,14 @@ export class ChatEngine {
 
     let generated: string | null
     try {
-      generated = await this.generateTitleWithModel(projectId, threadId, driverId, settings, text)
+      generated = await this.generateTitleWithModel(
+        projectId,
+        threadId,
+        driverId,
+        settings,
+        text,
+        parentTurnId
+      )
     } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
       Logger.dev('Thread auto-title generation failed — keeping fallback', {
@@ -5277,15 +5304,53 @@ export class ChatEngine {
     threadId: string,
     driverId: string,
     settings: ThreadSettings,
-    text: string
+    text: string,
+    parentTurnId: string
   ): Promise<string | null> {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     try {
-      return await driver.generateTitle(projectPath, { settings, message: text })
+      generated = await driver.generateTitle(projectPath, { settings, message: text })
+      return generated
+    } catch (error) {
+      failure = rawErrorMessage(error)
+      throw error
     } finally {
-      // Record input/cost for every actual title model attempt, including
-      // null results and failed calls.
-      this.memoryService.recordAuxiliaryUsage('title', estimateTokens(text), text.length)
+      const inputTokens = estimateTokens(text)
+      const outputTokens = estimateTokens(generated ?? '')
+      this.memoryService.recordAuxiliaryUsage('title', inputTokens, text.length, {
+        outputTokens,
+        costUsd: null,
+        costStatus: 'unavailable'
+      })
+      this.usageRepo.recordEvent({
+        id: `title:${parentTurnId}`,
+        threadId,
+        parentTurnId,
+        featureCallId: 'auto-title',
+        attempt: 1,
+        feature: 'title',
+        harnessId: driverId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        utilityId: null,
+        rawProviderUsage: {},
+        tokens: {
+          uncachedInput: inputTokens,
+          cachedInput: null,
+          cacheWrite: null,
+          output: outputTokens,
+          reasoning: null
+        },
+        rawTotal: null,
+        totalSemantics: 'unavailable',
+        toolFeeUsd: null,
+        success: generated !== null && failure === null,
+        retryCause: failure,
+        createdAt: Date.now(),
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
     }
   }
 
@@ -5310,6 +5375,8 @@ export class ChatEngine {
       // `ensureSession` already confirmed whether the harness natively holds
       // the conversation — skip the redundant provider history load entirely
       // (A-13), whether the first load returned messages or zero.
+    let response: AgentMessage | undefined
+    let failure: string | null = null
       const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
       if (nativeHistory === false) {
@@ -5353,7 +5420,24 @@ export class ChatEngine {
       }
     }
     return computePromptBudget({ contextWindow }).availableInputTokens
+    } catch (error) {
+      failure = rawErrorMessage(error)
+      throw error
   }
+      if (parentTurnId) {
+        this.recordAuxiliaryUsageEvent({
+          feature: 'image_descriptor',
+          threadId,
+          parentTurnId,
+          featureCallId: image.id,
+          attempt: attempt + 1,
+          harnessId: selection.harnessId,
+          settings,
+          inputText: IMAGE_DESCRIPTOR_PROMPT,
+          response,
+          failure
+        })
+      }
 
   /**
    * Cap the hidden orchestration context by the turn's available input budget
@@ -12361,7 +12445,7 @@ export class ChatEngine {
         })
       }
     }
-    if (pendingMemory && assistantResponse) {
+    if (pendingMemory && assistantResponse && memoryParentTurnId) {
       const driver = this.drivers.get(info.driverId)
       if (driver) {
         void this.proposeMemoryFromCompletedTurn(
@@ -12380,6 +12464,7 @@ export class ChatEngine {
   /** Apply in-memory reasoning time stamps to loaded messages (populated during streaming). */
   private applyReasoningStamps(sessionId: string, messages: AgentMessage[]): void {
     const sessionReasoning = this.reasoningTimes.get(sessionId)
+    let memoryParentTurnId: string | null = null
     if (!sessionReasoning) return
     for (const msg of messages) {
       if (msg.role !== 'assistant') continue
@@ -12465,6 +12550,12 @@ export class ChatEngine {
               start: mirrorPart.state.time.start,
               end: mirrorPart.state.time.end
             }
+      const parentTurnId = messages[latestUserIndex]?.id
+      memoryParentTurnId = parentTurnId ?? null
+      if (parentTurnId && turnAssistant) {
+        this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
+        this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
+      }
           }
         }
       }
@@ -12746,12 +12837,205 @@ export class ChatEngine {
   /** True when a silent session has live work we must not abort: an in-flight
    *  shell/CLI tool or a running provider-native sub-agent. */
   private hasInFlightWork(sessionId: string, info: SessionInfo): boolean {
+          memoryParentTurnId,
     if (info.openUnboundedTools && info.openUnboundedTools.size > 0) return true
     for (const [childSessionId, owner] of this.childSessionOwners) {
       if (owner.parentSessionId !== sessionId) continue
       if (this.sessionStatuses.get(childSessionId)?.state === 'working') return true
     }
     return false
+  }
+
+  private recordMessageUsageEvent(
+    threadId: string,
+    thread: Thread | null,
+    parentTurnId: string,
+    message: AgentMessage,
+    failure?: string
+  ): void {
+    const feature: UsageEventFeature =
+      thread?.achievementRole === 'auditor'
+        ? 'audit'
+        : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
+          ? 'assignment'
+          : 'main'
+    const tokens = message.tokens
+    const stepCosts = message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
+        part.type === 'step-finish' && typeof part.cost === 'number'
+    )
+    const knownCost =
+      typeof message.cost === 'number'
+        ? message.cost
+        : stepCosts.length > 0
+          ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
+          : null
+    const details: UsageEventDetails = {
+      id: `message:${message.id}`,
+      threadId,
+      parentTurnId,
+      featureCallId: message.id,
+      attempt: 1,
+      feature,
+      harnessId: message.harnessId ?? null,
+      providerId: message.providerId ?? null,
+      modelId: message.modelId ?? null,
+      utilityId: null,
+      rawProviderUsage: tokens ? { ...tokens } : {},
+      tokens: {
+        uncachedInput: tokens?.input ?? null,
+        cachedInput: tokens?.cacheRead ?? null,
+        cacheWrite: tokens?.cacheWrite ?? null,
+        output: tokens?.output ?? null,
+        reasoning: tokens?.reasoning ?? null
+      },
+      rawTotal: tokens?.total ?? null,
+      totalSemantics: tokens ? 'provider_defined' : 'unavailable',
+      toolFeeUsd: null,
+      success: !failure && !message.error,
+      retryCause: failure ?? message.error ?? null,
+      createdAt: message.completedAt ?? message.createdAt
+    }
+    if (knownCost === null) {
+      this.usageRepo.recordEvent({
+        ...details,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+      return
+    }
+    this.usageRepo.recordEvent({
+      ...details,
+      costStatus: 'known',
+      costUsd: knownCost,
+      pricingProvenance: {
+        source: 'provider',
+        currency: 'USD',
+        capturedAt: message.completedAt ?? message.createdAt
+      }
+    })
+  }
+
+  private recordAuxiliaryUsageEvent(input: {
+    feature: 'memory' | 'image_descriptor'
+    threadId: string
+    parentTurnId: string
+    featureCallId: string
+    attempt: number
+    harnessId: string
+    settings: ThreadSettings
+    inputText: string
+    response?: AgentMessage
+    failure: string | null
+  }): void {
+    const reported = input.response?.tokens
+    const inputTokens = reported?.input ?? estimateTokens(input.inputText)
+    const outputTokens =
+      reported?.output ?? estimateTokens(input.response ? assistantText(input.response) : '')
+    const cost = input.response?.cost ?? null
+    if (input.feature === 'memory') {
+      this.memoryService.recordAuxiliaryUsage('memory', inputTokens, input.inputText.length, {
+        outputTokens,
+        costUsd: cost,
+        costStatus: cost === null ? 'unavailable' : 'known'
+      })
+    }
+    const details: UsageEventDetails = {
+      id: `${input.feature}:${input.parentTurnId}:${input.featureCallId}:${input.attempt}`,
+      threadId: input.threadId,
+      parentTurnId: input.parentTurnId,
+      featureCallId: input.featureCallId,
+      attempt: input.attempt,
+      feature: input.feature,
+      harnessId: input.harnessId,
+      providerId: input.settings.providerId,
+      modelId: input.settings.modelId,
+      utilityId: null,
+      rawProviderUsage: reported ? { ...reported } : {},
+      tokens: {
+        uncachedInput: inputTokens,
+        cachedInput: reported?.cacheRead ?? null,
+        cacheWrite: reported?.cacheWrite ?? null,
+        output: outputTokens,
+        reasoning: reported?.reasoning ?? null
+      },
+      rawTotal: reported?.total ?? null,
+      totalSemantics: reported ? 'provider_defined' : 'unavailable',
+      toolFeeUsd: null,
+      success: input.failure === null && !input.response?.error,
+      retryCause: input.failure ?? input.response?.error ?? null,
+      createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
+    }
+    if (cost === null) {
+      this.usageRepo.recordEvent({
+        ...details,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+      return
+    }
+    this.usageRepo.recordEvent({
+      ...details,
+      costStatus: 'known',
+      costUsd: cost,
+      pricingProvenance: {
+        source: 'provider',
+        currency: 'USD',
+        capturedAt: details.createdAt
+      }
+    })
+  }
+
+  private recordToolUsageEvents(
+    threadId: string,
+    parentTurnId: string,
+    message: AgentMessage
+  ): void {
+    for (const part of message.parts) {
+      if (part.type !== 'tool') continue
+      const normalizedTool = part.tool.toLowerCase()
+      const feature: UsageEventFeature | null = normalizedTool.includes('computer')
+        ? 'computer_use'
+        : normalizedTool.includes('web') || normalizedTool.includes('fetch')
+          ? 'web'
+          : normalizedTool.includes('image_descriptor')
+            ? 'image_descriptor'
+            : null
+      if (!feature) continue
+      const failure =
+        part.state.status === 'error' ? (part.state.error ?? 'Tool call failed') : null
+      this.usageRepo.recordEvent({
+        id: `tool:${parentTurnId}:${part.callID}`,
+        threadId,
+        parentTurnId,
+        featureCallId: part.callID,
+        attempt: 1,
+        feature,
+        harnessId: message.harnessId ?? null,
+        providerId: message.providerId ?? null,
+        modelId: message.modelId ?? null,
+        utilityId: part.tool,
+        rawProviderUsage: {},
+        tokens: {
+          uncachedInput: null,
+          cachedInput: null,
+          cacheWrite: null,
+          output: null,
+          reasoning: null
+        },
+        rawTotal: null,
+        totalSemantics: 'unavailable',
+        toolFeeUsd: null,
+        success: part.state.status === 'completed',
+        retryCause: failure,
+        createdAt: part.state.time?.end ?? part.state.time?.start ?? message.createdAt,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+    }
   }
 
   /**
@@ -12962,7 +13246,7 @@ export class ChatEngine {
     const formatModes = useStructuredOutput ? [true, false] : [false]
     let lastError: Error | null = null
 
-    for (const structured of formatModes) {
+    for (const [formatIndex, structured] of formatModes.entries()) {
       const isolated =
         driver instanceof OpenCodeDriver
           ? await driver.createIsolatedSession(
@@ -12986,13 +13270,6 @@ export class ChatEngine {
       const completion = this.waitForSessionCompletion(sessionId, 90_000, 'Memory extraction')
 
       try {
-        // Record input/cost for EVERY actual model attempt (structured and
-        // fallback), before the send so a failed attempt is still counted.
-        this.memoryService.recordAuxiliaryUsage(
-          'memory',
-          estimateTokens(userMessage + assistantResponse),
-          userMessage.length + assistantResponse.length
-        )
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -13033,15 +13310,14 @@ export class ChatEngine {
           await driver.sendPrompt(projectPath, prompt)
         }
         const streamed = await completion
-        if (streamed !== undefined) {
-          return validateStructuredMemoryProposal(streamed, allowedScopes)
-        }
-
         const messages =
           isolated && driver instanceof OpenCodeDriver
             ? await driver.loadMessages(projectPath, sessionId, isolated)
             : await driver.loadMessages(projectPath, sessionId)
-        const response = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
+        response = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
+        if (streamed !== undefined) {
+          return validateStructuredMemoryProposal(streamed, allowedScopes)
+        }
         if (!response) throw new Error('The memory extractor returned no response')
         if (response.error) throw new Error(response.error)
         if (response.structuredOutput !== undefined) {
@@ -13246,6 +13522,7 @@ function classifyProviderMessages(
       return {
         ...message,
         origin: message.parts.some((part) => part.type === 'subagent') ? 'subagent' : 'compaction',
+    parentTurnId: string,
         visibility: 'working_trace'
       }
     }
@@ -13273,6 +13550,7 @@ function classifyProviderMessages(
 function isDedicatedAssignmentAuditorThread(thread: Thread | null | undefined): boolean {
   return (
     thread?.achievementRole === 'auditor' ||
+        parentTurnId,
     (thread?.assignmentId !== undefined &&
       thread.coordinatorThreadId !== undefined &&
       thread.assignmentRole === undefined)
@@ -13304,6 +13582,7 @@ function presentableMessages(
         presentable.visibility === 'hidden' &&
         presentable.role === 'user'
         ? { ...presentable, visibility: 'working_trace' as const, parts: [] }
+    parentTurnId: string,
         : presentable
     })
 }
@@ -13361,6 +13640,8 @@ function formatConversationTranscript(
         .trim()
       const references = (message.references ?? [])
         .map((reference) => {
+      let response: AgentMessage | undefined
+      let attemptFailure: string | null = null
           const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
           return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
         })
@@ -13432,6 +13713,7 @@ export function assertHarnessRequestCapabilities(
 export function parseGeneratedSpecContent(
   raw: string,
   assignmentRequired = false
+        attemptFailure = rawErrorMessage(error)
 ): EngineeringSpecContent {
   let parsed: unknown
   try {
@@ -13442,6 +13724,18 @@ export function parseGeneratedSpecContent(
     }
     throw error
   }
+        this.recordAuxiliaryUsageEvent({
+          feature: 'memory',
+          threadId,
+          parentTurnId,
+          featureCallId: 'memory-proposal',
+          attempt: formatIndex + 1,
+          harnessId: driver.id,
+          settings,
+          inputText: userMessage + assistantResponse,
+          response,
+          failure: attemptFailure
+        })
   return validateGeneratedSpecContent(parsed, assignmentRequired)
 }
 

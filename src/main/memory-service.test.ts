@@ -313,18 +313,34 @@ describe('auxiliary usage accounting', () => {
     await storage.initialize()
     const memoryService = new MemoryService(storage)
 
-    memoryService.recordAuxiliaryUsage('memory', 1_000, 4_000)
-    memoryService.recordAuxiliaryUsage('memory', 500, 2_000)
-    memoryService.recordAuxiliaryUsage('title', 200, 800)
+    memoryService.recordAuxiliaryUsage('memory', 1_000, 4_000, {
+      outputTokens: 100,
+      costUsd: null,
+      costStatus: 'unavailable'
+    })
+    memoryService.recordAuxiliaryUsage('memory', 500, 2_000, {
+      outputTokens: 50,
+      costUsd: 0.0002,
+      costStatus: 'estimated'
+    })
+    memoryService.recordAuxiliaryUsage('title', 200, 800, {
+      outputTokens: 20,
+      costUsd: 0,
+      costStatus: 'known'
+    })
 
     const totals = memoryService.auxiliaryUsageByFeature()
     expect(totals.memory.calls).toBe(2)
     expect(totals.memory.inputTokens).toBe(1_500)
     expect(totals.memory.inputChars).toBe(6_000)
-    expect(totals.memory.estimatedCost).toBeGreaterThan(0)
+    expect(totals.memory.outputTokens).toBe(150)
+    expect(totals.memory.estimatedCost).toBe(0.0002)
+    expect(totals.memory.unavailableCalls).toBe(1)
     expect(totals.title.calls).toBe(1)
     expect(totals.title.inputTokens).toBe(200)
-    expect(totals.memory.estimatedCost).toBeGreaterThan(totals.title.estimatedCost)
+    expect(totals.title.outputTokens).toBe(20)
+    expect(totals.title.estimatedCost).toBe(0)
+    expect(totals.title.unavailableCalls).toBe(0)
   })
 })
 

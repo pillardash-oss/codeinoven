@@ -10,7 +10,8 @@ import type {
   LocalProfileAnalytics,
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
-  LocalProfileUsageBreakdown
+  LocalProfileUsageBreakdown,
+  UsageEvent
 } from '../../../lib/types'
 
 interface HarnessUsageRow {
@@ -126,16 +127,92 @@ function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
 }
 
 /** Sum of step-finish cost parts on an assistant message, mirroring the renderer. */
-function messageCost(message: AgentMessage): number {
+function messageCost(message: AgentMessage): number | null {
   let stepCost = 0
+  let hasStepCost = false
   for (const part of message.parts) {
-    if (part.type === 'step-finish' && typeof part.cost === 'number') stepCost += part.cost
+    if (part.type === 'step-finish' && typeof part.cost === 'number') {
+      stepCost += part.cost
+      hasStepCost = true
+    }
   }
-  return message.cost ?? stepCost
+  return message.cost ?? (hasStepCost ? stepCost : null)
+}
+
+export interface UsageCostCoverage {
+  knownUsd: number
+  estimatedUsd: number
+  unavailableEvents: number
+  totalEvents: number
 }
 
 export class HarnessUsageRepo {
   constructor(private db: Database) {}
+
+  /** Persist one usage attempt. Replaying its stable identity is a no-op. */
+  recordEvent(event: UsageEvent): void {
+    this.db.run(
+      `INSERT OR IGNORE INTO usage_events(
+        id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
+        harness_id, provider_id, model_id, utility_id, raw_provider_usage_json,
+        tokens_uncached_input, tokens_cached_input, tokens_cache_write,
+        tokens_output, tokens_reasoning, raw_total, total_semantics,
+        cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
+        success, retry_cause, created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      event.id,
+      event.threadId,
+      event.parentTurnId,
+      event.featureCallId,
+      event.attempt,
+      event.feature,
+      event.harnessId,
+      event.providerId,
+      event.modelId,
+      event.utilityId,
+      JSON.stringify(event.rawProviderUsage),
+      event.tokens.uncachedInput,
+      event.tokens.cachedInput,
+      event.tokens.cacheWrite,
+      event.tokens.output,
+      event.tokens.reasoning,
+      event.rawTotal,
+      event.totalSemantics,
+      event.costUsd,
+      event.costStatus,
+      event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
+      event.toolFeeUsd,
+      event.success ? 1 : 0,
+      event.retryCause,
+      event.createdAt
+    )
+  }
+
+  /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
+  costCoverage(threadId?: string): UsageCostCoverage {
+    const row = this.db.get<{
+      known_usd: number
+      estimated_usd: number
+      unavailable_events: number
+      total_events: number
+    }>(
+      `SELECT
+         COALESCE(SUM(CASE WHEN cost_status = 'known' THEN cost_usd ELSE 0 END), 0) AS known_usd,
+         COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN cost_usd ELSE 0 END), 0) AS estimated_usd,
+         SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_events,
+         COUNT(*) AS total_events
+       FROM usage_events
+       WHERE (? IS NULL OR thread_id = ?)`,
+      threadId ?? null,
+      threadId ?? null
+    )
+    return {
+      knownUsd: row?.known_usd ?? 0,
+      estimatedUsd: row?.estimated_usd ?? 0,
+      unavailableEvents: row?.unavailable_events ?? 0,
+      totalEvents: row?.total_events ?? 0
+    }
+  }
 
   /** Distinct harness ids used across a thread's session, newest activity first. */
   harnessIdsFor(threadId: string): string[] {
@@ -422,7 +499,7 @@ export class HarnessUsageRepo {
 
       const providerId = message.providerId ?? ''
       const modelId = message.modelId
-      const cost = messageCost(message)
+      const cost = messageCost(message) ?? 0
       const tokens = message.tokens
       const createdAt = message.createdAt
       const completedAt = message.completedAt ?? createdAt
