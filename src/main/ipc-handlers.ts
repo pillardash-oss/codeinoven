@@ -3659,9 +3659,23 @@ export function registerIpcHandlers(
   ipcMain.handle('cloudDeploy:saveConfig', async (_, projectId: unknown, rawConfig: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeConfig = validateCloudDeploymentConfig(rawConfig, safeProjectId)
-    await storage.saveCloudDeploymentConfig(safeProjectId, safeConfig)
+    // Credential metadata (account ids, secretRefs, configured flags, active
+    // account, base URLs) is main-owned and reconciled against the vault. Never
+    // trust renderer-supplied credential records here: preserve the stored
+    // authoritative credentials and only apply the renderer's project mapping
+    // (providers + containers) and timestamp. Container updates must not be able
+    // to replace or orphan vaulted credentials.
+    const existing = await storage.getCloudDeploymentConfig(safeProjectId)
+    const merged: CloudDeploymentConfig = {
+      version: 2,
+      projectId: safeProjectId,
+      credentials: existing?.credentials ?? {},
+      project: safeConfig.project,
+      updatedAt: safeConfig.updatedAt
+    }
+    await storage.saveCloudDeploymentConfig(safeProjectId, merged)
     await syncCloudDeploymentsFlag(safeProjectId)
-    return safeConfig
+    return merged
   })
 
   ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
