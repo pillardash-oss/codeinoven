@@ -11,6 +11,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -72,6 +73,9 @@
 
   const componentId = $props.id()
   let renameThreadFormId = $derived(`${componentId}-thread-${thread.id}-rename-form`)
+
+  /** Title shown in the UI — the real title once generated, else a draft label. */
+  let displayTitle = $derived(effectiveThreadTitle(thread))
 
   /** How long the "todo" dot is held after a draft is cleared on send, so the
    *  badge does not flash to the thread's stale status before the harness
@@ -531,7 +535,7 @@
       : isWorking
         ? 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
-    title={thread.title}
+    title={displayTitle}
   >
     <span class="flex w-full min-w-0 items-center gap-2">
       {#if projectIconUrl}
@@ -562,7 +566,7 @@
             ? 'font-medium text-foreground'
             : 'text-foreground'}"
       >
-        {thread.title}
+        {displayTitle}
       </span>
       {#if !showBottomRow}
         <span class="whitespace-nowrap text-[10px] text-dimmed">
@@ -657,7 +661,7 @@
       : isWorking
         ? 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
-    title={thread.title}
+    title={displayTitle}
     onclick={() => {
       showPopover = false
       clearTimeout(popoverTimer)
@@ -734,7 +738,7 @@
             ? 'font-medium text-foreground'
             : 'text-foreground'}"
       >
-        {thread.title}
+        {displayTitle}
       </span>
 
       <!-- Single-line default: time rides on the top line -->

@@ -29,6 +29,7 @@
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
@@ -43,6 +44,7 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
     type AppConfig,
     type AppConfigPatch,
@@ -885,6 +887,10 @@
     })
     const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as Thread
+      // Once a real title exists the draft-derived label is no longer needed.
+      if (thread.title !== DEFAULT_THREAD_TITLE) {
+        clearDraftLabelCookie(thread.id)
+      }
       scopeState.updateThread(thread)
       if (workspaceState.selectedThread?.id === thread.id) {
         workspaceState.updateThread(thread)

@@ -10,6 +10,7 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import {
     rendererRecovery,
     isSettingsView,
@@ -487,6 +488,11 @@
 
   let showChangeScope = $state(false)
 
+  /** Title shown in the header — real title once generated, else a draft label. */
+  let headerThreadTitle = $derived(
+    workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
+  )
+
   let scopeBucket = $derived.by((): ScopeBucket | null => {
     const thread = workspaceState.selectedThread
     if (!thread || chatMode) return null
@@ -845,9 +851,9 @@
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
               class="truncate text-[13px] font-medium tracking-tight text-foreground"
-              title={thread.title}
+              title={headerThreadTitle}
             >
-              {thread.title}
+              {headerThreadTitle}
             </h1>
             <ThreadDropdown
               items={[

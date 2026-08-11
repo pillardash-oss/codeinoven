@@ -3,6 +3,7 @@ import type {
   PromptAttachment,
   PromptProjectReference
 } from '$shared/types'
+import { setDraftLabelCookie } from './draft-label'
 import {
   MAX_DRAFT_LENGTH,
   MAX_RECOVERY_DRAFTS,
@@ -255,6 +256,9 @@ export class RendererRecoveryStore {
       }
     }
     this.composerDrafts = next
+    // Mirror the draft-derived label into its 24h cookie so the sidebar/header
+    // can show what the user is typing instead of the "New Thread" placeholder.
+    setDraftLabelCookie(threadId, draft)
     this.persist()
   }
 
