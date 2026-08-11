@@ -304,6 +304,28 @@ export class CloudDeployState {
   }
 
   /**
+   * Refresh the authoritative status of every configured container during
+   * automatic monitoring. Serves each container's cache first and revalidates
+   * in the background only when its TTL has elapsed or it has no cache, so the
+   * poll never over-fetches; a failed key enters its failure cooldown and keeps
+   * the last known (stale) data on screen. Per-container keys are project-scoped
+   * (task-c-4), so containers from different projects never share or collide.
+   */
+  async monitorContainers(
+    projectId: string,
+    containers: ReadonlyArray<{ providerKind: CloudDeploymentProviderKind; id: string }>
+  ): Promise<void> {
+    for (const container of containers) {
+      try {
+        await this.ensureContainerStatus(projectId, container.providerKind, container.id)
+      } catch {
+        // The store surfaces a tailored message via its error channel; the
+        // panel keeps each container's last known status on screen.
+      }
+    }
+  }
+
+  /**
    * Push an updated snapshot for a configured container into the cache so the
    * panel reflects a status change without waiting for the next poll. Clears any
    * failure cooldown for the key.

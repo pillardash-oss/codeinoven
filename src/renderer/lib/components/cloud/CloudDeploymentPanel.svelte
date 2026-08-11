@@ -76,13 +76,34 @@
     if (configured) await refreshAll()
   }
 
-  /** All configured containers, flattened across providers and deduped by key. */
+  /**
+   * All configured containers, flattened across providers and deduped by key.
+   * The overview's merged snapshot supplies the base (including the project's
+   * custom label); the authoritative per-container status fetched during
+   * automatic monitoring is overlaid on top so build status changes show up
+   * without a manual reload. Only the authoritative status-bearing fields are
+   * overlaid so the project's label/id are never replaced by the provider's.
+   */
   const containers = $derived.by(() => {
     const byKey: Record<string, CloudDeploymentContainer> = {}
     for (const kind of providers) {
       const cached = cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)]
       for (const container of cached?.value.containers ?? []) {
         byKey[`${container.providerKind}/${container.id}`] = container
+      }
+    }
+    for (const [key, entry] of Object.entries(cloudDeployState.containerStatuses)) {
+      if (!key.startsWith(`${projectId}/`)) continue
+      const container = entry.value
+      const existing = byKey[`${container.providerKind}/${container.id}`]
+      if (!existing) continue
+      byKey[`${container.providerKind}/${container.id}`] = {
+        ...existing,
+        status: container.status,
+        updatedAt: container.updatedAt,
+        createdAt: container.createdAt,
+        log: container.log,
+        url: container.url
       }
     }
     return Object.values(byKey)
@@ -160,6 +181,7 @@
     if (!liveUpdates) return
     const timer = setInterval(() => {
       for (const kind of providers) void cloudDeployState.ensureOverview(projectId, kind)
+      void cloudDeployState.monitorContainers(projectId, containers)
     }, 60_000)
     return () => clearInterval(timer)
   })
