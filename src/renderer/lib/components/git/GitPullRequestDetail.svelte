@@ -723,7 +723,7 @@
     empty box only failed once GitHub rejected it.
   -->
   <div class="shrink-0 border-t border-border">
-    <div class="px-3 pt-2">
+    <div class="px-3 pt-2.5">
       <div
         class="rounded-lg border border-border bg-elevated focus-within:border-primary"
         role="presentation"
@@ -737,7 +737,8 @@
       </div>
     </div>
 
-    <div class="flex flex-wrap items-center gap-1 px-3 py-2">
+    <!-- Comment and review both consume the box above, so they share one row. -->
+    <div class="flex flex-wrap items-center gap-1.5 px-3 py-2.5">
       <button
         type="button"
         class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
@@ -752,8 +753,7 @@
         {/if}
         Comment
       </button>
-      <span class="flex-1"></span>
-      <span class="text-[9px] uppercase tracking-wide text-dimmed">Review</span>
+      <span class="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
       <button
         type="button"
         class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
@@ -783,83 +783,87 @@
     </div>
 
     {#if open && !hasBody}
-      <p class="px-3 pb-2 text-[9px] leading-relaxed text-dimmed">
+      <p class="px-3 pb-2.5 text-[9px] leading-relaxed text-dimmed">
         Requesting changes needs a comment saying what to change. Approving does not.
       </p>
     {/if}
 
-    <!-- Merging is a separate decision from reviewing, so it gets its own row. -->
-    <div class="flex items-center gap-1.5 border-t border-border px-3 py-2">
+    <!--
+      Merging is a repo operation, not a review — a tinted, separate zone
+      keeps it from reading as one more button in the review row above.
+    -->
+    <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
       {#if open}
-        <label class="text-[9px] uppercase tracking-wide text-dimmed" for="pr-merge-method">
-          Merge
-        </label>
-        <select
-          id="pr-merge-method"
-          class="h-7 cursor-pointer rounded-md border border-border bg-elevated px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
-          title="How the commits are combined when merging"
-          aria-label="Merge method"
-          bind:value={method}
-        >
-          {#each mergeMethods as option (option.id)}
-            <option value={option.id}>{option.label}</option>
-          {/each}
-        </select>
+        <div class="flex items-center gap-1.5">
+          <select
+            id="pr-merge-method"
+            class="h-7 cursor-pointer rounded-md border border-border bg-surface px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
+            title="How the commits are combined when merging"
+            aria-label="Merge method"
+            bind:value={method}
+          >
+            {#each mergeMethods as option (option.id)}
+              <option value={option.id}>{option.label}</option>
+            {/each}
+          </select>
+          <span class="flex-1"></span>
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+            title="Close this pull request without merging"
+            disabled={closing}
+            onclick={() => (closeConfirm = true)}
+          >
+            {#if closing}
+              <Loader2 size={12} class="animate-spin" />
+            {:else}
+              <X size={12} />
+            {/if}
+            Close
+          </button>
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+            title={`Merge this pull request into ${summary.baseRef}`}
+            disabled={merging}
+            onclick={openMergeConfirm}
+          >
+            {#if merging}
+              <Loader2 size={12} class="animate-spin" />
+            {:else}
+              <Merge size={12} />
+            {/if}
+            Merge into {summary.baseRef}
+          </button>
+        </div>
         {#if mergeBlocker}
-          <span class="flex min-w-0 items-center gap-1 text-[9px] text-warning">
+          <p class="mt-1.5 flex items-center gap-1 text-[9px] text-warning">
             <TriangleAlert size={10} class="shrink-0" />
-            <span class="truncate">{mergeBlocker}</span>
-          </span>
+            {mergeBlocker}
+          </p>
         {/if}
-        <span class="flex-1"></span>
-        <button
-          type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-danger/30 px-2.5 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-          title="Close this pull request without merging"
-          disabled={closing}
-          onclick={() => (closeConfirm = true)}
-        >
-          {#if closing}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <X size={12} />
-          {/if}
-          Close
-        </button>
-        <button
-          type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-          title={`Merge this pull request into ${summary.baseRef}`}
-          disabled={merging}
-          onclick={openMergeConfirm}
-        >
-          {#if merging}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <Merge size={12} />
-          {/if}
-          Merge into {summary.baseRef}
-        </button>
       {:else if prState === 'closed'}
-        <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
-          <CircleSlash size={10} class="shrink-0" />
-          <span class="truncate">Closed without merging</span>
-        </span>
-        <span class="flex-1"></span>
-        <button
-          type="button"
-          class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-          title="Reopen this pull request"
-          disabled={reopening}
-          onclick={() => void reopen()}
-        >
-          {#if reopening}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <RotateCcw size={12} />
-          {/if}
-          Reopen
-        </button>
+        <div class="flex items-center gap-1.5">
+          <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
+            <CircleSlash size={10} class="shrink-0" />
+            <span class="truncate">Closed without merging</span>
+          </span>
+          <span class="flex-1"></span>
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+            title="Reopen this pull request"
+            disabled={reopening}
+            onclick={() => void reopen()}
+          >
+            {#if reopening}
+              <Loader2 size={12} class="animate-spin" />
+            {:else}
+              <RotateCcw size={12} />
+            {/if}
+            Reopen
+          </button>
+        </div>
       {:else if prState === 'merged'}
         <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
           <Merge size={10} class="shrink-0" />
