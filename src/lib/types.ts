@@ -3179,12 +3179,7 @@ export interface GitHubWorkflowRunDetail {
 
 /** Provider-agnostic deployment hosts the Cloud Deployments panel can reach. */
 export type CloudDeploymentProviderKind =
-  | 'coolify'
-  | 'netlify'
-  | 'railway'
-  | 'vercel'
-  | 'dokploy'
-  | 'custom'
+  'coolify' | 'netlify' | 'railway' | 'vercel' | 'dokploy' | 'custom'
 
 /** Every `CloudDeploymentProviderKind` as a runtime array — single source for schema enums. */
 export const CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES: readonly CloudDeploymentProviderKind[] = [
@@ -3194,6 +3189,18 @@ export const CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES: readonly CloudDeploymentProv
   'vercel',
   'dokploy',
   'custom'
+]
+
+/**
+ * Provider kinds backed by the not-implemented stub (v1 is Coolify-only).
+ * Attempting to query these must surface a not-implemented-yet signal and must
+ * never trigger a network call. Single source shared by main and renderer.
+ */
+export const CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS: readonly CloudDeploymentProviderKind[] = [
+  'netlify',
+  'railway',
+  'vercel',
+  'dokploy'
 ]
 
 /** Latest build/run state of a cloud deployment container. */

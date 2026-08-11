@@ -4,6 +4,10 @@ const invoke = vi.hoisted(() => vi.fn())
 
 vi.mock('$lib/ipc.svelte', () => ({ invoke }))
 
+const toastMock = vi.hoisted(() => ({ message: vi.fn() }))
+
+vi.mock('svelte-sonner', () => ({ toast: toastMock }))
+
 import { cloudDeployState } from './cloud-deploy.svelte'
 import type {
   CloudDeploymentContainer,
@@ -35,6 +39,7 @@ describe('CloudDeployState store', () => {
   afterEach(() => {
     vi.useRealTimers()
     invoke.mockReset()
+    toastMock.message.mockReset()
     cloudDeployState.reset()
   })
 
@@ -156,5 +161,32 @@ describe('CloudDeployState store', () => {
     const result = await cloudDeployState.ensureOverview('project-1', providerKind, true)
     expect(result).toEqual(overview)
     expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('short-circuits a not-implemented stub kind with no IPC call and a toast', async () => {
+    const result = await cloudDeployState.ensureOverview('project-1', 'netlify')
+    expect(result).toBeNull()
+    expect(invoke).not.toHaveBeenCalled()
+    expect(toastMock.message).toHaveBeenCalledTimes(1)
+    expect(toastMock.message).toHaveBeenCalledWith(
+      "Netlify deployments aren't available yet",
+      expect.any(Object)
+    )
+  })
+
+  it('does not repeat the not-implemented toast for the same stub kind', async () => {
+    await cloudDeployState.ensureOverview('project-1', 'netlify')
+    await cloudDeployState.ensureOverview('project-1', 'netlify', true)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(toastMock.message).toHaveBeenCalledTimes(1)
+  })
+
+  it('short-circuits container status and log loads for stub kinds', async () => {
+    const status = await cloudDeployState.ensureContainerStatus('project-1', 'vercel', 'app-1')
+    const log = await cloudDeployState.ensureContainerLog('project-1', 'railway', 'app-1')
+    expect(status).toBeNull()
+    expect(log).toBeNull()
+    expect(invoke).not.toHaveBeenCalled()
+    expect(toastMock.message).toHaveBeenCalledTimes(2)
   })
 })
