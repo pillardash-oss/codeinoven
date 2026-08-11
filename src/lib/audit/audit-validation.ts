@@ -54,40 +54,37 @@ export function validateAuditReportContent(value: unknown): AuditReportContent {
   const findings = Array.isArray(input.findings)
     ? input.findings.flatMap((value, index) => {
         let finding: Record<string, unknown>
+        const path = `findings[${index}]`
         try {
-          finding = record(value, `Finding ${index + 1}`)
+          finding = record(value, path)
         } catch (error) {
-          issues.push(error instanceof Error ? error.message : `Finding ${index + 1} is invalid`)
+          issues.push(error instanceof Error ? error.message : `${path} is invalid`)
           return []
         }
-        const severity = collectText(finding.severity, `Finding ${index + 1} severity`, issues)
+        const severity = collectText(finding.severity, `${path}.severity`, issues)
         if (severity && !SEVERITIES.has(severity as AuditFindingSeverity)) {
-          issues.push(`Finding ${index + 1} severity is invalid`)
+          issues.push(`${path}.severity is invalid`)
         }
         return [
           {
-            id: collectText(finding.id, `Finding ${index + 1} ID`, issues),
-            title: collectText(finding.title, `Finding ${index + 1} title`, issues),
+            id: collectText(finding.id, `${path}.id`, issues),
+            title: collectText(finding.title, `${path}.title`, issues),
             severity: severity as AuditFindingSeverity,
-            description: collectText(
-              finding.description,
-              `Finding ${index + 1} description`,
-              issues
-            ),
-            evidence: collectMarkdownText(finding.evidence, `Finding ${index + 1} evidence`, issues)
+            description: collectText(finding.description, `${path}.description`, issues),
+            evidence: collectMarkdownText(finding.evidence, `${path}.evidence`, issues)
           }
         ]
       })
-    : (issues.push('Audit findings must be an array'), [])
+    : (issues.push('findings must be an array'), [])
   const content: AuditReportContent = {
-    executiveSummary: collectText(input.executiveSummary, 'Executive summary', issues),
+    executiveSummary: collectText(input.executiveSummary, 'executiveSummary', issues),
     findings,
     resolutionRecommendation: collectMarkdownText(
       input.resolutionRecommendation ?? input.requiredRemediation,
-      'Resolution and recommendation',
+      'resolutionRecommendation',
       issues
     ),
-    conclusion: collectText(input.conclusion, 'Conclusion', issues)
+    conclusion: collectText(input.conclusion, 'conclusion', issues)
   }
   if (issues.length > 0) throw new AuditReportValidationError(issues)
   return content
