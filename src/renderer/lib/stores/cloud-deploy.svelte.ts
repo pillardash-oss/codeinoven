@@ -1,8 +1,10 @@
+import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
-import type {
-  CloudDeploymentContainer,
-  CloudDeploymentProviderKind,
-  CloudDeploymentResult
+import {
+  CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
+  type CloudDeploymentContainer,
+  type CloudDeploymentProviderKind,
+  type CloudDeploymentResult
 } from '$shared/types'
 
 /** How long a cached overview or container status is served without refetching. */
@@ -22,6 +24,16 @@ const LOG_CACHE_TTL_MS = 5 * 60_000
  * always ignores the cooldown, so the user is never locked out.
  */
 const ERROR_COOLDOWN_MS = 120_000
+
+/** Human-readable platform names, used only for the not-implemented-yet toast. */
+const PROVIDER_DISPLAY_NAMES: Readonly<Record<CloudDeploymentProviderKind, string>> = {
+  coolify: 'Coolify',
+  netlify: 'Netlify',
+  railway: 'Railway',
+  vercel: 'Vercel',
+  dokploy: 'Dokploy',
+  custom: 'Custom'
+}
 
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
@@ -63,6 +75,9 @@ export class CloudDeployState {
   /** Last load error, surfaced to the panel when a background revalidate fails. */
   error: string | null = $state(null)
 
+  /** Provider kinds already notified via the not-implemented-yet toast this session. */
+  private notifiedNotImplemented: Partial<Record<CloudDeploymentProviderKind, boolean>> = {}
+
   static overviewKey(providerKind: CloudDeploymentProviderKind): string {
     return providerKind
   }
@@ -103,6 +118,25 @@ export class CloudDeployState {
   }
 
   /**
+   * Guard against querying a provider backed by the not-implemented stub.
+   * Returns `true` when the kind is stubbed, surfacing a not-implemented-yet
+   * toast once per session and skipping the IPC round trip entirely, so no
+   * adapter network call is ever made for these kinds.
+   */
+  private handleNotImplemented(providerKind: CloudDeploymentProviderKind): boolean {
+    if (!CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(providerKind)) return false
+    this.error = null
+    if (!this.notifiedNotImplemented[providerKind]) {
+      this.notifiedNotImplemented = { ...this.notifiedNotImplemented, [providerKind]: true }
+      const name = PROVIDER_DISPLAY_NAMES[providerKind]
+      toast.message(`${name} deployments aren't available yet`, {
+        description: 'This provider will be supported in a future update.'
+      })
+    }
+    return true
+  }
+
+  /**
    * Load the provider overview, serving cache first.
    *
    * Returns immediately when fresh cache exists; otherwise fetches and updates
@@ -115,6 +149,7 @@ export class CloudDeployState {
     providerKind: CloudDeploymentProviderKind,
     force = false
   ): Promise<CloudDeploymentResult | null> {
+    if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.overviewKey(providerKind)
     const cached = this.overviews[key]
     if (!force && cached && Date.now() - cached.fetchedAt < OVERVIEW_CACHE_TTL_MS) {
@@ -152,6 +187,7 @@ export class CloudDeployState {
     containerId: string,
     force = false
   ): Promise<CloudDeploymentContainer | null> {
+    if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(providerKind, containerId)
     const cached = this.containerStatuses[key]
     if (!force && cached && Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) {
@@ -202,6 +238,7 @@ export class CloudDeployState {
     containerId: string,
     force = false
   ): Promise<{ containerId: string; log: string } | null> {
+    if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(providerKind, containerId)
     const cached = this.containerLogs[key]
     if (!force && cached && Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) {
@@ -254,6 +291,7 @@ export class CloudDeployState {
     this.containerLogs = {}
     this.failures = {}
     this.requests = {}
+    this.notifiedNotImplemented = {}
     this.error = null
   }
 }
