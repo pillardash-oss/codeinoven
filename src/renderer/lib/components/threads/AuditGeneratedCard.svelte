@@ -10,6 +10,7 @@
     startedAt?: number
     finishedAt?: number
     retryLabel?: string
+    reworkCycle?: number
     settings: ThreadSettings
     providers: ProviderCatalog[]
     projectId?: string | null
@@ -18,7 +19,7 @@
     busy?: boolean
     onRetry: (settings: ThreadSettings) => void
     onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -34,6 +35,7 @@
     startedAt,
     finishedAt,
     retryLabel = 'Retry audit',
+    reworkCycle,
     settings,
     providers,
     projectId = null,
@@ -101,7 +103,9 @@
             : reworking
               ? 'Review sent to Sr. Engineer'
               : version === undefined
-                ? 'Audit in progress'
+                ? reworkCycle
+                  ? `Rework ${reworkCycle} complete — audit running again`
+                  : 'Audit in progress'
                 : `Report generated — Version ${version}`}
       </h3>
       <p
@@ -116,7 +120,9 @@
             : reworking
               ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
               : version === undefined
-                ? 'This dedicated auditor task is locked while the report is being prepared.'
+                ? reworkCycle
+                  ? 'The existing auditor is independently verifying the completed rework.'
+                  : 'This dedicated auditor task is locked while the report is being prepared.'
                 : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
       </p>
       {#if failed && elapsed}

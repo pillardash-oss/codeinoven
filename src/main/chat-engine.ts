@@ -6471,6 +6471,16 @@ export class ChatEngine {
                 result.assignment.projectId,
                 result.assignment.coordinatorThreadId
               )
+            } else if (result.assignment.auditCycle.reworkCycle) {
+              void this.startAssignmentReaudit(result.assignment, coordinator?.settings).catch(
+                (error) => {
+                  Logger.error('Automatic Assignment reaudit failed', {
+                    assignmentId: result.assignment.id,
+                    reworkCycle: result.assignment.auditCycle?.reworkCycle,
+                    error: rawErrorMessage(error)
+                  })
+                }
+              )
             }
             this.revokeAssignmentCapabilities(result.assignment.id)
           }
@@ -6563,6 +6573,13 @@ export class ChatEngine {
             }
           )
           this.writeAssignmentApiResponse(response, 200, { assignment, status: 'audit_available' })
+          void this.startAssignmentReaudit(assignment).catch((error) => {
+            Logger.error('Requested Assignment reaudit failed', {
+              assignmentId: assignment.id,
+              reworkCycle: assignment.auditCycle?.reworkCycle,
+              error: rawErrorMessage(error)
+            })
+          })
           return
         }
         if (path === '/v1/assignments/steer-worker') {
@@ -8511,6 +8528,25 @@ export class ChatEngine {
     return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
   }
 
+  private async startAssignmentReaudit(
+    assignment: AssignmentPlan,
+    fallbackSettings?: ThreadSettings
+  ): Promise<void> {
+    const [auditor, coordinator] = await Promise.all([
+      assignment.auditorThreadId
+        ? this.threadManager.getThread(assignment.projectId, assignment.auditorThreadId)
+        : Promise.resolve(null),
+      this.threadManager.getThread(assignment.projectId, assignment.coordinatorThreadId)
+    ])
+    const settings = auditor?.settings ?? fallbackSettings ?? coordinator?.settings
+    if (!settings) throw new Error('Assignment auditor settings are missing')
+    await this.generateAssignmentAudit(
+      assignment.projectId,
+      assignment.coordinatorThreadId,
+      settings
+    )
+  }
+
   async generateAssignmentAudit(
     projectId: string,
     coordinatorThreadId: string,
@@ -8960,6 +8996,7 @@ export class ChatEngine {
     projectId: string
     coordinatorThreadId: string
     spec: EngineeringSpec
+    assignment: AssignmentPlan
     content: AuditReportContent
     auditorThread: Thread
     auditorSettings: ThreadSettings
@@ -8969,6 +9006,9 @@ export class ChatEngine {
       threadId: input.coordinatorThreadId,
       specId: input.spec.id,
       specVersion: input.spec.version,
+      assignmentId: input.assignment.id,
+      assignmentVersion: input.assignment.version,
+      reworkCycle: input.assignment.auditCycle?.reworkCycle,
       content: input.content,
       provenance: {
         source: 'agent',
@@ -9125,6 +9165,7 @@ export class ChatEngine {
         projectId,
         coordinatorThreadId,
         spec,
+        assignment,
         content: recoveredContent,
         auditorThread,
         auditorSettings
@@ -9247,6 +9288,7 @@ export class ChatEngine {
           projectId,
           coordinatorThreadId,
           spec,
+          assignment,
           content,
           auditorThread,
           auditorSettings

@@ -19,6 +19,12 @@ export function exportAuditReportMarkdown(report: AuditReport): string {
     '',
     `Audit-Version: ${report.version}`,
     `Specification: ${report.specId} v${report.specVersion}`,
+    ...(report.assignmentId && report.assignmentVersion !== undefined
+      ? [
+          `Assignment: ${report.assignmentId} v${report.assignmentVersion}`,
+          `Work-Cycle: ${report.reworkCycle ? `Rework ${report.reworkCycle}` : 'Initial'}`
+        ]
+      : []),
     '',
     '## Executive Summary',
     '',

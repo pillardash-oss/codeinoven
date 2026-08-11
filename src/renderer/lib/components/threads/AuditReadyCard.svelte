@@ -17,7 +17,7 @@
     onCancel?: () => void
     onReaudit?: (settings: ThreadSettings) => void
     onModelChange?: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -79,6 +79,13 @@
         Audited by {report.provenance.providerId ?? 'provider'} /
         {report.provenance.modelId ?? 'model'}
       </p>
+      {#if report.assignmentVersion !== undefined}
+        <p class="mt-1 text-[11px] font-medium text-muted">
+          Assignment v{report.assignmentVersion} · {report.reworkCycle
+            ? `Rework ${report.reworkCycle}`
+            : 'Initial implementation'}
+        </p>
+      {/if}
     </div>
   </div>
   <div class="mt-4 flex flex-wrap items-center justify-between gap-2">

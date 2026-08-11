@@ -164,6 +164,14 @@
     return task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')
   }
 
+  function taskReworkCycle(task: AssignmentTask): number | undefined {
+    if (task.workKind === 'rework') return task.reworkCycle ?? 1
+    if (assignment.auditCycle?.reworkAssignmentVersion === assignment.version) {
+      return assignment.auditCycle.reworkCycle ?? 1
+    }
+    return undefined
+  }
+
   function taskTooltip(task: AssignmentTask, linkedWorker: Thread | undefined): string {
     const worker = workerLabel(task)
     const destination = task.threadId
@@ -383,6 +391,7 @@
         {#each assignment.content.tasks as task (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
           {@const active = task.threadId === selectedThreadId}
+          {@const reworkCycle = taskReworkCycle(task)}
           <button
             type="button"
             class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
@@ -396,7 +405,18 @@
             onclick={() => onOpenTask(task)}
           >
             <span class="min-w-0">
-              <span class="block truncate text-xs font-medium text-foreground">{task.title}</span>
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="min-w-0 truncate text-xs font-medium text-foreground"
+                  >{task.title}</span
+                >
+                {#if reworkCycle}
+                  <span
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+                  >
+                    Rework {reworkCycle}
+                  </span>
+                {/if}
+              </span>
               <span class="mt-0.5 block truncate text-[10px] text-dimmed">
                 {workerLabel(task)}
               </span>

@@ -23,6 +23,9 @@
     recentModels?: string[]
     compact?: boolean
     readOnly?: boolean
+    reworkCycle?: number
+    forceRework?: boolean
+    assignmentVersion?: number
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
@@ -30,7 +33,7 @@
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -52,6 +55,9 @@
     recentModels = [],
     compact = false,
     readOnly = false,
+    reworkCycle,
+    forceRework = false,
+    assignmentVersion,
     onChange,
     onWorkerModelChange,
     onSeniorModelChange,
@@ -106,6 +112,11 @@
       task.status !== 'completed' &&
       task.status !== 'stopped'
     )
+  }
+
+  function taskReworkCycle(task: AssignmentTask): number | undefined {
+    if (task.workKind === 'rework') return task.reworkCycle ?? reworkCycle ?? 1
+    return forceRework ? (reworkCycle ?? 1) : undefined
   }
 
   function updatePhaseModel(
@@ -379,6 +390,7 @@
       <div class="space-y-3">
         {#each content.tasks.filter((task) => task.phaseId === phase.id) as task (task.id)}
           {@const selectedTaskModel = resolvedTaskModel(task)}
+          {@const displayedReworkCycle = taskReworkCycle(task)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -417,6 +429,15 @@
               <span class="rounded bg-overlay px-1.5 py-0.5 text-[10px] text-muted">
                 {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
               </span>
+              {#if displayedReworkCycle}
+                <span
+                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning"
+                >
+                  Rework {displayedReworkCycle} · Assignment v{task.workAssignmentVersion ??
+                    assignmentVersion ??
+                    '?'}
+                </span>
+              {/if}
             </div>
             <EditableMarkdown
               {readOnly}

@@ -2353,6 +2353,7 @@ export type AssignmentTaskStatus =
   | 'stopped'
 
 export type AssignmentTaskOwner = 'senior' | 'worker'
+export type AssignmentTaskWorkKind = 'initial' | 'rework'
 
 export interface AssignmentModelSelection extends AgentModelSelection {
   thinkingLevel: ThinkingLevel
@@ -2397,6 +2398,12 @@ export interface AssignmentTask {
   expectedFiles: string[]
   auditChecklist: string[]
   model?: AssignmentModelSelection
+  /** Durable identity of the implementation pass this task belongs to. */
+  workKind?: AssignmentTaskWorkKind
+  /** One-based post-audit rework cycle; absent for initial implementation. */
+  reworkCycle?: number
+  /** Assignment version whose implementation pass produced this task execution. */
+  workAssignmentVersion?: number
   status: AssignmentTaskStatus
   statusBeforeStop?: Exclude<AssignmentTaskStatus, 'stopped'>
   workerName?: string
@@ -2437,6 +2444,8 @@ export interface AssignmentAuditCycle {
   reportVersion?: number
   reportedAt?: number
   reworkStartedAt?: number
+  /** One-based count of post-audit correction cycles. */
+  reworkCycle?: number
   /** Reviewable Assignment version proposed by the Sr. Engineer for this audit report. */
   reworkAssignmentVersion?: number
   completedAt?: number
@@ -2566,6 +2575,10 @@ export interface AuditReport {
   threadId: string
   specId: string
   specVersion: number
+  /** Exact Assignment implementation graph audited, when this is an Assignment audit. */
+  assignmentId?: string
+  assignmentVersion?: number
+  reworkCycle?: number
   version: number
   content: AuditReportContent
   annotations: AuditAnnotation[]
