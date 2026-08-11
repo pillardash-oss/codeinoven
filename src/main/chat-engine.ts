@@ -9089,12 +9089,6 @@ export class ChatEngine {
       .listVersions(projectId, coordinatorThreadId, reportId)
       .find((candidate) => candidate.version === reportVersion)
     if (!report) throw new Error('Achievement audit report not found.')
-    if (
-      !feedback.trim() &&
-      report.annotations.every((annotation) => annotation.status !== 'open')
-    ) {
-      throw new Error('Add feedback or an audit annotation before requesting changes.')
-    }
 
     const handoffDigest = createHash('sha256')
       .update(
@@ -9146,7 +9140,7 @@ export class ChatEngine {
         'internal',
         {
           action: `Apply Achievement audit v${report.version}`,
-          body: feedback.trim() || 'Resolve the open audit annotations and actionable findings.'
+          body: feedback.trim() || "Apply the audit report's actionable findings."
         }
       )
     }
@@ -9200,12 +9194,6 @@ export class ChatEngine {
       .listVersions(projectId, coordinatorThreadId, reportId)
       .find((candidate) => candidate.version === reportVersion)
     if (!report) throw new Error('Assignment audit report not found.')
-    if (
-      !feedback.trim() &&
-      report.annotations.every((annotation) => annotation.status !== 'open')
-    ) {
-      throw new Error('Add feedback or an audit annotation before requesting changes.')
-    }
 
     const updated = await this.assignmentEngine.beginAuditRework(projectId, coordinatorThreadId)
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'reworking', {
@@ -9271,7 +9259,9 @@ export class ChatEngine {
         'internal',
         {
           action: `Review audit report v${report.version}`,
-          body: feedback.trim() || 'Digest the open audit annotations and choose a corrective path.'
+          body:
+            feedback.trim() ||
+            "Digest the audit report's actionable findings and choose a corrective path."
         }
       )
     }
