@@ -54,6 +54,7 @@ import {
   validateHistoryRole,
   validateMergeMethod,
   validateMergeTarget,
+  MAX_GITHUB_NUMERIC_ID,
   validatePrCreateInput,
   validatePrNumber,
   validatePrState,
@@ -3235,7 +3236,12 @@ export function registerIpcHandlers(
       return provider.getDeploymentDetail({
         owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
-        deploymentId: validateBoundedInteger(deploymentId, 'Deployment ID', 1, 2_147_483_647)
+        deploymentId: validateBoundedInteger(
+          deploymentId,
+          'Deployment ID',
+          1,
+          MAX_GITHUB_NUMERIC_ID
+        )
       })
     }
   )
@@ -3248,7 +3254,7 @@ export function registerIpcHandlers(
       return provider.getWorkflowRunDetail({
         owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
-        runId: validateBoundedInteger(runId, 'Workflow run ID', 1, 2_147_483_647)
+        runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
     }
   )
@@ -3261,7 +3267,7 @@ export function registerIpcHandlers(
       return provider.getDeploymentJobLog({
         owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
         repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
-        jobId: validateBoundedInteger(jobId, 'Job ID', 1, 2_147_483_647)
+        jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
       })
     }
   )
