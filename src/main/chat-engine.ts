@@ -2498,7 +2498,6 @@ export class ChatEngine {
         }
 
         try {
-          await driver.ensureReady(projectPath)
           let resolvedProviderId = driver.id === context.harnessId ? context.providerId : undefined
           let resolvedModelId = driver.id === context.harnessId ? context.modelId : undefined
           if (!resolvedProviderId || !resolvedModelId) {
@@ -6190,7 +6189,6 @@ export class ChatEngine {
     if (!driver.capabilities?.commands) return []
 
     try {
-      await driver.ensureReady(projectPath)
       return this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
     } catch (error) {
       Logger.info('Harness command discovery skipped', {
@@ -11059,7 +11057,6 @@ export class ChatEngine {
     if (!driver.capabilities?.commands) {
       throw new Error(`${driver.name} does not support slash commands`)
     }
-    await driver.ensureReady(projectPath)
     const exposed = this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
     if (!exposed.some((candidate) => candidate.name === command)) {
       throw new Error(`Command is not available in ${driver.name}: ${command}`)
@@ -11136,7 +11133,9 @@ export class ChatEngine {
       )
     }
 
-    await driver.ensureReady(projectPath)
+    // Installation/version probes belong to the explicit Settings harness check.
+    // Thread operations call the driver directly so a transient probe cannot
+    // block history, prompts, commands, or other live session traffic.
     return { driver, projectPath }
   }
 

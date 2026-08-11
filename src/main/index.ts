@@ -660,14 +660,6 @@ async function bootPostPaintServices(): Promise<void> {
       .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
 
     try {
-      providerConnection.warmUp()
-      startupTelemetry.mark('provider:warmup')
-      startupTelemetry.report('startup background warmup')
-    } catch (error) {
-      Logger.error('Provider service warm-up failed (non-fatal):', error)
-    }
-
-    try {
       notificationService.start()
       setNotificationService(notificationService)
       updaterService?.start()
