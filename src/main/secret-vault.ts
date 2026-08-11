@@ -1,5 +1,6 @@
 import { safeStorage } from 'electron'
 import { uuidv7 } from '../lib/id'
+import type { CloudDeploymentProviderKind } from '../lib/types'
 import type { StorageEngine } from './storage-engine'
 
 interface EncryptedSecretRecord {
@@ -9,6 +10,11 @@ interface EncryptedSecretRecord {
 }
 
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
+
+/** Deterministic SecretVault ref under which a deployment provider's token is stored. */
+function providerTokenRef(kind: CloudDeploymentProviderKind): string {
+  return `deployment_provider_${kind}`
+}
 
 /**
  * Main-process-only credential vault.
@@ -42,6 +48,46 @@ export class SecretVault {
     }
     await this.storage.write(this.storePath, store)
     return ref
+  }
+
+  /**
+   * Store (or rotate) a deployment provider token, encrypted via `safeStorage`.
+   *
+   * This mirrors the GitHub token storage mechanism: the token is stored under a
+   * deterministic, provider-keyed ref inside the secure vault and only ciphertext
+   * is persisted beneath the CodeInOven config root. The plaintext token is never
+   * written to a repo or project file.
+   *
+   * Keychain-unavailable fallback: when the OS keychain (`safeStorage`) is
+   * unavailable, this throws and the provider is left unconfigured. The vault
+   * deliberately does not degrade to plaintext storage, so a provider token can
+   * never be persisted outside the secure store.
+   *
+   * @returns the opaque ref under which the encrypted token was persisted.
+   */
+  async saveProviderToken(kind: CloudDeploymentProviderKind, token: string): Promise<string> {
+    return this.save(token, providerTokenRef(kind))
+  }
+
+  /**
+   * Resolve a deployment provider token from the secure vault.
+   *
+   * Keychain-unavailable fallback: when the OS keychain is unavailable this
+   * throws rather than exposing stored ciphertext, keeping token access bound to
+   * a working secure store.
+   */
+  async resolveProviderToken(kind: CloudDeploymentProviderKind): Promise<string> {
+    return this.resolve(providerTokenRef(kind))
+  }
+
+  /** Whether a deployment provider token is currently stored for the kind. */
+  async hasProviderToken(kind: CloudDeploymentProviderKind): Promise<boolean> {
+    return this.exists(providerTokenRef(kind))
+  }
+
+  /** Remove the stored deployment provider token for the kind. */
+  async removeProviderToken(kind: CloudDeploymentProviderKind): Promise<void> {
+    await this.remove(providerTokenRef(kind))
   }
 
   async resolve(ref: string): Promise<string> {
