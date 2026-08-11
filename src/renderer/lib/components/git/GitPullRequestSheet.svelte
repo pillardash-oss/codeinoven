@@ -278,21 +278,21 @@
         </div>
         <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[10px]">
           {#if head === base}
-            <CircleSlash size={11} class="shrink-0 text-dimmed" />
+            <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed"
               >The head and base are the same branch — pick a different head.</span
             >
           {:else if comparing}
-            <Loader2 size={11} class="shrink-0 animate-spin text-dimmed" />
+            <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
             <span class="text-dimmed">Comparing {head} into {base}</span>
           {:else if compareError}
-            <TriangleAlert size={11} class="shrink-0 text-warning" />
+            <TriangleAlert size={12} class="shrink-0 text-warning" />
             <span class="text-warning">{compareError}</span>
           {:else if compare && !compare.hasChanges}
-            <CircleSlash size={11} class="shrink-0 text-dimmed" />
+            <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed">There isn't anything to compare.</span>
           {:else if compare}
-            <CircleCheck size={11} class="shrink-0 text-success" />
+            <CircleCheck size={12} class="shrink-0 text-success" />
             <span class="text-success">
               Able to merge — {compare.aheadBy} ahead · {compare.behindBy} behind ·
               {compare.totalCommits} commit{compare.totalCommits === 1 ? '' : 's'} ·
