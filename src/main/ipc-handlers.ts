@@ -4097,6 +4097,11 @@ export function registerIpcHandlers(
       validateStringArray(orderedPinnedIds, 'Ordered pinned IDs')
     )
   )
+  ipcMain.handle('thread:reorderPinnedGlobal', (_, orderedPinnedIds: unknown) =>
+    threadManager.reorderPinnedThreadsGlobal(
+      validateStringArray(orderedPinnedIds, 'Ordered pinned IDs')
+    )
+  )
   ipcMain.handle(
     'thread:reorderScope',
     (_, projectId: unknown, bucketId: unknown, slice: unknown, orderedIds: unknown) =>
