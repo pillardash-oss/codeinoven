@@ -62,6 +62,8 @@ const INVOKE_CHANNELS = [
   'agent:dismissSessionError',
   'agent:getChildSessionStatus',
   'agent:retryChildSession',
+  'agent:retryAssignmentWorker',
+  'agent:resumeAssignmentAttention',
   'agent:abortChildSession',
   'agent:generateSpec',
   'agent:generateAudit',
