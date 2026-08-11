@@ -2950,6 +2950,12 @@ export function registerIpcHandlers(
       validateGitPathArray(paths)
     )
   )
+  ipcMain.handle('git:resolveConflicted', async (_, projectId: unknown, path: unknown) =>
+    gitService.resolveConflicted(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitRelativePath(path)
+    )
+  )
   ipcMain.handle('git:unstage', async (_, projectId: unknown, paths: unknown) =>
     gitService.unstage(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),

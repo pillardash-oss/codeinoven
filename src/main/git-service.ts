@@ -212,6 +212,32 @@ export class GitService {
     })
   }
 
+  /**
+   * Complete resolution of a single conflicted path.
+   *
+   * A merge/rebase leaves the path in an unmerged index state until `git add`
+   * is run on it. Editing the working file (the editor's Save) removes the
+   * conflict markers on disk, but git still reports the path as conflicted. This
+   * stages the path so git marks it resolved — but only when the working file no
+   * longer contains conflict markers, so a partially-resolved file is never
+   * staged. Returns fresh status so the renderer can clear the conflicted list.
+   */
+  async resolveConflicted(projectPath: string, path: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePath = this.assertRelativePath(directory, path)
+      const status = await this.client(directory).status()
+      if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
+      const file = await this.workingFileContent(directory, safePath)
+      if (!file || file.binary || file.truncated) return this.readStatus(directory)
+      if (hasConflictMarkers(file.content)) return this.readStatus(directory)
+      await this.wrapError(directory, 'mutation', async () => {
+        await this.client(directory).add([safePath])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async unstage(projectPath: string, paths: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -298,11 +324,7 @@ export class GitService {
   }
 
   /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
-  async log(
-    projectPath: string,
-    limit = DEFAULT_LOG_LIMIT,
-    offset = 0
-  ): Promise<GitCommitInfo[]> {
+  async log(projectPath: string, limit = DEFAULT_LOG_LIMIT, offset = 0): Promise<GitCommitInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
@@ -1223,4 +1245,13 @@ export class GitService {
       config: [`http.extraheader=Authorization: Bearer ${token}`]
     })
   }
+}
+
+/**
+ * True when a text file still contains git conflict markers. A resolved file
+ * has none of the `<<<<<<<`, `=======`, or `>>>>>>>` marker lines, so presence
+ * of any of them means resolution is not complete.
+ */
+function hasConflictMarkers(content: string): boolean {
+  return /^(?:<<<<<<<[ \t].*|=======$|>>>>>>>[ \t].*)$/mu.test(content)
 }

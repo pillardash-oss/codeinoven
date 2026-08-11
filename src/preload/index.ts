@@ -143,6 +143,7 @@ const INVOKE_CHANNELS = [
   'git:status',
   'git:diff',
   'git:stage',
+  'git:resolveConflicted',
   'git:unstage',
   'git:commit',
   'git:init',

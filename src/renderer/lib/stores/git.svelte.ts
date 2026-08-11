@@ -250,6 +250,23 @@ export class GitState {
     }
   }
 
+  /**
+   * Mark a single conflicted path resolved once its conflict markers are gone.
+   * Staging it tells git the unmerged entry is resolved, which clears it from
+   * the conflicted list and refreshes the stored status.
+   */
+  async resolveConflicted(projectId: string, path: string): Promise<void> {
+    this.markBusy('stage', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:resolveConflicted', projectId, path)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Conflict could not be resolved')
+    } finally {
+      this.markBusy('stage', false)
+    }
+  }
+
   async unstage(projectId: string, paths: string[]): Promise<void> {
     this.markBusy('unstage', true)
     this.error = null

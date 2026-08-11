@@ -9,6 +9,7 @@ import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
 export type ProjectFileView = 'diff' | 'preview' | 'source'
@@ -575,11 +576,24 @@ class ProjectFilesWorkspace {
       )
       session.source = source
       if (session.draft === submittedDraft) session.draft = source.content
+      await this.reconcileConflictAfterSave(projectId, path)
     } catch (error) {
       session.error = errorMessage(error)
     } finally {
       session.saving = false
     }
+  }
+
+  /**
+   * After a successful editor save, mark the path resolved in git when it was
+   * a conflicted file and no conflict markers remain. The main side stages it
+   * (`git add`), which clears the unmerged index entry and lets the git panel
+   * drop it from the conflicted list.
+   */
+  private async reconcileConflictAfterSave(projectId: string, path: string): Promise<void> {
+    if (gitState.activeProjectId !== projectId) return
+    if (!gitState.conflicted.includes(path)) return
+    await gitState.resolveConflicted(projectId, path)
   }
 
   async reload(projectId: string, path: string): Promise<void> {
