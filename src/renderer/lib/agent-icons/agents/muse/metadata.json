@@ -2,9 +2,9 @@
   "id": "muse",
   "name": "Muse Code",
   "vendor": "Meta",
-  "website": "https://dev.meta.ai/docs/muse-code",
+  "website": "https://developer.meta.com/ai/products/muse-code/",
   "icon": "icon.svg",
   "monochrome": "mono.svg",
-  "primaryColor": "#0866FF",
+  "primaryColor": "#0082FB",
   "aliases": ["muse-code", "meta"]
 }
