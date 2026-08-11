@@ -92,7 +92,7 @@
     mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders])
   )
   const selectedHarnesses = new SvelteSet<string>()
-  let showAllHarnesses = $state(false)
+  let showAllHarnesses = $state(true)
   let harnessFilterOpen = $state(false)
   let selectedProvider = $derived(
     displayProviders.find(
@@ -137,7 +137,7 @@
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
   let effectiveHarnessCount = $derived(
-    showAllHarnesses ? 0 : selectedHarnesses.size || (harnessId ? 1 : 0)
+    showAllHarnesses ? 0 : selectedHarnesses.size || 0
   )
   let harnessFilterActive = $derived(effectiveHarnessCount > 0)
   let harnessFilterLabel = $derived(
@@ -286,12 +286,12 @@
 
   function passesHarnessFilter(candidateHarnessId: string): boolean {
     if (showAllHarnesses) return true
-    if (selectedHarnesses.size === 0) return candidateHarnessId === harnessId
+    if (selectedHarnesses.size === 0) return true
     return selectedHarnesses.has(candidateHarnessId)
   }
 
   function isHarnessSelected(candidateHarnessId: string): boolean {
-    return !showAllHarnesses && passesHarnessFilter(candidateHarnessId)
+    return !showAllHarnesses && selectedHarnesses.has(candidateHarnessId)
   }
 
   function toggleHarness(nextHarnessId: string): void {
@@ -357,7 +357,6 @@
   function resetPicker(): void {
     search = ''
     harnessFilterOpen = false
-    selectedHarnesses.clear()
     pickerListScrollTop = 0
   }
 
