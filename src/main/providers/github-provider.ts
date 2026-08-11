@@ -135,6 +135,7 @@ export class GitHubProvider implements GitProvider {
     const rawFiles = record['files']
     const filesChanged = Array.isArray(rawFiles) ? rawFiles.length : 0
     return {
+      source: 'remote',
       status,
       aheadBy: this.readNumber(record, 'ahead_by'),
       behindBy: this.readNumber(record, 'behind_by'),

@@ -2893,6 +2893,8 @@ export interface PullRequestPage {
  * A PR only makes sense when the head actually has commits the base lacks.
  */
 export interface PullRequestCompare {
+  /** Whether the comparison reflects GitHub or commits that only exist locally. */
+  source: 'remote' | 'local'
   status: 'ahead' | 'behind' | 'diverged' | 'identical'
   /** Commits the head has that the base does not. */
   aheadBy: number

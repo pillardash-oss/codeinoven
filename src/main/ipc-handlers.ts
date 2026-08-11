@@ -157,6 +157,14 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 
+/** Reduce local/tracking ref spellings to the branch name GitHub expects. */
+function canonicalGitHubBranch(branch: string): string {
+  return branch
+    .replace(/^refs\/remotes\/origin\//u, '')
+    .replace(/^refs\/heads\//u, '')
+    .replace(/^origin\//u, '')
+}
+
 function githubPermissionRequired(
   error: unknown,
   owner: string,
@@ -3138,14 +3146,47 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'pr:compare',
     async (_, projectId: unknown, owner: unknown, repo: unknown, base: unknown, head: unknown) => {
-      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to create pull requests')
-      return provider.comparePullRequests({
+      const safeBase = canonicalGitHubBranch(validateBranchName(base, 'Compare base'))
+      const safeHead = canonicalGitHubBranch(validateBranchName(head, 'Compare head'))
+      if (safeBase === safeHead) {
+        return {
+          source: 'local' as const,
+          status: 'identical' as const,
+          aheadBy: 0,
+          behindBy: 0,
+          totalCommits: 0,
+          filesChanged: 0,
+          hasChanges: false
+        }
+      }
+      const input = {
         owner: validateBoundedString(owner, 'PR owner', 1, 128),
         repo: validateBoundedString(repo, 'PR repository', 1, 128),
-        base: validateBranchName(base, 'Compare base'),
-        head: validateBranchName(head, 'Compare head')
-      })
+        base: safeBase,
+        head: safeHead
+      }
+      let remoteCompare = null
+      let missingRemoteHead: ProviderHttpError | null = null
+      try {
+        remoteCompare = await provider.comparePullRequests(input)
+        if (remoteCompare.hasChanges) return remoteCompare
+      } catch (error) {
+        // A branch that has never been pushed cannot be compared by GitHub yet.
+        if (!(error instanceof ProviderHttpError) || error.status !== 404) throw error
+        missingRemoteHead = error
+      }
+      const localCompare = await gitService.comparePullRequestBranches(
+        await resolveProjectPath(safeProjectId),
+        safeBase,
+        safeHead
+      )
+      if (localCompare?.hasChanges) return localCompare
+      const fallback = remoteCompare ?? localCompare
+      if (fallback) return fallback
+      throw missingRemoteHead ?? new Error('Could not compare these branches')
     }
   )
 

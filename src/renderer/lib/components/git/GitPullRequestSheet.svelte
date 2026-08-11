@@ -58,18 +58,30 @@
       (change) => change.staged && change.status !== 'conflicted'
     )
   )
+  const sameBranch = $derived(canonicalBranch(head) === canonicalBranch(base))
+  const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
+  const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
+  const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
 
-  /** A PR is only worth creating when the head has commits the base lacks. */
+  /** Local-only commits must be pushed before GitHub can create the PR. */
   const canCreate = $derived(
     Boolean(originIdentity) &&
       Boolean(head) &&
       Boolean(base) &&
-      head !== base &&
+      !sameBranch &&
       Boolean(title.trim()) &&
-      compare?.hasChanges === true &&
+      hasChangesToPublish &&
+      (compare?.source !== 'local' || pushLocal) &&
       !creating &&
       !submitting
   )
+
+  function canonicalBranch(value: string): string {
+    return value
+      .replace(/^refs\/remotes\/origin\//u, '')
+      .replace(/^refs\/heads\//u, '')
+      .replace(/^origin\//u, '')
+  }
 
   async function loadOrigin(): Promise<void> {
     try {
@@ -93,7 +105,7 @@
 
   /** Compare head against base; a stale response from an earlier selection is dropped. */
   async function runCompare(): Promise<void> {
-    if (!originIdentity || !head || !base || head === base) return
+    if (!originIdentity || !head || !base || sameBranch) return
     const sequence = ++compareSequence
     comparing = true
     compareError = ''
@@ -108,6 +120,7 @@
       if (sequence !== compareSequence) return
       if (snapshot) {
         compare = snapshot
+        if (snapshot.source === 'local') pushLocal = true
       } else {
         compare = null
         compareError = 'Could not compare these branches.'
@@ -178,7 +191,7 @@
   })
 
   $effect(() => {
-    if (head === base) {
+    if (sameBranch) {
       compare = null
       compareError = ''
       compareSequence++
@@ -277,7 +290,7 @@
           </div>
         </div>
         <div class="mt-2 flex min-h-4 items-center gap-1.5 text-[10px]">
-          {#if head === base}
+          {#if sameBranch}
             <CircleSlash size={12} class="shrink-0 text-dimmed" />
             <span class="text-dimmed"
               >The head and base are the same branch — pick a different head.</span
@@ -289,12 +302,18 @@
             <TriangleAlert size={12} class="shrink-0 text-warning" />
             <span class="text-warning">{compareError}</span>
           {:else if compare && !compare.hasChanges}
-            <CircleSlash size={12} class="shrink-0 text-dimmed" />
-            <span class="text-dimmed">There isn't anything to compare.</span>
+            {#if willCreateCommit}
+              <CircleCheck size={12} class="shrink-0 text-success" />
+              <span class="text-success">The staged changes will be committed and pushed.</span>
+            {:else}
+              <CircleSlash size={12} class="shrink-0 text-dimmed" />
+              <span class="text-dimmed">There isn't anything to compare.</span>
+            {/if}
           {:else if compare}
             <CircleCheck size={12} class="shrink-0 text-success" />
             <span class="text-success">
-              Able to merge — {compare.aheadBy} ahead · {compare.behindBy} behind ·
+              {compare.source === 'local' ? 'Local commits will be pushed' : 'Able to merge'} —
+              {compare.aheadBy} ahead · {compare.behindBy} behind ·
               {compare.totalCommits} commit{compare.totalCommits === 1 ? '' : 's'} ·
               {compare.filesChanged} file{compare.filesChanged === 1 ? '' : 's'} changed
             </span>
@@ -337,7 +356,11 @@
             <span class="text-[10px] text-muted">Push local changes</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
               Push committed changes to
-              <span class="font-mono text-foreground">{head}</span> so they're included in this pull request.
+              <span class="font-mono text-foreground">{head}</span> so they're included in this pull
+              request.
+              {#if compare?.source === 'local'}
+                This is required because the compared commits are not on GitHub yet.
+              {/if}
             </p>
           </div>
           <Switch
@@ -351,14 +374,16 @@
             <span class="text-[10px] text-muted">Commit local changes</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
               {hasStagedChanges
-                ? `Commit staged files as commit: ${title.trim() || 'Title'} before pushing.`
+                ? headIsCurrent
+                  ? `Commit staged files as commit: ${title.trim() || 'Title'} before pushing.`
+                  : `Check out ${head} before committing staged files to it.`
                 : 'No staged files to commit right now.'}
             </p>
           </div>
           <Switch
             checked={commitLocal}
             onchange={(value) => (commitLocal = value)}
-            disabled={!hasStagedChanges}
+            disabled={!hasStagedChanges || !headIsCurrent}
             aria-label="Commit local changes"
           />
         </div>
@@ -401,9 +426,11 @@
           type="button"
           class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
           disabled={!canCreate}
-          title={!canCreate && compare !== null && !compare.hasChanges
-            ? 'There isn\u2019t anything to compare'
-            : undefined}
+          title={!canCreate && compare?.source === 'local' && !pushLocal
+            ? 'Push local changes to create this pull request'
+            : !canCreate && compare !== null && !hasChangesToPublish
+              ? 'There isn\u2019t anything to compare'
+              : undefined}
           onclick={() => void createPullRequest()}
         >
           {#if creating}
