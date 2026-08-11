@@ -1,28 +1,36 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
   import FindInBar from '../files/FindInBar.svelte'
-  import type { AgentMessage } from '$shared/types'
 
   const MATCH_HIGHLIGHT = 'conversation-find-match'
   const ACTIVE_HIGHLIGHT = 'conversation-find-active'
 
-  interface ConversationMatch {
+  interface SurfaceMatch {
     range: Range
     element: HTMLElement
   }
 
   interface Props {
-    messages: AgentMessage[]
     container: HTMLElement | null
     focusTrigger: number
     onClose: () => void
+    searchSelector?: string
+    placeholder?: string
+    label?: string
   }
 
-  let { messages, container, focusTrigger, onClose }: Props = $props()
+  let {
+    container,
+    focusTrigger,
+    onClose,
+    searchSelector,
+    placeholder = 'Find…',
+    label = 'Find'
+  }: Props = $props()
 
   let query = $state('')
   let activeIndex = $state(0)
-  let matches = $state.raw<ConversationMatch[]>([])
+  let matches = $state.raw<SurfaceMatch[]>([])
 
   function clearHighlights(): void {
     CSS.highlights?.delete(MATCH_HIGHLIGHT)
@@ -37,15 +45,33 @@
     if (active) CSS.highlights.set(ACTIVE_HIGHLIGHT, new Highlight(active.range))
   }
 
-  function collectMatches(value: string): ConversationMatch[] {
+  function searchableRoots(): HTMLElement[] {
+    if (!container) return []
+    if (!searchSelector) return [container]
+    return [...container.querySelectorAll<HTMLElement>(searchSelector)]
+  }
+
+  function visibleTextNode(node: Node): boolean {
+    const parent = node.parentElement
+    if (!parent) return false
+    if (
+      parent.closest('[data-find-exclude], script, style, noscript, [hidden], [aria-hidden="true"]')
+    ) {
+      return false
+    }
+    return parent.getClientRects().length > 0
+  }
+
+  function collectMatches(value: string): SurfaceMatch[] {
     if (!container || !value) return []
     const needle = value.toLocaleLowerCase()
-    const result: ConversationMatch[] = []
+    const result: SurfaceMatch[] = []
 
-    for (const element of container.querySelectorAll<HTMLElement>(
-      '[data-conversation-searchable]'
-    )) {
-      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+    for (const root of searchableRoots()) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) =>
+          visibleTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      })
       let node = walker.nextNode()
       while (node) {
         const text = node.textContent ?? ''
@@ -57,7 +83,7 @@
           const range = document.createRange()
           range.setStart(node, index)
           range.setEnd(node, index + value.length)
-          result.push({ range, element })
+          result.push({ range, element: node.parentElement ?? root })
           offset = index + Math.max(value.length, 1)
         }
         node = walker.nextNode()
@@ -66,12 +92,17 @@
     return result
   }
 
+  function refreshMatches(): void {
+    matches = collectMatches(query)
+    activeIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0))
+    renderHighlights()
+  }
+
   async function handleQueryChange(value: string): Promise<void> {
     query = value
     activeIndex = 0
     await tick()
-    matches = collectMatches(value)
-    renderHighlights()
+    refreshMatches()
     scrollToCurrent()
   }
 
@@ -104,17 +135,19 @@
   }
 
   $effect(() => {
-    if (!query) return
-    if (messages.length === 0) {
-      matches = []
-      clearHighlights()
-      return
-    }
-    void tick().then(() => {
-      matches = collectMatches(query)
-      activeIndex = Math.min(activeIndex, Math.max(matches.length - 1, 0))
-      renderHighlights()
+    const surface = container
+    if (!surface || !query) return
+    const observer = new MutationObserver((records) => {
+      const onlyFindBarChanged = records.every((record) => {
+        const target =
+          record.target instanceof Element ? record.target : record.target.parentElement
+        return target !== null && target.closest('[data-find-exclude]') !== null
+      })
+      if (onlyFindBarChanged) return
+      void tick().then(refreshMatches)
     })
+    observer.observe(surface, { childList: true, characterData: true, subtree: true })
+    return () => observer.disconnect()
   })
 
   onDestroy(clearHighlights)
@@ -124,8 +157,8 @@
   {query}
   matches={matches.length}
   {activeIndex}
-  placeholder="Find in conversation…"
-  label="Find in conversation"
+  {placeholder}
+  {label}
   floating
   {focusTrigger}
   onQueryChange={(value) => void handleQueryChange(value)}

@@ -43,7 +43,7 @@
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
-  import FindInConversation from './FindInConversation.svelte'
+  import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -929,6 +929,7 @@
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
   let showSpecStudio = $state(false)
+  let threadViewElement = $state<HTMLDivElement | null>(null)
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
   let imageUrls = new FileBlobUrlManager()
 
@@ -1873,7 +1874,10 @@
     workspaceState.specStudioBusy = specBusy
     workspaceState.specStudioFormulating = specFormulating
     workspaceState.specStudioError = specError
-    if (!showSpecStudio) workspaceState.specAgentSidebarOpen = false
+    if (!showSpecStudio) {
+      workspaceState.specAgentSidebarOpen = false
+      findNavState.closeStudioFind()
+    }
   })
 
   // Register the header's Spec toggle; cleared when the thread view unmounts.
@@ -4152,6 +4156,7 @@
 
   function closeSpecStudio(): void {
     workspaceState.specAgentSidebarOpen = false
+    findNavState.closeStudioFind()
     studioDocument = 'spec'
     showSpecStudio = false
   }
@@ -5838,6 +5843,7 @@
 {/if}
 
 <div
+  bind:this={threadViewElement}
   class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col {(assignment &&
     assignment.status !== 'draft' &&
     !showSpecStudio &&
@@ -5846,8 +5852,18 @@
     ? 'assignment-panel-open'
     : ''}"
   style:--assignment-panel-width={`${assignmentPanelWidth}px`}
+  data-region={showSpecStudio ? 'spec-studio' : undefined}
 >
   {#if showSpecStudio}
+    {#if findNavState.studioFindOpen}
+      <FindInSurface
+        container={threadViewElement}
+        focusTrigger={findNavState.studioFindFocusTrigger}
+        placeholder={`Find in ${studioDocument}…`}
+        label="Find in Spec Studio"
+        onClose={() => findNavState.closeStudioFind()}
+      />
+    {/if}
     {#if studioDocument === 'brainstorm' && studioBrainstorm}
       {#key `${studioBrainstorm.id}:${studioBrainstorm.version}`}
         <BrainstormStudio
@@ -5988,10 +6004,12 @@
     {/if}
   {:else}
     {#if showFind}
-      <FindInConversation
-        {messages}
+      <FindInSurface
         container={scrollEl ?? null}
         focusTrigger={findNavState.conversationFindFocusTrigger}
+        searchSelector="[data-conversation-searchable]"
+        placeholder="Find in conversation…"
+        label="Find in conversation"
         onClose={closeFind}
       />
     {/if}

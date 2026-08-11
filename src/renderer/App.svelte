@@ -973,6 +973,10 @@
       findNavState.openEditorFind()
       return
     }
+    if (active?.closest('[data-region="spec-studio"]')) {
+      findNavState.openStudioFind()
+      return
+    }
     if (active?.closest('[data-region="conversation"]')) {
       findNavState.openConversationFind()
       return
@@ -981,6 +985,10 @@
     // Toolbar focus still belongs to the visible regular/fullscreen file surface.
     if (document.querySelector('[data-region="editor"][data-find-active="true"]')) {
       findNavState.openEditorFind()
+      return
+    }
+    if (document.querySelector('[data-region="spec-studio"]')) {
+      findNavState.openStudioFind()
       return
     }
     if (
@@ -1105,7 +1113,6 @@
     {navigate}
     {goBack}
     {goForward}
-    onCommandPaletteOpen={toggleCommandPalette}
     onProjectCreated={handleProjectCreated}
     onScopeThreadOpen={openScopeThread}
   />
