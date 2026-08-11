@@ -433,6 +433,16 @@ export function mapMuseRecord(
     const failed = outcome === 'failure' || outcome === 'error'
     tool.status = failed ? 'error' : 'completed'
     if (text) tool.output = text
+    // `edit_facts.path` is the project-relative file that the tool changed.
+    // Surfacing it as the tool input lets the checkpoint change tracker map the
+    // edit to a concrete path, so the working-trace diff and rollback capture
+    // the model's edits (not just the user's own changes).
+    const editFacts = record(payload['edit_facts'])
+    const editedPath = stringValue(editFacts?.['path'])
+    if (editedPath) {
+      tool.input = { path: editedPath, ...tool.input }
+      if (!tool.title) tool.title = editedPath
+    }
     tool.end = Date.now()
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
