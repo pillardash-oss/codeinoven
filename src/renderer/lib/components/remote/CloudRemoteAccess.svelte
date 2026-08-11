@@ -17,8 +17,6 @@
   } from '$lib/remote/cloud-api'
   import { remoteSession } from '$lib/remote/session-store.svelte'
 
-  declare const __CODEINOVEN_APP_VERSION__: string
-
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
 
   function normalizeEnrollmentCode(value: string): string {

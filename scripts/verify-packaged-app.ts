@@ -2,6 +2,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { Logger } from '../src/main/logger'
 
 type Options = {
   'artifact-dir': string
@@ -34,7 +35,7 @@ const artifactDir = args['artifact-dir']
 const target = args.target ?? ''
 
 if (!target) {
-  console.error('[verify-packaged-app] --target is required (mac|win|linux)')
+  Logger.error('[verify-packaged-app] --target is required (mac|win|linux)')
   process.exit(1)
 }
 
@@ -43,7 +44,7 @@ let entries: string[] = []
 try {
   entries = readdirSync(absArtifactDir)
 } catch {
-  console.error(`[verify-packaged-app] artifact directory missing: ${absArtifactDir}`)
+  Logger.error(`[verify-packaged-app] artifact directory missing: ${absArtifactDir}`)
   process.exit(1)
 }
 
@@ -52,7 +53,7 @@ const hasExtension = (extension: string): boolean => files.some((file) => file.e
 
 const mustHave = (label: string, condition: boolean): void => {
   if (!condition) {
-    console.error(`[verify-packaged-app] missing required artifact: ${label}`)
+    Logger.error(`[verify-packaged-app] missing required artifact: ${label}`)
     process.exit(1)
   }
 }
@@ -68,11 +69,14 @@ if (target === 'mac') {
   mustHave('linux AppImage', hasExtension('.AppImage'))
   mustHave('linux deb', hasExtension('.deb'))
 } else {
-  console.error(`[verify-packaged-app] unsupported target: ${target}`)
+  Logger.error(`[verify-packaged-app] unsupported target: ${target}`)
   process.exit(1)
 }
 
-mustHave('metadata file', files.some((file) => extname(file) === '.yml' && file.includes('latest')))
+mustHave(
+  'metadata file',
+  files.some((file) => extname(file) === '.yml' && file.includes('latest'))
+)
 
 const yamlFiles = files.filter((file) => extname(file) === '.yml' && file.includes('latest'))
 let hasVersionMarker = false
@@ -88,14 +92,20 @@ mustHave('publish metadata with file list', hasVersionMarker)
 const packageFiles = files
   .filter((file) => {
     const extension = extname(file)
-    return extension === '.dmg' || extension === '.zip' || extension === '.exe' || extension === '.AppImage' || extension === '.deb'
+    return (
+      extension === '.dmg' ||
+      extension === '.zip' ||
+      extension === '.exe' ||
+      extension === '.AppImage' ||
+      extension === '.deb'
+    )
   })
   .map((file) => resolve(absArtifactDir, file))
 
 if (target === 'win' && process.platform === 'win32') {
   const exe = packageFiles.find((file) => file.endsWith('.exe'))
   if (!exe) {
-    console.error('[verify-packaged-app] windows installer was expected but not found')
+    Logger.error('[verify-packaged-app] windows installer was expected but not found')
     process.exit(1)
   }
   const escapedPath = exe.replace(/'/g, "''")
@@ -105,12 +115,12 @@ if (target === 'win' && process.platform === 'win32') {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw (\"Authenticode signature status: $($sig.Status)\") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
+      `$sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw ("Authenticode signature status: $($sig.Status)") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
     ],
     { encoding: 'utf8' }
   )
   if (verify.status !== 0) {
-    console.error(
+    Logger.error(
       `[verify-packaged-app] windows signature check failed for ${exe}: ${verify.stderr || verify.stdout || 'unknown'}`
     )
     process.exit(1)
@@ -120,14 +130,17 @@ if (target === 'win' && process.platform === 'win32') {
 if (target === 'mac' && process.platform === 'darwin') {
   const dmg = packageFiles.find((file) => file.endsWith('.dmg'))
   if (!dmg) {
-    console.error('[verify-packaged-app] mac dmg artifact was expected but not found')
+    Logger.error('[verify-packaged-app] mac dmg artifact was expected but not found')
     process.exit(1)
   }
   const verify = spawnSync('codesign', ['-dv', dmg], { encoding: 'utf8' })
   if (verify.status !== 0) {
-    console.error('[verify-packaged-app] mac code signature check failed for', dmg)
+    Logger.error('[verify-packaged-app] mac code signature check failed for', dmg)
     process.exit(1)
   }
 }
 
-console.log('[verify-packaged-app] ok', JSON.stringify({ target, artifactDir: absArtifactDir, files }))
+Logger.info(
+  '[verify-packaged-app] ok',
+  JSON.stringify({ target, artifactDir: absArtifactDir, files })
+)

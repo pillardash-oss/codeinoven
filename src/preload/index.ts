@@ -163,6 +163,7 @@ const INVOKE_CHANNELS = [
   'git:addRemote',
   'git:removeRemote',
   'git:fetch',
+  'git:fetchBranch',
   'git:pull',
   'git:pullIntegrate',
   'git:push',
@@ -466,6 +467,8 @@ export interface AppBridge {
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
   /** Resolve, retain when ephemeral, and register a native File from a drop/paste gesture. */
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
+  /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
+  getPathForFile: (file: File) => string
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
@@ -528,7 +531,8 @@ const bridge: AppBridge = {
     if (!path) return ''
     const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
     return typeof registered === 'string' ? registered : ''
-  }
+  },
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
 
 contextBridge.exposeInMainWorld('api', bridge)

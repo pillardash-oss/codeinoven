@@ -115,9 +115,14 @@ async function runIteration(
   let stdout = ''
   let stderr = ''
   try {
+    const sandboxFlag = options.target === 'linux' ? '--no-sandbox' : null
     const child = spawn(
       executable,
-      [`--user-data-dir=${join(runRoot, 'chromium')}`, '--enable-logging=stderr'],
+      [
+        `--user-data-dir=${join(runRoot, 'chromium')}`,
+        '--enable-logging=stderr',
+        ...(sandboxFlag ? [sandboxFlag] : [])
+      ],
       {
         cwd: options.appDir,
         env: {
