@@ -7451,22 +7451,11 @@ export class ChatEngine {
       projectPath,
       'brainstorm'
     )
-    const messages = await this.loadMessages(projectId, threadId)
-    const transcript = messages
-      .filter((message) => !message.id.startsWith('brainstorm-research-'))
-      .map((message) => {
-        const text = message.parts
-          .flatMap((part) => {
-            if (part.type === 'text') return [part.text]
-            if (part.type !== 'question') return []
-            const answer = part.question.answer?.trim()
-            return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
-          })
-          .join('\n')
-        return `${message.role.toUpperCase()}: ${text}`
-      })
-      .join('\n\n')
-      .slice(-80_000)
+    const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
+    const transcript = formatConversationTranscript(
+      messages.filter((message) => !message.id.startsWith('brainstorm-research-')),
+      { maxCharacters: 80_000 }
+    )
     const source = `${validateBoundedString(instructions, 'Brainstorm instructions', 1, 80_000)}\n\nConversation context:\n${transcript}`
     await this.beginBrainstormConversationTurn(projectId, threadId, source)
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
@@ -7701,21 +7690,8 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     let source = instructions
     if (request.mode === 'conversation') {
-      const messages = await this.loadMessages(projectId, threadId)
-      const transcript = messages
-        .map((message) => {
-          const text = message.parts
-            .flatMap((part) => {
-              if (part.type === 'text') return [part.text]
-              if (part.type !== 'question') return []
-              const answer = part.question.answer?.trim()
-              return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
-            })
-            .join('\n')
-          return `${message.role.toUpperCase()}: ${text}`
-        })
-        .join('\n\n')
-        .slice(-80_000)
+      const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
+      const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
       source = `${instructions}\n\nConversation context:\n${transcript}`
     }
 
@@ -7994,22 +7970,8 @@ export class ChatEngine {
   ): Promise<AssignmentPlanContent> {
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, coordinatorThreadId)
-    const messages = await this.loadMessages(projectId, coordinatorThreadId)
-    const transcript = messages
-      .map((message) => {
-        const text = message.parts
-          .flatMap((part) => {
-            if (part.type === 'text') return [part.text]
-            if (part.type !== 'question') return []
-            const answer = part.question.answer?.trim()
-            return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
-          })
-          .join('\n')
-        return `${message.role.toUpperCase()}: ${text}`
-      })
-      .filter((message) => !message.endsWith(': '))
-      .join('\n\n')
-      .slice(-80_000)
+    const messages = await this.threadManager.loadMessageRecords(projectId, coordinatorThreadId)
+    const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
     const specPath = await this.artifactRef(
       projectId,
       coordinatorThreadId,
@@ -12917,6 +12879,58 @@ export function textForMessage(message: AgentMessage): string {
     .join('\n')
 }
 
+function formatConversationTranscript(
+  messages: AgentMessage[],
+  options: { includeHidden?: boolean; maxCharacters?: number } = {}
+): string {
+  const transcript = messages
+    .filter(
+      (message) =>
+        options.includeHidden === true ||
+        message.visibility === undefined ||
+        message.visibility === 'conversation' ||
+        message.visibility === 'working_trace'
+    )
+    .map((message) => {
+      const text = (message.transportParts ?? message.parts)
+        .flatMap((part) => {
+          if (part.type === 'text') return [part.text]
+          if (part.type === 'compaction-summary') {
+            return [`[Compacted conversation summary]\n${part.text}`]
+          }
+          if (part.type === 'compaction' && part.summary?.trim()) {
+            return [`[Compacted conversation summary]\n${part.summary}`]
+          }
+          if (part.type !== 'question') return []
+          const answer = part.question.answer?.trim()
+          return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
+        })
+        .join('\n')
+        .trim()
+      const references = (message.references ?? [])
+        .map((reference) => {
+          const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
+          return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
+        })
+        .filter((reference) => !text.includes(reference))
+        .join('\n\n')
+      const projectReferences = formatProjectReferenceContext(message.projectReferences ?? [])
+      const content = [
+        text,
+        references,
+        projectReferences && !text.includes(projectReferences) ? projectReferences : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const actor =
+        message.visibility === 'hidden' ? 'INTERNAL ORCHESTRATION' : message.role.toUpperCase()
+      return content ? `${actor}: ${content}` : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+  return options.maxCharacters === undefined ? transcript : transcript.slice(-options.maxCharacters)
+}
+
 /**
  * Format a mirrored transcript as a system-prompt recap. Used when a prompt
  * has to start a fresh harness session over an existing conversation
@@ -12939,35 +12953,7 @@ export function formatHistoryRecap(
   )
   const relevantMessages =
     latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
-  const transcript = relevantMessages
-    .map((message) => {
-      const text = (message.transportParts ?? message.parts)
-        .flatMap((part) => {
-          if (part.type === 'text') return [part.text]
-          if (part.type === 'compaction-summary') {
-            return [`[Compacted conversation summary]\n${part.text}`]
-          }
-          if (part.type === 'compaction' && part.summary?.trim()) {
-            return [`[Compacted conversation summary]\n${part.summary}`]
-          }
-          return []
-        })
-        .join('\n')
-        .trim()
-      const references = message.references
-        ?.map((reference) => {
-          const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
-          return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
-        })
-        .join('\n\n')
-      const projectReferences = formatProjectReferenceContext(message.projectReferences ?? [])
-      const content = [text, references, projectReferences].filter(Boolean).join('\n\n')
-      const actor =
-        message.visibility === 'hidden' ? 'INTERNAL ORCHESTRATION' : message.role.toUpperCase()
-      return content ? `${actor}: ${content}` : ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
+  const transcript = formatConversationTranscript(relevantMessages, { includeHidden: true })
   if (!transcript) return ''
   const budgetedTranscript =
     options.maxInputTokens === undefined
