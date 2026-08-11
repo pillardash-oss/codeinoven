@@ -1689,17 +1689,11 @@ Write the complete workflow, rules, and examples for this skill.`
         {/each}
       </div>
     {:else}
-      <div class="flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-2">
-        <p class="text-xs text-muted">No installed, supported harnesses were detected.</p>
-        <button
-          type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          disabled={providerStore.checkingCount > 0}
-          onclick={() => void providerStore.checkAll()}
-        >
-          <Loader2 size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
-          Re-check
-        </button>
+      <div class="rounded-lg bg-raised px-3 py-2">
+        <p class="text-xs text-muted">
+          No installed, supported harnesses were detected. Open Settings → Harnesses to check
+          installations.
+        </p>
       </div>
     {/if}
   </fieldset>
