@@ -65,6 +65,7 @@ import type {
   GitHubDeploymentJobLog,
   GitHubDeploymentOverviewResult,
   GitHubPollResult,
+  GitHubMutationResult,
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitIdentityInput,
@@ -760,7 +761,10 @@ export interface IpcInvokeContract {
   'git:stashFileDiff': Contract<[projectId: string, id: string, path: string], GitDiff>
   'git:abortMerge': Contract<[projectId: string], GitStatus>
   'git:abortRebase': Contract<[projectId: string], GitStatus>
-  'pr:create': Contract<[projectId: string, input: PrCreateInput], PullRequestReference>
+  'pr:create': Contract<
+    [projectId: string, input: PrCreateInput],
+    GitHubMutationResult<PullRequestReference>
+  >
   'pr:list': Contract<
     [projectId: string, owner: string, repo: string, state?: string],
     PullRequestReference[]
@@ -775,7 +779,7 @@ export interface IpcInvokeContract {
       commitTitle?: string,
       commitMessage?: string
     ],
-    PullRequestReference
+    GitHubMutationResult<PullRequestReference>
   >
   'pr:compare': Contract<
     [projectId: string, owner: string, repo: string, base: string, head: string],
@@ -783,11 +787,11 @@ export interface IpcInvokeContract {
   >
   'pr:reopen': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestReference
+    GitHubMutationResult<PullRequestReference>
   >
   'pr:close': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
-    PullRequestReference
+    GitHubMutationResult<PullRequestReference>
   >
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
@@ -822,7 +826,7 @@ export interface IpcInvokeContract {
   'pr:agentReport': Contract<[projectId: string, pullNumber: number], PrAgentReport>
   'pr:comment': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
-    PullRequestComment
+    GitHubMutationResult<PullRequestComment>
   >
   'pr:review': Contract<
     [

@@ -2830,14 +2830,18 @@ export interface PrDraft {
 /** PR create request as the renderer sends it; owner/repo resolve from the origin. */
 export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
 
+/** GitHub App installation access needed before a repository mutation can run. */
+export interface GitHubPermissionRequired {
+  status: 'permission_required'
+  message: string
+  settingsUrl: string
+}
+
+/** Typed boundary for GitHub writes, including recoverable installation access. */
+export type GitHubMutationResult<T> = { status: 'completed'; value: T } | GitHubPermissionRequired
+
 /** Result of submitting a pull-request review through the GitHub App. */
-export type PullRequestReviewResult =
-  | { status: 'submitted' }
-  | {
-      status: 'permission_required'
-      message: string
-      settingsUrl: string
-    }
+export type PullRequestReviewResult = GitHubMutationResult<null>
 
 /** Renderer-safe PR reference created or merged by a provider. */
 export interface PullRequestReference {
