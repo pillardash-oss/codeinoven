@@ -177,6 +177,8 @@
     harnessUsage?: AgentHarnessUsage[]
     /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
     onRevealUsage?: () => void
+    /** Called when the user stops hovering the usage indicator. */
+    onHideUsage?: () => void
     /** Whether this harness can explicitly compact conversation context. */
     canCompact?: boolean
     compacting?: boolean
@@ -241,6 +243,7 @@
     contextUsage,
     harnessUsage = [],
     onRevealUsage,
+    onHideUsage,
     canCompact = false,
     compacting = false,
     onCompact,
@@ -2058,6 +2061,7 @@
       {compacting}
       {onCompact}
       onReveal={onRevealUsage}
+      onHide={onHideUsage}
     />
 
     <!-- Send / Queue / Stop button.
