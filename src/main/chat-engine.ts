@@ -3609,7 +3609,17 @@ export class ChatEngine {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    const hasSendableContext =
+      text.length > 0 ||
+      (attachments?.length ?? 0) > 0 ||
+      Boolean(promptContext) ||
+      (promptReferences?.length ?? 0) > 0 ||
+      (projectReferences?.length ?? 0) > 0 ||
+      (taskReferences?.length ?? 0) > 0
+    if (text.length === 0 && !hasSendableContext) {
+      throw new TypeError('Prompt must be a string between 1 and 200000 characters')
+    }
     const messageId = validateEntityId(userMessageId, 'Message ID', 256)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
@@ -3708,7 +3718,17 @@ export class ChatEngine {
     // accept its first prompt as soon as its row is persisted.
     await this.threadCreation?.awaitReady(threadId)
     settings = validateThreadSettings(settings)
-    text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    text = validateBoundedString(text, 'Prompt', 0, 200_000)
+    const hasSendableContext =
+      text.length > 0 ||
+      (attachments?.length ?? 0) > 0 ||
+      Boolean(promptContext) ||
+      (promptReferences?.length ?? 0) > 0 ||
+      (projectReferences?.length ?? 0) > 0 ||
+      (taskReferences?.length ?? 0) > 0
+    if (text.length === 0 && !hasSendableContext) {
+      throw new TypeError('Prompt must be a string between 1 and 200000 characters')
+    }
     this.markProjectActive(projectId)
     const targetThread = await this.threadManager.getThread(projectId, threadId)
     if (

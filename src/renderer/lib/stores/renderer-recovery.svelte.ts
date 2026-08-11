@@ -316,12 +316,19 @@ export class RendererRecoveryStore {
 
   /** Persist a message queued while the agent was busy. */
   setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
+    const hasContext =
+      entry.text.length > 0 ||
+      entry.attachments.length > 0 ||
+      Boolean(entry.promptContext) ||
+      entry.promptReferences.length > 0 ||
+      entry.projectReferences.length > 0 ||
+      entry.taskReferences.length > 0
     if (
       !isRecoveryIdentifier(projectId) ||
       !isRecoveryIdentifier(threadId) ||
       typeof entry.text !== 'string' ||
-      entry.text.length === 0 ||
-      entry.text.length > MAX_DRAFT_LENGTH
+      entry.text.length > MAX_DRAFT_LENGTH ||
+      !hasContext
     ) {
       return
     }
