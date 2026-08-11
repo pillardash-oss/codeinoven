@@ -764,6 +764,58 @@ describe('cloudDeploy IPC', () => {
     await rm(storageRoot, { recursive: true, force: true })
   })
 
+  it('saveConfig preserves main-owned credential metadata and never replaces it with renderer values', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const save = handlers.get('cloudDeploy:saveConfig')
+
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )
+    const stored = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const storedAccount = stored.credentials['coolify']?.accounts[0]
+    expect(storedAccount?.configured).toBe(true)
+
+    // A renderer-supplied config attempts to swap the account id, secretRef, and
+    // configured flag. Main must preserve the authoritative vault-backed record.
+    const now = Date.now()
+    const forged: CloudDeploymentConfig = {
+      ...stored,
+      credentials: {
+        coolify: {
+          accounts: [
+            {
+              id: 'forged-id',
+              label: 'Personal',
+              providerKind: 'coolify',
+              secretRef: 'forged-ref',
+              configured: false,
+              createdAt: now,
+              updatedAt: now
+            }
+          ],
+          activeAccountId: 'forged-id'
+        }
+      },
+      updatedAt: now
+    }
+    await save?.(trustedEvent(), 'proj-a', forged)
+
+    const after = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const keptAccount = after.credentials['coolify']?.accounts[0]
+    expect(keptAccount?.id).toBe(storedAccount?.id)
+    expect(keptAccount?.secretRef).toBe(storedAccount?.secretRef)
+    expect(keptAccount?.configured).toBe(true)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
   it('switches the active account and resolves its token + base URL on overview', async () => {
     const storageRoot = await setupStorage()
     const set = handlers.get('cloudDeploy:setCredential')
