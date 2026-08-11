@@ -2349,6 +2349,7 @@ export interface AssignmentPlanContent {
 export type AssignmentAuditCycleStatus =
   | 'available'
   | 'running'
+  | 'failed'
   | 'report_ready'
   | 'planning_rework'
   | 'awaiting_rework_approval'
@@ -2362,6 +2363,8 @@ export interface AssignmentAuditCycle {
   statusBeforeStop?: Exclude<AssignmentAuditCycleStatus, 'stopped'>
   availableAt?: number
   startedAt?: number
+  failedAt?: number
+  failure?: string
   reportId?: string
   reportVersion?: number
   reportedAt?: number
@@ -3170,6 +3173,100 @@ export interface GitHubWorkflowRunDetail {
   run: GitHubWorkflowRun
   jobs: GitHubDeploymentJob[]
   fetchedAt: number
+}
+
+// ─── Cloud deployments ───────────────────────────────────────────────────────
+
+/** Provider-agnostic deployment hosts the Cloud Deployments panel can reach. */
+export type CloudDeploymentProviderKind =
+  | 'coolify'
+  | 'netlify'
+  | 'railway'
+  | 'vercel'
+  | 'dokploy'
+  | 'custom'
+
+/** Every `CloudDeploymentProviderKind` as a runtime array — single source for schema enums. */
+export const CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES: readonly CloudDeploymentProviderKind[] = [
+  'coolify',
+  'netlify',
+  'railway',
+  'vercel',
+  'dokploy',
+  'custom'
+]
+
+/** Latest build/run state of a cloud deployment container. */
+export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'unknown'
+
+/** One provider-agnostic cloud deployment container/application mapping. */
+export interface CloudDeploymentContainer {
+  /** Stable container identity the provider adapter can query by. */
+  id: string
+  /** User-supplied custom label shown in the panel. */
+  label: string
+  /** Provider that owns this container. */
+  providerKind: CloudDeploymentProviderKind
+  /** Latest known deployment/build status. */
+  status: CloudDeploymentStatus
+  /** Live URL of the deployed application, when known. */
+  url?: string
+  /** Epoch ms the container was first seen. */
+  createdAt?: number
+  /** Epoch ms of the last status change. */
+  updatedAt?: number
+  /** Capped raw log text for the latest deployment, when available. */
+  log?: string
+}
+
+/** Reference to a securely vaulted provider credential; never carries plaintext. */
+export interface CloudDeploymentCredentialRef {
+  /** Provider this credential authenticates. */
+  providerKind: CloudDeploymentProviderKind
+  /** Opaque SecretVault reference for the stored token. */
+  secretRef: string
+  /** Verified base URL the provider is reached at (e.g. the Coolify host). */
+  baseUrl?: string
+  /** Whether a credential is currently configured for this provider. */
+  configured: boolean
+  /** Epoch ms the credential was last stored or rotated. */
+  updatedAt: number
+}
+
+/** One project's selected providers and their labelled container mappings. */
+export interface CloudDeploymentProjectConfig {
+  /** Provider kinds selected for this project. */
+  providers: CloudDeploymentProviderKind[]
+  /** Container mappings configured for this project, with user labels. */
+  containers: CloudDeploymentContainer[]
+}
+
+/** Per-project cloud deployment configuration, persisted by main, never in the repo. */
+export interface CloudDeploymentConfig {
+  version: 1
+  projectId: string
+  /** Credential references keyed by provider kind. */
+  credentials: Partial<Record<CloudDeploymentProviderKind, CloudDeploymentCredentialRef>>
+  /** Selected providers plus labelled container mappings for this project. */
+  project: CloudDeploymentProjectConfig
+  /** Epoch ms of the last configuration change. */
+  updatedAt: number
+}
+
+/** Read-only provider-agnostic deployment snapshot for a project. */
+export interface CloudDeploymentOverview {
+  containers: CloudDeploymentContainer[]
+  fetchedAt: number
+}
+
+/**
+ * Cloud deployment overview IPC result. `hasDeployments` is derived from the
+ * snapshot and drives whether the Cloud Deployments panel is shown at all.
+ */
+export interface CloudDeploymentResult extends CloudDeploymentOverview {
+  hasDeployments: boolean
+  /** Actionable provider/credential access failure returned without rejecting IPC. */
+  accessError?: string
 }
 
 /** One entry from `git stash list`, e.g. `stash@{0}`. */
