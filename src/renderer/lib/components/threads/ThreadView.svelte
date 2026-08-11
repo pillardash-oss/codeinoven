@@ -2358,8 +2358,11 @@
     startedAt = thread.lastActivity,
     auditRunning = thread.auditState === 'running'
   ): void {
+    // Delegated activity contributes to the aggregate working display, but it
+    // says nothing about the Sr. Engineer's own live session. Preserve the raw
+    // session state here: live working keeps Steer available, while live idle
+    // is established authoritatively by connectSession/session.status.
     if (delegatedWorkBusy || auditRunning) {
-      setIdleFromRestore()
       return
     }
     if (status === 'planning' || status === 'executing') {
