@@ -81,6 +81,9 @@ export class CloudDeployState {
   /** Provider kinds already notified via the not-implemented-yet toast this session. */
   private notifiedNotImplemented: Partial<Record<CloudDeploymentProviderKind, boolean>> = {}
 
+  /** The project the store is currently scoped to, if any. */
+  private scopedProjectId: string | null = null
+
   static overviewKey(projectId: string, providerKind: CloudDeploymentProviderKind): string {
     return `${projectId}/${providerKind}`
   }
@@ -354,6 +357,7 @@ export class CloudDeployState {
       this.failures = {}
       this.requests = {}
       this.notifiedNotImplemented = {}
+      this.scopedProjectId = null
       this.error = null
       return
     }
@@ -362,6 +366,7 @@ export class CloudDeployState {
     this.containerLogs = CloudDeployState.dropByProjectPrefix(this.containerLogs, projectId)
     this.failures = CloudDeployState.dropByProjectPrefix(this.failures, projectId)
     this.requests = CloudDeployState.dropByProjectPrefix(this.requests, projectId)
+    if (this.scopedProjectId === projectId) this.scopedProjectId = null
   }
 
   /**
@@ -371,6 +376,11 @@ export class CloudDeployState {
    * active project changes.
    */
   ensureProject(projectId: string): void {
+    // Idempotent: only re-scope when the active project actually changes.
+    // Reassigning the reactive maps on every call (as in an effect) creates new
+    // references each run and feeds an infinite effect-update loop.
+    if (this.scopedProjectId === projectId) return
+    this.scopedProjectId = projectId
     this.overviews = CloudDeployState.keepByProjectPrefix(this.overviews, projectId)
     this.containerStatuses = CloudDeployState.keepByProjectPrefix(this.containerStatuses, projectId)
     this.containerLogs = CloudDeployState.keepByProjectPrefix(this.containerLogs, projectId)

@@ -379,6 +379,8 @@
                       <Bug size={14} />
                     {:else if action.id === 'sources'}
                       <Info size={14} />
+                    {:else if action.id === 'cloud-deployments'}
+                      <Cloud size={14} />
                     {/if}
                   </span>
                   <span class="min-w-0">
