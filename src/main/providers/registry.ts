@@ -29,8 +29,16 @@ export function registerDeploymentProvider(
   registry.set(kind, factory)
 }
 
-/** Resolve a `DeploymentProvider` for a kind, falling back to the stub. */
-export function resolveDeploymentProvider(kind: CloudDeploymentProviderKind): DeploymentProvider {
+/**
+ * Resolve a `DeploymentProvider` for a kind, falling back to the stub.
+ * Callers that already hold a verified base URL / vaulted token pass them via
+ * `context` so the adapter can authenticate; callers without one (e.g. the
+ * config flows) resolve with an empty context and the adapter degrades safely.
+ */
+export function resolveDeploymentProvider(
+  kind: CloudDeploymentProviderKind,
+  context: DeploymentProviderContext = {}
+): DeploymentProvider {
   const factory = registry.get(kind) ?? (() => new NotImplementedProvider(kind))
-  return factory({})
+  return factory(context)
 }
