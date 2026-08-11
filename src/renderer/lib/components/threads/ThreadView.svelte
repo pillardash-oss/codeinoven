@@ -141,6 +141,7 @@
     BrainstormDocument,
     BrainstormSectionId,
     BrainstormTraceUpdate,
+    SpecGenerationTraceUpdate,
     BrainstormWorkflowState,
     EngineeringSpec,
     AssignmentPlan,
@@ -1269,7 +1270,6 @@
   let brainstormBusy = $state(false)
   let brainstormEntryInFlight = $state<'brainstorm' | 'spec' | null>(null)
   let brainstormDecisionInFlight = $state<BrainstormDecisionAction | null>(null)
-  let brainstormConversationTurnActive = $state(false)
   let brainstormGenerationFailed = $state(false)
   let activePlanningEntry = $derived(
     brainstormEntryInFlight ??
@@ -1280,30 +1280,61 @@
           : null) ??
       (busy && !brainstorm && !spec ? (brainstormWorkflow?.entryChoice ?? null) : null)
   )
-  let brainstormEntryTrace = $derived.by<AgentPart[]>(() => {
-    if (!activePlanningEntry || brainstormConversationTurnActive) return []
-    const label =
-      activePlanningEntry === 'spec' && providerStatus?.state === 'working'
-        ? (providerStatus.activity?.label ??
-          'Preparing the engineering specification from this conversation.')
-        : activePlanningEntry === 'brainstorm'
-          ? 'Preparing the reviewable Brainstorm document from this conversation.'
-          : 'Preparing the engineering specification from this conversation.'
-    return [
-      {
-        type: 'text',
-        id: `planning-entry-${activePlanningEntry}`,
-        messageID: `planning-entry-${activePlanningEntry}`,
-        text: label,
-        phase: 'commentary'
+  let specGenerationTraceParts = $state<AgentPart[]>([])
+  let specGenerationTraceActive = $state(false)
+  let specGenerationTraceStartedAt = $state<number | undefined>()
+
+  function specTracePartStart(part: AgentPart): number | undefined {
+    if (part.type === 'reasoning') return part.time?.start
+    if (part.type === 'tool') return part.state.time?.start
+    if (part.type === 'subagent') return part.activity.time?.start
+    return undefined
+  }
+
+  function clearSpecGenerationTrace(): void {
+    specGenerationTraceParts = []
+    specGenerationTraceStartedAt = undefined
+    specGenerationTraceActive = false
+  }
+
+  function applySpecGenerationTrace(update: SpecGenerationTraceUpdate): void {
+    if (update.type === 'started') {
+      specGenerationTraceParts = []
+      specGenerationTraceStartedAt = update.startedAt
+      specGenerationTraceActive = true
+      return
+    }
+    if (update.type === 'completed') {
+      clearSpecGenerationTrace()
+      return
+    }
+    if (update.type === 'part.updated') {
+      if (!specGenerationTraceActive) {
+        specGenerationTraceParts = []
+        specGenerationTraceStartedAt = specTracePartStart(update.part) ?? Date.now()
+        specGenerationTraceActive = true
       }
-    ]
-  })
+      const partIndex = specGenerationTraceParts.findIndex(
+        (candidate) => candidate.id === update.part.id
+      )
+      specGenerationTraceParts =
+        partIndex === -1
+          ? [...specGenerationTraceParts, update.part]
+          : specGenerationTraceParts.map((candidate, index) =>
+              index === partIndex ? update.part : candidate
+            )
+      return
+    }
+    if (!specGenerationTraceActive || update.field !== 'text') return
+    specGenerationTraceParts = specGenerationTraceParts.map((part) => {
+      if (part.id !== update.partId || part.type !== 'reasoning') return part
+      return { ...part, text: `${part.text}${update.delta}` }
+    })
+  }
 
   function applyBrainstormTrace(update: BrainstormTraceUpdate): void {
     if (update.type === 'started' || update.type === 'completed') {
       threadMessages.mergePage(thread.projectId, thread.id, update.messages)
-      brainstormConversationTurnActive = true
       if (update.type === 'started') {
         agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
       }
@@ -2447,6 +2478,14 @@
 
   function handleAgentEvent(event: AgentEvent): void {
     if (
+      event.type === 'spec.trace' &&
+      event.projectId === thread.projectId &&
+      event.threadId === thread.id
+    ) {
+      applySpecGenerationTrace(event.update)
+      return
+    }
+    if (
       event.type === 'brainstorm.trace' &&
       event.projectId === thread.projectId &&
       event.threadId === thread.id
@@ -2467,9 +2506,7 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
-      if (event.type === 'brainstorm.ready') {
-        brainstormConversationTurnActive = false
-      }
+      if (event.type === 'spec.ready') clearSpecGenerationTrace()
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       if (providerStatus?.state !== 'error') providerStatus = null
@@ -2481,6 +2518,7 @@
     }
     if (event.type === 'thread.error') {
       if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
+      clearSpecGenerationTrace()
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       pendingPermissions = []
@@ -3760,7 +3798,6 @@
     } finally {
       brainstormBusy = false
       brainstormEntryInFlight = null
-      brainstormConversationTurnActive = false
       agentRuns.setIdle(thread.projectId, thread.id)
     }
   }
@@ -3934,7 +3971,6 @@
     } finally {
       brainstormBusy = false
       brainstormDecisionInFlight = null
-      brainstormConversationTurnActive = false
       agentRuns.setIdle(thread.projectId, thread.id)
     }
   }
@@ -6222,19 +6258,19 @@
             {/if}
           {/each}
 
-          {#if brainstormEntryTrace.length > 0}
+          {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
             <WorkingTrace
-              parts={brainstormEntryTrace}
+              parts={specGenerationTraceParts}
               open
               busy
               latest
-              startTime={activeTurnStartTime}
+              startTime={specGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
             />
           {/if}
 
-          {#if delegatedWorkBusy || specFormulating || (threadWorking && latestTurnRenderableParts.length === 0)}
+          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && threadWorking && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>

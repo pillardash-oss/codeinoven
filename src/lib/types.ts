@@ -1759,6 +1759,12 @@ export type BrainstormTraceUpdate =
   | { type: 'part.delta'; messageId: string; partId: string; field: string; delta: string }
   | { type: 'completed'; messages: AgentMessage[] }
 
+export type SpecGenerationTraceUpdate =
+  | { type: 'started'; startedAt: number }
+  | { type: 'part.updated'; part: AgentPart }
+  | { type: 'part.delta'; partId: string; field: string; delta: string }
+  | { type: 'completed' }
+
 export type AgentEvent =
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
   | {
@@ -1867,6 +1873,13 @@ export type AgentEvent =
       projectId: string
       threadId: string
       update: BrainstormTraceUpdate
+    }
+  | {
+      type: 'spec.trace'
+      sessionId: string
+      projectId: string
+      threadId: string
+      update: SpecGenerationTraceUpdate
     }
   | {
       type: 'spec.ready'

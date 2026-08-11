@@ -7523,6 +7523,13 @@ export class ChatEngine {
           startedAt: pendingWorkflow.createdAt,
           attempt: Math.max(1, pendingWorkflow.attempts)
         })
+        this.broadcast({
+          type: 'spec.trace',
+          sessionId,
+          projectId,
+          threadId,
+          update: { type: 'started', startedAt: pendingWorkflow.createdAt }
+        })
         const status = this.initialSpecWorkingStatus(
           pendingWorkflow,
           `${repairError || pendingWorkflow.repairArtifactPath ? 'Correcting invalid specification output' : 'Formulating specification'} · attempt ${Math.max(1, pendingWorkflow.attempts)}/${SPEC_GENERATION_MAX_ATTEMPTS}`
@@ -10429,7 +10436,7 @@ export class ChatEngine {
       this.projectIdleSince.delete(eventOwner.projectId)
       this.releasedProjects.delete(eventOwner.projectId)
       this.forwardBrainstormTrace(eventOwner, event)
-      this.forwardInitialSpecActivity(eventOwner, event)
+      this.forwardInitialSpecTrace(eventOwner, event)
     }
     const streamedMessageId =
       event.type === 'message.part.updated'
@@ -10720,40 +10727,80 @@ export class ChatEngine {
     }
   }
 
-  /** Expose safe, concise progress from the isolated spec worker on its coordinator session. */
-  private forwardInitialSpecActivity(owner: SessionInfo, event: AgentEvent): void {
+  /** Expose genuine trace parts from the active isolated specification worker. */
+  private forwardInitialSpecTrace(owner: SessionInfo, event: AgentEvent): void {
     if (!owner.ephemeral || !('sessionId' in event)) return
     const key = this.initialSpecKey(owner.projectId, owner.threadId)
     const active = this.activeInitialSpecSessions.get(key)
     if (!active || active.sessionId !== event.sessionId) return
 
+    if (
+      event.type === 'message.completed' ||
+      event.type === 'session.idle' ||
+      event.type === 'session.error'
+    ) {
+      this.broadcast({
+        type: 'spec.trace',
+        sessionId: event.sessionId,
+        projectId: owner.projectId,
+        threadId: owner.threadId,
+        update: { type: 'completed' }
+      })
+      return
+    }
+
+    if (event.type === 'message.part.delta') {
+      this.broadcast({
+        type: 'spec.trace',
+        sessionId: event.sessionId,
+        projectId: owner.projectId,
+        threadId: owner.threadId,
+        update: {
+          type: 'part.delta',
+          partId: `${event.sessionId}:${event.partId}`,
+          field: event.field,
+          delta: event.delta
+        }
+      })
+      return
+    }
+
+    if (event.type !== 'message.part.updated') return
+    const sourcePart = event.part
+    if (!['reasoning', 'tool', 'subagent', 'step-finish'].includes(sourcePart.type)) return
+    const part: AgentPart = {
+      ...sourcePart,
+      id: `${event.sessionId}:${sourcePart.id}`,
+      messageID: `spec-trace:${owner.threadId}`
+    }
+    this.broadcast({
+      type: 'spec.trace',
+      sessionId: event.sessionId,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      update: { type: 'part.updated', part }
+    })
+
     let label: string | null = null
-    if (event.type === 'message.part.updated') {
-      const part = event.part
-      if (part.type === 'reasoning') {
-        label = 'Reasoning through the engineering specification'
-      } else if (part.type === 'subagent') {
-        label = 'Coordinating specification research'
-      } else if (part.type === 'tool') {
-        const input = isRecord(part.state.input) ? part.state.input : null
-        const path =
-          input && typeof input.filePath === 'string'
-            ? input.filePath
-            : input && typeof input.path === 'string'
-              ? input.path
-              : null
-        const tool = normalizedToolName(part.tool)
-        label =
-          tool === 'read'
-            ? `Inspecting ${path ? basename(path) : 'project files'}`
-            : tool === 'grep' || tool === 'glob' || tool === 'list'
-              ? 'Searching project context'
-              : part.state.title?.trim() || `Using ${part.tool}`
-      }
-    } else if (event.type === 'message.completed') {
-      label = event.error
-        ? 'Specification worker reported an error'
-        : 'Validating specification output'
+    if (sourcePart.type === 'reasoning') {
+      label = 'Reasoning through the engineering specification'
+    } else if (sourcePart.type === 'subagent') {
+      label = 'Coordinating specification research'
+    } else if (sourcePart.type === 'tool') {
+      const input = isRecord(sourcePart.state.input) ? sourcePart.state.input : null
+      const path =
+        input && typeof input.filePath === 'string'
+          ? input.filePath
+          : input && typeof input.path === 'string'
+            ? input.path
+            : null
+      const tool = normalizedToolName(sourcePart.tool)
+      label =
+        tool === 'read'
+          ? `Inspecting ${path ? basename(path) : 'project files'}`
+          : tool === 'grep' || tool === 'glob' || tool === 'list'
+            ? 'Searching project context'
+            : sourcePart.state.title?.trim() || `Using ${sourcePart.tool}`
     }
     if (!label) return
 
