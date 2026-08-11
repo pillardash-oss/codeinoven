@@ -314,12 +314,12 @@
           {@render harnessSection(entry)}
         {/each}
       </div>
-    {:else if usage && usage.rateLimits.length > 0}
+    {:else if harnessUsage[0] && harnessUsage[0].rateLimits.length > 0}
       <div class="mt-3 space-y-2.5 border-t border-border pt-3">
         {#if harnessUsage[0]?.models?.length}
           {@render modelRows(harnessUsage[0].models)}
         {/if}
-        {@render limitRows(usage.rateLimits)}
+        {@render limitRows(harnessUsage[0].rateLimits)}
       </div>
     {/if}
 
