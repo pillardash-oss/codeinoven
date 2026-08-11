@@ -262,14 +262,16 @@
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
   })
-  // A persisted in-flight status means the turn is genuinely still running
-  // (main finalizes planning/executing to completed/awaiting/failed/interrupted
-  // the moment the session idles, and restart recovery marks leftovers
-  // interrupted at startup). Mark it busy synchronously at mount so the working
-  // trace is open and the view sits at the live bottom the instant the user
-  // opens the thread — never a folded trace waiting on a status round trip.
+  // A persisted in-flight status normally means this thread's harness turn is
+  // still running. Coordinator status also represents delegated workflow work,
+  // though, so only restore non-coordinators synchronously; the coordinator's
+  // live session status below determines whether its own trace is actually busy.
   // svelte-ignore state_referenced_locally
-  if (thread.status === 'planning' || thread.status === 'executing') {
+  if (
+    (thread.status === 'planning' || thread.status === 'executing') &&
+    thread.assignmentRole !== 'coordinator' &&
+    thread.achievementRole !== 'coordinator'
+  ) {
     agentRuns.setBusy(thread.projectId, thread.id, true, undefined, thread.lastActivity)
   }
   /** When the current busy run started; authoritative source for the live timer. */
@@ -2228,7 +2230,11 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        restoreWorkingState(updatedThread.status)
+        restoreWorkingState(
+          updatedThread.status,
+          updatedThread.lastActivity,
+          updatedThread.auditState === 'running'
+        )
       }
       if (
         updatedThread.projectId === thread.projectId &&
@@ -2343,16 +2349,20 @@
    *  still working. Live session activity for pending permission/question gates
    *  is re-established by connectSession's live status instead.
    *
-   *  A planning/executing status is treated as live work: main finalizes it to
-   *  completed/awaiting_approval/failed/interrupted the moment the session
-   *  idles (and restart recovery marks leftovers interrupted at startup), so a
-   *  persisted in-flight status is never "stale" — it means the turn is still
-   *  running. Trusting it lets a thread the agent is working on re-open with
-   *  its working trace expanded immediately instead of a folded idle view.
-   *  A coordinator with delegated work (workers/auditor) is kept busy the same
-   *  way even though its own session is idle between handoffs. */
-  function restoreWorkingState(status: Thread['status'], startedAt = thread.lastActivity): void {
-    if (status === 'planning' || status === 'executing' || delegatedWorkBusy) {
+   *  Coordinator status is broader: it remains executing while workers or an
+   *  auditor run. That delegated state keeps the coordination trace visible via
+   *  `threadWorking`, but it must not make the composer queue/steer against an
+   *  idle Sr. Engineer session. */
+  function restoreWorkingState(
+    status: Thread['status'],
+    startedAt = thread.lastActivity,
+    auditRunning = thread.auditState === 'running'
+  ): void {
+    if (delegatedWorkBusy || auditRunning) {
+      setIdleFromRestore()
+      return
+    }
+    if (status === 'planning' || status === 'executing') {
       agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId(), startedAt)
       return
     }
@@ -2394,7 +2404,8 @@
       if (!liveStatusKnown) {
         restoreWorkingState(
           threadData?.status ?? thread.status,
-          threadData?.lastActivity ?? thread.lastActivity
+          threadData?.lastActivity ?? thread.lastActivity,
+          (threadData?.auditState ?? thread.auditState) === 'running'
         )
       }
       seedContextUsageSnapshot(threadData?.contextUsage)
@@ -2442,10 +2453,10 @@
       providerStatus = await invoke('agent:getSessionStatus', projectId, id)
       if (!alive) return
       // The live session status is the single source of truth on mount. Once
-      // established, loadLocal's DB-status fallback must not override it. A
-      // stale idle/error snapshot must never downgrade a run the in-memory
-      // store still tracks as busy (e.g. returning to a thread the agent is
-      // actively working on while the status map lags).
+      // established, loadLocal's broader DB workflow status must not override
+      // it. In particular, a coordinator can be persisted as executing while
+      // only its workers or auditor are active; live idle must clear that fake
+      // raw-busy state so messages go to the Sr. Engineer normally.
       liveStatusKnown = providerStatus !== null
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
         agentRuns.setBusy(
@@ -2455,10 +2466,7 @@
           latestUserMessageId(),
           providerStatus.state === 'working' ? providerStatus.startedAt : undefined
         )
-      } else if (
-        (providerStatus?.state === 'error' || providerStatus?.state === 'idle') &&
-        !agentRuns.isBusy(projectId, id)
-      ) {
+      } else if (providerStatus?.state === 'error' || providerStatus?.state === 'idle') {
         setIdleFromRestore()
       }
       await refreshPendingPermissions()
@@ -7048,17 +7056,15 @@
                     ? 'Sr. Engineer is preparing the Brainstorm…'
                     : activePlanningEntry === 'spec'
                       ? 'Sr. Engineer is preparing the specification…'
-                      : loopAuditing
-                        ? 'Achievement is auditing the implementation…'
-                        : specFormulating
-                          ? 'Formulating specification…'
-                          : delegatedWorkBusy
-                            ? `${delegatedActivityLabel} — type to steer coordination`
-                            : busy
-                              ? `${APP_NAME} is working — type to queue a message`
-                              : 'Send a message...'}
-                  disabled={specFormulating || loopAuditing}
-                  working={threadWorking}
+                      : specFormulating
+                        ? 'Formulating specification…'
+                        : delegatedWorkBusy
+                          ? `${delegatedActivityLabel} — message the Sr. Engineer`
+                          : busy
+                            ? `${APP_NAME} is working — type to queue a message`
+                            : 'Send a message...'}
+                  disabled={specFormulating}
+                  working={busy}
                   onStop={abortRun}
                   autofocus
                   showEngineeringMode={!chatMode}
