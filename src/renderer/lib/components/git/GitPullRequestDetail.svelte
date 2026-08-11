@@ -3,6 +3,7 @@
     ArrowLeft,
     Bot,
     Check,
+    ChevronDown,
     CircleDot,
     CircleSlash,
     ExternalLink,
@@ -12,6 +13,7 @@
     MessageSquare,
     Merge,
     MessagesSquare,
+    MoreHorizontal,
     RefreshCw,
     RotateCcw,
     Send,
@@ -20,7 +22,7 @@
     TriangleAlert,
     X
   } from '@lucide/svelte'
-  import { AlertDialog } from 'bits-ui'
+  import { AlertDialog, DropdownMenu } from 'bits-ui'
   import { gitState, GitState } from '$lib/stores/git.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
@@ -737,111 +739,159 @@
       </div>
     </div>
 
-    <!-- Comment and review both consume the box above, so they share one row. -->
-    <div class="flex flex-wrap items-center gap-1.5 px-3 py-2.5">
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-        title={hasBody ? 'Post this as a comment' : 'Write something first'}
-        disabled={posting || !hasBody}
-        onclick={() => void postComment()}
-      >
-        {#if posting}
-          <Loader2 size={12} class="animate-spin" />
-        {:else}
-          <MessageSquare size={12} />
-        {/if}
-        Comment
-      </button>
-      <span class="mx-0.5 h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
-        title={open
-          ? 'Approve this pull request (a comment is optional)'
-          : 'This pull request is no longer open'}
-        disabled={!open || reviewing}
-        onclick={() => void submitReview('APPROVE')}
-      >
-        <ThumbsUp size={12} />
-        Approve
-      </button>
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
-        title={!open
-          ? 'This pull request is no longer open'
-          : hasBody
-            ? 'Request changes on this pull request'
-            : 'Write what needs to change first — GitHub requires a comment'}
-        disabled={!open || reviewing || !hasBody}
-        onclick={() => void submitReview('REQUEST_CHANGES')}
-      >
-        <TriangleAlert size={12} />
-        Request changes
-      </button>
+    <!--
+      Comment and review both consume the box above, so they read as one
+      toolbar (shared border, no gaps) instead of three loose buttons.
+    -->
+    <div class="px-3 py-2.5">
+      <div class="flex h-8 items-stretch overflow-hidden rounded-lg border border-border">
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          title={hasBody ? 'Post this as a comment' : 'Write something first'}
+          disabled={posting || !hasBody}
+          onclick={() => void postComment()}
+        >
+          {#if posting}
+            <Loader2 size={12} class="animate-spin" />
+          {:else}
+            <MessageSquare size={12} />
+          {/if}
+          Comment
+        </button>
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[10px] font-medium text-success transition-colors hover:bg-success/10 disabled:cursor-default disabled:opacity-40"
+          title={open
+            ? 'Approve this pull request (a comment is optional)'
+            : 'This pull request is no longer open'}
+          disabled={!open || reviewing}
+          onclick={() => void submitReview('APPROVE')}
+        >
+          <ThumbsUp size={12} />
+          Approve
+        </button>
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-l border-border text-[10px] font-medium text-warning transition-colors hover:bg-warning/10 disabled:cursor-default disabled:opacity-40"
+          title={!open
+            ? 'This pull request is no longer open'
+            : hasBody
+              ? 'Request changes on this pull request'
+              : 'Write what needs to change first — GitHub requires a comment'}
+          disabled={!open || reviewing || !hasBody}
+          onclick={() => void submitReview('REQUEST_CHANGES')}
+        >
+          <TriangleAlert size={12} />
+          Request changes
+        </button>
+      </div>
+      {#if open && !hasBody}
+        <p class="mt-1.5 text-[9px] leading-relaxed text-dimmed">
+          Requesting changes needs a comment saying what to change. Approving does not.
+        </p>
+      {/if}
     </div>
-
-    {#if open && !hasBody}
-      <p class="px-3 pb-2.5 text-[9px] leading-relaxed text-dimmed">
-        Requesting changes needs a comment saying what to change. Approving does not.
-      </p>
-    {/if}
 
     <!--
       Merging is a repo operation, not a review — a tinted, separate zone
-      keeps it from reading as one more button in the review row above.
+      keeps it from reading as one more button in the toolbar above. The
+      method picker and close action live behind dropdowns (matching
+      EditorOpenControl's split-button pattern) instead of a bare <select>
+      and a third loose button.
     -->
     <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
       {#if open}
-        <div class="flex items-center gap-1.5">
-          <select
-            id="pr-merge-method"
-            class="h-7 cursor-pointer rounded-md border border-border bg-surface px-1.5 text-[10px] text-foreground outline-none disabled:cursor-default disabled:opacity-40"
-            title="How the commits are combined when merging"
-            aria-label="Merge method"
-            bind:value={method}
-          >
-            {#each mergeMethods as option (option.id)}
-              <option value={option.id}>{option.label}</option>
-            {/each}
-          </select>
-          <span class="flex-1"></span>
-          <button
-            type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
-            title="Close this pull request without merging"
-            disabled={closing}
-            onclick={() => (closeConfirm = true)}
-          >
-            {#if closing}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <X size={12} />
-            {/if}
-            Close
-          </button>
-          <button
-            type="button"
-            class="flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-            title={`Merge this pull request into ${summary.baseRef}`}
-            disabled={merging}
-            onclick={openMergeConfirm}
-          >
-            {#if merging}
-              <Loader2 size={12} class="animate-spin" />
-            {:else}
-              <Merge size={12} />
-            {/if}
-            Merge into {summary.baseRef}
-          </button>
+        <div class="flex items-center justify-end gap-1.5">
+          {#if mergeBlocker}
+            <span class="mr-auto flex min-w-0 items-center gap-1 text-[9px] text-warning">
+              <TriangleAlert size={10} class="shrink-0" />
+              <span class="truncate">{mergeBlocker}</span>
+            </span>
+          {/if}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-surface hover:text-foreground disabled:cursor-default disabled:opacity-40"
+              title="More pull request actions"
+              aria-label="More pull request actions"
+              disabled={closing}
+            >
+              {#if closing}
+                <Loader2 size={13} class="animate-spin" />
+              {:else}
+                <MoreHorizontal size={13} />
+              {/if}
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="top"
+                align="end"
+                sideOffset={6}
+                class="z-50 w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+              >
+                <DropdownMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger outline-none transition-colors data-[highlighted]:bg-danger/10"
+                  onSelect={() => (closeConfirm = true)}
+                >
+                  <X size={13} class="shrink-0" />
+                  Close without merging
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+
+          <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
+            <button
+              type="button"
+              class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+              title={`Merge this pull request into ${summary.baseRef} using ${method}`}
+              disabled={merging}
+              onclick={openMergeConfirm}
+            >
+              {#if merging}
+                <Loader2 size={12} class="animate-spin" />
+              {:else}
+                <Merge size={12} />
+              {/if}
+              Merge into {summary.baseRef}
+            </button>
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+                title="Choose a merge method"
+                aria-label="Choose a merge method"
+                disabled={merging}
+              >
+                <ChevronDown size={12} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="top"
+                  align="end"
+                  sideOffset={6}
+                  class="z-50 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+                >
+                  <p
+                    class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+                  >
+                    Merge method
+                  </p>
+                  {#each mergeMethods as option (option.id)}
+                    <DropdownMenu.Item
+                      class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+                      onSelect={() => (method = option.id)}
+                    >
+                      {option.label}
+                      {#if method === option.id}
+                        <Check size={13} class="shrink-0 text-primary" />
+                      {/if}
+                    </DropdownMenu.Item>
+                  {/each}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
         </div>
-        {#if mergeBlocker}
-          <p class="mt-1.5 flex items-center gap-1 text-[9px] text-warning">
-            <TriangleAlert size={10} class="shrink-0" />
-            {mergeBlocker}
-          </p>
-        {/if}
       {:else if prState === 'closed'}
         <div class="flex items-center gap-1.5">
           <span class="flex min-w-0 items-center gap-1 text-[9px] text-dimmed">
