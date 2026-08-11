@@ -20,6 +20,8 @@
     onCompact?: () => void
     /** Called when the user hovers the indicator to flush the latest usage. */
     onReveal?: () => void
+    /** Called when the user stops hovering the indicator. */
+    onHide?: () => void
   }
 
   let {
@@ -28,7 +30,8 @@
     canCompact = false,
     compacting = false,
     onCompact,
-    onReveal
+    onReveal,
+    onHide
   }: Props = $props()
 
   const boundedPercent = $derived(
@@ -255,7 +258,12 @@
   </div>
 {/snippet}
 
-<div class="group relative">
+<div
+  class="group relative"
+  role="group"
+  aria-label="Context and provider usage"
+  onmouseleave={onHide}
+>
   <button
     type="button"
     class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"

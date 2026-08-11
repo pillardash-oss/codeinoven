@@ -779,8 +779,36 @@
   let contextUsageCommittedAt = 0
   let contextUsageSettleTimer: ReturnType<typeof setTimeout> | undefined
 
+  /**
+   * Fold a fresh usage snapshot over whatever the meter already shows without
+   * ever *losing* telemetry. A quota refresh that returns no rate limits, no
+   * credits, or no context fields must not erase the bars/value the user is
+   * currently viewing — only a newer, richer snapshot may replace them.
+   */
+  function mergeContextUsage(
+    previous: AgentContextUsage | undefined,
+    incoming: AgentContextUsage
+  ): AgentContextUsage {
+    if (!previous) return incoming
+    return {
+      ...previous,
+      ...incoming,
+      tokens: incoming.tokens ?? previous.tokens,
+      costUsd: incoming.costUsd ?? previous.costUsd,
+      contextUsed: incoming.contextUsed ?? previous.contextUsed,
+      contextWindow: incoming.contextWindow ?? previous.contextWindow,
+      contextPercent: incoming.contextPercent ?? previous.contextPercent,
+      rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,
+      ...(incoming.credits
+        ? { credits: incoming.credits }
+        : previous.credits
+          ? { credits: previous.credits }
+          : {})
+    }
+  }
+
   function commitContextUsage(usage: AgentContextUsage): void {
-    contextUsageDisplay = usage
+    contextUsageDisplay = mergeContextUsage(contextUsageDisplay, usage)
     contextUsageCommittedAt = Date.now()
     const snapshot: ThreadContextUsage = {
       ...usage,
@@ -813,6 +841,13 @@
       accountUsageFetchedAt === 0 ||
       Date.now() - accountUsageFetchedAt > ACCOUNT_USAGE_CACHE_MS
     if (stale) void refreshAccountUsageOnDemand()
+  }
+
+  /** Called when the user stops hovering the usage indicator. Resets the quota
+   *  cache so the *next* hover always fetches fresh data — while the user keeps
+   *  hovering, no further fetch is scheduled. */
+  function hideContextUsage(): void {
+    accountUsageFetchedAt = 0
   }
 
   async function refreshAccountUsageOnDemand(refreshKey?: string): Promise<void> {
@@ -6715,6 +6750,7 @@
               onSlashCommand={executeHarnessCommand}
               contextUsage={contextUsageDisplay}
               onRevealUsage={revealContextUsage}
+              onHideUsage={hideContextUsage}
               {harnessUsage}
               canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
               {compacting}
