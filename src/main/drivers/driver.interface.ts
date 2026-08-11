@@ -64,6 +64,8 @@ export interface HarnessToolDefinition {
 /** Provider-neutral input supplied when a harness prepares utility injection. */
 export interface UtilityRuntimePreparationRequest {
   projectPath: string
+  /** Selected provider for this turn, when the harness exposes provider selection. */
+  providerId?: string
   resolvedUtilities: ResolvedUtility[]
 }
 
@@ -81,6 +83,11 @@ export interface UtilityRuntimeConfigFile {
  * Values remain inert until UtilityRuntimeService materializes the overlay.
  */
 export interface UtilityRuntimeOverlay {
+  /**
+   * The harness cannot safely expose the per-turn gateway for this launch.
+   * Skill instructions remain available, but gateway-backed utilities are not advertised.
+   */
+  gatewayAvailable?: boolean
   env?: Record<string, string>
   args?: string[]
   configFiles?: UtilityRuntimeConfigFile[]
