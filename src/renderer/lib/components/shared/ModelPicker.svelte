@@ -296,7 +296,6 @@
 
   function toggleHarness(nextHarnessId: string): void {
     if (showAllHarnesses) showAllHarnesses = false
-    if (selectedHarnesses.size === 0 && harnessId) selectedHarnesses.add(harnessId)
     if (selectedHarnesses.has(nextHarnessId)) {
       if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
       return
@@ -359,7 +358,6 @@
     search = ''
     harnessFilterOpen = false
     selectedHarnesses.clear()
-    showAllHarnesses = false
     pickerListScrollTop = 0
   }
 
