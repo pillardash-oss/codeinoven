@@ -1,5 +1,3 @@
-import { SvelteMap } from 'svelte/reactivity'
-
 const HISTORY_LIMIT = 50
 
 function copySnapshot<T>(value: T): T {
@@ -86,22 +84,22 @@ export class StudioDocumentHistory<T> {
 }
 
 export class StudioDocumentHistoryCollection<T> {
-  private histories = new SvelteMap<string, StudioDocumentHistory<T>>()
+  private histories: Record<string, StudioDocumentHistory<T>> = {}
 
   forDocument(key: string): StudioDocumentHistory<T> {
-    let history = this.histories.get(key)
+    let history = this.histories[key]
     if (!history) {
       history = new StudioDocumentHistory<T>()
-      this.histories.set(key, history)
+      this.histories[key] = history
     }
     return history
   }
 
   hasUnsavedChanges(): boolean {
-    return [...this.histories.values()].some((history) => history.dirty)
+    return Object.values(this.histories).some((history) => history.dirty)
   }
 
   clear(): void {
-    this.histories.clear()
+    this.histories = {}
   }
 }
