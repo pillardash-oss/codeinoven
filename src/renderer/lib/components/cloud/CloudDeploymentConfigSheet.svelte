@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { CheckCircle2, Cloud, Loader2, Server } from '@lucide/svelte'
+  import { CheckCircle2, Cloud, Loader2 } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import SideSheet from '../ui/SideSheet.svelte'
   import Switch from '../ui/Switch.svelte'
+  import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
   import {
     CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
     type CloudDeploymentConfig,
@@ -443,7 +444,12 @@
               : `Configure ${PROVIDER_DISPLAY_NAMES[kind]}`}
           >
             <span class="flex min-w-0 items-center gap-2.5">
-              <Server size={15} class="shrink-0 text-dimmed" />
+              <CloudProviderIcon
+                providerKind={kind}
+                size={15}
+                class="shrink-0 text-dimmed"
+                title={PROVIDER_DISPLAY_NAMES[kind]}
+              />
               <span class="min-w-0">
                 <span class="block truncate text-xs font-medium">
                   {PROVIDER_DISPLAY_NAMES[kind]}

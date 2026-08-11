@@ -8,8 +8,7 @@
     Loader2,
     Plus,
     RefreshCw,
-    Rocket,
-    Server
+    Rocket
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -24,6 +23,7 @@
   import Switch from '../ui/Switch.svelte'
   import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
+  import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
   import {
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
@@ -365,7 +365,12 @@
           {@const kindContainers = containers.filter((c) => c.providerKind === kind)}
           <section class="border-b border-border">
             <div class="flex items-center gap-1.5 bg-surface px-3 py-1.5">
-              <Server size={10} class="shrink-0 text-dimmed" />
+              <CloudProviderIcon
+                providerKind={kind}
+                size={10}
+                class="shrink-0 text-dimmed"
+                title={PROVIDER_LABELS[kind]}
+              />
               <span class="text-[10px] font-medium text-muted">{PROVIDER_LABELS[kind]}</span>
               {#if kindContainers.length > 0}
                 <span class="text-[9px] tabular-nums text-dimmed">{kindContainers.length}</span>
