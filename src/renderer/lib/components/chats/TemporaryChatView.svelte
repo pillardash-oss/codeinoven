@@ -335,7 +335,7 @@
 
   function sendElaboratePrompt(): Promise<void> {
     return send(
-      'Explain this selection in detail. Do not perform any execution, do not make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
+      'Explain this selection in detail. Be clear and explain in simple terms, ensure you do not overwhelm the user with so much jargons, unless explicitly asked to. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
       [],
       '*Elaborate.*'
     )
