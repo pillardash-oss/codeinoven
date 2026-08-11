@@ -386,7 +386,7 @@
         class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-elevated"
         onclick={() => (expandedFile = expandedFile === fileKey ? null : fileKey)}
       >
-        <FileDiff size={11} class="shrink-0 text-dimmed" />
+        <FileDiff size={12} class="shrink-0 text-dimmed" />
         <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-foreground">
           {file.path}
         </span>
@@ -497,7 +497,7 @@
     <p
       class="flex shrink-0 items-center gap-1 border-b border-border px-3 py-1 text-[10px] text-success"
     >
-      <Check size={11} />
+      <Check size={12} />
       {notice}
     </p>
   {/if}
@@ -516,7 +516,7 @@
           : 'text-muted hover:text-foreground'}"
         onclick={() => (tab = entry.id)}
       >
-        <Icon size={11} />
+        <Icon size={12} />
         {entry.label}
         {#if entry.count > 0}<span class="tabular-nums text-dimmed">{entry.count}</span>{/if}
       </button>
@@ -604,7 +604,7 @@
                 </p>
               </div>
               {#if loadingCommit === commit.sha}
-                <Loader2 size={11} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
+                <Loader2 size={12} class="mt-0.5 shrink-0 animate-spin text-dimmed" />
               {/if}
             </button>
             {#if expandedCommit === commit.sha}
@@ -646,7 +646,7 @@
                 aria-label="Open {check.name} results"
                 onclick={() => void openInBrowser(check.url ?? '')}
               >
-                <ExternalLink size={11} />
+                <ExternalLink size={12} />
               </button>
             {/if}
           </div>
@@ -665,7 +665,7 @@
               title="Open the thread that produced this review"
               onclick={() => onOpenThread(agentReport?.threadId ?? '')}
             >
-              <Bot size={11} />
+              <Bot size={12} />
               Open thread
             </button>
           {/if}
@@ -676,7 +676,7 @@
             disabled={posting}
             onclick={() => void postAgentReport()}
           >
-            <Send size={11} />
+            <Send size={12} />
             Post to PR
           </button>
         </div>
@@ -684,7 +684,7 @@
       </div>
     {:else}
       <div class="flex flex-col items-center gap-3 px-6 py-10 text-center">
-        <Bot size={20} class="text-dimmed" />
+        <Bot size={18} class="text-dimmed" />
         <p class="text-[11px] leading-relaxed text-muted">
           No agent review yet. "Agent review" opens a thread where an agent checks this PR out in a
           worktree and writes its findings to <span class="font-mono"
@@ -746,9 +746,9 @@
         onclick={() => void postComment()}
       >
         {#if posting}
-          <Loader2 size={11} class="animate-spin" />
+          <Loader2 size={12} class="animate-spin" />
         {:else}
-          <MessageSquare size={11} />
+          <MessageSquare size={12} />
         {/if}
         Comment
       </button>
@@ -763,7 +763,7 @@
         disabled={!open || reviewing}
         onclick={() => void submitReview('APPROVE')}
       >
-        <ThumbsUp size={11} />
+        <ThumbsUp size={12} />
         Approve
       </button>
       <button
@@ -777,7 +777,7 @@
         disabled={!open || reviewing || !hasBody}
         onclick={() => void submitReview('REQUEST_CHANGES')}
       >
-        <TriangleAlert size={11} />
+        <TriangleAlert size={12} />
         Request changes
       </button>
     </div>
@@ -820,9 +820,9 @@
           onclick={() => (closeConfirm = true)}
         >
           {#if closing}
-            <Loader2 size={11} class="animate-spin" />
+            <Loader2 size={12} class="animate-spin" />
           {:else}
-            <X size={11} />
+            <X size={12} />
           {/if}
           Close
         </button>
@@ -834,9 +834,9 @@
           onclick={openMergeConfirm}
         >
           {#if merging}
-            <Loader2 size={11} class="animate-spin" />
+            <Loader2 size={12} class="animate-spin" />
           {:else}
-            <Merge size={11} />
+            <Merge size={12} />
           {/if}
           Merge into {summary.baseRef}
         </button>
@@ -854,9 +854,9 @@
           onclick={() => void reopen()}
         >
           {#if reopening}
-            <Loader2 size={11} class="animate-spin" />
+            <Loader2 size={12} class="animate-spin" />
           {:else}
-            <RotateCcw size={11} />
+            <RotateCcw size={12} />
           {/if}
           Reopen
         </button>

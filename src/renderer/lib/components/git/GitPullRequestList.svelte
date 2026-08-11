@@ -180,9 +180,12 @@
           </button>
         </div>
       {:else if items.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">
-          No {prState === 'all' ? '' : prState} pull requests.
-        </p>
+        <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+          <GitPullRequest size={18} class="text-dimmed" />
+          <p class="text-[11px] leading-relaxed text-dimmed">
+            No {prState === 'all' ? '' : prState} pull requests.
+          </p>
+        </div>
       {:else}
         {#each items as pr (pr.number)}
           {@const Icon = icon(pr)}
@@ -220,7 +223,7 @@
           disabled={page === 1 || loading}
           onclick={() => (page -= 1)}
         >
-          <ChevronLeft size={11} />
+          <ChevronLeft size={12} />
           Previous
         </button>
         <span class="text-[9px] tabular-nums text-dimmed">Page {page}</span>
@@ -231,7 +234,7 @@
           onclick={() => (page += 1)}
         >
           Next
-          <ChevronRight size={11} />
+          <ChevronRight size={12} />
         </button>
       </div>
     {/if}
