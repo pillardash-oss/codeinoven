@@ -110,10 +110,13 @@ import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../lib/brainstorm/brainstorm-validation'
 import { exportBrainstormMarkdown } from '../lib/brainstorm/brainstorm-markdown'
 import { atomicWrite, getConfigRoot } from '../lib/utils'
+import { PROJECT_DATA_DIRECTORY } from '../lib/project-artifacts'
 import { normalizeWorkerNames } from '../lib/assignment/worker-names'
+import { retainTemporaryAttachment } from './temporary-attachment-retention'
 import type {
   AppConfig,
   AppConfigPatch,
+  AttachmentStorageScope,
   AgentDefaultsConfig,
   AgentModelSelection,
   AgentRole,
@@ -285,12 +288,6 @@ const AGENT_DEFAULT_FIELDS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-interface AttachmentStorageScope {
-  kind: 'project' | 'chat'
-  projectId: string
-  threadId: string
 }
 
 function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
@@ -1116,13 +1113,28 @@ export function registerIpcHandlers(
     })
   }
 
+  async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
+    const project = await projectManager.getProject(scope.projectId)
+    if (project?.source === 'local' && project.path) {
+      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
+    }
+
+    return scope.kind === 'chat'
+      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
+      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+  }
+
   // A native File supplied by Electron's webUtils represents an explicit user
   // drop/paste gesture. The preload keeps this channel private so renderer code
   // cannot grant an arbitrary string path.
-  privileged('file:registerSelection', async (_event, path: unknown) => {
+  privileged('file:registerSelection', async (_event, path: unknown, rawScope: unknown) => {
     if (typeof path !== 'string' || path.length === 0) return null
-    await privilegedIpc.registerUserSelectedFile(path)
-    return path
+    const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
+    const retainedPath = scope
+      ? await retainTemporaryAttachment(path, await attachmentStorageDirectory(scope))
+      : path
+    await privilegedIpc.registerUserSelectedFile(retainedPath)
+    return retainedPath
   })
 
   // ─── Application config ────────────────────────────────────────────────
@@ -2328,10 +2340,7 @@ export function registerIpcHandlers(
       const scope = validateAttachmentStorageScope(rawScope)
       const image = clipboard.readImage()
       if (image.isEmpty()) return null
-      const tempDir =
-        scope.kind === 'chat'
-          ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
-          : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+      const tempDir = await attachmentStorageDirectory(scope)
       await mkdir(tempDir, { recursive: true })
       const tempPath = join(tempDir, `pasted-${randomUUID()}.png`)
       await writeFile(tempPath, image.toPNG(), { flag: 'wx', mode: 0o600 })
@@ -2343,8 +2352,9 @@ export function registerIpcHandlers(
     }
   })
 
-  ipcMain.handle('dialog:pickFile', async () => {
+  ipcMain.handle('dialog:pickFile', async (_event, rawScope: unknown) => {
     try {
+      const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       if (win && !win.isFocused()) win.focus()
 
@@ -2387,10 +2397,14 @@ export function registerIpcHandlers(
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
-      config.lastAttachmentDialogPath = dirname(result.filePaths[0])
-      await privilegedIpc.registerUserSelectedFile(result.filePaths[0])
+      const selectedPath = result.filePaths[0]
+      config.lastAttachmentDialogPath = dirname(selectedPath)
+      const retainedPath = scope
+        ? await retainTemporaryAttachment(selectedPath, await attachmentStorageDirectory(scope))
+        : selectedPath
+      await privilegedIpc.registerUserSelectedFile(retainedPath)
       await storage.saveConfig(config)
-      return result.filePaths[0]
+      return retainedPath
     } catch (error) {
       Logger.error('dialog:pickFile failed:', error)
       return null

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppConfig, AppConfigPatch } from '../lib/types'
+import type { AppConfig, AppConfigPatch, AttachmentStorageScope } from '../lib/types'
 import {
   NO_TRAFFIC_LIGHT,
   TRAFFIC_LIGHT_ARG_PREFIX,
@@ -448,10 +448,8 @@ export interface AppBridge {
    *  performed by the validated main-process `file:read` channel so the preload
    *  never touches the filesystem directly and only scoped paths can be read. */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
-  /** Resolve the native path of a File object dropped/pasted in the renderer. */
-  getPathForFile: (file: File) => string
-  /** Resolve and register a native File supplied by an explicit drop/paste gesture. */
-  registerFileSelection: (file: File) => Promise<string>
+  /** Resolve, retain when ephemeral, and register a native File from a drop/paste gesture. */
+  registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
@@ -509,11 +507,10 @@ const bridge: AppBridge = {
     if (data === null) throw new Error('Could not read the requested file')
     return data as Uint8Array<ArrayBuffer>
   },
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
-  registerFileSelection: async (file: File): Promise<string> => {
+  registerFileSelection: async (file: File, scope?: AttachmentStorageScope): Promise<string> => {
     const path = webUtils.getPathForFile(file)
     if (!path) return ''
-    const registered = await ipcRenderer.invoke('file:registerSelection', path)
+    const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
     return typeof registered === 'string' ? registered : ''
   }
 }

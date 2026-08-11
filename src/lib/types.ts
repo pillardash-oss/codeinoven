@@ -58,6 +58,13 @@ export interface CreateProjectInput {
   hasDeployments?: boolean
 }
 
+/** Destination identity for restart-safe composer attachment files. */
+export interface AttachmentStorageScope {
+  kind: 'project' | 'chat'
+  projectId: string
+  threadId: string
+}
+
 // ─── Scope board ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_SCOPE_BUCKET_ID = 'default'
