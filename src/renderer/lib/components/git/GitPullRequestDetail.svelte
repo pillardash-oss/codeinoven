@@ -81,7 +81,14 @@
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
   const reviewing = $derived(gitState.isBusy('pr-review'))
-  const merging = $derived(gitState.isBusy('pr-merge'))
+  /**
+   * True while the merge is actively running OR while the detail view is still
+   * waiting for the PR state to flip to "merged" after a successful merge. This
+   * keeps the merge button disabled and showing a spinner for the whole
+   * operation, so it's never re-enabled while the PR still reads "open".
+   */
+  let mergePending = $state(false)
+  const merging = $derived(gitState.isBusy('pr-merge') || mergePending)
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const closing = $derived(gitState.isBusy('pr-close'))
   const prState = $derived(detail?.state ?? summary.state)
@@ -272,18 +279,29 @@
     mergeConfirm = false
     // GitHub ignores custom title/message for rebase, which preserves the
     // original commits. Trimmed-empty values are omitted so GitHub uses its own.
-    const merged = await gitState.mergePullRequest(
-      projectId,
-      identity.owner,
-      identity.repo,
-      number,
-      method,
-      method === 'rebase' ? undefined : commitTitle.trim() || undefined,
-      method === 'rebase' ? undefined : commitMessage.trim() || undefined
-    )
-    if (merged) {
-      notice = `Merged with ${method}`
-      await refresh()
+    mergePending = true
+    try {
+      const merged = await gitState.mergePullRequest(
+        projectId,
+        identity.owner,
+        identity.repo,
+        number,
+        method,
+        method === 'rebase' ? undefined : commitTitle.trim() || undefined,
+        method === 'rebase' ? undefined : commitMessage.trim() || undefined
+      )
+      if (merged) {
+        notice = `Merged with ${method}`
+        // The merge already succeeded, but the detail still reads "open" until
+        // GitHub propagates the new state. Keep refreshing so the merge button
+        // stays in its loading state (never re-enabled while it says "open")
+        // until the status flips to "merged" or an error surfaces.
+        for (let attempt = 0; attempt < 4 && prState === 'open' && !gitState.error; attempt += 1) {
+          await refresh()
+        }
+      }
+    } finally {
+      mergePending = false
     }
   }
 
@@ -501,6 +519,17 @@
     >
       <Check size={12} />
       {notice}
+    </p>
+  {/if}
+
+  {#if gitState.error}
+    <p
+      class="flex shrink-0 items-center gap-1 border-b border-danger/30 bg-danger/10 px-3 py-1 text-[10px] text-danger"
+      title={gitState.error}
+      aria-label={gitState.error}
+    >
+      <TriangleAlert size={12} class="shrink-0" />
+      {gitState.error}
     </p>
   {/if}
 
