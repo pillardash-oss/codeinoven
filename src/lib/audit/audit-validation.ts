@@ -2,6 +2,13 @@ import type { AuditFindingSeverity, AuditReportContent } from '../types'
 
 const SEVERITIES = new Set<AuditFindingSeverity>(['critical', 'high', 'medium', 'low', 'info'])
 
+export class AuditReportValidationError extends TypeError {
+  constructor(readonly issues: string[]) {
+    super(`Audit report validation failed:\n${issues.map((issue) => `- ${issue}`).join('\n')}`)
+    this.name = 'AuditReportValidationError'
+  }
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`)
@@ -23,31 +30,67 @@ function markdownText(value: unknown, label: string): string {
   throw new TypeError(`${label} is required`)
 }
 
+function collectText(value: unknown, label: string, issues: string[]): string {
+  try {
+    return text(value, label)
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : `${label} is invalid`)
+    return ''
+  }
+}
+
+function collectMarkdownText(value: unknown, label: string, issues: string[]): string {
+  try {
+    return markdownText(value, label)
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : `${label} is invalid`)
+    return ''
+  }
+}
+
 export function validateAuditReportContent(value: unknown): AuditReportContent {
   const input = record(value, 'Audit report')
-  if (!Array.isArray(input.findings)) throw new TypeError('Audit findings must be an array')
-  return {
-    executiveSummary: text(input.executiveSummary, 'Executive summary'),
-    findings: input.findings.map((value, index) => {
-      const finding = record(value, `Finding ${index + 1}`)
-      const severity = text(finding.severity, `Finding ${index + 1} severity`)
-      if (!SEVERITIES.has(severity as AuditFindingSeverity)) {
-        throw new TypeError(`Finding ${index + 1} severity is invalid`)
-      }
-      return {
-        id: text(finding.id, `Finding ${index + 1} ID`),
-        title: text(finding.title, `Finding ${index + 1} title`),
-        severity: severity as AuditFindingSeverity,
-        description: text(finding.description, `Finding ${index + 1} description`),
-        evidence: markdownText(finding.evidence, `Finding ${index + 1} evidence`)
-      }
-    }),
-    resolutionRecommendation: markdownText(
+  const issues: string[] = []
+  const findings = Array.isArray(input.findings)
+    ? input.findings.flatMap((value, index) => {
+        let finding: Record<string, unknown>
+        try {
+          finding = record(value, `Finding ${index + 1}`)
+        } catch (error) {
+          issues.push(error instanceof Error ? error.message : `Finding ${index + 1} is invalid`)
+          return []
+        }
+        const severity = collectText(finding.severity, `Finding ${index + 1} severity`, issues)
+        if (severity && !SEVERITIES.has(severity as AuditFindingSeverity)) {
+          issues.push(`Finding ${index + 1} severity is invalid`)
+        }
+        return [
+          {
+            id: collectText(finding.id, `Finding ${index + 1} ID`, issues),
+            title: collectText(finding.title, `Finding ${index + 1} title`, issues),
+            severity: severity as AuditFindingSeverity,
+            description: collectText(
+              finding.description,
+              `Finding ${index + 1} description`,
+              issues
+            ),
+            evidence: collectMarkdownText(finding.evidence, `Finding ${index + 1} evidence`, issues)
+          }
+        ]
+      })
+    : (issues.push('Audit findings must be an array'), [])
+  const content: AuditReportContent = {
+    executiveSummary: collectText(input.executiveSummary, 'Executive summary', issues),
+    findings,
+    resolutionRecommendation: collectMarkdownText(
       input.resolutionRecommendation ?? input.requiredRemediation,
-      'Resolution and recommendation'
+      'Resolution and recommendation',
+      issues
     ),
-    conclusion: text(input.conclusion, 'Conclusion')
+    conclusion: collectText(input.conclusion, 'Conclusion', issues)
   }
+  if (issues.length > 0) throw new AuditReportValidationError(issues)
+  return content
 }
 
 export function parseAuditReportContent(value: string): AuditReportContent {

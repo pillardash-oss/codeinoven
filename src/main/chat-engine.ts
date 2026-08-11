@@ -153,7 +153,11 @@ import {
 } from '../lib/project-artifacts'
 import { messageId as createMessageId } from '../lib/id'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
-import { parseAuditReportContent, validateAuditReportContent } from '../lib/audit/audit-validation'
+import {
+  AuditReportValidationError,
+  parseAuditReportContent,
+  validateAuditReportContent
+} from '../lib/audit/audit-validation'
 import { parseGeneratedAssignmentContent } from '../lib/assignment/assignment-validation'
 import {
   mermaidRepairPrompt,
@@ -201,6 +205,12 @@ const AUDIT_GENERATION_SYSTEM_PROMPT = [
   'Report concrete evidence. Do not modify files.',
   'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
   'Return only the requested structured audit report.'
+].join(' ')
+
+const AUDIT_REPAIR_SYSTEM_PROMPT = [
+  `You repair a persisted ${APP_NAME} audit-report JSON file after deterministic validation fails.`,
+  'Read only the supplied audit-attempt file and correct only the listed validation errors.',
+  'Preserve the existing findings and evidence, do not inspect the project again, and return exactly one complete corrected JSON object.'
 ].join(' ')
 
 const LOOP_MAX_ITERATIONS = 8
@@ -933,6 +943,26 @@ interface RejectedSpecArtifact {
   diagnostic: string
   rejectedOutput: string
   createdAt: number
+}
+
+interface AssignmentAuditRepairManifest {
+  schemaVersion: 1
+  status: 'invalid' | 'valid'
+  projectId: string
+  threadId: string
+  assignmentId: string
+  specId: string
+  specVersion: number
+  runId: string
+  attempt: number
+  attemptPath: string
+  errors: string[]
+  updatedAt: number
+}
+
+interface PersistedAuditAttempt {
+  relativePath: string
+  artifactPath: string
 }
 
 class GeneratedJsonParseError extends Error {
@@ -8722,6 +8752,223 @@ export class ChatEngine {
     return updated
   }
 
+  private async persistAssignmentAuditAttempt(input: {
+    projectId: string
+    threadId: string
+    runId: string
+    attempt: number
+    rawOutput: string
+  }): Promise<PersistedAuditAttempt> {
+    const featureSlug = await ensureFeatureSlug(this.database, input.projectId, input.threadId)
+    const relativePath = join(
+      'audit',
+      'runs',
+      input.runId,
+      `attempt-${Math.max(1, input.attempt)}.json`
+    )
+    const artifactPath = join(featureArtifactDirectory(featureSlug), relativePath).replace(
+      /\\/gu,
+      '/'
+    )
+    await this.storage.writeProjectSpecRaw(
+      input.projectId,
+      featureSlug,
+      relativePath,
+      `${input.rawOutput.trimEnd()}\n`,
+      requireLocalProject(this.database, input.projectId)
+    )
+    return { relativePath, artifactPath }
+  }
+
+  private async validatePersistedAssignmentAuditAttempt(
+    projectId: string,
+    threadId: string,
+    relativePath: string
+  ): Promise<AuditReportContent> {
+    const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+    const rawOutput = await this.storage.readProjectSpecRaw(
+      projectId,
+      featureSlug,
+      relativePath,
+      requireLocalProject(this.database, projectId)
+    )
+    if (rawOutput === null) throw new Error('Persisted Assignment audit attempt was not found')
+    return parseAuditReportContent(rawOutput)
+  }
+
+  private async writeAssignmentAuditRepairManifest(
+    manifest: AssignmentAuditRepairManifest
+  ): Promise<void> {
+    const featureSlug = await ensureFeatureSlug(
+      this.database,
+      manifest.projectId,
+      manifest.threadId
+    )
+    const project = requireLocalProject(this.database, manifest.projectId)
+    const diagnosticPath = join(
+      'audit',
+      'runs',
+      manifest.runId,
+      `attempt-${manifest.attempt}.errors.json`
+    )
+    await Promise.all([
+      this.storage.writeProjectSpecRaw(
+        manifest.projectId,
+        featureSlug,
+        diagnosticPath,
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            attemptPath: manifest.attemptPath,
+            errors: manifest.errors,
+            status: manifest.status,
+            updatedAt: manifest.updatedAt
+          },
+          null,
+          2
+        )}\n`,
+        project
+      ),
+      this.storage.writeProjectSpecRaw(
+        manifest.projectId,
+        featureSlug,
+        join('audit', 'latest-repair.json'),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        project
+      )
+    ])
+  }
+
+  private async readAssignmentAuditRepairManifest(
+    projectId: string,
+    threadId: string
+  ): Promise<AssignmentAuditRepairManifest | null> {
+    const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+    const raw = await this.storage.readProjectSpecRaw(
+      projectId,
+      featureSlug,
+      join('audit', 'latest-repair.json'),
+      requireLocalProject(this.database, projectId)
+    )
+    if (raw === null) return null
+    let value: unknown
+    try {
+      value = JSON.parse(raw)
+    } catch {
+      return null
+    }
+    if (
+      !isRecord(value) ||
+      value['schemaVersion'] !== 1 ||
+      (value['status'] !== 'invalid' && value['status'] !== 'valid') ||
+      typeof value['projectId'] !== 'string' ||
+      typeof value['threadId'] !== 'string' ||
+      typeof value['assignmentId'] !== 'string' ||
+      typeof value['specId'] !== 'string' ||
+      typeof value['specVersion'] !== 'number' ||
+      typeof value['runId'] !== 'string' ||
+      typeof value['attempt'] !== 'number' ||
+      typeof value['attemptPath'] !== 'string' ||
+      !Array.isArray(value['errors']) ||
+      !value['errors'].every((error) => typeof error === 'string') ||
+      typeof value['updatedAt'] !== 'number'
+    ) {
+      return null
+    }
+    return {
+      schemaVersion: 1,
+      status: value['status'],
+      projectId: value['projectId'],
+      threadId: value['threadId'],
+      assignmentId: value['assignmentId'],
+      specId: value['specId'],
+      specVersion: value['specVersion'],
+      runId: value['runId'],
+      attempt: value['attempt'],
+      attemptPath: value['attemptPath'],
+      errors: value['errors'],
+      updatedAt: value['updatedAt']
+    }
+  }
+
+  private assignmentAuditRepairPrompt(manifest: AssignmentAuditRepairManifest): string {
+    return [
+      `The persisted audit report at ${manifest.attemptPath} failed deterministic validation.`,
+      'Correct only these validation errors:',
+      ...manifest.errors.map((error) => `- ${error}`),
+      'Read that file, preserve its audit findings and evidence, and return exactly one complete corrected audit-report JSON object with no Markdown fences or commentary.',
+      'Do not repeat the audit, specification, Assignment, or project inspection.'
+    ].join('\n')
+  }
+
+  private latestAssignmentAuditOutput(messages: AgentMessage[]): string | null {
+    for (const message of [...messages].reverse()) {
+      if (message.role !== 'assistant' || message.error) continue
+      const rawOutput =
+        message.structuredOutput !== undefined
+          ? (JSON.stringify(message.structuredOutput, null, 2) ?? String(message.structuredOutput))
+          : message.parts
+              .filter((part) => part.type === 'text')
+              .map((part) => part.text)
+              .join('\n')
+              .trim()
+      if (rawOutput.startsWith('{') || rawOutput.startsWith('```json')) return rawOutput
+    }
+    return null
+  }
+
+  private async completeAssignmentAudit(input: {
+    projectId: string
+    coordinatorThreadId: string
+    spec: EngineeringSpec
+    content: AuditReportContent
+    auditorThread: Thread
+    auditorSettings: ThreadSettings
+  }): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    const report = await this.auditEngine.create({
+      projectId: input.projectId,
+      threadId: input.coordinatorThreadId,
+      specId: input.spec.id,
+      specVersion: input.spec.version,
+      content: input.content,
+      provenance: {
+        source: 'agent',
+        actor: 'auditor',
+        harnessId: input.auditorSettings.harnessId,
+        providerId: input.auditorSettings.providerId,
+        modelId: input.auditorSettings.modelId
+      }
+    })
+    await this.assignmentEngine.reportAuditCycle(
+      input.projectId,
+      input.coordinatorThreadId,
+      report.id,
+      report.version
+    )
+    await this.threadManager.setAuditState(
+      input.projectId,
+      input.coordinatorThreadId,
+      'report_ready',
+      { id: report.id, version: report.version }
+    )
+    await this.threadManager.setStatus(input.projectId, input.auditorThread.id, 'completed', {
+      read: false
+    })
+    await this.threadManager.setStatus(
+      input.projectId,
+      input.coordinatorThreadId,
+      'awaiting_approval',
+      { read: false }
+    )
+    await this.loadMessages(input.projectId, input.auditorThread.id)
+    return {
+      report,
+      auditorThread:
+        (await this.threadManager.getThread(input.projectId, input.auditorThread.id)) ??
+        input.auditorThread
+    }
+  }
+
   private async runAssignmentAudit(
     projectId: string,
     coordinatorThreadId: string,
@@ -8762,25 +9009,95 @@ export class ChatEngine {
     ].join('\n\n')
     let lastError: Error | null = null
     const auditStartedAt = Date.now()
+    const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
+    const priorRepair = await this.readAssignmentAuditRepairManifest(projectId, coordinatorThreadId)
+    let repairManifest: AssignmentAuditRepairManifest | null =
+      priorRepair?.status === 'invalid' &&
+      priorRepair.assignmentId === assignment.id &&
+      priorRepair.specId === spec.id &&
+      priorRepair.specVersion === spec.version
+        ? priorRepair
+        : null
+    let recoveredContent: AuditReportContent | null = null
+    if (
+      repairManifest === null &&
+      (assignment.auditCycle?.status === 'failed' || auditorThread.status === 'failed')
+    ) {
+      const previousOutput = this.latestAssignmentAuditOutput(
+        await driver.loadMessages(projectPath, sessionId)
+      )
+      if (previousOutput !== null) {
+        const recoveredAttempt = await this.persistAssignmentAuditAttempt({
+          projectId,
+          threadId: coordinatorThreadId,
+          runId,
+          attempt: 1,
+          rawOutput: previousOutput
+        })
+        try {
+          recoveredContent = await this.validatePersistedAssignmentAuditAttempt(
+            projectId,
+            coordinatorThreadId,
+            recoveredAttempt.relativePath
+          )
+          await this.writeAssignmentAuditRepairManifest({
+            schemaVersion: 1,
+            status: 'valid',
+            projectId,
+            threadId: coordinatorThreadId,
+            assignmentId: assignment.id,
+            specId: spec.id,
+            specVersion: spec.version,
+            runId,
+            attempt: 1,
+            attemptPath: recoveredAttempt.artifactPath,
+            errors: [],
+            updatedAt: Date.now()
+          })
+        } catch (error) {
+          const errors =
+            error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
+          repairManifest = {
+            schemaVersion: 1,
+            status: 'invalid',
+            projectId,
+            threadId: coordinatorThreadId,
+            assignmentId: assignment.id,
+            specId: spec.id,
+            specVersion: spec.version,
+            runId,
+            attempt: 1,
+            attemptPath: recoveredAttempt.artifactPath,
+            errors,
+            updatedAt: Date.now()
+          }
+          await this.writeAssignmentAuditRepairManifest(repairManifest)
+        }
+      }
+    }
 
     await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
       read: false
     })
+    if (recoveredContent !== null) {
+      return this.completeAssignmentAudit({
+        projectId,
+        coordinatorThreadId,
+        spec,
+        content: recoveredContent,
+        auditorThread,
+        auditorSettings
+      })
+    }
     for (const [attemptIndex, useStructuredOutput] of formatModes.entries()) {
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
       const messageId = createMessageId()
-      const prompt =
-        attemptIndex === 0
-          ? basePrompt
-          : [
-              'Your previous audit response was not valid JSON.',
-              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
-            ].join('\n\n')
+      const repairing = repairManifest !== null
+      const prompt = repairManifest ? this.assignmentAuditRepairPrompt(repairManifest) : basePrompt
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -8790,7 +9107,7 @@ export class ChatEngine {
         [],
         [],
         [],
-        attemptIndex === 0
+        attemptIndex === 0 && !repairing
           ? { action: 'Audit Assignment', body: assignment.content.title }
           : undefined,
         'internal'
@@ -8809,7 +9126,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: repairing ? AUDIT_REPAIR_SYSTEM_PROMPT : AUDIT_GENERATION_SYSTEM_PROMPT,
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId,
           ...(useStructuredOutput
@@ -8818,72 +9135,83 @@ export class ChatEngine {
         })
         this.startSessionWatchdog(sessionId)
         const streamed = await completion
-        let content: AuditReportContent
+        let rawOutput: string
         if (streamed !== undefined) {
-          try {
-            content = validateAuditReportContent(streamed)
-          } catch (error) {
-            lastError =
-              error instanceof Error ? error : new Error('The Assignment audit was invalid.')
-            continue
-          }
+          rawOutput =
+            typeof streamed === 'string'
+              ? streamed
+              : (JSON.stringify(streamed, null, 2) ?? String(streamed))
         } else {
           const messages = await driver.loadMessages(projectPath, sessionId)
           const response = [...messages].reverse().find((message) => message.role === 'assistant')
           if (!response) throw new Error('The Assignment auditor returned no response')
           if (response.error) throw new Error(response.error)
-          try {
-            content =
-              response.structuredOutput !== undefined
-                ? validateAuditReportContent(response.structuredOutput)
-                : parseAuditReportContent(
-                    response.parts
-                      .filter((part) => part.type === 'text')
-                      .map((part) => part.text)
-                      .join('\n')
-                  )
-          } catch (error) {
-            lastError =
-              error instanceof Error ? error : new Error('The Assignment audit was invalid.')
-            continue
-          }
+          rawOutput =
+            response.structuredOutput !== undefined
+              ? (JSON.stringify(response.structuredOutput, null, 2) ??
+                String(response.structuredOutput))
+              : response.parts
+                  .filter((part) => part.type === 'text')
+                  .map((part) => part.text)
+                  .join('\n')
         }
-        const report = await this.auditEngine.create({
+        const persistedAttempt = await this.persistAssignmentAuditAttempt({
           projectId,
           threadId: coordinatorThreadId,
+          runId,
+          attempt: attemptIndex + 1,
+          rawOutput
+        })
+        let content: AuditReportContent
+        try {
+          content = await this.validatePersistedAssignmentAuditAttempt(
+            projectId,
+            coordinatorThreadId,
+            persistedAttempt.relativePath
+          )
+        } catch (error) {
+          const errors =
+            error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
+          lastError = new AuditReportValidationError(errors)
+          repairManifest = {
+            schemaVersion: 1,
+            status: 'invalid',
+            projectId,
+            threadId: coordinatorThreadId,
+            assignmentId: assignment.id,
+            specId: spec.id,
+            specVersion: spec.version,
+            runId,
+            attempt: attemptIndex + 1,
+            attemptPath: persistedAttempt.artifactPath,
+            errors,
+            updatedAt: Date.now()
+          }
+          await this.writeAssignmentAuditRepairManifest(repairManifest)
+          continue
+        }
+        await this.writeAssignmentAuditRepairManifest({
+          schemaVersion: 1,
+          status: 'valid',
+          projectId,
+          threadId: coordinatorThreadId,
+          assignmentId: assignment.id,
           specId: spec.id,
           specVersion: spec.version,
-          content,
-          provenance: {
-            source: 'agent',
-            actor: 'auditor',
-            harnessId: auditorSettings.harnessId,
-            providerId: auditorSettings.providerId,
-            modelId: auditorSettings.modelId
-          }
+          runId,
+          attempt: attemptIndex + 1,
+          attemptPath: persistedAttempt.artifactPath,
+          errors: [],
+          updatedAt: Date.now()
         })
-        await this.assignmentEngine.reportAuditCycle(
+        return this.completeAssignmentAudit({
           projectId,
           coordinatorThreadId,
-          report.id,
-          report.version
-        )
-        await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
-          id: report.id,
-          version: report.version
+          spec,
+          content,
+          auditorThread,
+          auditorSettings
         })
-        await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
-          read: false
-        })
-        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
-          read: false
-        })
-        await this.loadMessages(projectId, auditorThread.id)
-        return {
-          report,
-          auditorThread:
-            (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
-        }
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The Assignment auditor failed.')
         break
