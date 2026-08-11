@@ -1481,7 +1481,6 @@
   type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
-    if (auditState === 'report_ready' && auditReport) return 'report_ready'
     const cycleStatus = assignment?.auditCycle?.status
     if (cycleStatus === 'failed') return 'failed'
     if (cycleStatus === 'available' && assignmentAuditThread?.status === 'failed') return 'failed'
@@ -1495,8 +1494,10 @@
     )
       return 'reworking'
     if (cycleStatus === 'completed') return undefined
+    if (auditState === 'report_ready' && auditReport) return 'report_ready'
     return auditState
   })
+  let assignmentReworkCycle = $derived(assignment?.auditCycle?.reworkCycle)
   let assignmentAuditFailure = $derived(assignment?.auditCycle?.failure ?? auditError)
   let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
   let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
@@ -6914,6 +6915,7 @@
                 error={assignmentAuditFailure || errorMessage}
                 startedAt={assignmentAuditStartedAt}
                 finishedAt={assignmentAuditFinishedAt}
+                reworkCycle={assignmentReworkCycle}
                 settings={auditSettings}
                 {providers}
                 projectId={thread.projectId}
@@ -6973,6 +6975,24 @@
                   onUpdate={handleQuestionUpdate}
                 />
               {/key}
+            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
+              <AuditGeneratedCard
+                state="running"
+                reworkCycle={assignmentReworkCycle}
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={auditBusy}
+                onRetry={() => void openAssignmentAuditWork()}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
             {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
               <AuditGeneratedCard
                 state="failed"
@@ -6980,6 +7000,7 @@
                 startedAt={assignmentAuditStartedAt}
                 finishedAt={assignmentAuditFinishedAt}
                 retryLabel="Open auditor & retry"
+                reworkCycle={assignmentReworkCycle}
                 settings={auditSettings}
                 {providers}
                 projectId={thread.projectId}
@@ -6997,6 +7018,7 @@
             {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
               <AuditOfferCard
                 threadTitle={thread.title}
+                reworkCycle={assignmentReworkCycle}
                 settings={auditSettings}
                 {providers}
                 projectId={thread.projectId}

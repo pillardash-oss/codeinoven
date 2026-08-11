@@ -792,6 +792,9 @@
         <AssignmentReviewContent
           content={draft}
           {readOnly}
+          reworkCycle={assignment.auditCycle?.reworkCycle}
+          forceRework={assignment.auditCycle?.reworkAssignmentVersion === assignment.version}
+          assignmentVersion={assignment.version}
           {providers}
           {harnessId}
           {fallbackModel}

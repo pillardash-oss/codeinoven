@@ -375,8 +375,14 @@ export class AssignmentEngine {
 
     const now = this.now()
     const scopeBucketId = `assignment-${active.id}`
+    const reworkActivation = active.auditCycle?.status === 'awaiting_rework_approval'
     const tasks = active.content.tasks.map((task) => ({
       ...task,
+      workKind: task.workKind ?? (reworkActivation ? ('rework' as const) : ('initial' as const)),
+      workAssignmentVersion: task.workAssignmentVersion ?? active.version,
+      ...(reworkActivation
+        ? { reworkCycle: task.reworkCycle ?? active.auditCycle?.reworkCycle ?? 1 }
+        : {}),
       status: task.dependsOn.length === 0 ? ('ready' as const) : ('blocked' as const)
     }))
     const approved: AssignmentPlan = {
@@ -730,7 +736,8 @@ export class AssignmentEngine {
     return this.saveAuditCycle(active, {
       ...active.auditCycle,
       status: 'planning_rework',
-      reworkStartedAt: now
+      reworkStartedAt: now,
+      reworkCycle: (active.auditCycle.reworkCycle ?? 0) + 1
     })
   }
 
@@ -759,11 +766,20 @@ export class AssignmentEngine {
     }
     const now = this.now()
     const nextVersion = active.version + 1
+    const reworkCycle = active.auditCycle.reworkCycle ?? 1
     const draft: AssignmentPlan = {
       ...active,
       version: nextVersion,
       status: 'draft',
-      content: structuredClone(content),
+      content: {
+        ...structuredClone(content),
+        tasks: content.tasks.map((task) => ({
+          ...structuredClone(task),
+          workKind: 'rework' as const,
+          reworkCycle,
+          workAssignmentVersion: nextVersion
+        }))
+      },
       auditCycle: {
         ...active.auditCycle,
         status: 'awaiting_rework_approval',
@@ -840,7 +856,14 @@ export class AssignmentEngine {
         `Task ${taskId} is ${task.status}, not completed`
       )
     }
-    const updatedTask: AssignmentTask = { ...task, status: 'rework', completedAt: undefined }
+    const updatedTask: AssignmentTask = {
+      ...task,
+      workKind: 'rework',
+      reworkCycle: active.auditCycle?.reworkCycle ?? 1,
+      workAssignmentVersion: active.version,
+      status: 'rework',
+      completedAt: undefined
+    }
     const updated: AssignmentPlan = {
       ...active,
       status: 'running',
@@ -867,6 +890,9 @@ export class AssignmentEngine {
     this.requireAuditRework(active)
     const task: AssignmentTask = {
       ...structuredClone(input),
+      workKind: 'rework',
+      reworkCycle: active.auditCycle?.reworkCycle ?? 1,
+      workAssignmentVersion: active.version,
       status: 'planned'
     }
     const validation = validateAssignment({
@@ -1142,8 +1168,17 @@ export class AssignmentEngine {
     if (!this.repo.claimOperation(operationId, assignmentId, 'review_task')) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
+    const activeReworkCycle =
+      active.auditCycle?.status === 'reworking' ? (active.auditCycle.reworkCycle ?? 1) : undefined
     const reviewedTask: AssignmentTask = {
       ...task,
+      ...(activeReworkCycle
+        ? {
+            workKind: 'rework' as const,
+            reworkCycle: activeReworkCycle,
+            workAssignmentVersion: active.version
+          }
+        : {}),
       review,
       status:
         review.decision === 'pass'
@@ -1176,6 +1211,7 @@ export class AssignmentEngine {
         ? {
             auditCycle: {
               ...active.auditCycle,
+              ...(activeReworkCycle ? { reworkCycle: activeReworkCycle } : {}),
               status: 'available',
               availableAt: now,
               startedAt: undefined,
