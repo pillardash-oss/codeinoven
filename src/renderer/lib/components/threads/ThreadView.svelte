@@ -7156,6 +7156,7 @@
                   contextUsage={contextUsageDisplay}
                   onRevealUsage={revealContextUsage}
                   onHideUsage={hideContextUsage}
+                  usageRefreshing={refreshingAccountUsage}
                   {harnessUsage}
                   canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
                   {compacting}
