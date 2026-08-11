@@ -2125,125 +2125,111 @@
                 <p class="text-xs font-medium text-muted">No branches</p>
               </div>
             {:else}
-              {@const localBranches = gitState.branches.filter((b) => !b.remote)}
-              {@const remoteBranches = gitState.branches.filter((b) => b.remote)}
-              {#snippet branchRow(branch: GitBranchInfo)}
-                {@const canFetch = Boolean(branch.remote ?? primaryRemote?.name)}
-                <ContextMenu.Root>
-                  <ContextMenu.Trigger
-                    class="block w-full"
-                    aria-label={`Actions for branch ${branch.name}`}
-                  >
-                    <div
-                      class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
+              {@const sortedBranches = [...gitState.branches].sort((a, b) =>
+                a.current === b.current ? a.name.localeCompare(b.name) : a.current ? -1 : 1
+              )}
+              <div class="space-y-0.5">
+                {#each sortedBranches as branch (branch.name)}
+                  {@const canFetch = Boolean(branch.remote ?? primaryRemote?.name)}
+                  <ContextMenu.Root>
+                    <ContextMenu.Trigger
+                      class="block w-full"
+                      aria-label={`Actions for branch ${branch.name}`}
                     >
-                      <span
-                        class={[
-                          'flex size-5 shrink-0 items-center justify-center rounded-full',
-                          branchAvatarClass(branch.name)
-                        ]}
+                      <div
+                        class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
                       >
-                        <GitBranch size={11} />
-                      </span>
-                      <button
-                        type="button"
-                        class="min-w-0 flex-1 cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
-                        disabled={branch.current}
-                        title={branch.current ? undefined : `Check out ${branch.name}`}
-                        onclick={() => requestCheckout(branch.name)}
-                      >
-                        {branch.remote ? `${branch.remote}/${branch.name}` : branch.name}
-                      </button>
-                      {#if branch.ahead > 0 || branch.behind > 0}
-                        <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
-                          {#if branch.ahead > 0}
-                            <span class="text-success">+{branch.ahead}</span>
-                          {/if}
-                          {#if branch.behind > 0}
-                            <span class="text-danger">−{branch.behind}</span>
-                          {/if}
-                        </span>
-                      {/if}
-                      <DropdownMenu.Root>
-                        <DropdownMenu.Trigger
-                          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                          aria-label={`More actions for branch ${branch.name}`}
-                          title={`More actions for branch ${branch.name}`}
-                        >
-                          <MoreHorizontal size={13} />
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content
-                            class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                            side="bottom"
-                            align="end"
-                            sideOffset={4}
-                            collisionPadding={8}
-                          >
-                            <BranchActionsMenu
-                              isCurrent={branch.current}
-                              {canFetch}
-                              busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                              onCheckout={() => requestCheckout(branch.name)}
-                              onFetch={() => void fetchBranchAction(branch)}
-                              onDelete={() => requestDeleteBranch(branch.name)}
-                            />
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
-                      {#if branch.current}
                         <span
-                          class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold text-primary"
+                          class={[
+                            'flex size-5 shrink-0 items-center justify-center rounded-full',
+                            branchAvatarClass(branch.name)
+                          ]}
                         >
-                          current
+                          <GitBranch size={11} />
                         </span>
-                      {/if}
-                    </div>
-                  </ContextMenu.Trigger>
-                  <ContextMenu.Portal>
-                    <ContextMenu.Content
-                      class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                      side="bottom"
-                      align="start"
-                      sideOffset={4}
-                      collisionPadding={8}
-                    >
-                      <BranchActionsMenu
-                        isCurrent={branch.current}
-                        {canFetch}
-                        busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                        onCheckout={() => requestCheckout(branch.name)}
-                        onFetch={() => void fetchBranchAction(branch)}
-                        onDelete={() => requestDeleteBranch(branch.name)}
-                      />
-                    </ContextMenu.Content>
-                  </ContextMenu.Portal>
-                </ContextMenu.Root>
-              {/snippet}
-
-              {#if localBranches.length > 0}
-                <p class="px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
-                  Local
-                </p>
-                <div class="space-y-0.5">
-                  {#each localBranches as branch (branch.name)}
-                    {@render branchRow(branch)}
-                  {/each}
-                </div>
-              {/if}
-
-              {#if remoteBranches.length > 0}
-                <p
-                  class="mt-2 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
-                >
-                  Remote
-                </p>
-                <div class="space-y-0.5">
-                  {#each remoteBranches as branch (branch.remote + '/' + branch.name)}
-                    {@render branchRow(branch)}
-                  {/each}
-                </div>
-              {/if}
+                        <span class="min-w-0 flex-1">
+                          <button
+                            type="button"
+                            class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
+                            disabled={branch.current}
+                            title={branch.current ? undefined : `Check out ${branch.name}`}
+                            onclick={() => requestCheckout(branch.name)}
+                          >
+                            {branch.name}
+                          </button>
+                          {#if branch.remote}
+                            <span class="block truncate text-[9px] text-dimmed">
+                              tracks {branch.remote}/{branch.name}
+                            </span>
+                          {/if}
+                        </span>
+                        {#if branch.ahead > 0 || branch.behind > 0}
+                          <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
+                            {#if branch.ahead > 0}
+                              <span class="text-success">+{branch.ahead}</span>
+                            {/if}
+                            {#if branch.behind > 0}
+                              <span class="text-danger">−{branch.behind}</span>
+                            {/if}
+                          </span>
+                        {/if}
+                        <DropdownMenu.Root>
+                          <DropdownMenu.Trigger
+                            class="peer flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                            aria-label={`More actions for branch ${branch.name}`}
+                            title={`More actions for branch ${branch.name}`}
+                          >
+                            <MoreHorizontal size={13} />
+                          </DropdownMenu.Trigger>
+                          <DropdownMenu.Portal>
+                            <DropdownMenu.Content
+                              class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                              side="bottom"
+                              align="end"
+                              sideOffset={4}
+                              collisionPadding={8}
+                            >
+                              <BranchActionsMenu
+                                isCurrent={branch.current}
+                                {canFetch}
+                                busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                                onCheckout={() => requestCheckout(branch.name)}
+                                onFetch={() => void fetchBranchAction(branch)}
+                                onDelete={() => requestDeleteBranch(branch.name)}
+                              />
+                            </DropdownMenu.Content>
+                          </DropdownMenu.Portal>
+                        </DropdownMenu.Root>
+                        {#if branch.current}
+                          <span
+                            class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold text-primary peer-hover:hidden peer-data-[state=open]:hidden"
+                          >
+                            current
+                          </span>
+                        {/if}
+                      </div>
+                    </ContextMenu.Trigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Content
+                        class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                        side="bottom"
+                        align="start"
+                        sideOffset={4}
+                        collisionPadding={8}
+                      >
+                        <BranchActionsMenu
+                          isCurrent={branch.current}
+                          {canFetch}
+                          busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                          onCheckout={() => requestCheckout(branch.name)}
+                          onFetch={() => void fetchBranchAction(branch)}
+                          onDelete={() => requestDeleteBranch(branch.name)}
+                        />
+                      </ContextMenu.Content>
+                    </ContextMenu.Portal>
+                  </ContextMenu.Root>
+                {/each}
+              </div>
             {/if}
           </div>
         </div>
