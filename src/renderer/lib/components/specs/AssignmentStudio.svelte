@@ -41,6 +41,7 @@
     providers: ProviderCatalog[]
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     busy?: boolean
@@ -64,6 +65,7 @@
     onOpenInEditor: (content: AssignmentPlanContent) => CallbackResult
     onRevealInAppFile: (content: AssignmentPlanContent) => CallbackResult
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
@@ -93,6 +95,7 @@
     providers,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     busy = false,
@@ -116,6 +119,7 @@
     onOpenInEditor,
     onRevealInAppFile,
     onWorkerModelChange,
+    onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
     onReorderFavorite,
@@ -725,6 +729,7 @@
           {providers}
           {harnessId}
           {fallbackModel}
+          {seniorModel}
           {favoriteModels}
           {recentModels}
           {annotations}
@@ -732,6 +737,7 @@
           onAnnotateSection={openSectionAnnotation}
           onChange={updateDraft}
           {onWorkerModelChange}
+          {onSeniorModelChange}
           {onTaskModelChange}
           {onToggleFavorite}
           {onReorderFavorite}

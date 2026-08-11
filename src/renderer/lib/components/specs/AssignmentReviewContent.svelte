@@ -18,12 +18,14 @@
     projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     compact?: boolean
     readOnly?: boolean
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
@@ -45,12 +47,14 @@
     projectId = null,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     compact = false,
     readOnly = false,
     onChange,
     onWorkerModelChange,
+    onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
     onReorderFavorite,
@@ -89,7 +93,8 @@
   }
 
   function resolvedTaskModel(task: AssignmentTask): AssignmentModelSelection {
-    return task.model ?? phaseModel(task.phaseId)
+    if (task.model) return task.model
+    return task.owner === 'senior' ? seniorModel : phaseModel(task.phaseId)
   }
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
@@ -164,7 +169,8 @@
         }
       })
     })
-    onWorkerModelChange?.(selection)
+    if (current.owner === 'senior') onSeniorModelChange?.(selection)
+    else onWorkerModelChange?.(selection)
   }
 
   function updateTaskText(

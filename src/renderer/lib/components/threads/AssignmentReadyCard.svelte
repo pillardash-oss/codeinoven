@@ -14,6 +14,7 @@
     projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     busy?: boolean
@@ -22,6 +23,7 @@
     onApprove: (content: AssignmentPlanContent) => void
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onToggleFavorite?: (providerId: string, modelId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
@@ -36,6 +38,7 @@
     projectId = null,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     busy = false,
@@ -44,6 +47,7 @@
     onApprove,
     onOpenFullscreen,
     onWorkerModelChange,
+    onSeniorModelChange,
     onToggleFavorite,
     onReorderFavorite
   }: Props = $props()
@@ -99,11 +103,13 @@
       {projectId}
       {harnessId}
       {fallbackModel}
+      {seniorModel}
       {favoriteModels}
       {recentModels}
       compact
       onChange={(content) => (draft = content)}
       {onWorkerModelChange}
+      {onSeniorModelChange}
       {onToggleFavorite}
       {onReorderFavorite}
     />
