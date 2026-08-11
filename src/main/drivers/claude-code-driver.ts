@@ -126,15 +126,6 @@ function fallbackClaudeModel(): ProviderModel {
   }
 }
 
-/** Never persist Claude's authentication status text as a thread title. */
-export function filterClaudeGeneratedTitle(title: string | null): string | null {
-  if (!title) return null
-  const normalized = title.trim()
-  if (/^failed to authenticate(?:\b|$)/iu.test(normalized)) return null
-  if (/^oauth session (?:has )?expired(?:\b|$)/iu.test(normalized)) return null
-  return title
-}
-
 function claudeModelName(model: ModelInfo): string {
   const resolvedName = model.description.split(' · ', 1)[0]?.trim()
   if (!resolvedName) return model.displayName
@@ -1077,9 +1068,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         ? [{ providerId: 'anthropic', modelId }]
         : []
     )
-    return filterClaudeGeneratedTitle(
-      await this.generateTitleWithCandidates(projectPath, options, candidates)
-    )
+    return this.generateTitleWithCandidates(projectPath, options, candidates)
   }
 
   /** Append user input to Claude's realtime stream while its turn is active. */
