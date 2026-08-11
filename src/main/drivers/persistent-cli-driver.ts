@@ -16,6 +16,7 @@ import type {
   SessionAgentEvent
 } from '../../lib/types'
 import { Logger } from '../logger'
+import { estimateTokenCostUsd } from '../pricing'
 import type { StorageEngine } from '../storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
@@ -689,6 +690,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        this.estimateMissingCost(message)
       }
     }
     if (event.type === 'usage.updated') {
@@ -700,7 +702,26 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
+        this.estimateMissingCost(message)
       }
+    }
+  }
+
+  /**
+   * When a harness reports tokens but no dollar cost, fill in an estimate from
+   * the local model-catalog pricing so usage reports aren't zero. Only applies
+   * when cost is genuinely missing; a provider-reported cost is never replaced.
+   */
+  protected estimateMissingCost(message: AgentMessage): void {
+    if (typeof message.cost === 'number') return
+    const estimated = estimateTokenCostUsd(message.modelId, message.providerId, message.tokens)
+    if (estimated === null) return
+    message.cost = estimated
+    message.costProvenance = {
+      source: 'model_catalog',
+      sourceId: message.modelId,
+      currency: 'USD',
+      capturedAt: message.completedAt ?? message.createdAt ?? Date.now()
     }
   }
 
