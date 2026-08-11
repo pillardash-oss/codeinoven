@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ArrowLeft,
+    Bot,
     CircleCheck,
     CircleX,
     Clock3,
@@ -22,9 +23,11 @@
     onBack: () => void
     /** Push an updated status snapshot back into the panel/store cache. */
     onUpdated: (container: CloudDeploymentContainer) => void
+    /** Hand the failing deployment to an agent for read-only diagnosis. */
+    onRemediate: () => void
   }
 
-  let { projectId, container, onBack, onUpdated }: Props = $props()
+  let { projectId, container, onBack, onUpdated, onRemediate }: Props = $props()
 
   let error = $state('')
 
@@ -114,6 +117,18 @@
         {container.label}
       </span>
       <StatusPill tone={tone(status.status)}>{label(status.status)}</StatusPill>
+      {#if status.status === 'failed'}
+        <button
+          type="button"
+          class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Diagnose this failed deployment with an agent"
+          aria-label="Diagnose this failed deployment with an agent"
+          onclick={onRemediate}
+        >
+          <Bot size={12} />
+          Diagnose
+        </button>
+      {/if}
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
