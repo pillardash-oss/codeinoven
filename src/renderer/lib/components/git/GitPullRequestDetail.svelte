@@ -79,7 +79,6 @@
   const loading = $derived(gitState.isBusy('pr-detail') && !bundle)
   const posting = $derived(gitState.isBusy('pr-comment'))
   const reviewing = $derived(gitState.isBusy('pr-review'))
-  const reviewPermission = $derived(gitState.reviewPermission)
   const merging = $derived(gitState.isBusy('pr-merge'))
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const closing = $derived(gitState.isBusy('pr-close'))
@@ -177,6 +176,34 @@
     if (kind === 'review' && meta === 'changes requested') return 'border-l-2 border-l-warning'
     if (kind === 'description') return 'border-l-2 border-l-primary'
     return ''
+  }
+
+  /** Badge colour for the PR state pill in the header. */
+  function stateBadgeClass(state: string): string {
+    if (state === 'merged') return 'bg-primary/10 text-primary'
+    if (state === 'closed') return 'bg-danger/10 text-danger'
+    return 'bg-success/10 text-success'
+  }
+
+  /** Badge colour for the checks-summary pill in the header. */
+  function checksBadgeClass(state: string): string {
+    if (state === 'failure') return 'bg-danger/10 text-danger hover:bg-danger/20'
+    if (state === 'pending') return 'bg-warning/10 text-warning hover:bg-warning/20'
+    return 'bg-success/10 text-success hover:bg-success/20'
+  }
+
+  /** Stable background colour for an author's avatar, keyed off their name. */
+  const avatarPalette = [
+    'bg-primary/20 text-primary',
+    'bg-success/20 text-success',
+    'bg-warning/20 text-warning',
+    'bg-danger/20 text-danger',
+    'bg-accent/20 text-accent'
+  ]
+  function avatarClass(author: string): string {
+    let hash = 0
+    for (let i = 0; i < author.length; i += 1) hash = (hash * 31 + author.charCodeAt(i)) | 0
+    return avatarPalette[Math.abs(hash) % avatarPalette.length]
   }
 
   async function refresh(): Promise<void> {
@@ -343,6 +370,13 @@
   })
 </script>
 
+{#snippet emptyState(Icon: typeof Bot, text: string)}
+  <div class="flex flex-col items-center gap-2 px-6 py-10 text-center">
+    <Icon size={18} class="text-dimmed" />
+    <p class="text-[11px] leading-relaxed text-dimmed">{text}</p>
+  </div>
+{/snippet}
+
 {#snippet fileList(files: PullRequestFile[], keyPrefix: string)}
   {#each files as file (file.path)}
     {@const fileKey = `${keyPrefix}:${file.path}`}
@@ -380,8 +414,8 @@
 
 <div class="flex h-full min-h-0 flex-col">
   <!-- Header -->
-  <div class="shrink-0 border-b border-border px-3 py-2">
-    <div class="flex items-center gap-1">
+  <div class="shrink-0 border-b border-border px-3 py-2.5">
+    <div class="flex items-center gap-1.5">
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -393,24 +427,18 @@
       </button>
       <span class="font-mono text-[10px] text-dimmed">#{number}</span>
       <span
-        class="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide {detail?.state ===
-        'merged'
-          ? 'bg-primary/10 text-primary'
-          : detail?.state === 'closed'
-            ? 'bg-danger/10 text-danger'
-            : 'bg-success/10 text-success'}"
+        class="rounded px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide {stateBadgeClass(
+          detail?.state ?? summary.state
+        )}"
       >
         {detail?.state ?? summary.state}{summary.draft ? ' · draft' : ''}
       </span>
       {#if checks && checks.state !== 'none'}
         <button
           type="button"
-          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors {checks.state ===
-          'failure'
-            ? 'bg-danger/10 text-danger hover:bg-danger/20'
-            : checks.state === 'pending'
-              ? 'bg-warning/10 text-warning hover:bg-warning/20'
-              : 'bg-success/10 text-success hover:bg-success/20'}"
+          class="flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors {checksBadgeClass(
+            checks.state
+          )}"
           title="View check results"
           onclick={() => (tab = 'checks')}
         >
@@ -443,14 +471,14 @@
         <ExternalLink size={13} />
       </button>
     </div>
-    <p class="mt-1 text-[12px] font-medium leading-snug text-foreground">{summary.title}</p>
-    <p class="mt-0.5 truncate font-mono text-[9px] text-dimmed">
+    <p class="mt-1.5 text-[12px] font-medium leading-snug text-foreground">{summary.title}</p>
+    <p class="mt-1 truncate font-mono text-[9px] text-dimmed">
       {summary.headRef} → {summary.baseRef} · {summary.authorLogin} · {relativeTime(
         summary.updatedAt
       )}
     </p>
     {#if detail}
-      <p class="mt-1 flex items-center gap-2 text-[9px] tabular-nums text-dimmed">
+      <p class="mt-1.5 flex items-center gap-2 text-[9px] tabular-nums text-dimmed">
         <span class="text-success">+{detail.additions}</span>
         <span class="text-danger">−{detail.deletions}</span>
         <span>{detail.changedFiles} files</span>
@@ -503,7 +531,7 @@
       </div>
     {:else if tab === 'conversation'}
       {#if conversation.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">Nothing has been said yet.</p>
+        {@render emptyState(MessagesSquare, 'Nothing has been said yet.')}
       {:else}
         <div class="flex flex-col gap-2 p-2">
           {#each conversation as entry (entry.key)}
@@ -517,7 +545,9 @@
                 class="flex items-center gap-1.5 border-b border-border/60 bg-elevated/50 px-2.5 py-1.5"
               >
                 <span
-                  class="flex size-4 shrink-0 items-center justify-center rounded-full bg-border text-[8px] font-semibold uppercase text-muted"
+                  class="flex size-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold uppercase {avatarClass(
+                    entry.author
+                  )}"
                   aria-hidden="true"
                 >
                   {entry.author.slice(0, 1)}
@@ -555,7 +585,7 @@
       {/if}
     {:else if tab === 'commits'}
       {#if !bundle || bundle.commits.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">No commits on this branch.</p>
+        {@render emptyState(GitCommitHorizontal, 'No commits on this branch.')}
       {:else}
         {#each bundle.commits as commit (commit.sha)}
           <div class="border-b border-border/50">
@@ -592,15 +622,13 @@
       {/if}
     {:else if tab === 'files'}
       {#if !bundle || bundle.files.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">No changed files.</p>
+        {@render emptyState(FileDiff, 'No changed files.')}
       {:else}
         {@render fileList(bundle.files, 'pr')}
       {/if}
     {:else if tab === 'checks'}
       {#if !checks || checks.checks.length === 0}
-        <p class="px-4 py-8 text-center text-[11px] text-dimmed">
-          No checks have reported on this branch.
-        </p>
+        {@render emptyState(ShieldCheck, 'No checks have reported on this branch.')}
       {:else}
         {#each checks.checks as check (check.name + (check.url ?? ''))}
           {@const Icon = checkIcon(check)}
@@ -753,24 +781,6 @@
         Request changes
       </button>
     </div>
-
-    {#if reviewPermission}
-      <div
-        class="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
-      >
-        <TriangleAlert size={13} class="shrink-0 text-warning" />
-        <p class="min-w-0 flex-1 text-[10px] leading-relaxed text-muted">
-          {reviewPermission.message}
-        </p>
-        <button
-          type="button"
-          class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
-          onclick={() => void openInBrowser(reviewPermission.settingsUrl)}
-        >
-          Update GitHub access
-        </button>
-      </div>
-    {/if}
 
     {#if open && !hasBody}
       <p class="px-3 pb-2 text-[9px] leading-relaxed text-dimmed">
