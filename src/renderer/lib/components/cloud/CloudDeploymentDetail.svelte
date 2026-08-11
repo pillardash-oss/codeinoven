@@ -34,14 +34,14 @@
   /** Detail is served from the store cache so re-entering the view is instant. */
   const cached = $derived(
     cloudDeployState.containerLogs[
-      CloudDeployState.containerKey(container.providerKind, container.id)
+      CloudDeployState.containerKey(projectId, container.providerKind, container.id)
     ]
   )
   const log = $derived(cached?.value.log ?? '')
 
   const cachedStatus = $derived(
     cloudDeployState.containerStatuses[
-      CloudDeployState.containerKey(container.providerKind, container.id)
+      CloudDeployState.containerKey(projectId, container.providerKind, container.id)
     ]
   )
   const status = $derived(cachedStatus?.value ?? container)

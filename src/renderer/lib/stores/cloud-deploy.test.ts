@@ -142,7 +142,7 @@ describe('CloudDeployState store', () => {
     invoke.mockResolvedValue(container)
     await cloudDeployState.ensureContainerStatus('project-1', providerKind, container.id)
 
-    cloudDeployState.setContainerStatus({ ...container, status: 'building' })
+    cloudDeployState.setContainerStatus('project-1', { ...container, status: 'building' })
     const updated = await cloudDeployState.ensureContainerStatus(
       'project-1',
       providerKind,
@@ -188,5 +188,75 @@ describe('CloudDeployState store', () => {
     expect(log).toBeNull()
     expect(invoke).not.toHaveBeenCalled()
     expect(toastMock.message).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not collide overview cache entries across projects for the same provider', async () => {
+    invoke.mockResolvedValue(overview)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    // Each project's fresh entry is served from its own cache slot.
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    // Revalidating one project leaves the other's entry untouched and fresh.
+    vi.advanceTimersByTime(61_000)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(3)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not collide container status/log keys across projects for the same container', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.ensureContainerStatus('project-1', providerKind, container.id)
+    await cloudDeployState.ensureContainerStatus('project-2', providerKind, container.id)
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    invoke.mockResolvedValue({ containerId: container.id, log: 'build ok' })
+    await cloudDeployState.ensureContainerLog('project-1', providerKind, container.id)
+    await cloudDeployState.ensureContainerLog('project-2', providerKind, container.id)
+    expect(invoke).toHaveBeenCalledTimes(4)
+  })
+
+  it('does not share a failure cooldown across projects for the same provider', async () => {
+    invoke.mockRejectedValue(new Error('boom'))
+    await expect(cloudDeployState.ensureOverview('project-1', providerKind)).rejects.toThrow('boom')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    // project-2 has no failure recorded, so it is not blocked by project-1's cooldown.
+    invoke.mockResolvedValue(overview)
+    const result = await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(result).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('reset(projectId) clears only that project scoped data', async () => {
+    invoke.mockResolvedValue(overview)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    cloudDeployState.reset('project-1')
+    // project-1 refetches; project-2 is still served from its own cache.
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
+
+  it('ensureProject re-scopes the store to one project, dropping other projects data', async () => {
+    invoke.mockResolvedValue(overview)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    cloudDeployState.ensureProject('project-2')
+    // project-2 keeps its hot cache; project-1 was dropped and refetches on demand.
+    await cloudDeployState.ensureOverview('project-2', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(2)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(3)
   })
 })
