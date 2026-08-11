@@ -391,10 +391,11 @@
     <section class="p-4" aria-label="Assignment tasks">
       <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
       <div class="space-y-1">
-        {#each assignment.content.tasks as task (task.id)}
+        {#each assignment.content.tasks as task, taskIndex (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
           {@const active = task.threadId === selectedThreadId}
           {@const reworkCycle = taskReworkCycle(task)}
+          {@const taskNumber = taskIndex + 1}
           <button
             type="button"
             class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
@@ -407,7 +408,11 @@
             aria-current={active ? 'true' : undefined}
             onclick={() => onOpenTask(task)}
           >
-            <span class="min-w-0">
+            <span
+              class="w-4 shrink-0 pt-px text-right text-[10px] font-medium tabular-nums text-dimmed"
+              aria-hidden="true">{taskNumber}</span
+            >
+            <span class="min-w-0 flex-1">
               <span class="flex min-w-0 items-center gap-1.5">
                 <span class="min-w-0 truncate text-xs font-medium text-foreground"
                   >{task.title}</span
