@@ -1742,6 +1742,9 @@ export interface AgentMessage {
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */
   cost?: number
+  /** Provenance of `cost` when it was derived from a pricing table rather than
+   *  reported verbatim by the provider (kept transient; not persisted). */
+  costProvenance?: UsagePricingProvenance
   tokens?: AgentTokenUsage
   /** Effective model context window reported by the harness, when available. */
   contextWindow?: number

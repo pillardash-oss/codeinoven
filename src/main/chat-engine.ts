@@ -119,7 +119,8 @@ import type {
   Thread,
   ThreadSettings,
   UsageEventDetails,
-  UsageEventFeature
+  UsageEventFeature,
+  UsagePricingProvenance
 } from '../lib/types'
 import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../lib/types'
 import { APP_NAME } from '../lib/brand'
@@ -13098,6 +13099,8 @@ export class ChatEngine {
         : stepCosts.length > 0
           ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
           : null
+    const estimated =
+      message.costProvenance !== undefined && message.costProvenance.source !== 'provider'
     const details: UsageEventDetails = {
       id: `message:${message.id}`,
       threadId,
@@ -13135,13 +13138,15 @@ export class ChatEngine {
     }
     this.usageRepo.recordEvent({
       ...details,
-      costStatus: 'known',
+      costStatus: estimated ? 'estimated' : 'known',
       costUsd: knownCost,
-      pricingProvenance: {
-        source: 'provider',
-        currency: 'USD',
-        capturedAt: message.completedAt ?? message.createdAt
-      }
+      pricingProvenance:
+        message.costProvenance ??
+        ({
+          source: 'provider',
+          currency: 'USD',
+          capturedAt: message.completedAt ?? message.createdAt
+        } satisfies UsagePricingProvenance)
     })
   }
 
