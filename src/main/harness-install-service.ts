@@ -49,9 +49,9 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
     win32: 'https://github.com/google-antigravity/antigravity-cli'
   },
   muse: {
-    darwin: 'https://dev.meta.ai/docs/muse-code/install',
-    linux: 'https://dev.meta.ai/docs/muse-code/install',
-    win32: 'https://dev.meta.ai/docs/muse-code/install'
+    darwin: 'https://developer.meta.com/ai/products/muse-code/',
+    linux: 'https://developer.meta.com/ai/products/muse-code/',
+    win32: 'https://developer.meta.com/ai/products/muse-code/'
   }
 }
 
