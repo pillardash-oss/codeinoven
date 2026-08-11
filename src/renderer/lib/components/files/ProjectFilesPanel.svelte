@@ -14,7 +14,7 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isAudioMime, isImageMime, isVideoMime, mimeFromPath } from '$lib/mime'
+  import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -34,6 +34,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import type { ProjectTextFile } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -73,13 +74,51 @@
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
+  let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
   let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
   let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
   let previewUrl = $derived(
-    activeTab && (pdf || image || video || audio)
+    activeTab && (pdf || image || video || audio) && !svg
       ? projectFilePreviewUrl(projectId, activeTab.path)
       : null
   )
+  // SVG is rendered natively in the renderer via a blob URL (animated SVGs
+  // play), instead of the privileged `appfile://` scheme, which intentionally
+  // refuses to serve project-controlled SVG.
+  let svgPreviewUrl = $state<string | null>(null)
+  let svgPreviewFailed = $state(false)
+  $effect(() => {
+    if (!activeTab || !svg) {
+      if (svgPreviewUrl) {
+        URL.revokeObjectURL(svgPreviewUrl)
+        svgPreviewUrl = null
+      }
+      svgPreviewFailed = false
+      return
+    }
+    let cancelled = false
+    svgPreviewFailed = false
+    void invoke('projectFiles:read', projectId, activeTab.path)
+      .then((source: ProjectTextFile) => {
+        if (cancelled) return
+        const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
+        svgPreviewUrl = url
+      })
+      .catch(() => {
+        if (cancelled) return
+        svgPreviewFailed = true
+      })
+    return () => {
+      cancelled = true
+      if (svgPreviewUrl) {
+        URL.revokeObjectURL(svgPreviewUrl)
+        svgPreviewUrl = null
+      }
+      svgPreviewFailed = false
+    }
+  })
+  let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
+  let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
@@ -645,7 +684,7 @@
           {/if}
         </div>
       {:else if activeTab.view === 'preview' && image}
-        <FileImagePreview src={previewUrl} alt={activeTab.path} />
+        <FileImagePreview src={imagePreviewSrc} alt={activeTab.path} failed={imagePreviewFailed} />
       {:else if activeTab.view === 'preview' && (video || audio)}
         <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
@@ -655,7 +694,11 @@
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
         {#if image}
-          <FileImagePreview src={previewUrl} alt={activeTab.path} />
+          <FileImagePreview
+            src={imagePreviewSrc}
+            alt={activeTab.path}
+            failed={imagePreviewFailed}
+          />
         {:else if video || audio}
           <FileMediaPreview
             src={previewUrl}
@@ -919,7 +962,11 @@
               {/if}
             </div>
           {:else if activeTab?.view === 'preview' && image}
-            <FileImagePreview src={previewUrl} alt={activeTab.path} />
+            <FileImagePreview
+              src={imagePreviewSrc}
+              alt={activeTab.path}
+              failed={imagePreviewFailed}
+            />
           {:else if activeTab?.view === 'preview' && (video || audio)}
             <FileMediaPreview
               src={previewUrl}
@@ -928,7 +975,11 @@
             />
           {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
             {#if image}
-              <FileImagePreview src={previewUrl} alt={activeTab.path} />
+              <FileImagePreview
+                src={imagePreviewSrc}
+                alt={activeTab.path}
+                failed={imagePreviewFailed}
+              />
             {:else if video || audio}
               <FileMediaPreview
                 src={previewUrl}
