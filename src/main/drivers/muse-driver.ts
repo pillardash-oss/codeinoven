@@ -8,9 +8,7 @@ import type {
   AgentProviderIssue,
   ProviderCatalog,
   ProviderModel,
-  SessionAgentEvent,
-  ThinkingLevel,
-  ThinkingPreset
+  SessionAgentEvent
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
@@ -58,27 +56,6 @@ const MUSE_PROBE_TIMEOUT_MS = 15_000
 /** Provider id under which every Muse-cloud model is catalogued. */
 const MUSE_PROVIDER_ID = 'meta'
 
-/** Reasoning-effort presets baked into Muse's `--reasoning-effort` flag. */
-const MUSE_THINKING_PRESETS: ThinkingPreset[] = [
-  { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
-  { id: 'low', label: 'Low', description: 'Low reasoning effort' },
-  { id: 'medium', label: 'Medium', description: 'Moderate reasoning effort' },
-  { id: 'high', label: 'High', description: 'High reasoning effort' },
-  { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' },
-  { id: 'ultra', label: 'Ultra', description: 'Ultra reasoning effort' }
-]
-
-/** Map a thread's thinking level onto Muse's `--reasoning-effort` values. */
-const MUSE_REASONING_EFFORT: Record<ThinkingLevel, string> = {
-  minimal: 'minimal',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'ultra',
-  ultra: 'ultra'
-}
-
 /**
  * Static fallback catalog for the Meta provider. Muse exposes no documented
  * model-list subcommand, so the account's observed default model is advertised
@@ -96,8 +73,7 @@ const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
         id: 'muse-spark-1.2-contributor',
         providerId: MUSE_PROVIDER_ID,
         name: 'Muse Spark 1.2',
-        reasoning: true,
-        thinkingPresets: MUSE_THINKING_PRESETS,
+        reasoning: false,
         attachment: false,
         toolcall: true
       }
@@ -156,8 +132,7 @@ async function readMuseModelCatalog(): Promise<ProviderCatalog[]> {
           id: modelId,
           providerId,
           name: stringValue(row['display_label']) ?? modelId,
-          reasoning: true,
-          thinkingPresets: MUSE_THINKING_PRESETS,
+          reasoning: false,
           attachment: false,
           toolcall: true,
           ...(contextLimit === undefined ? {} : { contextWindow: contextLimit })
@@ -584,8 +559,6 @@ export class MuseDriver extends PersistentCliDriver {
     if (options.settings.modelId && options.settings.modelId !== 'default') {
       args.push('--model', options.settings.modelId)
     }
-    const effort = MUSE_REASONING_EFFORT[options.settings.thinkingLevel]
-    if (effort) args.push('--reasoning-effort', effort)
 
     if (options.readOnly) {
       // Inspection chats must not mutate the workspace.
