@@ -8,7 +8,7 @@ This is the canonical reference for the principles, philosophies, design languag
 
 **CodeInOven is a desktop workstation for coordinated agentic software engineering.**
 
-It is not a chat toy and not another IDE plugin. It is a control plane that coordinates AI coding agents (OpenCode, Claude Code, Codex, and future drivers) through a clear, reviewable lifecycle:
+It is not a chat toy and not another IDE plugin. It is a control plane that coordinates AI coding agents (OpenCode, Claude Code, Codex, Muse Code, and more) through a clear, reviewable lifecycle:
 
 ```
 specify → review → approve → implement
