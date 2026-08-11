@@ -1202,6 +1202,7 @@ export class ChatEngine {
   private capabilityDiscovery: CapabilityDiscoveryService
   private baseUrlProviders: BaseUrlProviderService
   private utilityOrchestration: UtilityOrchestrationService
+  private usageRepo: HarnessUsageRepo
   private utilityTurns = new Map<
     string,
     {
@@ -1221,6 +1222,7 @@ export class ChatEngine {
     private threadCreation?: ThreadCreationCoordinator
   ) {
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
+    this.usageRepo = new HarnessUsageRepo(database)
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.checkpointManager = new CheckpointManager(database)
@@ -1234,7 +1236,6 @@ export class ChatEngine {
       async (threads) => {
         for (const thread of threads) broadcastThreadDeleted(thread)
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
-  private usageRepo: HarnessUsageRepo
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
       }
@@ -1254,7 +1255,6 @@ export class ChatEngine {
       this.utilityOrchestration.onCuaActivity((pid, threadId) => {
         void this.computerUsePip?.track(pid, threadId)
       })
-    this.usageRepo = new HarnessUsageRepo(database)
     }
     this.specEngine = new SpecEngine(storage, database, {
       validateForApproval: validateEngineeringSpec
@@ -4151,6 +4151,7 @@ export class ChatEngine {
               JSON.stringify(generated.content),
               projectId,
               threadId,
+              messageId,
               driver,
               projectPath,
               pendingMemory.settings
@@ -4762,6 +4763,12 @@ export class ChatEngine {
     }
     this.clearSessionWatchdog(request.sessionId)
     try {
+      const parentTurnId = this.database.get<{ id: string }>(
+        `SELECT id FROM agent_messages
+         WHERE thread_id = ? AND role = 'user'
+         ORDER BY created_at DESC, id DESC LIMIT 1`,
+        request.threadId
+      )?.id
       const results: ImageDescriptorResult[] = []
       for (const image of request.images) {
         const outcome = await this.describeWithImageDescriptorRecovery(
@@ -4976,6 +4983,8 @@ export class ChatEngine {
       undefined,
       true
     )
+    let response: AgentMessage | undefined
+    let failure: string | null = null
     try {
       // Inline local file sources as data URLs so the vision session never
       // depends on the original path still existing (transient temp screenshots
@@ -5019,7 +5028,24 @@ export class ChatEngine {
         .trim()
       if (!text) throw new Error('The vision model returned an empty description')
       return text
+    } catch (error) {
+      failure = rawErrorMessage(error)
+      throw error
     } finally {
+      if (parentTurnId) {
+        this.recordAuxiliaryUsageEvent({
+          feature: 'image_descriptor',
+          threadId,
+          parentTurnId,
+          featureCallId: image.id,
+          attempt: attempt + 1,
+          harnessId: selection.harnessId,
+          settings,
+          inputText: IMAGE_DESCRIPTOR_PROMPT,
+          response,
+          failure
+        })
+      }
       this.clearCompletionWaiter(sessionId)
       this.clearSessionWatchdog(sessionId)
       this.sessionRegistry.delete(sessionId)
@@ -5117,12 +5143,6 @@ export class ChatEngine {
       transportParts: [
         {
           type: 'text',
-      const parentTurnId = this.database.get<{ id: string }>(
-        `SELECT id FROM agent_messages
-         WHERE thread_id = ? AND role = 'user'
-         ORDER BY created_at DESC, id DESC LIMIT 1`,
-        request.threadId
-      )?.id
           id: `${messageId}-transport-text`,
           messageID: messageId,
           text: transportText
@@ -5308,6 +5328,8 @@ export class ChatEngine {
     parentTurnId: string
   ): Promise<string | null> {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    let generated: string | null = null
+    let failure: string | null = null
     try {
       generated = await driver.generateTitle(projectPath, { settings, message: text })
       return generated
@@ -5375,8 +5397,6 @@ export class ChatEngine {
       // `ensureSession` already confirmed whether the harness natively holds
       // the conversation — skip the redundant provider history load entirely
       // (A-13), whether the first load returned messages or zero.
-    let response: AgentMessage | undefined
-    let failure: string | null = null
       const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
       if (nativeHistory === true) return ''
       if (nativeHistory === false) {
@@ -5420,24 +5440,7 @@ export class ChatEngine {
       }
     }
     return computePromptBudget({ contextWindow }).availableInputTokens
-    } catch (error) {
-      failure = rawErrorMessage(error)
-      throw error
   }
-      if (parentTurnId) {
-        this.recordAuxiliaryUsageEvent({
-          feature: 'image_descriptor',
-          threadId,
-          parentTurnId,
-          featureCallId: image.id,
-          attempt: attempt + 1,
-          harnessId: selection.harnessId,
-          settings,
-          inputText: IMAGE_DESCRIPTOR_PROMPT,
-          response,
-          failure
-        })
-      }
 
   /**
    * Cap the hidden orchestration context by the turn's available input budget
@@ -12096,6 +12099,7 @@ export class ChatEngine {
     const pendingMemory = this.pendingMemoryDecisions.get(sessionId)
     this.pendingMemoryDecisions.delete(sessionId)
     let assistantResponse = ''
+    let memoryParentTurnId: string | null = null
     let turnUtilitiesCleaned = false
     let assignmentContinuation: {
       assignment: AssignmentPlan
@@ -12181,6 +12185,12 @@ export class ChatEngine {
         }
       }
       await this.threadManager.upsertMessages(info.projectId, info.threadId, merged)
+      const parentTurnId = messages[latestUserIndex]?.id
+      memoryParentTurnId = parentTurnId ?? null
+      if (parentTurnId && turnAssistant) {
+        this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
+        this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
+      }
       // Snapshot this turn's harness usage into the dedicated analytics table.
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
@@ -12453,6 +12463,7 @@ export class ChatEngine {
           assistantResponse,
           info.projectId,
           info.threadId,
+          memoryParentTurnId,
           driver,
           info.projectPath,
           pendingMemory.settings
@@ -12461,10 +12472,201 @@ export class ChatEngine {
     }
   }
 
+  private recordMessageUsageEvent(
+    threadId: string,
+    thread: Thread | null,
+    parentTurnId: string,
+    message: AgentMessage,
+    failure?: string
+  ): void {
+    const feature: UsageEventFeature =
+      thread?.achievementRole === 'auditor'
+        ? 'audit'
+        : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
+          ? 'assignment'
+          : 'main'
+    const tokens = message.tokens
+    const stepCosts = message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
+        part.type === 'step-finish' && typeof part.cost === 'number'
+    )
+    const knownCost =
+      typeof message.cost === 'number'
+        ? message.cost
+        : stepCosts.length > 0
+          ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
+          : null
+    const details: UsageEventDetails = {
+      id: `message:${message.id}`,
+      threadId,
+      parentTurnId,
+      featureCallId: message.id,
+      attempt: 1,
+      feature,
+      harnessId: message.harnessId ?? null,
+      providerId: message.providerId ?? null,
+      modelId: message.modelId ?? null,
+      utilityId: null,
+      rawProviderUsage: tokens ? { ...tokens } : {},
+      tokens: {
+        uncachedInput: tokens?.input ?? null,
+        cachedInput: tokens?.cacheRead ?? null,
+        cacheWrite: tokens?.cacheWrite ?? null,
+        output: tokens?.output ?? null,
+        reasoning: tokens?.reasoning ?? null
+      },
+      rawTotal: tokens?.total ?? null,
+      totalSemantics: tokens ? 'provider_defined' : 'unavailable',
+      toolFeeUsd: null,
+      success: !failure && !message.error,
+      retryCause: failure ?? message.error ?? null,
+      createdAt: message.completedAt ?? message.createdAt
+    }
+    if (knownCost === null) {
+      this.usageRepo.recordEvent({
+        ...details,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+      return
+    }
+    this.usageRepo.recordEvent({
+      ...details,
+      costStatus: 'known',
+      costUsd: knownCost,
+      pricingProvenance: {
+        source: 'provider',
+        currency: 'USD',
+        capturedAt: message.completedAt ?? message.createdAt
+      }
+    })
+  }
+
+  private recordAuxiliaryUsageEvent(input: {
+    feature: 'memory' | 'image_descriptor'
+    threadId: string
+    parentTurnId: string
+    featureCallId: string
+    attempt: number
+    harnessId: string
+    settings: ThreadSettings
+    inputText: string
+    response?: AgentMessage
+    failure: string | null
+  }): void {
+    const reported = input.response?.tokens
+    const inputTokens = reported?.input ?? estimateTokens(input.inputText)
+    const outputTokens =
+      reported?.output ?? estimateTokens(input.response ? assistantText(input.response) : '')
+    const cost = input.response?.cost ?? null
+    if (input.feature === 'memory') {
+      this.memoryService.recordAuxiliaryUsage('memory', inputTokens, input.inputText.length, {
+        outputTokens,
+        costUsd: cost,
+        costStatus: cost === null ? 'unavailable' : 'known'
+      })
+    }
+    const details: UsageEventDetails = {
+      id: `${input.feature}:${input.parentTurnId}:${input.featureCallId}:${input.attempt}`,
+      threadId: input.threadId,
+      parentTurnId: input.parentTurnId,
+      featureCallId: input.featureCallId,
+      attempt: input.attempt,
+      feature: input.feature,
+      harnessId: input.harnessId,
+      providerId: input.settings.providerId,
+      modelId: input.settings.modelId,
+      utilityId: null,
+      rawProviderUsage: reported ? { ...reported } : {},
+      tokens: {
+        uncachedInput: inputTokens,
+        cachedInput: reported?.cacheRead ?? null,
+        cacheWrite: reported?.cacheWrite ?? null,
+        output: outputTokens,
+        reasoning: reported?.reasoning ?? null
+      },
+      rawTotal: reported?.total ?? null,
+      totalSemantics: reported ? 'provider_defined' : 'unavailable',
+      toolFeeUsd: null,
+      success: input.failure === null && !input.response?.error,
+      retryCause: input.failure ?? input.response?.error ?? null,
+      createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
+    }
+    if (cost === null) {
+      this.usageRepo.recordEvent({
+        ...details,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+      return
+    }
+    this.usageRepo.recordEvent({
+      ...details,
+      costStatus: 'known',
+      costUsd: cost,
+      pricingProvenance: {
+        source: 'provider',
+        currency: 'USD',
+        capturedAt: details.createdAt
+      }
+    })
+  }
+
+  private recordToolUsageEvents(
+    threadId: string,
+    parentTurnId: string,
+    message: AgentMessage
+  ): void {
+    for (const part of message.parts) {
+      if (part.type !== 'tool') continue
+      const normalizedTool = part.tool.toLowerCase()
+      const feature: UsageEventFeature | null = normalizedTool.includes('computer')
+        ? 'computer_use'
+        : normalizedTool.includes('web') || normalizedTool.includes('fetch')
+          ? 'web'
+          : normalizedTool.includes('image_descriptor')
+            ? 'image_descriptor'
+            : null
+      if (!feature) continue
+      const failure =
+        part.state.status === 'error' ? (part.state.error ?? 'Tool call failed') : null
+      this.usageRepo.recordEvent({
+        id: `tool:${parentTurnId}:${part.callID}`,
+        threadId,
+        parentTurnId,
+        featureCallId: part.callID,
+        attempt: 1,
+        feature,
+        harnessId: message.harnessId ?? null,
+        providerId: message.providerId ?? null,
+        modelId: message.modelId ?? null,
+        utilityId: part.tool,
+        rawProviderUsage: {},
+        tokens: {
+          uncachedInput: null,
+          cachedInput: null,
+          cacheWrite: null,
+          output: null,
+          reasoning: null
+        },
+        rawTotal: null,
+        totalSemantics: 'unavailable',
+        toolFeeUsd: null,
+        success: part.state.status === 'completed',
+        retryCause: failure,
+        createdAt: part.state.time?.end ?? part.state.time?.start ?? message.createdAt,
+        costStatus: 'unavailable',
+        costUsd: null,
+        pricingProvenance: null
+      })
+    }
+  }
+
   /** Apply in-memory reasoning time stamps to loaded messages (populated during streaming). */
   private applyReasoningStamps(sessionId: string, messages: AgentMessage[]): void {
     const sessionReasoning = this.reasoningTimes.get(sessionId)
-    let memoryParentTurnId: string | null = null
     if (!sessionReasoning) return
     for (const msg of messages) {
       if (msg.role !== 'assistant') continue
@@ -12550,12 +12752,6 @@ export class ChatEngine {
               start: mirrorPart.state.time.start,
               end: mirrorPart.state.time.end
             }
-      const parentTurnId = messages[latestUserIndex]?.id
-      memoryParentTurnId = parentTurnId ?? null
-      if (parentTurnId && turnAssistant) {
-        this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
-        this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
-      }
           }
         }
       }
@@ -12837,205 +13033,12 @@ export class ChatEngine {
   /** True when a silent session has live work we must not abort: an in-flight
    *  shell/CLI tool or a running provider-native sub-agent. */
   private hasInFlightWork(sessionId: string, info: SessionInfo): boolean {
-          memoryParentTurnId,
     if (info.openUnboundedTools && info.openUnboundedTools.size > 0) return true
     for (const [childSessionId, owner] of this.childSessionOwners) {
       if (owner.parentSessionId !== sessionId) continue
       if (this.sessionStatuses.get(childSessionId)?.state === 'working') return true
     }
     return false
-  }
-
-  private recordMessageUsageEvent(
-    threadId: string,
-    thread: Thread | null,
-    parentTurnId: string,
-    message: AgentMessage,
-    failure?: string
-  ): void {
-    const feature: UsageEventFeature =
-      thread?.achievementRole === 'auditor'
-        ? 'audit'
-        : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
-          ? 'assignment'
-          : 'main'
-    const tokens = message.tokens
-    const stepCosts = message.parts.filter(
-      (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
-        part.type === 'step-finish' && typeof part.cost === 'number'
-    )
-    const knownCost =
-      typeof message.cost === 'number'
-        ? message.cost
-        : stepCosts.length > 0
-          ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
-          : null
-    const details: UsageEventDetails = {
-      id: `message:${message.id}`,
-      threadId,
-      parentTurnId,
-      featureCallId: message.id,
-      attempt: 1,
-      feature,
-      harnessId: message.harnessId ?? null,
-      providerId: message.providerId ?? null,
-      modelId: message.modelId ?? null,
-      utilityId: null,
-      rawProviderUsage: tokens ? { ...tokens } : {},
-      tokens: {
-        uncachedInput: tokens?.input ?? null,
-        cachedInput: tokens?.cacheRead ?? null,
-        cacheWrite: tokens?.cacheWrite ?? null,
-        output: tokens?.output ?? null,
-        reasoning: tokens?.reasoning ?? null
-      },
-      rawTotal: tokens?.total ?? null,
-      totalSemantics: tokens ? 'provider_defined' : 'unavailable',
-      toolFeeUsd: null,
-      success: !failure && !message.error,
-      retryCause: failure ?? message.error ?? null,
-      createdAt: message.completedAt ?? message.createdAt
-    }
-    if (knownCost === null) {
-      this.usageRepo.recordEvent({
-        ...details,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
-      return
-    }
-    this.usageRepo.recordEvent({
-      ...details,
-      costStatus: 'known',
-      costUsd: knownCost,
-      pricingProvenance: {
-        source: 'provider',
-        currency: 'USD',
-        capturedAt: message.completedAt ?? message.createdAt
-      }
-    })
-  }
-
-  private recordAuxiliaryUsageEvent(input: {
-    feature: 'memory' | 'image_descriptor'
-    threadId: string
-    parentTurnId: string
-    featureCallId: string
-    attempt: number
-    harnessId: string
-    settings: ThreadSettings
-    inputText: string
-    response?: AgentMessage
-    failure: string | null
-  }): void {
-    const reported = input.response?.tokens
-    const inputTokens = reported?.input ?? estimateTokens(input.inputText)
-    const outputTokens =
-      reported?.output ?? estimateTokens(input.response ? assistantText(input.response) : '')
-    const cost = input.response?.cost ?? null
-    if (input.feature === 'memory') {
-      this.memoryService.recordAuxiliaryUsage('memory', inputTokens, input.inputText.length, {
-        outputTokens,
-        costUsd: cost,
-        costStatus: cost === null ? 'unavailable' : 'known'
-      })
-    }
-    const details: UsageEventDetails = {
-      id: `${input.feature}:${input.parentTurnId}:${input.featureCallId}:${input.attempt}`,
-      threadId: input.threadId,
-      parentTurnId: input.parentTurnId,
-      featureCallId: input.featureCallId,
-      attempt: input.attempt,
-      feature: input.feature,
-      harnessId: input.harnessId,
-      providerId: input.settings.providerId,
-      modelId: input.settings.modelId,
-      utilityId: null,
-      rawProviderUsage: reported ? { ...reported } : {},
-      tokens: {
-        uncachedInput: inputTokens,
-        cachedInput: reported?.cacheRead ?? null,
-        cacheWrite: reported?.cacheWrite ?? null,
-        output: outputTokens,
-        reasoning: reported?.reasoning ?? null
-      },
-      rawTotal: reported?.total ?? null,
-      totalSemantics: reported ? 'provider_defined' : 'unavailable',
-      toolFeeUsd: null,
-      success: input.failure === null && !input.response?.error,
-      retryCause: input.failure ?? input.response?.error ?? null,
-      createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
-    }
-    if (cost === null) {
-      this.usageRepo.recordEvent({
-        ...details,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
-      return
-    }
-    this.usageRepo.recordEvent({
-      ...details,
-      costStatus: 'known',
-      costUsd: cost,
-      pricingProvenance: {
-        source: 'provider',
-        currency: 'USD',
-        capturedAt: details.createdAt
-      }
-    })
-  }
-
-  private recordToolUsageEvents(
-    threadId: string,
-    parentTurnId: string,
-    message: AgentMessage
-  ): void {
-    for (const part of message.parts) {
-      if (part.type !== 'tool') continue
-      const normalizedTool = part.tool.toLowerCase()
-      const feature: UsageEventFeature | null = normalizedTool.includes('computer')
-        ? 'computer_use'
-        : normalizedTool.includes('web') || normalizedTool.includes('fetch')
-          ? 'web'
-          : normalizedTool.includes('image_descriptor')
-            ? 'image_descriptor'
-            : null
-      if (!feature) continue
-      const failure =
-        part.state.status === 'error' ? (part.state.error ?? 'Tool call failed') : null
-      this.usageRepo.recordEvent({
-        id: `tool:${parentTurnId}:${part.callID}`,
-        threadId,
-        parentTurnId,
-        featureCallId: part.callID,
-        attempt: 1,
-        feature,
-        harnessId: message.harnessId ?? null,
-        providerId: message.providerId ?? null,
-        modelId: message.modelId ?? null,
-        utilityId: part.tool,
-        rawProviderUsage: {},
-        tokens: {
-          uncachedInput: null,
-          cachedInput: null,
-          cacheWrite: null,
-          output: null,
-          reasoning: null
-        },
-        rawTotal: null,
-        totalSemantics: 'unavailable',
-        toolFeeUsd: null,
-        success: part.state.status === 'completed',
-        retryCause: failure,
-        createdAt: part.state.time?.end ?? part.state.time?.start ?? message.createdAt,
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
-    }
   }
 
   /**
@@ -13153,6 +13156,7 @@ export class ChatEngine {
     assistantResponse: string,
     projectId: string,
     threadId: string,
+    parentTurnId: string,
     driver: HarnessDriver,
     projectPath: string,
     settings: ThreadSettings
@@ -13180,6 +13184,7 @@ export class ChatEngine {
         extraction.assistantInput,
         projectId,
         threadId,
+        parentTurnId,
         driver,
         projectPath,
         settings
@@ -13211,6 +13216,7 @@ export class ChatEngine {
     assistantResponse: string,
     projectId: string,
     threadId: string,
+    parentTurnId: string,
     driver: HarnessDriver,
     projectPath: string,
     settings: ThreadSettings
@@ -13268,6 +13274,8 @@ export class ChatEngine {
         true
       )
       const completion = this.waitForSessionCompletion(sessionId, 90_000, 'Memory extraction')
+      let response: AgentMessage | undefined
+      let attemptFailure: string | null = null
 
       try {
         const prompt: SendPromptOptions = {
@@ -13331,6 +13339,7 @@ export class ChatEngine {
           allowedScopes
         )
       } catch (error) {
+        attemptFailure = rawErrorMessage(error)
         if (isolated && driver instanceof OpenCodeDriver) {
           await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
         } else {
@@ -13341,6 +13350,18 @@ export class ChatEngine {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
         }
       } finally {
+        this.recordAuxiliaryUsageEvent({
+          feature: 'memory',
+          threadId,
+          parentTurnId,
+          featureCallId: 'memory-proposal',
+          attempt: formatIndex + 1,
+          harnessId: driver.id,
+          settings,
+          inputText: userMessage + assistantResponse,
+          response,
+          failure: attemptFailure
+        })
         this.clearCompletionWaiter(sessionId)
         this.sessionRegistry.delete(sessionId)
         this.reasoningTimes.delete(sessionId)
@@ -13522,7 +13543,6 @@ function classifyProviderMessages(
       return {
         ...message,
         origin: message.parts.some((part) => part.type === 'subagent') ? 'subagent' : 'compaction',
-    parentTurnId: string,
         visibility: 'working_trace'
       }
     }
@@ -13550,7 +13570,6 @@ function classifyProviderMessages(
 function isDedicatedAssignmentAuditorThread(thread: Thread | null | undefined): boolean {
   return (
     thread?.achievementRole === 'auditor' ||
-        parentTurnId,
     (thread?.assignmentId !== undefined &&
       thread.coordinatorThreadId !== undefined &&
       thread.assignmentRole === undefined)
@@ -13582,7 +13601,6 @@ function presentableMessages(
         presentable.visibility === 'hidden' &&
         presentable.role === 'user'
         ? { ...presentable, visibility: 'working_trace' as const, parts: [] }
-    parentTurnId: string,
         : presentable
     })
 }
@@ -13640,8 +13658,6 @@ function formatConversationTranscript(
         .trim()
       const references = (message.references ?? [])
         .map((reference) => {
-      let response: AgentMessage | undefined
-      let attemptFailure: string | null = null
           const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
           return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
         })
@@ -13713,7 +13729,6 @@ export function assertHarnessRequestCapabilities(
 export function parseGeneratedSpecContent(
   raw: string,
   assignmentRequired = false
-        attemptFailure = rawErrorMessage(error)
 ): EngineeringSpecContent {
   let parsed: unknown
   try {
@@ -13724,18 +13739,6 @@ export function parseGeneratedSpecContent(
     }
     throw error
   }
-        this.recordAuxiliaryUsageEvent({
-          feature: 'memory',
-          threadId,
-          parentTurnId,
-          featureCallId: 'memory-proposal',
-          attempt: formatIndex + 1,
-          harnessId: driver.id,
-          settings,
-          inputText: userMessage + assistantResponse,
-          response,
-          failure: attemptFailure
-        })
   return validateGeneratedSpecContent(parsed, assignmentRequired)
 }
 
