@@ -22,6 +22,8 @@ const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
 /** OpenCode's global config file — hiding providers writes disabled_providers here. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+/** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
+const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
 
 interface AuthDefinition {
   id: string
@@ -309,6 +311,39 @@ async function readPiStatus(): Promise<HarnessAuthStatus> {
   }
 }
 
+/**
+ * Muse keeps OAuth credentials in `~/.config/muse/auth.json` (or
+ * `$XDG_CONFIG_HOME/muse/auth.json`) and honors a `META_API_KEY` env var that
+ * takes priority over a logged-in session. The CLI exposes no `auth status`
+ * subcommand, so presence of an access token or the env var indicates an
+ * authenticated Meta account.
+ */
+async function readMuseStatus(): Promise<HarnessAuthStatus> {
+  if (process.env['META_API_KEY']) {
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'meta', label: 'Meta', method: 'api-key', active: true }]
+    }
+  }
+  try {
+    const raw = await readFile(MUSE_AUTH_PATH, 'utf8')
+    const stored = JSON.parse(raw) as Record<string, unknown>
+    const hasToken =
+      typeof stored?.['accessToken'] === 'string' ||
+      typeof stored?.['access_token'] === 'string' ||
+      typeof stored?.['token'] === 'string'
+    if (hasToken) {
+      return {
+        state: 'authenticated',
+        accounts: [{ id: 'meta', label: 'Meta', method: 'oauth', active: true }]
+      }
+    }
+  } catch {
+    // Missing or malformed auth file — fall through to unauthenticated.
+  }
+  return { state: 'unauthenticated', accounts: [] }
+}
+
 /** Provider ids listed under `disabled_providers` in OpenCode's global config. */
 function readHiddenProviders(): string[] {
   try {
@@ -418,6 +453,15 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     command: 'agy',
     readStatus: readAntigravityStatus,
     loginArgs: () => [],
+    pickerLogin: true
+  },
+  {
+    id: 'muse',
+    name: 'Muse Code',
+    command: 'muse',
+    readStatus: readMuseStatus,
+    loginArgs: () => ['login'],
+    logoutArgs: () => ['logout'],
     pickerLogin: true
   }
 ]
@@ -529,6 +573,16 @@ export class ProviderAccountOrchestrator {
         }))
       }
       case 'antigravity': {
+        const status = await this.getStatus(harnessId)
+        if (status.state === 'error') return []
+        return status.accounts.map((account) => ({
+          id: account.id,
+          name: account.label,
+          modelCount: 0,
+          authenticated: status.state === 'authenticated'
+        }))
+      }
+      case 'muse': {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
         return status.accounts.map((account) => ({

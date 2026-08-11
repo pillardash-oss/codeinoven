@@ -43,7 +43,8 @@ const UPDATE_ARGS: Record<string, string[]> = {
   'claude-code': ['update'],
   cline: ['update'],
   pi: ['update'],
-  antigravity: ['update']
+  antigravity: ['update'],
+  muse: ['update']
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u

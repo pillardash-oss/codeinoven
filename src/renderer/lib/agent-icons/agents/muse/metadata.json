@@ -1,0 +1,10 @@
+{
+  "id": "muse",
+  "name": "Muse Code",
+  "vendor": "Meta",
+  "website": "https://dev.meta.ai/docs/muse-code",
+  "icon": "icon.svg",
+  "monochrome": "mono.svg",
+  "primaryColor": "#0866FF",
+  "aliases": ["muse-code", "meta"]
+}
