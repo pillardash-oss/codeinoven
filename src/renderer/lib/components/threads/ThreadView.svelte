@@ -2972,6 +2972,22 @@
       composerRestoreKey += 1
     }
   })
+  /** Where the scroll-to-latest button floats within the bottom-chrome wrapper.
+   *  When a fixed gutter (worker/provider/compaction card, no top padding) sits
+   *  above the composer the button straddles that card's top edge. The queued
+   *  message card and the in-composer image-descriptor card both start 8px
+   *  below the stack edge (pt-2), so they straddle slightly lower. With nothing
+   *  above the composer it keeps the original -2.75rem spot. */
+  const scrollButtonTop = $derived(
+    assignmentWorkerAttentionItems.length > 0 ||
+      (visibleProviderStatus !== null && !coordinatorErrorMatchesAssignmentWorker) ||
+      compactionInterruptedNotice !== ''
+      ? '-1.125rem'
+      : (queuedMessage !== '' && !specFormulating && !isAssignmentAuditorThread) ||
+          (pendingImageDescriptorError !== null && !achievementAutonomous)
+        ? '-0.625rem'
+        : '-2.75rem'
+  )
 
   /** The mounted composer, used to focus the editor in place (no remount). */
   let composer: ChatComposer | undefined = $state(undefined)
@@ -6481,208 +6497,16 @@
       </div>
     </div>
 
-    <!-- Assignment worker failures stay visible on the coordinator, but their
-         actions target the owning durable worker rather than this thread. -->
-    {#each assignmentWorkerAttentionItems as item (item.task.id)}
-      <div class="conversation-gutter shrink-0 px-6 pb-2">
-        <div class="mx-auto max-w-3xl">
-          <AgentProviderStatusCard
-            status={assignmentWorkerAttentionStatus(item.task, item.worker)}
-            providerName={harnessDisplayName(item.worker.settings?.harnessId ?? 'unknown')}
-            settings={item.worker.settings}
-            {providers}
-            projectId={thread.projectId}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            sourceLabel={item.task.workerName ?? item.worker.title}
-            sourceDetail={item.task.title}
-            retryLabel="Retry worker"
-            retrying={assignmentWorkerRetryingId === item.worker.id}
-            onModelChange={(selected) => void changeAssignmentWorkerModel(item.worker, selected)}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-            onRetry={() => void retryAssignmentWorker(item.worker)}
-          />
-        </div>
-      </div>
-    {/each}
-
-    <!-- Provider status — between messages and composer, always visible. A
-         matching bubbled worker error is replaced by the attributed card above. -->
-    {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
-      <div class="conversation-gutter shrink-0 px-6 pb-2">
-        <div class="mx-auto max-w-3xl">
-          <AgentProviderStatusCard
-            status={visibleProviderStatus}
-            {providerName}
-            settings={chatMode
-              ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
-              : settings}
-            {providers}
-            projectId={thread.projectId}
-            favoriteModels={chatMode
-              ? rendererRecovery.chatFavoriteModels
-              : rendererRecovery.favoriteModels}
-            recentModels={chatMode
-              ? rendererRecovery.chatRecentModels
-              : rendererRecovery.recentModels}
-            onModelChange={changeThreadModel}
-            onToggleFavorite={(providerId, modelId) =>
-              chatMode
-                ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
-                : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              chatMode
-                ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-            onStop={abortRun}
-            onRetry={retryConnection}
-            autoRetryEnabled={autoRetryAfterReset}
-            onDismiss={() => {
-              errorMessage = ''
-              providerStatus = null
-              void dismissSessionError()
-            }}
-          />
-        </div>
-      </div>
-    {/if}
-
-    <!-- Gentle notice — an interrupted auto-compaction silently ate the last turn -->
-    {#if compactionInterruptedNotice}
-      <div class="conversation-gutter shrink-0 px-6 pb-2">
-        <div class="mx-auto max-w-3xl">
-          <div
-            class="flex items-start gap-3 rounded-xl border border-info/25 bg-info/5 px-4 py-3"
-            role="status"
-          >
-            <Info size={16} class="mt-0.5 shrink-0 text-info" />
-            <p class="min-w-0 flex-1 text-sm leading-relaxed text-foreground">
-              {compactionInterruptedNotice}
-            </p>
-            <button
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Dismiss compaction notice"
-              title="Dismiss"
-              onclick={() => (compactionInterruptedNotice = '')}
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      </div>
-    {/if}
-
-    <!-- Queued message card — attached to the top of the composer -->
-    {#if queuedMessage && !specFormulating && !isAssignmentAuditorThread}
-      <div class="conversation-gutter shrink-0 px-6 pt-2">
-        <div class="mx-auto max-w-3xl">
-          <div class="rounded-t-xl border border-border bg-surface shadow-sm">
-            <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
-              <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                >Queued</span
-              >
-              <div class="flex items-center gap-1">
-                <button
-                  class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
-                  title="Send this message to the agent now"
-                  onclick={() => void steerQueuedMessage()}
-                >
-                  Steer
-                </button>
-                <div class="relative">
-                  <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    aria-label="Queued message actions"
-                    onclick={() => (showQueueMenu = !showQueueMenu)}
-                    oncontextmenu={(e: MouseEvent) => {
-                      e.preventDefault()
-                      showQueueMenu = true
-                    }}
-                  >
-                    <Ellipsis size={13} />
-                  </button>
-                  {#if showQueueMenu}
-                    <button
-                      class="fixed inset-0 z-30 cursor-default"
-                      aria-label="Close menu"
-                      onclick={() => (showQueueMenu = false)}
-                    ></button>
-                    <div
-                      class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                      role="menu"
-                    >
-                      {#if !queuedPresentation}
-                        <button
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-                          role="menuitem"
-                          onclick={editQueuedMessage}
-                        >
-                          <Pencil size={13} class="text-muted" />
-                          Edit
-                        </button>
-                        <div class="mx-2 my-1 border-t"></div>
-                      {/if}
-                      <button
-                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                        role="menuitem"
-                        onclick={deleteQueuedMessage}
-                      >
-                        <Trash2 size={13} />
-                        Delete
-                      </button>
-                    </div>
-                  {/if}
-                </div>
-              </div>
-            </div>
-            {#if queuedPromptReferences.length > 0}
-              <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                {#each queuedPromptReferences as reference (reference.id)}
-                  <span
-                    class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
-                    title={reference.comment
-                      ? `${reference.comment}\n\n${reference.text}`
-                      : reference.text}
-                  >
-                    <MessageSquare size={11} class="shrink-0 text-accent" />
-                    <span class="font-medium text-foreground">{reference.label}</span>
-                    <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                    {#if reference.comment}
-                      <span class="max-w-48 truncate italic text-foreground">
-                        “{reference.comment}”
-                      </span>
-                    {/if}
-                  </span>
-                {/each}
-              </div>
-            {/if}
-            {#if queuedPresentation}
-              <div class="px-3 pb-2.5">
-                <p class="text-[11px] italic text-dimmed">{queuedPresentation.action}</p>
-                {#if queuedPresentation.body}
-                  <p class="mt-1 text-[12px] text-muted line-clamp-3">
-                    {queuedPresentation.body}
-                  </p>
-                {/if}
-              </div>
-            {:else}
-              <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
-            {/if}
-          </div>
-        </div>
-      </div>
-    {/if}
-
-    <!-- Composer — always anchored at the bottom. Blocking permission and question
-       tools replace it until the user responds. -->
-    <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
+    <!-- Bottom-anchored chrome. Everything pinned between the conversation and
+         the window edge lives here so the scroll-to-latest button can float at
+         the top of the whole stack: straddling an error card when one is shown
+         and dropping back to its normal spot above the composer otherwise. -->
+    <div class="bottom-chrome relative shrink-0">
       {#if userScrolledAway}
         <button
           type="button"
-          class="absolute -top-11 left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          class="absolute left-1/2 z-40 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors hover:bg-elevated hover:text-foreground"
+          style:top={scrollButtonTop}
           title="Scroll to latest message"
           aria-label="Scroll to latest message"
           onclick={scrollToLatest}
@@ -6691,299 +6515,501 @@
           <ChevronDown size={18} />
         </button>
       {/if}
-      <div class="mx-auto w-full max-w-3xl">
-        {#if pendingImageDescriptorError && !achievementAutonomous}
-          {#key pendingImageDescriptorError.id}
-            <ImageDescriptorErrorCard
-              request={pendingImageDescriptorError}
-              {providers}
-              projectId={thread.projectId}
-              favoriteModels={rendererRecovery.favoriteModels}
-              recentModels={rendererRecovery.recentModels}
-              onRetry={(requestId, selection) =>
-                replyImageDescriptor(requestId, 'retry', selection)}
-              onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
-              onToggleFavorite={(providerId, modelId) =>
-                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-            />
-          {/key}
+      <div class="flex min-w-0 flex-col">
+        <!-- Assignment worker failures stay visible on the coordinator, but their
+         actions target the owning durable worker rather than this thread. -->
+        {#each assignmentWorkerAttentionItems as item (item.task.id)}
+          <div class="conversation-gutter shrink-0 px-6 pb-2">
+            <div class="mx-auto max-w-3xl">
+              <AgentProviderStatusCard
+                status={assignmentWorkerAttentionStatus(item.task, item.worker)}
+                providerName={harnessDisplayName(item.worker.settings?.harnessId ?? 'unknown')}
+                settings={item.worker.settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                sourceLabel={item.task.workerName ?? item.worker.title}
+                sourceDetail={item.task.title}
+                retryLabel="Retry worker"
+                retrying={assignmentWorkerRetryingId === item.worker.id}
+                onModelChange={(selected) =>
+                  void changeAssignmentWorkerModel(item.worker, selected)}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onRetry={() => void retryAssignmentWorker(item.worker)}
+              />
+            </div>
+          </div>
+        {/each}
+
+        <!-- Provider status — between messages and composer, always visible. A
+         matching bubbled worker error is replaced by the attributed card above. -->
+        {#if visibleProviderStatus && !coordinatorErrorMatchesAssignmentWorker}
+          <div class="conversation-gutter shrink-0 px-6 pb-2">
+            <div class="mx-auto max-w-3xl">
+              <AgentProviderStatusCard
+                status={visibleProviderStatus}
+                {providerName}
+                settings={chatMode
+                  ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+                  : settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={chatMode
+                  ? rendererRecovery.chatFavoriteModels
+                  : rendererRecovery.favoriteModels}
+                recentModels={chatMode
+                  ? rendererRecovery.chatRecentModels
+                  : rendererRecovery.recentModels}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  chatMode
+                    ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
+                    : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  chatMode
+                    ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                    : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onStop={abortRun}
+                onRetry={retryConnection}
+                autoRetryEnabled={autoRetryAfterReset}
+                onDismiss={() => {
+                  errorMessage = ''
+                  providerStatus = null
+                  void dismissSessionError()
+                }}
+              />
+            </div>
+          </div>
         {/if}
-        {#if isAssignmentAuditorThread}
-          <AuditGeneratedCard
-            state={assignmentAuditState}
-            version={assignmentAuditState === 'running' ? undefined : auditReport?.version}
-            error={auditError || errorMessage}
-            settings={auditSettings}
-            {providers}
-            projectId={thread.projectId}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            busy={auditBusy || busy}
-            onRetry={retryAssignmentAuditFromAuditor}
-            onModelChange={changeAuditModel}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-            onViewReport={openCoordinatorAuditReport}
-          />
-        {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
-          <BrainstormEntryChoiceCard
-            busy={brainstormBusy}
-            retryChoice={brainstormWorkflow.entryChoice}
-            {providers}
-            projectId={thread.projectId}
-            {settings}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
-            onJumpToSpec={() => chooseBrainstormEntry('spec')}
-            onModelChange={changeSpecModel}
-            onCancel={cancelBrainstormEntryRetry}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          />
-        {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy}
-          <BrainstormEntryChoiceCard
-            busy={brainstormBusy}
-            onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
-            onJumpToSpec={() => chooseBrainstormEntry('spec')}
-          />
-        {:else if pendingPermissions.length > 0 && !achievementAutonomous}
-          {@const pendingPermission = pendingPermissions[0]}
-          {#key pendingPermission.id}
-            <PermissionRequestCard
-              request={pendingPermission}
-              onAllowOnce={allowPermissionOnce}
-              onAllowAlways={allowPermissionAlways}
-              onReject={rejectPermission}
-              onAlternative={providePermissionAlternative}
-            />
-          {/key}
-        {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}
-          {@const pendingRequest = pendingQuestionRequests[0]}
-          {#key pendingRequest.requestId}
-            <AgentQuestionCard
-              request={pendingRequest}
-              onAnswer={handleQuestionAnswer}
-              onDismiss={handleQuestionDismiss}
-              onUpdate={handleQuestionUpdate}
-            />
-          {/key}
-        {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
-          <AuditOfferCard
-            threadTitle={thread.title}
-            settings={auditSettings}
-            {providers}
-            projectId={thread.projectId}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            busy={auditBusy}
-            onCancel={completeAudit}
-            onAudit={generateAudit}
-            onModelChange={changeAuditModel}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          />
-        {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous}
-          <AuditReadyCard
-            report={auditReport}
-            {providers}
-            projectId={thread.projectId}
-            settings={auditSettings}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            busy={auditBusy}
-            onViewReport={openAuditStudio}
-            onComplete={completeAudit}
-            onCancel={returnAuditToOffer}
-            onReaudit={reaudit}
-            onModelChange={changeAuditModel}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          />
-        {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
-          {@const readyBrainstorm = brainstorm}
-          <BrainstormReadyCard
-            version={readyBrainstorm.version}
-            busy={brainstormBusy}
-            onReview={openBrainstormStudio}
-            onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
-          />
-        {:else if assignment?.status === 'draft' && !busy && !specFormulating}
-          {#key assignment.version}
-            <AssignmentReadyCard
-              {assignment}
-              {providers}
-              projectId={thread.projectId}
-              harnessId={settings.harnessId}
-              fallbackModel={workerModelForThread()}
-              seniorModel={seniorModelForThread()}
-              favoriteModels={rendererRecovery.favoriteModels}
-              recentModels={rendererRecovery.recentModels}
-              busy={assignmentBusy}
-              error={assignmentError}
-              onSave={(content) => void saveAssignment(content)}
-              onApprove={(content) => void approveAssignment(content)}
-              onOpenFullscreen={openAssignmentStudio}
-              onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
-              onSeniorModelChange={updateAssignmentSeniorModel}
-              onToggleFavorite={(providerId, modelId) =>
-                rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-            />
-          {/key}
-        {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating}
-          <SpecReadyCard
-            {providers}
-            projectId={thread.projectId}
-            {settings}
-            favoriteModels={rendererRecovery.favoriteModels}
-            recentModels={rendererRecovery.recentModels}
-            busy={busy || specBusy}
-            assignmentMode={settings.assignmentMode === true}
-            assignmentAvailable={assignment !== null}
-            onCancel={cancelSpecReadyTool}
-            onReview={reviewReadySpec}
-            onProceed={proceedWithReadySpec}
-            onGenerateAssignment={generateAssignmentDraft}
-            onOpenAssignment={openAssignmentStudio}
-            onModelChange={changeSpecModel}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-          />
-        {:else}
-          {#if activeTodo}
-            <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} />
-          {/if}
-          {#key composerRestoreKey}
-            <ChatComposer
-              bind:this={composer}
-              placeholder={activePlanningEntry === 'brainstorm'
-                ? 'Sr. Engineer is preparing the Brainstorm…'
-                : activePlanningEntry === 'spec'
-                  ? 'Sr. Engineer is preparing the specification…'
-                  : loopAuditing
-                    ? 'Achievement is auditing the implementation…'
-                    : specFormulating
-                      ? 'Formulating specification…'
-                      : delegatedWorkBusy
-                        ? `${delegatedActivityLabel} — type to steer coordination`
-                        : busy
-                          ? `${APP_NAME} is working — type to queue a message`
-                          : 'Send a message...'}
-              disabled={specFormulating || loopAuditing}
-              working={threadWorking}
-              onStop={abortRun}
-              autofocus
-              showEngineeringMode={!chatMode}
-              showChatModes={chatMode}
-              {settings}
-              onSettingsChange={updateSettings}
-              {providers}
-              harnessId={settings.harnessId}
-              actions={activeActions}
-              onActionSelect={handleActionSelection}
-              onSlashCommand={executeHarnessCommand}
-              contextUsage={contextUsageDisplay}
-              onRevealUsage={revealContextUsage}
-              onHideUsage={hideContextUsage}
-              {harnessUsage}
-              canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
-              {compacting}
-              onCompact={() => void compactWork()}
-              projectContext={composerProject}
-              projectId={thread.projectId}
-              attachmentStorage={{
-                kind: chatMode ? 'chat' : 'project',
-                projectId: thread.projectId,
-                threadId: thread.id
-              }}
-              onSwitchProject={(pid) => void switchProject(pid)}
-              fileTagProjectId={project?.source === 'local' && project.path
-                ? thread.projectId
-                : undefined}
-              assignmentId={assignment?.id}
-              assignmentTasks={assignment?.content.tasks ?? []}
-              initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
-              initialAttachments={rendererRecovery.attachmentsFor(thread.projectId, thread.id)}
-              initialProjectReferences={rendererRecovery.projectReferencesFor(
-                thread.projectId,
-                thread.id
-              )}
-              initialTaskReferences={rendererRecovery.taskReferencesFor(
-                thread.projectId,
-                thread.id
-              )}
-              onValueChange={(value) =>
-                rendererRecovery.setDraft(thread.projectId, thread.id, value)}
-              onAttachmentsChange={(files) =>
-                rendererRecovery.setDraft(
-                  thread.projectId,
-                  thread.id,
-                  rendererRecovery.draftFor(thread.projectId, thread.id),
-                  files
-                )}
-              onProjectReferencesChange={(projectReferences) =>
-                rendererRecovery.setDraft(
-                  thread.projectId,
-                  thread.id,
-                  rendererRecovery.draftFor(thread.projectId, thread.id),
-                  rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                  projectReferences
-                )}
-              onTaskReferencesChange={(taskReferences) =>
-                rendererRecovery.setDraft(
-                  thread.projectId,
-                  thread.id,
-                  rendererRecovery.draftFor(thread.projectId, thread.id),
-                  rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                  rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
-                  taskReferences
-                )}
-              references={responseReferences}
-              onRemoveReference={removeResponseReference}
-              onRemoveAllReferences={clearResponseReferences}
-              onEditReference={editResponseReference}
-              onSend={sendComposerMessage}
-              historyMessages={userMessageTexts}
-              hidePermissionSelector={chatMode}
-              favoriteModels={chatMode
-                ? rendererRecovery.chatFavoriteModels
-                : rendererRecovery.favoriteModels}
-              onToggleFavorite={(providerId, modelId) =>
-                chatMode
-                  ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
-                  : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                chatMode
-                  ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                  : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-              recentModels={chatMode
-                ? rendererRecovery.chatRecentModels
-                : rendererRecovery.recentModels}
-              onModelUsed={(modelKey) =>
-                chatMode
-                  ? rendererRecovery.addChatRecentModel(modelKey)
-                  : rendererRecovery.addRecentModel(modelKey)}
-              imageDescriptorDefault={agentDefaults.imageDescriptor}
-              {imageDescriptorAskAgain}
-              onImageDescriptorDefaultChange={setImageDescriptorDefault}
-              onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
-            />
-          {/key}
+
+        <!-- Gentle notice — an interrupted auto-compaction silently ate the last turn -->
+        {#if compactionInterruptedNotice}
+          <div class="conversation-gutter shrink-0 px-6 pb-2">
+            <div class="mx-auto max-w-3xl">
+              <div
+                class="flex items-start gap-3 rounded-xl border border-info/25 bg-info/5 px-4 py-3"
+                role="status"
+              >
+                <Info size={16} class="mt-0.5 shrink-0 text-info" />
+                <p class="min-w-0 flex-1 text-sm leading-relaxed text-foreground">
+                  {compactionInterruptedNotice}
+                </p>
+                <button
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                  aria-label="Dismiss compaction notice"
+                  title="Dismiss"
+                  onclick={() => (compactionInterruptedNotice = '')}
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
         {/if}
+
+        <!-- Queued message card — attached to the top of the composer -->
+        {#if queuedMessage && !specFormulating && !isAssignmentAuditorThread}
+          <div class="conversation-gutter shrink-0 px-6 pt-2">
+            <div class="mx-auto max-w-3xl">
+              <div class="rounded-t-xl border border-border bg-surface shadow-sm">
+                <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                    >Queued</span
+                  >
+                  <div class="flex items-center gap-1">
+                    <button
+                      class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+                      title="Send this message to the agent now"
+                      onclick={() => void steerQueuedMessage()}
+                    >
+                      Steer
+                    </button>
+                    <div class="relative">
+                      <button
+                        class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        aria-label="Queued message actions"
+                        onclick={() => (showQueueMenu = !showQueueMenu)}
+                        oncontextmenu={(e: MouseEvent) => {
+                          e.preventDefault()
+                          showQueueMenu = true
+                        }}
+                      >
+                        <Ellipsis size={13} />
+                      </button>
+                      {#if showQueueMenu}
+                        <button
+                          class="fixed inset-0 z-30 cursor-default"
+                          aria-label="Close menu"
+                          onclick={() => (showQueueMenu = false)}
+                        ></button>
+                        <div
+                          class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                          role="menu"
+                        >
+                          {#if !queuedPresentation}
+                            <button
+                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+                              role="menuitem"
+                              onclick={editQueuedMessage}
+                            >
+                              <Pencil size={13} class="text-muted" />
+                              Edit
+                            </button>
+                            <div class="mx-2 my-1 border-t"></div>
+                          {/if}
+                          <button
+                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                            role="menuitem"
+                            onclick={deleteQueuedMessage}
+                          >
+                            <Trash2 size={13} />
+                            Delete
+                          </button>
+                        </div>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+                {#if queuedPromptReferences.length > 0}
+                  <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                    {#each queuedPromptReferences as reference (reference.id)}
+                      <span
+                        class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                        title={reference.comment
+                          ? `${reference.comment}\n\n${reference.text}`
+                          : reference.text}
+                      >
+                        <MessageSquare size={11} class="shrink-0 text-accent" />
+                        <span class="font-medium text-foreground">{reference.label}</span>
+                        <span class="max-w-56 truncate text-muted">{reference.text}</span>
+                        {#if reference.comment}
+                          <span class="max-w-48 truncate italic text-foreground">
+                            “{reference.comment}”
+                          </span>
+                        {/if}
+                      </span>
+                    {/each}
+                  </div>
+                {/if}
+                {#if queuedPresentation}
+                  <div class="px-3 pb-2.5">
+                    <p class="text-[11px] italic text-dimmed">{queuedPresentation.action}</p>
+                    {#if queuedPresentation.body}
+                      <p class="mt-1 text-[12px] text-muted line-clamp-3">
+                        {queuedPresentation.body}
+                      </p>
+                    {/if}
+                  </div>
+                {:else}
+                  <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Composer — always anchored at the bottom. Blocking permission and question
+       tools replace it until the user responds. -->
+        <div class="conversation-gutter composer-gutter relative shrink-0 px-6 pb-5 pt-2">
+          <div class="mx-auto w-full max-w-3xl">
+            {#if pendingImageDescriptorError && !achievementAutonomous}
+              {#key pendingImageDescriptorError.id}
+                <ImageDescriptorErrorCard
+                  request={pendingImageDescriptorError}
+                  {providers}
+                  projectId={thread.projectId}
+                  favoriteModels={rendererRecovery.favoriteModels}
+                  recentModels={rendererRecovery.recentModels}
+                  onRetry={(requestId, selection) =>
+                    replyImageDescriptor(requestId, 'retry', selection)}
+                  onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
+                  onToggleFavorite={(providerId, modelId) =>
+                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                />
+              {/key}
+            {/if}
+            {#if isAssignmentAuditorThread}
+              <AuditGeneratedCard
+                state={assignmentAuditState}
+                version={assignmentAuditState === 'running' ? undefined : auditReport?.version}
+                error={auditError || errorMessage}
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={auditBusy || busy}
+                onRetry={retryAssignmentAuditFromAuditor}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openCoordinatorAuditReport}
+              />
+            {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
+              <BrainstormEntryChoiceCard
+                busy={brainstormBusy}
+                retryChoice={brainstormWorkflow.entryChoice}
+                {providers}
+                projectId={thread.projectId}
+                {settings}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
+                onJumpToSpec={() => chooseBrainstormEntry('spec')}
+                onModelChange={changeSpecModel}
+                onCancel={cancelBrainstormEntryRetry}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy}
+              <BrainstormEntryChoiceCard
+                busy={brainstormBusy}
+                onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
+                onJumpToSpec={() => chooseBrainstormEntry('spec')}
+              />
+            {:else if pendingPermissions.length > 0 && !achievementAutonomous}
+              {@const pendingPermission = pendingPermissions[0]}
+              {#key pendingPermission.id}
+                <PermissionRequestCard
+                  request={pendingPermission}
+                  onAllowOnce={allowPermissionOnce}
+                  onAllowAlways={allowPermissionAlways}
+                  onReject={rejectPermission}
+                  onAlternative={providePermissionAlternative}
+                />
+              {/key}
+            {:else if pendingQuestionRequests.length > 0 && !achievementAutonomous}
+              {@const pendingRequest = pendingQuestionRequests[0]}
+              {#key pendingRequest.requestId}
+                <AgentQuestionCard
+                  request={pendingRequest}
+                  onAnswer={handleQuestionAnswer}
+                  onDismiss={handleQuestionDismiss}
+                  onUpdate={handleQuestionUpdate}
+                />
+              {/key}
+            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
+              <AuditOfferCard
+                threadTitle={thread.title}
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={auditBusy}
+                onCancel={completeAudit}
+                onAudit={generateAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous}
+              <AuditReadyCard
+                report={auditReport}
+                {providers}
+                projectId={thread.projectId}
+                settings={auditSettings}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={auditBusy}
+                onViewReport={openAuditStudio}
+                onComplete={completeAudit}
+                onCancel={returnAuditToOffer}
+                onReaudit={reaudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
+              {@const readyBrainstorm = brainstorm}
+              <BrainstormReadyCard
+                version={readyBrainstorm.version}
+                busy={brainstormBusy}
+                onReview={openBrainstormStudio}
+                onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+              />
+            {:else if assignment?.status === 'draft' && !busy && !specFormulating}
+              {#key assignment.version}
+                <AssignmentReadyCard
+                  {assignment}
+                  {providers}
+                  projectId={thread.projectId}
+                  harnessId={settings.harnessId}
+                  fallbackModel={workerModelForThread()}
+                  seniorModel={seniorModelForThread()}
+                  favoriteModels={rendererRecovery.favoriteModels}
+                  recentModels={rendererRecovery.recentModels}
+                  busy={assignmentBusy}
+                  error={assignmentError}
+                  onSave={(content) => void saveAssignment(content)}
+                  onApprove={(content) => void approveAssignment(content)}
+                  onOpenFullscreen={openAssignmentStudio}
+                  onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
+                  onSeniorModelChange={updateAssignmentSeniorModel}
+                  onToggleFavorite={(providerId, modelId) =>
+                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                />
+              {/key}
+            {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating}
+              <SpecReadyCard
+                {providers}
+                projectId={thread.projectId}
+                {settings}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={busy || specBusy}
+                assignmentMode={settings.assignmentMode === true}
+                assignmentAvailable={assignment !== null}
+                onCancel={cancelSpecReadyTool}
+                onReview={reviewReadySpec}
+                onProceed={proceedWithReadySpec}
+                onGenerateAssignment={generateAssignmentDraft}
+                onOpenAssignment={openAssignmentStudio}
+                onModelChange={changeSpecModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {:else}
+              {#if activeTodo}
+                <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} />
+              {/if}
+              {#key composerRestoreKey}
+                <ChatComposer
+                  bind:this={composer}
+                  placeholder={activePlanningEntry === 'brainstorm'
+                    ? 'Sr. Engineer is preparing the Brainstorm…'
+                    : activePlanningEntry === 'spec'
+                      ? 'Sr. Engineer is preparing the specification…'
+                      : loopAuditing
+                        ? 'Achievement is auditing the implementation…'
+                        : specFormulating
+                          ? 'Formulating specification…'
+                          : delegatedWorkBusy
+                            ? `${delegatedActivityLabel} — type to steer coordination`
+                            : busy
+                              ? `${APP_NAME} is working — type to queue a message`
+                              : 'Send a message...'}
+                  disabled={specFormulating || loopAuditing}
+                  working={threadWorking}
+                  onStop={abortRun}
+                  autofocus
+                  showEngineeringMode={!chatMode}
+                  showChatModes={chatMode}
+                  {settings}
+                  onSettingsChange={updateSettings}
+                  {providers}
+                  harnessId={settings.harnessId}
+                  actions={activeActions}
+                  onActionSelect={handleActionSelection}
+                  onSlashCommand={executeHarnessCommand}
+                  contextUsage={contextUsageDisplay}
+                  onRevealUsage={revealContextUsage}
+                  onHideUsage={hideContextUsage}
+                  {harnessUsage}
+                  canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
+                  {compacting}
+                  onCompact={() => void compactWork()}
+                  projectContext={composerProject}
+                  projectId={thread.projectId}
+                  attachmentStorage={{
+                    kind: chatMode ? 'chat' : 'project',
+                    projectId: thread.projectId,
+                    threadId: thread.id
+                  }}
+                  onSwitchProject={(pid) => void switchProject(pid)}
+                  fileTagProjectId={project?.source === 'local' && project.path
+                    ? thread.projectId
+                    : undefined}
+                  assignmentId={assignment?.id}
+                  assignmentTasks={assignment?.content.tasks ?? []}
+                  initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
+                  initialAttachments={rendererRecovery.attachmentsFor(thread.projectId, thread.id)}
+                  initialProjectReferences={rendererRecovery.projectReferencesFor(
+                    thread.projectId,
+                    thread.id
+                  )}
+                  initialTaskReferences={rendererRecovery.taskReferencesFor(
+                    thread.projectId,
+                    thread.id
+                  )}
+                  onValueChange={(value) =>
+                    rendererRecovery.setDraft(thread.projectId, thread.id, value)}
+                  onAttachmentsChange={(files) =>
+                    rendererRecovery.setDraft(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.draftFor(thread.projectId, thread.id),
+                      files
+                    )}
+                  onProjectReferencesChange={(projectReferences) =>
+                    rendererRecovery.setDraft(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.draftFor(thread.projectId, thread.id),
+                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                      projectReferences
+                    )}
+                  onTaskReferencesChange={(taskReferences) =>
+                    rendererRecovery.setDraft(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.draftFor(thread.projectId, thread.id),
+                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                      rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
+                      taskReferences
+                    )}
+                  references={responseReferences}
+                  onRemoveReference={removeResponseReference}
+                  onRemoveAllReferences={clearResponseReferences}
+                  onEditReference={editResponseReference}
+                  onSend={sendComposerMessage}
+                  historyMessages={userMessageTexts}
+                  hidePermissionSelector={chatMode}
+                  favoriteModels={chatMode
+                    ? rendererRecovery.chatFavoriteModels
+                    : rendererRecovery.favoriteModels}
+                  onToggleFavorite={(providerId, modelId) =>
+                    chatMode
+                      ? rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)
+                      : rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    chatMode
+                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  recentModels={chatMode
+                    ? rendererRecovery.chatRecentModels
+                    : rendererRecovery.recentModels}
+                  onModelUsed={(modelKey) =>
+                    chatMode
+                      ? rendererRecovery.addChatRecentModel(modelKey)
+                      : rendererRecovery.addRecentModel(modelKey)}
+                  imageDescriptorDefault={agentDefaults.imageDescriptor}
+                  {imageDescriptorAskAgain}
+                  onImageDescriptorDefaultChange={setImageDescriptorDefault}
+                  onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                />
+              {/key}
+            {/if}
+          </div>
+        </div>
       </div>
     </div>
     {#if assignment && assignment.status !== 'draft' && !isAssignmentAuditorThread}
@@ -7055,7 +7081,8 @@
     container-type: inline-size;
   }
 
-  .thread-view.assignment-panel-open .conversation-gutter {
+  .thread-view.assignment-panel-open > .conversation-gutter,
+  .thread-view.assignment-panel-open > .bottom-chrome {
     margin-right: var(--assignment-panel-width);
   }
 
