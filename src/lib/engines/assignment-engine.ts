@@ -376,15 +376,41 @@ export class AssignmentEngine {
     const now = this.now()
     const scopeBucketId = `assignment-${active.id}`
     const reworkActivation = active.auditCycle?.status === 'awaiting_rework_approval'
-    const tasks = active.content.tasks.map((task) => ({
-      ...task,
-      workKind: task.workKind ?? (reworkActivation ? ('rework' as const) : ('initial' as const)),
-      workAssignmentVersion: task.workAssignmentVersion ?? active.version,
-      ...(reworkActivation
-        ? { reworkCycle: task.reworkCycle ?? active.auditCycle?.reworkCycle ?? 1 }
-        : {}),
-      status: task.dependsOn.length === 0 ? ('ready' as const) : ('blocked' as const)
-    }))
+    const scopeRepairActivation = reworkActivation && active.auditCycle?.scopeRepair === true
+    const completedTaskIds = new Set(
+      active.content.tasks
+        .filter((task) => scopeRepairActivation && task.status === 'completed')
+        .map((task) => task.id)
+    )
+    const tasks = active.content.tasks.map((task) => {
+      if (scopeRepairActivation && task.status === 'completed') return task
+      const {
+        statusBeforeStop: _statusBeforeStop,
+        workerName: _workerName,
+        threadId: _threadId,
+        report: _report,
+        review: _review,
+        startedAt: _startedAt,
+        completedAt: _completedAt,
+        ...taskDefinition
+      } = task
+      return {
+        ...taskDefinition,
+        workKind: task.workKind ?? (reworkActivation ? ('rework' as const) : ('initial' as const)),
+        workAssignmentVersion: reworkActivation
+          ? active.version
+          : (task.workAssignmentVersion ?? active.version),
+        ...(reworkActivation
+          ? { reworkCycle: task.reworkCycle ?? active.auditCycle?.reworkCycle ?? 1 }
+          : {}),
+        status:
+          task.dependsOn.length === 0 ||
+          (scopeRepairActivation &&
+            task.dependsOn.every((dependency) => completedTaskIds.has(dependency)))
+            ? ('ready' as const)
+            : ('blocked' as const)
+      }
+    })
     const approved: AssignmentPlan = {
       ...active,
       status: 'approved',
@@ -751,10 +777,24 @@ export class AssignmentEngine {
     if (active.status === 'draft' && active.auditCycle?.status === 'awaiting_rework_approval') {
       return active
     }
-    if (active.status !== 'completed' || active.auditCycle?.status !== 'planning_rework') {
+    const auditRework =
+      active.status === 'completed' && active.auditCycle?.status === 'planning_rework'
+    const scopeRepair =
+      ['approved', 'running', 'attention'].includes(active.status) &&
+      active.content.tasks.some((task) => task.status === 'rework')
+    if (!auditRework && !scopeRepair) {
       throw new AssignmentEngineError(
         'invalid_transition',
-        'The Sr. Engineer can propose rework only after audit feedback is submitted'
+        'The Sr. Engineer can propose rework only for an active rework task or after audit feedback is submitted'
+      )
+    }
+    if (
+      scopeRepair &&
+      active.content.tasks.some((task) => ['running', 'reported', 'auditing'].includes(task.status))
+    ) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Stop or review active tasks before proposing a scope repair'
       )
     }
     const validation = validateAssignment(content)
@@ -766,23 +806,73 @@ export class AssignmentEngine {
     }
     const now = this.now()
     const nextVersion = active.version + 1
-    const reworkCycle = active.auditCycle.reworkCycle ?? 1
+    const reworkCycle = auditRework
+      ? (active.auditCycle?.reworkCycle ?? 1)
+      : (active.auditCycle?.reworkCycle ?? 0) + 1
+    const currentTasks = new Map(active.content.tasks.map((task) => [task.id, task]))
+    if (scopeRepair) {
+      const proposedTaskIds = new Set(content.tasks.map((task) => task.id))
+      const missingTask = active.content.tasks.find((task) => !proposedTaskIds.has(task.id))
+      if (missingTask) {
+        throw new AssignmentEngineError(
+          'validation_failed',
+          `Scope repair must preserve existing task ${missingTask.id}`
+        )
+      }
+    }
+    const amendedContent: AssignmentPlanContent = {
+      ...structuredClone(content),
+      tasks: content.tasks.map((task) => {
+        const currentTask = currentTasks.get(task.id)
+        if (!scopeRepair || !currentTask) return structuredClone(task)
+        if (currentTask.status === 'completed') return structuredClone(currentTask)
+        return {
+          ...structuredClone(task),
+          status: currentTask.status,
+          ...(currentTask.workKind ? { workKind: currentTask.workKind } : {}),
+          ...(currentTask.reworkCycle ? { reworkCycle: currentTask.reworkCycle } : {}),
+          ...(currentTask.workAssignmentVersion
+            ? { workAssignmentVersion: currentTask.workAssignmentVersion }
+            : {}),
+          ...(currentTask.workerName ? { workerName: currentTask.workerName } : {}),
+          ...(currentTask.threadId ? { threadId: currentTask.threadId } : {}),
+          ...(currentTask.report ? { report: structuredClone(currentTask.report) } : {}),
+          ...(currentTask.review ? { review: structuredClone(currentTask.review) } : {}),
+          ...(currentTask.startedAt ? { startedAt: currentTask.startedAt } : {}),
+          ...(currentTask.completedAt ? { completedAt: currentTask.completedAt } : {})
+        }
+      })
+    }
+    const amendedValidation = validateAssignment(amendedContent)
+    if (!amendedValidation.valid) {
+      throw new AssignmentEngineError(
+        'validation_failed',
+        amendedValidation.issues.map((issue) => issue.message).join('; ')
+      )
+    }
     const draft: AssignmentPlan = {
       ...active,
       version: nextVersion,
       status: 'draft',
       content: {
-        ...structuredClone(content),
-        tasks: content.tasks.map((task) => ({
-          ...structuredClone(task),
-          workKind: 'rework' as const,
-          reworkCycle,
-          workAssignmentVersion: nextVersion
-        }))
+        ...amendedContent,
+        tasks: amendedContent.tasks.map((task) =>
+          scopeRepair && task.status === 'completed'
+            ? structuredClone(task)
+            : {
+                ...structuredClone(task),
+                workKind: 'rework' as const,
+                reworkCycle,
+                workAssignmentVersion: nextVersion
+              }
+        )
       },
       auditCycle: {
-        ...active.auditCycle,
+        ...(active.auditCycle ?? {}),
         status: 'awaiting_rework_approval',
+        scopeRepair,
+        reworkStartedAt: active.auditCycle?.reworkStartedAt ?? now,
+        reworkCycle,
         reworkAssignmentVersion: nextVersion
       },
       provenance: {

@@ -6512,6 +6512,7 @@ export class ChatEngine {
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks.',
       'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for routine implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
       'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
+      'If a reviewed task is in rework because the signed graph lacks a prerequisite, dependency, or required file scope, call propose-rework-assignment with the complete amended graph. The application will preserve completed work and pause for user sign-off on the repair. Do not wait for the final audit: that audit cannot begin until implementation finishes.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
           role: 'coordinator',
@@ -6721,7 +6722,7 @@ export class ChatEngine {
       '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }',
       '- /v1/assignments/reopen-task — { "assignmentId": "...", "taskId": "..." }',
       '- /v1/assignments/add-followup-task — { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
-      '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }',
+      '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }. When an active task is in rework because its signed scope is insufficient, submit the complete amended graph here. This creates a reviewable draft for user sign-off; it does not wait for the final Assignment audit.',
       '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked) — { "assignmentId": "..." }',
       '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
       '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.'
