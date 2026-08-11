@@ -414,6 +414,9 @@
     draft: boolean
   }): void {
     showPullRequestSheet = false
+    // The sheet can be opened from the header dropdown on any tab — make sure the
+    // PR detail view is actually on screen before selecting the new PR.
+    activeTab = 'pulls'
     selectedPullRequest = {
       number: created.reference.number,
       title: created.reference.title,
