@@ -2173,40 +2173,42 @@
                             {/if}
                           </span>
                         {/if}
-                        <DropdownMenu.Root>
-                          <DropdownMenu.Trigger
-                            class="peer flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                            aria-label={`More actions for branch ${branch.name}`}
-                            title={`More actions for branch ${branch.name}`}
-                          >
-                            <MoreHorizontal size={13} />
-                          </DropdownMenu.Trigger>
-                          <DropdownMenu.Portal>
-                            <DropdownMenu.Content
-                              class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                              side="bottom"
-                              align="end"
-                              sideOffset={4}
-                              collisionPadding={8}
+                        <div class="relative h-6 w-6 shrink-0">
+                          <DropdownMenu.Root>
+                            <DropdownMenu.Trigger
+                              class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                              aria-label={`More actions for branch ${branch.name}`}
+                              title={`More actions for branch ${branch.name}`}
                             >
-                              <BranchActionsMenu
-                                isCurrent={branch.current}
-                                {canFetch}
-                                busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                                onCheckout={() => requestCheckout(branch.name)}
-                                onFetch={() => void fetchBranchAction(branch)}
-                                onDelete={() => requestDeleteBranch(branch.name)}
-                              />
-                            </DropdownMenu.Content>
-                          </DropdownMenu.Portal>
-                        </DropdownMenu.Root>
-                        {#if branch.current}
-                          <span
-                            class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold text-primary peer-hover:hidden peer-data-[state=open]:hidden"
-                          >
-                            current
-                          </span>
-                        {/if}
+                              <MoreHorizontal size={13} />
+                            </DropdownMenu.Trigger>
+                            <DropdownMenu.Portal>
+                              <DropdownMenu.Content
+                                class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                                side="bottom"
+                                align="end"
+                                sideOffset={4}
+                                collisionPadding={8}
+                              >
+                                <BranchActionsMenu
+                                  isCurrent={branch.current}
+                                  {canFetch}
+                                  busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                                  onCheckout={() => requestCheckout(branch.name)}
+                                  onFetch={() => void fetchBranchAction(branch)}
+                                  onDelete={() => requestDeleteBranch(branch.name)}
+                                />
+                              </DropdownMenu.Content>
+                            </DropdownMenu.Portal>
+                          </DropdownMenu.Root>
+                          {#if branch.current}
+                            <span
+                              class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[8px] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
+                            >
+                              current
+                            </span>
+                          {/if}
+                        </div>
                       </div>
                     </ContextMenu.Trigger>
                     <ContextMenu.Portal>
