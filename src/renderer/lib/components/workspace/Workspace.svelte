@@ -638,6 +638,11 @@
     contextSidebarState.openSources(selectedThread.projectId, selectedThread.id)
   }
 
+  function openCloudDeploymentsTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
+  }
+
   let sidebarActions = $derived.by(() => {
     if (!selectedThread) return []
     const actions = [
@@ -663,6 +668,12 @@
             }
           ]
         : []),
+      {
+        id: 'cloud-deployments',
+        label: 'Cloud Deployments',
+        description: 'Monitor your cloud deployments',
+        onSelect: openCloudDeploymentsTab
+      },
       {
         id: 'terminal',
         label: 'Terminal',
@@ -2916,6 +2927,13 @@
               {:else if activeContextTab.kind === 'git'}
                 {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
                   <GitStatusPanel
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
+              {:else if activeContextTab.kind === 'cloud-deployment'}
+                {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
+                  <CloudDeploymentPanel
                     projectId={activeContextTab.projectId}
                     threadId={activeContextTab.threadId}
                   />
