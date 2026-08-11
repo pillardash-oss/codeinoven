@@ -1,11 +1,13 @@
 <script lang="ts">
   import { gitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import Modal from '../ui/Modal.svelte'
+  import DockableModal from '../ui/DockableModal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import { APP_SLUG } from '$shared/brand'
   import type { PullRequestCompare, PullRequestReference } from '$shared/types'
   import {
     ArrowRight,
+    CheckCircle2,
     CircleCheck,
     CircleSlash,
     ExternalLink,
@@ -49,6 +51,8 @@
   let compareSequence = 0
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
+  /** True while the panel is collapsed into the bottom-right dock. */
+  let minimized = $state(false)
 
   const branch = $derived(gitState.status?.branch ?? null)
   const branches = $derived(gitState.branches.map((b) => b.name))
@@ -201,7 +205,37 @@
   })
 </script>
 
-<Modal open title="New pull request" {onClose} size="lg">
+<DockableModal
+  open
+  title="New pull request"
+  {minimized}
+  closable={Boolean(result)}
+  onMinimize={() => (minimized = true)}
+  {onClose}
+  onExpand={() => (minimized = false)}
+  dragLabel="Drag to move the pull request panel"
+  storageKey={`${APP_SLUG}.pullRequestSheet.v1`}
+>
+  {#snippet dock()}
+    <button
+      class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
+      title="Show pull request creation"
+      aria-label="Show pull request creation"
+      onclick={() => (minimized = false)}
+    >
+      {#if result}
+        <CheckCircle2 size={14} class="shrink-0 text-success" />
+        <span class="text-[11px] font-medium">PR #{result.number} created</span>
+      {:else if submitting}
+        <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+        <span class="text-[11px] font-medium">Creating pull request…</span>
+      {:else}
+        <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+        <span class="text-[11px] font-medium">New pull request</span>
+      {/if}
+    </button>
+  {/snippet}
+
   <div class="space-y-3">
     {#if originError}
       <p
@@ -414,33 +448,31 @@
 
   {#snippet footer()}
     {#if !result}
-      <div class="flex items-center justify-end gap-2">
-        <button
-          type="button"
-          class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-          disabled={!canCreate}
-          title={!canCreate && compare?.source === 'local' && !pushLocal
-            ? 'Push local changes to create this pull request'
-            : !canCreate && compare !== null && !hasChangesToPublish
-              ? 'There isn\u2019t anything to compare'
-              : undefined}
-          onclick={() => void createPullRequest()}
-        >
-          {#if creating}
-            <Loader2 size={12} class="animate-spin" />
-          {:else}
-            <GitPullRequest size={12} />
-          {/if}
-          Create pull request
-        </button>
-      </div>
+      <button
+        type="button"
+        class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+        onclick={onClose}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+        disabled={!canCreate}
+        title={!canCreate && compare?.source === 'local' && !pushLocal
+          ? 'Push local changes to create this pull request'
+          : !canCreate && compare !== null && !hasChangesToPublish
+            ? 'There isn\u2019t anything to compare'
+            : undefined}
+        onclick={() => void createPullRequest()}
+      >
+        {#if creating || submitting}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <GitPullRequest size={12} />
+        {/if}
+        {submitting ? 'Creating pull request…' : 'Create pull request'}
+      </button>
     {/if}
   {/snippet}
-</Modal>
+</DockableModal>

@@ -24,6 +24,10 @@
     dock: Snippet
     children: Snippet
     footer?: Snippet
+    /** LocalStorage key used to persist the panel's position/size. */
+    storageKey?: string
+    /** Tooltip/aria label shown on the draggable header. */
+    dragLabel?: string
   }
 
   let {
@@ -36,10 +40,11 @@
     onExpand,
     dock,
     children,
-    footer
+    footer,
+    storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    dragLabel = 'Drag to move the task panel'
   }: Props = $props()
 
-  const STORAGE_KEY = `${APP_SLUG}.harnessTasksPanel.v1`
   const PANEL_MARGIN = 12
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
@@ -86,7 +91,7 @@
   function loadSnapshot(): PanelSnapshot | null {
     if (typeof window === 'undefined') return null
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY)
+      const raw = window.localStorage.getItem(storageKey)
       if (!raw) return null
       const parsed = JSON.parse(raw) as Partial<PanelSnapshot>
       if (
@@ -107,7 +112,7 @@
     if (typeof window === 'undefined') return
     try {
       window.localStorage.setItem(
-        STORAGE_KEY,
+        storageKey,
         JSON.stringify({ x: position.x, y: position.y, width, height })
       )
     } catch {
@@ -225,8 +230,8 @@
       class="flex shrink-0 cursor-grab items-center justify-between gap-3 border-b px-4 py-2.5 select-none {dragging
         ? 'cursor-grabbing'
         : ''}"
-      title="Drag to move the task panel"
-      aria-label="Drag to move the task panel"
+      title={dragLabel}
+      aria-label={dragLabel}
       role="group"
       onpointerdown={onHeaderPointerDown}
       onpointermove={onHeaderPointerMove}
