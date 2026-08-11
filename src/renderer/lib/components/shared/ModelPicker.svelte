@@ -156,33 +156,37 @@
   )
   let favoriteModelsList = $derived(
     filterEntries(
-      favoriteModels
-        .slice()
-        .reverse()
-        .map((key) => {
-          const parsed = parseModelKey(key)
-          if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
-          return entry && passesVisionFilter(entry.model) ? entry : null
-        })
-        .filter((entry): entry is ModelEntry => entry !== null),
+      dedupeModelEntries(
+        favoriteModels
+          .slice()
+          .reverse()
+          .map((key) => {
+            const parsed = parseModelKey(key)
+            if (!parsed.providerId) return null
+            const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
+            return entry && passesVisionFilter(entry.model) ? entry : null
+          })
+          .filter((entry): entry is ModelEntry => entry !== null)
+      ),
       search
     )
   )
   let recentModelsList = $derived(
     filterEntries(
-      recentModels
-        .map((key) => {
-          const parsed = parseModelKey(key)
-          if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
-          return entry &&
-            passesHarnessFilter(entry.provider.harnessId) &&
-            passesVisionFilter(entry.model)
-            ? entry
-            : null
-        })
-        .filter((entry): entry is ModelEntry => entry !== null),
+      dedupeModelEntries(
+        recentModels
+          .map((key) => {
+            const parsed = parseModelKey(key)
+            if (!parsed.providerId) return null
+            const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
+            return entry &&
+              passesHarnessFilter(entry.provider.harnessId) &&
+              passesVisionFilter(entry.model)
+              ? entry
+              : null
+          })
+          .filter((entry): entry is ModelEntry => entry !== null)
+      ),
       search
     )
   )
@@ -314,6 +318,24 @@
       : entries.filter(({ provider, model }) =>
           words.every((word) => modelHaystack(provider, model).includes(word))
         )
+  }
+
+  /**
+   * Collapse duplicate resolved model entries. A legacy 2-segment key and a
+   * harness-scoped 3-segment key can both resolve to the same catalog entry
+   * (e.g. during the key-format migration), which would otherwise render as
+   * duplicate `each` keys. Keeps the first occurrence, preserving display order.
+   */
+  function dedupeModelEntries(entries: ModelEntry[]): ModelEntry[] {
+    const seen: Record<string, true> = {}
+    const deduped: ModelEntry[] = []
+    for (const entry of entries) {
+      const identity = modelEntryKey(entry)
+      if (seen[identity]) continue
+      seen[identity] = true
+      deduped.push(entry)
+    }
+    return deduped
   }
 
   /** Resolve a model key against the current catalog first, then cached catalogs.
