@@ -64,6 +64,67 @@ export function truncateToTokenBudget(text: string, maxTokens: number): string {
   return text.length > maxCharacters ? text.slice(0, maxCharacters) : text
 }
 
+/** Input for budgeting one utility/tool result before it re-enters the context. */
+export interface ToolResultBudgetInput {
+  /** The utility/tool result content to budget before reinjection. */
+  content: string
+  /** Tokens already consumed by the current turn's composed input layers. */
+  turnTokens?: number
+  /** Selected model's maximum context tokens (`ProviderModel.contextWindow`). */
+  contextWindow?: number
+  /** Tokens reserved for the model's output. */
+  outputTokens?: number
+  /** Tokens reserved for tool schemas and tool results. */
+  toolHeadroomTokens?: number
+}
+
+export interface ToolResultBudget {
+  /** Estimated tokens of the original content before budgeting. */
+  inputTokens: number
+  /** Token allowance granted within the remaining input budget. */
+  allowedTokens: number
+  /** Whether the content was truncated to fit the allowance. */
+  truncated: boolean
+  /** The budgeted content to reinject (unchanged when it already fits). */
+  content: string
+  /** Estimated tokens of the budgeted content actually reinjected. */
+  reinjectedTokens: number
+  /** Estimated tokens removed by truncation (0 when unchanged). */
+  truncatedTokens: number
+}
+
+/**
+ * Budget one utility/tool result against the selected model's remaining input
+ * allowance. It reuses `computePromptBudget` so the reserved output and tool
+ * headroom are preserved, subtracts the current turn's already-consumed input
+ * layers, and only truncates content that exceeds the remaining capacity.
+ * Small content is returned unchanged. The metadata reports the original and
+ * reinjected token volume plus whether truncation occurred, so callers can
+ * attribute usage. No separate budgeting algorithm is introduced.
+ */
+export function budgetToolResult(input: ToolResultBudgetInput): ToolResultBudget {
+  const budget = computePromptBudget({
+    contextWindow: input.contextWindow,
+    outputTokens: input.outputTokens,
+    toolHeadroomTokens: input.toolHeadroomTokens
+  })
+  const inputTokens = estimateTextTokens(input.content)
+  const turnTokens = Math.max(0, input.turnTokens ?? 0)
+  const remainingInput = Math.max(0, budget.availableInputTokens - turnTokens)
+  const allowedTokens = Math.min(inputTokens, remainingInput)
+  const truncated = inputTokens > allowedTokens
+  const content = truncated ? truncateToTokenBudget(input.content, allowedTokens) : input.content
+  const reinjectedTokens = estimateTextTokens(content)
+  return {
+    content,
+    inputTokens,
+    allowedTokens,
+    truncated,
+    reinjectedTokens,
+    truncatedTokens: Math.max(0, inputTokens - reinjectedTokens)
+  }
+}
+
 /** Estimated tokens of each final-composition input layer. */
 export interface TurnLayerTokens {
   /** User message text. */
