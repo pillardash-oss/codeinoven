@@ -401,11 +401,12 @@ function mapOpenCodeTokens(raw: unknown): AgentTokenUsage | undefined {
   const cacheRead = numberValue(cache?.['read']) ?? 0
   const cacheWrite = numberValue(cache?.['write']) ?? 0
   // OpenCode reports `input` as the total input token count, which already
-  // contains any cached read/write tokens. Summing cacheRead/cacheWrite on top
-  // of `input` would double-count overlapping categories, so the total is the
-  // provider's own accounting when reported and otherwise input + output +
-  // reasoning (cache is a subset of input and must not be added again).
-  const total = numberValue(tokens['total']) ?? input + output + reasoning
+  // contains any cached read/write tokens, and `reasoning` as a subset of
+  // `output`. The raw provider total is preserved verbatim when reported.
+  // Only when it is absent is a cache-inclusive total synthesized as
+  // `input + output`: input already carries the cached tokens and reasoning is
+  // counted once inside output, so nothing overlapping is added on top.
+  const total = numberValue(tokens['total']) ?? input + output
   return {
     input,
     output,
