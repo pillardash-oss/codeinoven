@@ -7,8 +7,10 @@
   import { blockHtml, fileCitationTarget, lexMarkdown } from './markdown'
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
+  import { revealCitationFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
 
   interface Props {
     /** Markdown source — may be an incomplete, still-streaming message. */
@@ -142,6 +144,19 @@
     if (linkFromEvent(event)) clearTooltip()
   }
 
+  function openCitation(path: string, line?: number): void {
+    if (onCiteFile) {
+      if (line !== undefined && onCiteFile.length < 2) {
+        onCiteFile(`${path}:${line}`)
+      } else {
+        onCiteFile(path, line)
+      }
+      return
+    }
+    const projectId = workspaceState.activeProject?.id
+    if (projectId) void revealCitationFile(projectId, path, line)
+  }
+
   function handleClick(event: MouseEvent): void {
     const link = linkFromEvent(event)
     if (!link) return
@@ -149,13 +164,7 @@
     if (citation) {
       event.preventDefault()
       clearTooltip()
-      if (onCiteFile) {
-        if (citation.line !== undefined && onCiteFile.length < 2) {
-          onCiteFile(`${citation.path}:${citation.line}`)
-        } else {
-          onCiteFile(citation.path, citation.line)
-        }
-      }
+      openCitation(citation.path, citation.line)
       return
     }
 
@@ -177,13 +186,7 @@
   /** Mirror of the citation click path — used by the file context menu's
    *  "Open file" action so both interactions behave identically. */
   function openCitationFromMenu(path: string, line?: number): void {
-    if (onCiteFile) {
-      if (line !== undefined && onCiteFile.length < 2) {
-        onCiteFile(`${path}:${line}`)
-      } else {
-        onCiteFile(path, line)
-      }
-    }
+    openCitation(path, line)
   }
 </script>
 
