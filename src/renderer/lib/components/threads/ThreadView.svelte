@@ -808,7 +808,7 @@
   }
 
   function commitContextUsage(usage: AgentContextUsage): void {
-    contextUsageDisplay = mergeContextUsage(contextUsageDisplay, usage)
+    contextUsageDisplay = usage
     contextUsageCommittedAt = Date.now()
     const snapshot: ThreadContextUsage = {
       ...usage,
@@ -869,9 +869,10 @@
           usage.harnessId === settings.harnessId && usage.providerId === settings.providerId
       )
       if (currentUsage) {
-        // Persist the fresh quota with the current context snapshot so it
-        // restores on the next mount without another harness round-trip.
-        const merged: AgentContextUsage = {
+        // Fold the fresh quota over whatever the meter already shows so an empty
+        // rate-limit list or missing credits can never erase the bars the user is
+        // viewing — it can only replace them with newer, richer data.
+        const merged = mergeContextUsage(contextUsageDisplay, {
           ...(contextUsageDisplay ?? {
             contextUsed: 0,
             costUsd: 0,
@@ -893,7 +894,9 @@
             ? { contextUsed: currentUsage.contextUsed }
             : {}),
           ...(currentUsage.credits ? { credits: currentUsage.credits } : {})
-        }
+        })
+        // Persist the fresh quota with the current context snapshot so it
+        // restores on the next mount without another harness round-trip.
         commitContextUsage(merged)
       }
     } catch {
