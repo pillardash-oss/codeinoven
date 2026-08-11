@@ -13192,6 +13192,47 @@ export class ChatEngine {
         if (!result.idempotent) {
           await this.promptCoordinatorForAudit(result.assignment, thread.assignmentTaskId, report)
         }
+      } else if (thread?.assignmentRole === 'coordinator' && thread.assignmentId) {
+        const assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
+        const seniorTasks =
+          assignment?.content.tasks.filter(
+            (task) =>
+              task.owner === 'senior' &&
+              (task.threadId === undefined || task.threadId === thread.id) &&
+              ['ready', 'running', 'rework'].includes(task.status)
+          ) ?? []
+        // Attribute a coordinator failure only when there is one unambiguous
+        // senior-owned task. If several tasks are actionable, the error stays
+        // on the coordinator thread instead of guessing which task owned it.
+        if (assignment?.id === thread.assignmentId && seniorTasks.length === 1) {
+          const seniorTask = seniorTasks[0]
+          const runningTask =
+            seniorTask.status === 'running'
+              ? seniorTask
+              : (
+                  await this.assignmentEngine.assignTask(
+                    assignment.id,
+                    seniorTask.id,
+                    `senior-session-failed-assign-${sessionId}-${info.activeTurnId ?? 'unbound-turn'}`
+                  )
+                ).task
+          if (runningTask) {
+            await this.assignmentEngine.reportTask(
+              assignment.id,
+              runningTask.id,
+              thread.id,
+              {
+                status: 'blocked',
+                summary: error ?? 'The Sr. Engineer harness session failed.',
+                evidence: [
+                  `Sr. Engineer thread ${thread.id} ended with a harness or provider error.`
+                ],
+                reportedAt: Date.now()
+              },
+              `senior-session-failed-report-${sessionId}-${info.activeTurnId ?? 'unbound-turn'}`
+            )
+          }
+        }
       }
     } catch (failure) {
       Logger.error('session error recovery failed:', failure)

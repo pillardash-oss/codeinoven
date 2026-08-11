@@ -56,6 +56,7 @@ export function classifyProviderIssue(
   if (
     normalized.includes('network') ||
     normalized.includes('connection') ||
+    normalized.includes('disconnected') ||
     normalized.includes('timeout') ||
     normalized.includes('timed out') ||
     normalized.includes('econnreset') ||
