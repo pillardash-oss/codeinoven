@@ -1806,6 +1806,16 @@ function mapCodexUsage(
   }
 }
 
+/**
+ * Map one Codex/OpenAI token-accounting object into the shared usage shape.
+ * The provider reports input, cached input, output, and reasoning tokens as
+ * separate fields. Reasoning is a subset of output and cached input is a
+ * subset of the provider's total, so the raw provider total is preserved
+ * verbatim when reported. Only when no provider total is present is a
+ * cache-inclusive total synthesized (`input + cacheRead + output`), matching
+ * the provider's accounting semantics instead of double-counting reasoning or
+ * dropping cache.
+ */
 function mapCodexTokenBreakdown(value: Record<string, unknown>): AgentTokenUsage | undefined {
   const input =
     numberValue(value['inputTokens']) ??
@@ -1827,12 +1837,27 @@ function mapCodexTokenBreakdown(value: Record<string, unknown>): AgentTokenUsage
     numberValue(value['cached_input_tokens']) ??
     numberValue(value['cacheRead']) ??
     0
+  const cacheWrite =
+    numberValue(value['cacheWriteTokens']) ??
+    numberValue(value['cache_write_tokens']) ??
+    numberValue(value['cacheWrite']) ??
+    0
+  const rawTotal = numberValue(value['totalTokens']) ?? numberValue(value['total_tokens'])
   const total =
-    numberValue(value['totalTokens']) ??
-    numberValue(value['total_tokens']) ??
-    input + output + reasoning
-  if (input === 0 && output === 0 && reasoning === 0 && total === 0) return undefined
-  return { input, output, reasoning, cacheRead, cacheWrite: 0, total }
+    rawTotal ??
+    // Cache-inclusive fallback that mirrors the provider total: reasoning is a
+    // subset of output and cached input is included alongside uncached input.
+    input + cacheRead + output
+  if (
+    input === 0 &&
+    output === 0 &&
+    reasoning === 0 &&
+    cacheRead === 0 &&
+    cacheWrite === 0 &&
+    total === 0
+  )
+    return undefined
+  return { input, output, reasoning, cacheRead, cacheWrite, total }
 }
 
 function rateLimitLabel(window: Record<string, unknown>, fallback: string): string {
