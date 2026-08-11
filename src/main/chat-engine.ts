@@ -8761,6 +8761,7 @@ export class ChatEngine {
       `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     let lastError: Error | null = null
+    const auditStartedAt = Date.now()
 
     await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
@@ -8891,13 +8892,24 @@ export class ChatEngine {
       }
     }
 
-    await this.assignmentEngine.makeAuditAvailable(projectId, coordinatorThreadId)
+    const failure = lastError ?? new Error('The Assignment auditor failed.')
+    Logger.error('Assignment audit failed', {
+      projectId,
+      threadId: coordinatorThreadId,
+      auditorThreadId: auditorThread.id,
+      harnessId: auditorSettings.harnessId,
+      providerId: auditorSettings.providerId,
+      modelId: auditorSettings.modelId,
+      elapsedMs: Math.max(0, Date.now() - auditStartedAt),
+      error: failure.message
+    })
+    await this.assignmentEngine.failAuditCycle(projectId, coordinatorThreadId, failure.message)
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
       read: false
     })
     await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
-    throw lastError ?? new Error('The Assignment auditor failed.')
+    throw failure
   }
 
   private async runAchievementAudit(
