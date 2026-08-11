@@ -205,10 +205,12 @@
   onMount(() => {
     void (async () => {
       await providerStore.init()
-      await baseUrlProviderStore.load()
-      await checkAllAuth()
-      await harnessLifecycleStore.checkAll()
-      await loadManifests()
+      await Promise.all([
+        providerStore.checkAll().then(() => checkAllAuth()),
+        baseUrlProviderStore.load(),
+        harnessLifecycleStore.checkAll(),
+        loadManifests()
+      ])
     })()
   })
 </script>

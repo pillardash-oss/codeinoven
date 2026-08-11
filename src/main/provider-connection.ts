@@ -78,11 +78,6 @@ export class ProviderConnectionService {
     return this.getAll()
   }
 
-  /** Run the initial detection pass (fire-and-forget on app start). */
-  warmUp(): void {
-    void this.checkAll()
-  }
-
   // ─── Internals ──────────────────────────────────────────────────────────────
 
   private update(info: ProviderConnectionInfo): void {
