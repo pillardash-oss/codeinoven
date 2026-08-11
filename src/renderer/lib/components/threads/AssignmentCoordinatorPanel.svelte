@@ -8,7 +8,7 @@
     assignment: AssignmentPlan
     threads: Thread[]
     auditThread?: Thread
-    auditState?: Thread['auditState']
+    auditState?: Thread['auditState'] | 'failed'
     finalComplete?: boolean
     reportAvailable?: boolean
     selectedThreadId: string
@@ -94,7 +94,9 @@
       !coordinatorWorking &&
       !workersWorking
   )
-  const auditWorkAvailable = $derived(auditState === 'offered' && !finalComplete)
+  const auditWorkAvailable = $derived(
+    (auditState === 'offered' || auditState === 'failed') && !finalComplete
+  )
 
   function clampWidth(nextWidth: number): number {
     const viewportMaximum = Math.max(MIN_WIDTH, window.innerWidth - 480)
@@ -274,7 +276,7 @@
           title="Open the Assignment audit work"
           onclick={onOpenAuditWork}
         >
-          Audit Work
+          {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
         </button>
       {/if}
       {#if reportAvailable && !finalComplete && onViewReport}

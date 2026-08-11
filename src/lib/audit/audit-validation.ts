@@ -14,6 +14,15 @@ function text(value: unknown, label: string): string {
   return value.trim()
 }
 
+function markdownText(value: unknown, label: string): string {
+  if (typeof value === 'string') return text(value, label)
+  if (Array.isArray(value)) {
+    const entries = value.map((entry, index) => text(entry, `${label} item ${index + 1}`))
+    if (entries.length > 0) return entries.map((entry) => `- ${entry}`).join('\n')
+  }
+  throw new TypeError(`${label} is required`)
+}
+
 export function validateAuditReportContent(value: unknown): AuditReportContent {
   const input = record(value, 'Audit report')
   if (!Array.isArray(input.findings)) throw new TypeError('Audit findings must be an array')
@@ -30,10 +39,13 @@ export function validateAuditReportContent(value: unknown): AuditReportContent {
         title: text(finding.title, `Finding ${index + 1} title`),
         severity: severity as AuditFindingSeverity,
         description: text(finding.description, `Finding ${index + 1} description`),
-        evidence: text(finding.evidence, `Finding ${index + 1} evidence`)
+        evidence: markdownText(finding.evidence, `Finding ${index + 1} evidence`)
       }
     }),
-    resolutionRecommendation: text(input.resolutionRecommendation, 'Resolution and recommendation'),
+    resolutionRecommendation: markdownText(
+      input.resolutionRecommendation ?? input.requiredRemediation,
+      'Resolution and recommendation'
+    ),
     conclusion: text(input.conclusion, 'Conclusion')
   }
 }

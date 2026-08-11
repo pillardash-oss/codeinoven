@@ -4,9 +4,12 @@
   import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
 
   interface Props {
-    state?: Thread['auditState']
+    state?: Thread['auditState'] | 'failed'
     version?: number
     error?: string
+    startedAt?: number
+    finishedAt?: number
+    retryLabel?: string
     settings: ThreadSettings
     providers: ProviderCatalog[]
     projectId?: string | null
@@ -28,6 +31,9 @@
     state,
     version,
     error,
+    startedAt,
+    finishedAt,
+    retryLabel = 'Retry audit',
     settings,
     providers,
     projectId = null,
@@ -41,8 +47,24 @@
     onViewReport
   }: Props = $props()
 
+  let failed = $derived(state === 'failed')
   let interrupted = $derived(state === 'offered')
   let reworking = $derived(state === 'reworking')
+  let elapsed = $derived(
+    startedAt !== undefined && finishedAt !== undefined
+      ? formatDuration(Math.max(0, finishedAt - startedAt))
+      : null
+  )
+
+  function formatDuration(durationMs: number): string {
+    const totalSeconds = Math.floor(durationMs / 1_000)
+    const hours = Math.floor(totalSeconds / 3_600)
+    const minutes = Math.floor((totalSeconds % 3_600) / 60)
+    const seconds = totalSeconds % 60
+    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+    if (minutes > 0) return `${minutes}m ${seconds}s`
+    return `${seconds}s`
+  }
 
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
     onModelChange({
@@ -54,12 +76,17 @@
   }
 </script>
 
-<section class="rounded-xl border bg-surface p-4" aria-label="Assignment audit status">
+<section
+  class="rounded-xl border bg-surface p-4 {failed ? 'border-danger/40' : 'border-border'}"
+  aria-label="Assignment audit status"
+>
   <div class="flex items-start gap-3">
-    <div class="rounded-lg bg-primary/10 p-2 text-primary">
+    <div
+      class="rounded-lg p-2 {failed ? 'bg-danger/10 text-danger' : 'bg-primary/10 text-primary'}"
+    >
       {#if busy || state === 'running'}
         <Loader2 size={18} class="animate-spin" />
-      {:else if interrupted}
+      {:else if failed || interrupted}
         <CircleAlert size={18} />
       {:else}
         <FileCheck2 size={18} />
@@ -67,27 +94,37 @@
     </div>
     <div class="min-w-0 flex-1">
       <h3 class="text-sm font-semibold text-foreground">
-        {interrupted
-          ? 'Audit interrupted'
-          : reworking
-            ? 'Review sent to Sr. Engineer'
-            : version === undefined
-              ? 'Audit in progress'
-              : `Report generated — Version ${version}`}
+        {failed
+          ? 'Audit failed'
+          : interrupted
+            ? 'Audit interrupted'
+            : reworking
+              ? 'Review sent to Sr. Engineer'
+              : version === undefined
+                ? 'Audit in progress'
+                : `Report generated — Version ${version}`}
       </h3>
-      <p class="mt-1 text-xs leading-relaxed text-muted">
-        {interrupted
-          ? error ||
-            'The auditor could not finish. Choose another harness or model, then retry the audit.'
-          : reworking
-            ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
-            : version === undefined
-              ? 'This dedicated auditor task is locked while the report is being prepared.'
-              : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
+      <p
+        class="mt-1 text-xs leading-relaxed {failed ? 'text-danger' : 'text-muted'}"
+        role={failed ? 'alert' : undefined}
+      >
+        {failed
+          ? error || 'The auditor failed without returning a usable error.'
+          : interrupted
+            ? error ||
+              'The auditor could not finish. Choose another harness or model, then retry the audit.'
+            : reworking
+              ? `The Sr. Engineer is reviewing audit report v${version ?? 1} and your feedback. It will either handle the correction directly or propose a new Assignment for your review.`
+              : version === undefined
+                ? 'This dedicated auditor task is locked while the report is being prepared.'
+                : 'Review the rendered report, switch versions, and add annotations in Audit Studio.'}
       </p>
+      {#if failed && elapsed}
+        <p class="mt-2 text-[11px] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
+      {/if}
     </div>
   </div>
-  {#if interrupted}
+  {#if failed || interrupted}
     <div class="mt-4 flex flex-wrap items-center justify-end gap-2">
       <ModelPicker
         {providers}
@@ -110,7 +147,7 @@
         onclick={() => onRetry(settings)}
       >
         {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-        Retry audit
+        {retryLabel}
       </button>
     </div>
   {:else if version !== undefined}

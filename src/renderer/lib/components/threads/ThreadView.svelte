@@ -1466,10 +1466,13 @@
       thread.achievementRole === 'auditor'
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
-  let assignmentAuditState = $derived.by<Thread['auditState']>(() => {
+  type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
+  let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
     if (auditState === 'report_ready' && auditReport) return 'report_ready'
     const cycleStatus = assignment?.auditCycle?.status
+    if (cycleStatus === 'failed') return 'failed'
+    if (cycleStatus === 'available' && assignmentAuditThread?.status === 'failed') return 'failed'
     if (cycleStatus === 'available') return 'offered'
     if (cycleStatus === 'running') return 'running'
     if (cycleStatus === 'report_ready') return 'report_ready'
@@ -1482,6 +1485,9 @@
     if (cycleStatus === 'completed') return undefined
     return auditState
   })
+  let assignmentAuditFailure = $derived(assignment?.auditCycle?.failure ?? auditError)
+  let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
+  let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
   function delegatedThreadWorking(candidate: Thread | undefined): boolean {
     return (
       candidate !== undefined &&
@@ -4503,6 +4509,18 @@
       const rawError = error instanceof Error ? error.message : 'The Assignment audit failed.'
       errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
       auditError = errorMessage
+      const persistedAssignment = await invoke(
+        'assignment:getActive',
+        thread.projectId,
+        coordinatorThreadId
+      ).catch(() => null)
+      if (persistedAssignment) assignment = persistedAssignment
+      if (persistedAssignment?.auditorThreadId) {
+        assignmentAuditThread =
+          (await invoke('thread:get', thread.projectId, persistedAssignment.auditorThreadId).catch(
+            () => null
+          )) ?? assignmentAuditThread
+      }
     } finally {
       auditBusy = false
     }
@@ -6756,7 +6774,9 @@
               <AuditGeneratedCard
                 state={assignmentAuditState}
                 version={assignmentAuditState === 'running' ? undefined : auditReport?.version}
-                error={auditError || errorMessage}
+                error={assignmentAuditFailure || errorMessage}
+                startedAt={assignmentAuditStartedAt}
+                finishedAt={assignmentAuditFinishedAt}
                 settings={auditSettings}
                 {providers}
                 projectId={thread.projectId}
@@ -6816,6 +6836,27 @@
                   onUpdate={handleQuestionUpdate}
                 />
               {/key}
+            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
+              <AuditGeneratedCard
+                state="failed"
+                error={assignmentAuditFailure}
+                startedAt={assignmentAuditStartedAt}
+                finishedAt={assignmentAuditFinishedAt}
+                retryLabel="Open auditor & retry"
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                busy={auditBusy}
+                onRetry={() => void openAssignmentAuditWork()}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId) =>
+                  rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
             {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
               <AuditOfferCard
                 threadTitle={thread.title}

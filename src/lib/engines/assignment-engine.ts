@@ -654,7 +654,7 @@ export class AssignmentEngine {
         'An Assignment audit can start only after implementation completes'
       )
     }
-    if (active.auditCycle && !['available'].includes(active.auditCycle.status)) {
+    if (active.auditCycle && !['available', 'failed'].includes(active.auditCycle.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         `Assignment audit is ${active.auditCycle.status}`
@@ -664,7 +664,30 @@ export class AssignmentEngine {
     return this.saveAuditCycle(active, {
       status: 'running',
       availableAt: active.auditCycle?.availableAt ?? now,
-      startedAt: now
+      startedAt: now,
+      failedAt: undefined,
+      failure: undefined
+    })
+  }
+
+  async failAuditCycle(
+    projectId: string,
+    coordinatorThreadId: string,
+    failure: string
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status !== 'completed' || active.auditCycle?.status !== 'running') {
+      throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not running')
+    }
+    const normalizedFailure = failure.trim()
+    if (!normalizedFailure) {
+      throw new AssignmentEngineError('validation_failed', 'Assignment audit failure is required')
+    }
+    return this.saveAuditCycle(active, {
+      ...active.auditCycle,
+      status: 'failed',
+      failedAt: this.now(),
+      failure: normalizedFailure.slice(0, 20_000)
     })
   }
 
@@ -796,6 +819,8 @@ export class AssignmentEngine {
       status: 'available',
       availableAt: this.now(),
       startedAt: undefined,
+      failedAt: undefined,
+      failure: undefined,
       reportedAt: undefined,
       completedAt: undefined
     })
