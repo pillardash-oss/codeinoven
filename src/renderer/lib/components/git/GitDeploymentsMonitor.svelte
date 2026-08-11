@@ -4,6 +4,7 @@
     CircleDot,
     CircleX,
     Clock3,
+    ExternalLink,
     GitBranch,
     Loader2,
     PackageCheck,
@@ -131,6 +132,16 @@
           {/if}
         </p>
       </div>
+      <button
+        type="button"
+        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        title="View workflow runs on GitHub"
+        aria-label="View workflow runs on GitHub"
+        onclick={() =>
+          void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/actions`)}
+      >
+        <ExternalLink size={12} />
+      </button>
       <button
         type="button"
         class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
