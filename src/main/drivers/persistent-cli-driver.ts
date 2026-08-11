@@ -3,6 +3,7 @@ import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { generateId } from '../../lib/utils'
 import { APP_NAME } from '../../lib/brand'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import type {
   AgentEvent,
   AgentMessage,
@@ -320,7 +321,26 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         }
       }
       if (error && !this.structuredProcessIssues.has(session.id)) {
-        this.emit({ type: 'session.error', sessionId: session.id, error })
+        const kind = classifyProviderIssue(error)
+        this.emit({
+          type: 'session.error',
+          sessionId: session.id,
+          error,
+          ...(kind === 'unknown'
+            ? {}
+            : {
+                issue: {
+                  kind,
+                  message:
+                    kind === 'authentication'
+                      ? `${this.name} sign-in expired. Sign in again, then retry this message.`
+                      : error,
+                  rawError: error,
+                  harnessId: this.id,
+                  retryable: kind !== 'billing'
+                }
+              })
+        })
       }
       this.structuredProcessIssues.delete(session.id)
       this.emit({ type: 'session.idle', sessionId: session.id })
