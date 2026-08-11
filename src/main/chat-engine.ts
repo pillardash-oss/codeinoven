@@ -1945,7 +1945,7 @@ export class ChatEngine {
     threadId: string,
     sessionId: string,
     projectPath: string,
-    permissionLevel: PermissionLevel,
+    settings: ThreadSettings,
     skipRuntime = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
@@ -1973,11 +1973,30 @@ export class ChatEngine {
         sessionId,
         projectPath,
         nativeCapabilities,
-        permissionLevel
+        permissionLevel: settings.permissionLevel
       })
       const resolvedUtilities = gateway.resolvedUtilities
-      const request = { projectPath, resolvedUtilities }
+      const request = {
+        projectPath,
+        providerId: settings.providerId,
+        resolvedUtilities
+      }
       const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
+      const skillInstructions = resolvedUtilities.flatMap(({ utility }) =>
+        utility.kind === 'skill'
+          ? [
+              `Utility skill: ${utility.name}\n${utility.description}\n\n${utility.config.instructions}`
+            ]
+          : []
+      )
+      if (overlay.gatewayAvailable === false) {
+        // Also clear any overlay left by an interrupted prior turn before the
+        // harness launches against its normal authenticated profile.
+        await applyRuntime(projectPath, null, sessionId)
+        await gateway.cleanup()
+        gateway = undefined
+        return skillInstructions.join('\n\n')
+      }
       const environment = { ...(overlay.env ?? {}) }
       for (const { utility } of resolvedUtilities) {
         for (const credential of utility.credentials) {
@@ -2003,13 +2022,6 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      const skillInstructions = resolvedUtilities.flatMap(({ utility }) =>
-        utility.kind === 'skill'
-          ? [
-              `Utility skill: ${utility.name}\n${utility.description}\n\n${utility.config.instructions}`
-            ]
-          : []
-      )
       return [gateway.instructions, ...skillInstructions].filter(Boolean).join('\n\n')
     } catch (error) {
       const cleanups: Array<Promise<unknown>> = []
@@ -3927,7 +3939,7 @@ export class ChatEngine {
       threadId,
       sessionId,
       projectPath,
-      settings.permissionLevel,
+      settings,
       // Assignment workers must stay on the pooled project server. Spawning a
       // per-session isolated opencode server for every worker (because of the
       // utility gateway) makes N+1 opencode processes all write to the single
