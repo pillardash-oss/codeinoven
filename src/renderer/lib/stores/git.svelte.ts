@@ -11,6 +11,8 @@ import type {
   GitHubDeploymentOverviewResult,
   GitHubDeviceCode,
   GitHubPollResult,
+  GitHubMutationResult,
+  GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitRemoteInfo,
@@ -28,8 +30,7 @@ import type {
   PullRequestCompare,
   PullRequestFile,
   PullRequestPage,
-  PullRequestReference,
-  PullRequestReviewResult
+  PullRequestReference
 } from '$shared/types'
 
 /** One in-flight git operation, tracked per project for busy/disabled UI. */
@@ -118,8 +119,21 @@ export class GitState {
   stashes: GitStashEntry[] = $state([])
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
-  reviewPermission: Extract<PullRequestReviewResult, { status: 'permission_required' }> | null =
-    $state(null)
+  githubPermission: GitHubPermissionRequired | null = $state(null)
+
+  /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
+  get reviewPermission(): GitHubPermissionRequired | null {
+    return this.githubPermission
+  }
+
+  private resolveGitHubMutation<T>(result: GitHubMutationResult<T>): T | null {
+    if (result.status === 'permission_required') {
+      this.githubPermission = result
+      return null
+    }
+    this.githubPermission = null
+    return result.value
+  }
 
   /**
    * The project whose data currently lives in the shared fields above. The
@@ -162,6 +176,7 @@ export class GitState {
     this.credentialStatus = null
     this.stashes = []
     this.error = null
+    this.githubPermission = null
   }
 
   isBusy(operation: GitOperation | GitOperation[]): boolean {
@@ -551,8 +566,9 @@ export class GitState {
   ): Promise<PullRequestReference | null> {
     this.markBusy('pr-create', true)
     this.error = null
+    this.githubPermission = null
     try {
-      return await invoke('pr:create', projectId, input)
+      return this.resolveGitHubMutation(await invoke('pr:create', projectId, input))
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be created')
       return null
@@ -572,16 +588,19 @@ export class GitState {
   ): Promise<PullRequestReference | null> {
     this.markBusy('pr-merge', true)
     this.error = null
+    this.githubPermission = null
     try {
-      return await invoke(
-        'pr:merge',
-        projectId,
-        owner,
-        repo,
-        pullNumber,
-        method,
-        commitTitle,
-        commitMessage
+      return this.resolveGitHubMutation(
+        await invoke(
+          'pr:merge',
+          projectId,
+          owner,
+          repo,
+          pullNumber,
+          method,
+          commitTitle,
+          commitMessage
+        )
       )
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be merged')
@@ -631,8 +650,11 @@ export class GitState {
   ): Promise<PullRequestReference | null> {
     this.markBusy('pr-reopen', true)
     this.error = null
+    this.githubPermission = null
     try {
-      return await invoke('pr:reopen', projectId, owner, repo, pullNumber)
+      return this.resolveGitHubMutation(
+        await invoke('pr:reopen', projectId, owner, repo, pullNumber)
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be reopened')
       return null
@@ -650,8 +672,11 @@ export class GitState {
   ): Promise<PullRequestReference | null> {
     this.markBusy('pr-close', true)
     this.error = null
+    this.githubPermission = null
     try {
-      return await invoke('pr:close', projectId, owner, repo, pullNumber)
+      return this.resolveGitHubMutation(
+        await invoke('pr:close', projectId, owner, repo, pullNumber)
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be closed')
       return null
@@ -1023,8 +1048,11 @@ export class GitState {
   ): Promise<PullRequestComment | null> {
     this.markBusy('pr-comment', true)
     this.error = null
+    this.githubPermission = null
     try {
-      return await invoke('pr:comment', projectId, owner, repo, pullNumber, body)
+      return this.resolveGitHubMutation(
+        await invoke('pr:comment', projectId, owner, repo, pullNumber, body)
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'The comment could not be posted')
       return null
@@ -1043,11 +1071,11 @@ export class GitState {
   ): Promise<boolean> {
     this.markBusy('pr-review', true)
     this.error = null
-    this.reviewPermission = null
+    this.githubPermission = null
     try {
       const result = await invoke('pr:review', projectId, owner, repo, pullNumber, event, body)
       if (result.status === 'permission_required') {
-        this.reviewPermission = result
+        this.githubPermission = result
         return false
       }
       return true

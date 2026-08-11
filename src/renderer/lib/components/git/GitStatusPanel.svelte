@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
@@ -1147,7 +1148,23 @@
         </button>
       </div>
     {:else}
-      {#if gitState.error}
+      {#if gitState.githubPermission}
+        <div
+          class="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2"
+        >
+          <Unplug size={13} class="shrink-0 text-warning" />
+          <p class="min-w-0 flex-1 text-[10px] leading-relaxed text-muted">
+            {gitState.githubPermission.message}
+          </p>
+          <button
+            type="button"
+            class="h-7 shrink-0 rounded-md border border-border bg-surface px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
+            onclick={() => void openInBrowser(gitState.githubPermission?.settingsUrl ?? '')}
+          >
+            Update GitHub access
+          </button>
+        </div>
+      {:else if gitState.error}
         <div class="mx-2 mt-2">
           <p
             class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"

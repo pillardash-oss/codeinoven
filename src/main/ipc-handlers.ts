@@ -127,6 +127,8 @@ import type {
   CreateProjectInput,
   EngineeringSpec,
   EngineeringSpecContent,
+  GitHubMutationResult,
+  GitHubPermissionRequired,
   GitHubDeploymentOverview,
   AuditSectionId,
   HistoryEntry,
@@ -150,6 +152,41 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
+
+function githubPermissionRequired(
+  error: unknown,
+  owner: string,
+  repo: string
+): GitHubPermissionRequired | null {
+  if (
+    !(error instanceof ProviderHttpError) ||
+    error.status !== 403 ||
+    !/resource not accessible by integration/iu.test(error.message)
+  ) {
+    return null
+  }
+  return {
+    status: 'permission_required',
+    message:
+      `CodeInOven needs Pull requests read and write access for ${owner}/${repo}. ` +
+      'Install the GitHub App on this repository or approve its pending permission update.',
+    settingsUrl: GITHUB_APP_INSTALL_URL
+  }
+}
+
+async function runGitHubMutation<T>(
+  owner: string,
+  repo: string,
+  mutation: () => Promise<T>
+): Promise<GitHubMutationResult<T>> {
+  try {
+    return { status: 'completed', value: await mutation() }
+  } catch (error) {
+    const permission = githubPermissionRequired(error, owner, repo)
+    if (permission) return permission
+    throw error
+  }
+}
 const EDITOR_IDS = new Set<EditorId>([
   'system',
   'terminal',
@@ -3024,15 +3061,17 @@ export function registerIpcHandlers(
     if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
     const identity = await remoteIdentity(safeProjectId)
     const draft = validatePrCreateInput(input)
-    return provider.createPullRequest({
-      owner: identity.owner,
-      repo: identity.repo,
-      title: draft.title,
-      body: draft.body,
-      head: draft.head,
-      base: draft.base,
-      draft: draft.draft
-    })
+    return runGitHubMutation(identity.owner, identity.repo, () =>
+      provider.createPullRequest({
+        owner: identity.owner,
+        repo: identity.repo,
+        title: draft.title,
+        body: draft.body,
+        head: draft.head,
+        base: draft.base,
+        draft: draft.draft
+      })
+    )
   })
   ipcMain.handle(
     'pr:list',
@@ -3060,18 +3099,22 @@ export function registerIpcHandlers(
     ) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
-      return provider.mergePullRequest({
-        owner: validateBoundedString(owner, 'PR owner', 1, 128),
-        repo: validateBoundedString(repo, 'PR repository', 1, 128),
-        pullNumber: validatePrNumber(pullNumber),
-        method: validateMergeMethod(method),
-        ...(commitTitle === undefined
-          ? {}
-          : { commitTitle: validateMergeCommitTitle(commitTitle) }),
-        ...(commitMessage === undefined
-          ? {}
-          : { commitMessage: validateMergeCommitMessage(commitMessage) })
-      })
+      const safeOwner = validateBoundedString(owner, 'PR owner', 1, 128)
+      const safeRepo = validateBoundedString(repo, 'PR repository', 1, 128)
+      return runGitHubMutation(safeOwner, safeRepo, () =>
+        provider.mergePullRequest({
+          owner: safeOwner,
+          repo: safeRepo,
+          pullNumber: validatePrNumber(pullNumber),
+          method: validateMergeMethod(method),
+          ...(commitTitle === undefined
+            ? {}
+            : { commitTitle: validateMergeCommitTitle(commitTitle) }),
+          ...(commitMessage === undefined
+            ? {}
+            : { commitMessage: validateMergeCommitMessage(commitMessage) })
+        })
+      )
     }
   )
 
@@ -3093,7 +3136,7 @@ export function registerIpcHandlers(
     'pr:reopen',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.reopenPullRequest(target)
+      return runGitHubMutation(target.owner, target.repo, () => provider.reopenPullRequest(target))
     }
   )
 
@@ -3101,7 +3144,7 @@ export function registerIpcHandlers(
     'pr:close',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.closePullRequest(target)
+      return runGitHubMutation(target.owner, target.repo, () => provider.closePullRequest(target))
     }
   )
 
@@ -3311,10 +3354,12 @@ export function registerIpcHandlers(
       body: unknown
     ) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
-      return provider.createPullRequestComment({
-        ...target,
-        body: validatePrCommentBody(body)
-      })
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.createPullRequestComment({
+          ...target,
+          body: validatePrCommentBody(body)
+        })
+      )
     }
   )
 
@@ -3336,25 +3381,10 @@ export function registerIpcHandlers(
       if (verdict !== 'APPROVE' && !text.trim()) {
         throw new Error('Leave a comment explaining the requested changes')
       }
-      try {
+      return runGitHubMutation(target.owner, target.repo, async () => {
         await provider.createPullRequestReview({ ...target, event: verdict, body: text })
-        return { status: 'submitted' } as const
-      } catch (error) {
-        if (
-          error instanceof ProviderHttpError &&
-          error.status === 403 &&
-          /resource not accessible by integration/iu.test(error.message)
-        ) {
-          return {
-            status: 'permission_required',
-            message:
-              `CodeInOven needs Pull requests read and write access for ${target.owner}/${target.repo}. ` +
-              'Install the GitHub App on this repository or approve its pending permission update.',
-            settingsUrl: GITHUB_APP_INSTALL_URL
-          } as const
-        }
-        throw error
-      }
+        return null
+      })
     }
   )
 
