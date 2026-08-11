@@ -1577,7 +1577,6 @@ export type AccountAuthProvider = 'google' | 'apple'
 
 export interface AccountSignInStart {
   url: string
-  expiresAt: number
 }
 
 export interface AccountProfileSyncPayload {
