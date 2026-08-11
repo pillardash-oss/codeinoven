@@ -210,6 +210,65 @@ export const AUDIT_REPORT_SCHEMA: Record<string, unknown> = {
         required: ['id', 'title', 'severity', 'description', 'evidence']
       }
     },
+    auditedFiles: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 }
+        },
+        required: ['path', 'reason']
+      }
+    },
+    verification: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        repositoryRevision: { type: 'string', minLength: 1 },
+        scope: { type: 'string', minLength: 1 },
+        checks: {
+          type: 'array',
+          minItems: 4,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              kind: {
+                type: 'string',
+                enum: ['format', 'lint', 'typecheck', 'test', 'build', 'other']
+              },
+              command: { type: 'string' },
+              files: { type: 'array', items: { type: 'string', minLength: 1 } },
+              status: { type: 'string', enum: ['passed', 'failed', 'not_applicable'] },
+              exitCode: { type: 'number' },
+              evidence: { type: 'string', minLength: 1 },
+              findingIds: { type: 'array', items: { type: 'string', minLength: 1 } }
+            },
+            required: ['id', 'kind', 'command', 'files', 'status', 'evidence', 'findingIds']
+          }
+        },
+        utilities: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              status: { type: 'string', enum: ['used', 'unavailable', 'not_applicable'] },
+              evidence: { type: 'string', minLength: 1 }
+            },
+            required: ['name', 'status', 'evidence']
+          }
+        },
+        limitations: { type: 'array', items: { type: 'string', minLength: 1 } }
+      },
+      required: ['repositoryRevision', 'scope', 'checks', 'utilities', 'limitations']
+    },
     resolutionRecommendation: { type: 'string', minLength: 1 },
     conclusion: { type: 'string', minLength: 1 }
   },

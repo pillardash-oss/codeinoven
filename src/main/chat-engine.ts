@@ -200,7 +200,7 @@ interface PersistedProviderCatalog {
 }
 
 const AUDIT_REPORT_JSON_CONTRACT =
-  'Use exactly this JSON shape and property spelling: {"executiveSummary":"string","findings":[{"id":"string","title":"string","severity":"critical|high|medium|low|info","description":"string","evidence":"string"}],"resolutionRecommendation":"string","conclusion":"string"}. Do not rename, omit, or add properties; in particular, the required key is resolutionRecommendation, not resolutionAndRecommendation or resolution_and_recommendation.'
+  'Use these core JSON properties and exact spelling: {"executiveSummary":"string","findings":[{"id":"string","title":"string","severity":"critical|high|medium|low|info","description":"string","evidence":"string"}],"resolutionRecommendation":"string","conclusion":"string"}. Do not rename or omit core properties; in particular, the required key is resolutionRecommendation, not resolutionAndRecommendation or resolution_and_recommendation. Include auditedFiles and verification only when the Assignment audit evidence contract requires them, and do not add any other properties.'
 
 const AUDIT_GENERATION_SYSTEM_PROMPT = [
   `You are an independent ${APP_NAME} audit agent.`,
@@ -219,6 +219,22 @@ const AUDIT_REPAIR_SYSTEM_PROMPT = [
   'Read only the supplied audit-attempt file and correct only the listed validation errors.',
   AUDIT_REPORT_JSON_CONTRACT,
   'Preserve the existing findings and evidence, do not inspect the project again, and return exactly one complete corrected JSON object.'
+].join(' ')
+
+const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
+  'An Assignment audit is an evidence run, not a source-summary exercise.',
+  'Before writing the report, enumerate every implementation file in scope from the Assignment, task reports and commits, repository history, and directly related imports or consumers.',
+  'Inspect the repository instructions and manifests to discover its actual toolchain. Never assume a package manager, framework, or command.',
+  'Run format verification and lint against every applicable audited file, passing the explicit file paths rather than a whole-project directory or broad glob. Use a non-writing formatter check; never rewrite implementation files during an independent audit.',
+  'Run the repository-specific scoped typecheck, static check, or build check that covers the audited files.',
+  'Run only focused tests related to the changed files and feature. Never run the entire application test suite unless the audited feature is itself repository-wide and the Assignment explicitly requires it.',
+  'When the code uses a framework or technology with an installed MCP, skill, or other app utility, call utility_search, activate the relevant result, and invoke its validation/autofix analysis in non-writing mode. For Svelte, use the Svelte documentation and autofixer utility when available.',
+  'A check that cannot safely be scoped must be recorded as not_applicable with the concrete reason; do not replace it with a whole-repository command.',
+  'Record the exact repository revision, audited-file inventory, commands, target files, exit codes, concise output evidence, utilities used or unavailable, and limitations.',
+  'Every failed check must link to at least one actionable finding. Never claim a check passed unless you executed it and observed exit code 0.',
+  'Include exitCode only for checks that ran; omit it for not_applicable checks.',
+  'In addition to the normal audit fields, return auditedFiles and verification using exactly this shape: "auditedFiles":[{"path":"project/relative/path","reason":"why this file is in scope"}],"verification":{"repositoryRevision":"git revision plus dirty-state description","scope":"how the audited scope was derived","checks":[{"id":"check-id","kind":"format|lint|typecheck|test|build|other","command":"exact command or empty when not applicable","files":["project/relative/path"],"status":"passed|failed|not_applicable","exitCode":0,"evidence":"concise factual output or reason","findingIds":[]}],"utilities":[{"name":"utility or MCP name","status":"used|unavailable|not_applicable","evidence":"operation and result or concrete reason"}],"limitations":["remaining verification limitation"]}.',
+  'The checks array must include format, lint, typecheck, and test results. Every audited file must appear in the files list of a format result and a lint result, including an explicit not_applicable result where that check truly does not apply.'
 ].join(' ')
 
 const LOOP_MAX_ITERATIONS = 8
@@ -469,7 +485,10 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
-const AUDIT_ALLOWED_TOOLS = SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool !== 'question')
+const AUDIT_ALLOWED_TOOLS = [
+  ...SPEC_BRAINSTORM_ALLOWED_TOOLS.filter((tool) => tool !== 'question'),
+  'bash'
+]
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
@@ -9348,7 +9367,7 @@ export class ChatEngine {
       requireLocalProject(this.database, projectId)
     )
     if (rawOutput === null) throw new Error('Persisted Assignment audit attempt was not found')
-    return parseAuditReportContent(rawOutput)
+    return parseAuditReportContent(rawOutput, { requireVerification: true })
   }
 
   private async writeAssignmentAuditRepairManifest(
@@ -9452,8 +9471,104 @@ export class ChatEngine {
       'Correct only these validation errors:',
       ...manifest.errors.map((error) => `- ${error}`),
       'Read that file, preserve its audit findings and evidence, and return exactly one complete corrected audit-report JSON object with no Markdown fences or commentary.',
+      'Preserve the auditedFiles and verification manifest. Never invent a command, exit code, utility invocation, or result that was not present in the persisted attempt; use not_applicable with the concrete limitation when execution evidence is unavailable.',
       'Do not repeat the audit, specification, Assignment, or project inspection.'
     ].join('\n')
+  }
+
+  private assignmentAuditNeedsFreshEvidence(errors: string[]): boolean {
+    return errors.some(
+      (error) =>
+        error.startsWith('auditedFiles') ||
+        error.startsWith('verification') ||
+        error.includes('verification scope')
+    )
+  }
+
+  private validateAssignmentAuditExecutionEvidence(input: {
+    content: AuditReportContent
+    assignment: AssignmentPlan
+    messages: AgentMessage[]
+    auditStartedAt: number
+    utilitySearchRequired: boolean
+  }): void {
+    const issues: string[] = []
+    const auditedFiles = new Set(input.content.auditedFiles?.map((file) => file.path) ?? [])
+    for (const expectedFile of new Set(
+      input.assignment.content.tasks.flatMap((task) => task.expectedFiles)
+    )) {
+      if (!auditedFiles.has(expectedFile)) {
+        issues.push(`auditedFiles is missing Assignment expected file ${expectedFile}`)
+      }
+    }
+
+    const observedTools = input.messages
+      .filter(
+        (message) =>
+          message.role === 'assistant' && message.createdAt >= input.auditStartedAt - 1_000
+      )
+      .flatMap((message) => message.parts)
+      .filter(
+        (part): part is Extract<AgentPart, { type: 'tool' }> =>
+          part.type === 'tool' && ['completed', 'error'].includes(part.state.status)
+      )
+    const observedCommands = observedTools
+      .filter((part) => /bash|command|shell|exec/iu.test(part.tool))
+      .map((part) =>
+        [part.state.title, JSON.stringify(part.state.input), part.state.output, part.state.error]
+          .filter((value): value is string => Boolean(value))
+          .join('\n')
+      )
+    const verification = input.content.verification
+    for (const check of verification?.checks ?? []) {
+      if (check.status === 'not_applicable') continue
+      const command = check.command.replace(/^\$\s*/u, '').trim()
+      const observedCommand = observedCommands.find(
+        (observed) => observed.includes(command) || command.includes(observed.trim())
+      )
+      if (!observedCommand) {
+        issues.push(
+          `verification.checks ${check.id} has no matching completed command in the auditor transcript`
+        )
+        continue
+      }
+      if (check.kind === 'format' || check.kind === 'lint') {
+        for (const file of check.files) {
+          if (!observedCommand.includes(file)) {
+            issues.push(
+              `verification.checks ${check.id} did not explicitly target audited file ${file}`
+            )
+          }
+        }
+      }
+    }
+
+    const observedToolNames = observedTools.map((part) => part.tool.toLowerCase())
+    if (
+      input.utilitySearchRequired &&
+      !observedToolNames.some((name) => name.includes('utility_search'))
+    ) {
+      issues.push('verification.utilities has no utility_search call in the auditor transcript')
+    }
+    for (const utility of verification?.utilities ?? []) {
+      if (utility.status !== 'used') continue
+      const tokens = utility.name
+        .toLowerCase()
+        .split(/[^a-z0-9]+/u)
+        .filter((token) => token.length > 3 && token !== 'utility')
+      const invoked = observedToolNames.some(
+        (name) =>
+          name.includes('utility_invoke') ||
+          name.includes('mcp') ||
+          tokens.some((token) => name.includes(token))
+      )
+      if (!invoked) {
+        issues.push(
+          `verification.utilities ${utility.name} has no matching invocation in the auditor transcript`
+        )
+      }
+    }
+    if (issues.length > 0) throw new AuditReportValidationError(issues)
   }
 
   private latestAssignmentAuditOutput(messages: AgentMessage[]): string | null {
@@ -9560,10 +9675,38 @@ export class ChatEngine {
       join('versions', `${spec.id}-v${spec.version}.md`)
     )
     const assignmentPath = await this.artifactRef(projectId, coordinatorThreadId, 'assignment.md')
+    const featureSlug = await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
+    const taskScope = assignment.content.tasks
+      .map((task) => {
+        const evidenceThreadId = task.threadId ?? assignment.coordinatorThreadId
+        const checklist = task.auditChecklist.map((item) => `  - ${item}`).join('\n') || '  - None'
+        const expectedFiles =
+          task.expectedFiles.map((path) => `  - ${path}`).join('\n') || '  - None'
+        const reportedEvidence = task.report?.evidence.map((item) => `  - ${item}`).join('\n')
+        const reviewEvidence = task.review?.checklistResults
+          .map(
+            (result) =>
+              `  - ${result.passed ? 'PASS' : 'FAIL'}: ${result.item}${result.evidence ? ` — ${result.evidence}` : ''}`
+          )
+          .join('\n')
+        return [
+          `Task ${task.id}: ${task.title}`,
+          `Expected files:\n${expectedFiles}`,
+          `Audit checklist:\n${checklist}`,
+          `Baseline evidence: .cio/specs/${featureSlug}/tasks/${evidenceThreadId}/test/baseline.txt`,
+          `Final-check evidence: .cio/specs/${featureSlug}/tasks/${evidenceThreadId}/test/check.txt`,
+          ...(task.report?.commitHash ? [`Reported commit: ${task.report.commitHash}`] : []),
+          ...(reportedEvidence ? [`Worker-reported evidence:\n${reportedEvidence}`] : []),
+          ...(reviewEvidence ? [`Sr. Engineer checklist review:\n${reviewEvidence}`] : [])
+        ].join('\n')
+      })
+      .join('\n\n')
     const basePrompt = [
       'Audit the current project implementation against the approved specification and completed Assignment:',
       `Specification: ${specPath}`,
       `Assignment: ${assignmentPath}`,
+      `Assignment implementation scope and persisted evidence:\n${taskScope}`,
+      'Treat the expected-file lists as the minimum scope, then use the reported commits, repository status/history, imports, and affected consumers to enumerate every additional implementation file that must be audited.',
       `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
     let lastError: Error | null = null
@@ -9574,7 +9717,8 @@ export class ChatEngine {
       priorRepair?.status === 'invalid' &&
       priorRepair.assignmentId === assignment.id &&
       priorRepair.specId === spec.id &&
-      priorRepair.specVersion === spec.version
+      priorRepair.specVersion === spec.version &&
+      !this.assignmentAuditNeedsFreshEvidence(priorRepair.errors)
         ? priorRepair
         : null
     let recoveredContent: AuditReportContent | null = null
@@ -9599,6 +9743,13 @@ export class ChatEngine {
             coordinatorThreadId,
             recoveredAttempt.relativePath
           )
+          this.validateAssignmentAuditExecutionEvidence({
+            content: recoveredContent,
+            assignment,
+            messages: await driver.loadMessages(projectPath, sessionId),
+            auditStartedAt,
+            utilitySearchRequired: false
+          })
           await this.writeAssignmentAuditRepairManifest({
             schemaVersion: 1,
             status: 'valid',
@@ -9616,7 +9767,7 @@ export class ChatEngine {
         } catch (error) {
           const errors =
             error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
-          repairManifest = {
+          const invalidManifest: AssignmentAuditRepairManifest = {
             schemaVersion: 1,
             status: 'invalid',
             projectId,
@@ -9630,7 +9781,8 @@ export class ChatEngine {
             errors,
             updatedAt: Date.now()
           }
-          await this.writeAssignmentAuditRepairManifest(repairManifest)
+          await this.writeAssignmentAuditRepairManifest(invalidManifest)
+          repairManifest = this.assignmentAuditNeedsFreshEvidence(errors) ? null : invalidManifest
         }
       }
     }
@@ -9658,6 +9810,29 @@ export class ChatEngine {
       const messageId = createMessageId()
       const repairing = repairManifest !== null
       const prompt = repairManifest ? this.assignmentAuditRepairPrompt(repairManifest) : basePrompt
+      let utilityInstructions = ''
+      let utilityRuntimeAvailable = false
+      if (!repairing) {
+        try {
+          utilityInstructions = await this.prepareTurnUtilities(
+            driver,
+            projectId,
+            auditorThread.id,
+            sessionId,
+            projectPath,
+            auditorSettings
+          )
+          utilityRuntimeAvailable = Boolean(utilityInstructions)
+        } catch (error) {
+          utilityInstructions = `The app utility gateway could not be prepared for this audit: ${rawErrorMessage(error)}. Record this exact limitation in verification.utilities and verification.limitations.`
+          Logger.error('Assignment audit utility preparation failed', {
+            projectId,
+            threadId: coordinatorThreadId,
+            auditorThreadId: auditorThread.id,
+            error: rawErrorMessage(error)
+          })
+        }
+      }
       await this.persistOutboundMessage(
         projectId,
         auditorThread.id,
@@ -9686,8 +9861,16 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: repairing ? AUDIT_REPAIR_SYSTEM_PROMPT : AUDIT_GENERATION_SYSTEM_PROMPT,
-          allowedTools: AUDIT_ALLOWED_TOOLS,
+          systemPrompt: repairing
+            ? AUDIT_REPAIR_SYSTEM_PROMPT
+            : [
+                AUDIT_GENERATION_SYSTEM_PROMPT,
+                ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
+                utilityInstructions
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+          allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId,
           ...(useStructuredOutput
             ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA, retryCount: 2 } }
@@ -9729,11 +9912,18 @@ export class ChatEngine {
             coordinatorThreadId,
             persistedAttempt.relativePath
           )
+          this.validateAssignmentAuditExecutionEvidence({
+            content,
+            assignment,
+            messages: await driver.loadMessages(projectPath, sessionId),
+            auditStartedAt,
+            utilitySearchRequired: utilityRuntimeAvailable
+          })
         } catch (error) {
           const errors =
             error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
           lastError = new AuditReportValidationError(errors)
-          repairManifest = {
+          const invalidManifest: AssignmentAuditRepairManifest = {
             schemaVersion: 1,
             status: 'invalid',
             projectId,
@@ -9747,7 +9937,8 @@ export class ChatEngine {
             errors,
             updatedAt: Date.now()
           }
-          await this.writeAssignmentAuditRepairManifest(repairManifest)
+          await this.writeAssignmentAuditRepairManifest(invalidManifest)
+          repairManifest = this.assignmentAuditNeedsFreshEvidence(errors) ? null : invalidManifest
           continue
         }
         await this.writeAssignmentAuditRepairManifest({
@@ -9778,6 +9969,14 @@ export class ChatEngine {
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
+        await this.cleanupTurnUtilities(sessionId).catch((error) => {
+          Logger.error('Assignment audit utility cleanup failed', {
+            projectId,
+            threadId: coordinatorThreadId,
+            auditorThreadId: auditorThread.id,
+            error: rawErrorMessage(error)
+          })
+        })
       }
     }
 

@@ -1027,6 +1027,111 @@
           })}
         </section>
 
+        {#if draft.content.auditedFiles?.length || draft.content.verification}
+          <section class="scroll-mt-5" aria-labelledby="audit-verification-heading">
+            <h2 id="audit-verification-heading" class="text-xl font-semibold tracking-tight">
+              Verification evidence
+            </h2>
+
+            {#if draft.content.auditedFiles?.length}
+              <div class="mt-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                  Audited files
+                </h3>
+                <ul class="mt-2 divide-y divide-border border-y">
+                  {#each draft.content.auditedFiles as file (file.path)}
+                    <li class="grid gap-1 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                      <code class="break-all text-xs text-foreground">{file.path}</code>
+                      <span class="text-xs leading-5 text-muted">{file.reason}</span>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+
+            {#if draft.content.verification}
+              <div class="mt-5 space-y-5">
+                <div class="grid gap-1 text-xs md:grid-cols-[8rem_minmax(0,1fr)]">
+                  <span class="font-semibold text-dimmed">Repository state</span>
+                  <code class="break-all text-foreground">
+                    {draft.content.verification.repositoryRevision}
+                  </code>
+                  <span class="font-semibold text-dimmed">Audit scope</span>
+                  <span class="text-muted">{draft.content.verification.scope}</span>
+                </div>
+
+                <div>
+                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                    Scoped checks
+                  </h3>
+                  <div class="mt-2 divide-y divide-border border-y">
+                    {#each draft.content.verification.checks as check (check.id)}
+                      <div class="space-y-1.5 py-3">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-xs font-semibold capitalize text-foreground">
+                            {check.kind}
+                          </span>
+                          <span
+                            class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                          >
+                            {check.status.replace('_', ' ')}
+                          </span>
+                          {#if check.exitCode !== undefined}
+                            <span class="text-[10px] tabular-nums text-dimmed">
+                              Exit {check.exitCode}
+                            </span>
+                          {/if}
+                        </div>
+                        {#if check.command}
+                          <code
+                            class="block overflow-x-auto whitespace-pre text-xs text-foreground"
+                          >
+                            {check.command}
+                          </code>
+                        {/if}
+                        <p class="text-xs leading-5 text-muted">{check.evidence}</p>
+                        {#if check.files.length}
+                          <p class="break-all text-[10px] leading-4 text-dimmed">
+                            {check.files.join(', ')}
+                          </p>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                    Utilities and MCPs
+                  </h3>
+                  <ul class="mt-2 space-y-2">
+                    {#each draft.content.verification.utilities as utility (utility.name)}
+                      <li class="text-xs leading-5 text-muted">
+                        <span class="font-semibold text-foreground">{utility.name}</span>
+                        <span class="text-dimmed"> · {utility.status.replace('_', ' ')}</span>
+                        — {utility.evidence}
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+
+                {#if draft.content.verification.limitations.length}
+                  <div>
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                      Limitations
+                    </h3>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted">
+                      {#each draft.content.verification.limitations as limitation (limitation)}
+                        <li>{limitation}</li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </section>
+        {/if}
+
         {@render textSection(
           'resolution_recommendation',
           'Resolution & recommendation',
