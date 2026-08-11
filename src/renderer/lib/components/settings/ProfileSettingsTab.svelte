@@ -50,6 +50,7 @@
     harnesses: [],
     providers: [],
     models: [],
+    utilities: [],
     projects: [],
     activityDays: [],
     generatedAt: 0
@@ -169,6 +170,19 @@
     const hours = Math.floor(totalMinutes / 60)
     const minutes = totalMinutes % 60
     return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`
+  }
+
+  function utilityLabel(id: string): string {
+    switch (id) {
+      case 'image_descriptor':
+        return 'Image descriptor'
+      case 'memory':
+        return 'Memory'
+      case 'title':
+        return 'Title generation'
+      default:
+        return id
+    }
   }
 
   function formatDateRange(range: LocalProfileAnalyticsRange): string {
@@ -740,6 +754,31 @@
       </div>
     </section>
   </div>
+
+  <section class="mt-4 rounded-xl border" aria-labelledby="utility-usage-heading">
+    <div class="border-b px-4 py-3">
+      <h2 id="utility-usage-heading" class="text-sm font-semibold">Utilities</h2>
+      <p class="mt-0.5 text-xs text-muted">
+        Image descriptor, memory, and title generation in this period.
+      </p>
+    </div>
+    <div class="divide-y">
+      {#each usage.utilities as utility (utility.id)}
+        <div class="flex items-center justify-between gap-4 px-4 py-3 text-xs">
+          <span class="min-w-0 truncate font-semibold">{utilityLabel(utility.id)}</span>
+          <span class="shrink-0 tabular-nums text-muted">
+            {formatNumber(utility.tokens)} tokens · {formatCost(utility.costUsd)} · {formatNumber(
+              utility.messageCount
+            )} calls
+          </span>
+        </div>
+      {:else}
+        <p class="px-4 py-8 text-center text-xs text-muted">
+          Utility usage appears after an image is described or memory is generated.
+        </p>
+      {/each}
+    </div>
+  </section>
 </div>
 
 <style>

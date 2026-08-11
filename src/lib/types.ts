@@ -1552,6 +1552,8 @@ export interface LocalProfileAnalytics {
   harnesses: LocalProfileUsageBreakdown[]
   providers: LocalProfileUsageBreakdown[]
   models: LocalProfileUsageBreakdown[]
+  /** Auxiliary utility calls (image descriptor, memory, title) with their cost. */
+  utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
   generatedAt: number

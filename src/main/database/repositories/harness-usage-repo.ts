@@ -74,6 +74,15 @@ interface LocalProjectAggregateRow extends UsageAggregateRow {
   last_active_at: number
 }
 
+/**
+ * Auxiliary utility features whose usage is recorded in `usage_events` but is
+ * NOT already represented by an assistant `agent_messages` row (so adding them
+ * to the profile totals never double-counts an agent turn). Web and
+ * computer-use tool calls are excluded because their tokens ride inside the
+ * parent agent turn.
+ */
+const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title'] as const
+
 function tokensFromRow(
   row: Pick<
     HarnessUsageRow | HarnessModelUsageRow,
@@ -402,9 +411,27 @@ export class HarnessUsageRepo {
          AND m.harness_id IS NOT NULL
          AND m.created_at >= ?
          AND m.created_at < ?
-         AND p.hidden = 0
        GROUP BY p.id
        ORDER BY message_count DESC, last_active_at DESC`,
+      ...params
+    )
+    const utilityRows = this.db.all<LocalUsageAggregateRow>(
+      `SELECT feature AS id,
+              NULL AS harness_id,
+              NULL AS provider_id,
+              COUNT(*) AS message_count,
+              SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+              SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
+                  + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
+                  + COALESCE(tokens_reasoning, 0)) AS tokens_total,
+              0 AS duration_ms
+       FROM usage_events
+       WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
+         AND created_at >= ?
+         AND created_at < ?
+       GROUP BY feature
+       ORDER BY message_count DESC, feature ASC`,
+      ...PROFILE_UTILITY_FEATURES,
       ...params
     )
     const activityRows = this.db.all<{ date: string; message_count: number }>(
@@ -428,6 +455,11 @@ export class HarnessUsageRepo {
     const harnesses = harnessRows.map(toUsageBreakdown)
     const providers = providerRows.map(toUsageBreakdown)
     const models = modelRows.map(toUsageBreakdown)
+    const utilities = utilityRows.map(toUsageBreakdown)
+    const harnessCost = harnessRows.reduce((sum, row) => sum + row.cost_usd, 0)
+    const harnessTokens = harnessRows.reduce((sum, row) => sum + row.tokens_total, 0)
+    const utilityCost = utilityRows.reduce((sum, row) => sum + row.cost_usd, 0)
+    const utilityTokens = utilityRows.reduce((sum, row) => sum + row.tokens_total, 0)
     const projects: LocalProfileProjectBreakdown[] = projectRows.map((row) => ({
       id: row.id,
       name: row.name,
@@ -449,8 +481,8 @@ export class HarnessUsageRepo {
     return {
       range,
       messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
-      costUsd: harnessRows.reduce((sum, row) => sum + row.cost_usd, 0),
-      tokens: harnessRows.reduce((sum, row) => sum + row.tokens_total, 0),
+      costUsd: harnessCost + utilityCost,
+      tokens: harnessTokens + utilityTokens,
       durationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
       topHarnessId: harnesses[0]?.id ?? null,
       topProviderId: providers[0]?.id ?? null,
@@ -458,6 +490,7 @@ export class HarnessUsageRepo {
       harnesses,
       providers,
       models,
+      utilities,
       projects,
       activityDays,
       generatedAt: Date.now()
