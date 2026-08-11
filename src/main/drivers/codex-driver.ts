@@ -1827,10 +1827,18 @@ function mapCodexTokenRecord(value: Record<string, unknown>): {
   legacy: AgentTokenUsage | undefined
   usage: CodexNormalizedUsage | undefined
 } {
-  const input = numberValue(value['inputTokens']) ?? numberValue(value['input_tokens'])
-  const output = numberValue(value['outputTokens']) ?? numberValue(value['output_tokens'])
+  const input =
+    numberValue(value['inputTokens']) ??
+    numberValue(value['input_tokens']) ??
+    numberValue(value['input'])
+  const output =
+    numberValue(value['outputTokens']) ??
+    numberValue(value['output_tokens']) ??
+    numberValue(value['output'])
   const reasoning =
-    numberValue(value['reasoningOutputTokens']) ?? numberValue(value['reasoning_output_tokens'])
+    numberValue(value['reasoningOutputTokens']) ??
+    numberValue(value['reasoning_output_tokens']) ??
+    numberValue(value['reasoning'])
   const cachedInput =
     numberValue(value['cachedInputTokens']) ??
     numberValue(value['cached_input_tokens']) ??
@@ -1848,8 +1856,14 @@ function mapCodexTokenRecord(value: Record<string, unknown>): {
     cacheWrite !== undefined ||
     rawTotal !== undefined
   if (!reported) return { legacy: undefined, usage: undefined }
+  // Codex reports `input` as the cache-inclusive input count, and cached input
+  // is a subset of it, so uncached input is the remainder after the reported
+  // cache portion is removed. A defensive clamp keeps a malformed cache value
+  // that exceeds the input from producing a negative token count; when input is
+  // absent uncached input stays null because there is nothing to subtract from.
+  const uncachedInput = input === undefined ? null : Math.max(0, input - (cachedInput ?? 0))
   const usage: CodexNormalizedUsage = {
-    uncachedInput: input ?? null,
+    uncachedInput,
     cachedInput: cachedInput ?? null,
     cacheWrite: cacheWrite ?? null,
     output: output ?? null,
@@ -1907,6 +1921,7 @@ export function mapCodexUsage(value: unknown):
   const contextUsed =
     numberValue(last['inputTokens']) ??
     numberValue(last['input_tokens']) ??
+    numberValue(last['input']) ??
     numberValue(tokenUsage['contextUsed']) ??
     numberValue(tokenUsage['context_used']) ??
     totalRecord?.legacy?.total ??
