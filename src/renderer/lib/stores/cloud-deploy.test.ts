@@ -1,0 +1,160 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const invoke = vi.hoisted(() => vi.fn())
+
+vi.mock('$lib/ipc.svelte', () => ({ invoke }))
+
+import { cloudDeployState } from './cloud-deploy.svelte'
+import type {
+  CloudDeploymentContainer,
+  CloudDeploymentProviderKind,
+  CloudDeploymentResult
+} from '$shared/types'
+
+const providerKind: CloudDeploymentProviderKind = 'coolify'
+
+const container: CloudDeploymentContainer = {
+  id: 'app-1',
+  label: 'My App',
+  providerKind,
+  status: 'success',
+  url: 'https://app.example.com'
+}
+
+const overview: CloudDeploymentResult = {
+  containers: [container],
+  hasDeployments: true,
+  fetchedAt: Date.now()
+}
+
+describe('CloudDeployState store', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    invoke.mockReset()
+    cloudDeployState.reset()
+  })
+
+  it('serves a fresh overview from cache without re-fetching', async () => {
+    invoke.mockResolvedValue(overview)
+    const first = await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(first).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    const second = await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(second).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('revalidates the overview after the TTL elapses', async () => {
+    invoke.mockResolvedValue(overview)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(61_000)
+    const refreshed = await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(refreshed).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not re-fetch a key during its failure cooldown', async () => {
+    invoke.mockRejectedValue(
+      new Error("Error invoking remote method 'cloudDeploy:overview': Error: boom")
+    )
+    await expect(cloudDeployState.ensureOverview('project-1', providerKind)).rejects.toThrow('boom')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    const duringCooldown = await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(duringCooldown).toBeNull()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries a key once its failure cooldown has elapsed', async () => {
+    invoke.mockRejectedValue(new Error('boom'))
+    await expect(cloudDeployState.ensureOverview('project-1', providerKind)).rejects.toThrow('boom')
+
+    vi.advanceTimersByTime(121_000)
+    invoke.mockResolvedValue(overview)
+    const result = await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(result).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates concurrent overview fetches for the same key', async () => {
+    let resolveOverview: (value: CloudDeploymentResult) => void
+    invoke.mockImplementation(
+      () =>
+        new Promise<CloudDeploymentResult>((resolve) => {
+          resolveOverview = resolve
+        })
+    )
+
+    const first = cloudDeployState.ensureOverview('project-1', providerKind)
+    const second = cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    resolveOverview!(overview)
+    await expect(first).resolves.toEqual(overview)
+    await expect(second).resolves.toEqual(overview)
+  })
+
+  it('deduplicates container status fetches for the same key', async () => {
+    invoke.mockResolvedValue(container)
+    const first = await cloudDeployState.ensureContainerStatus(
+      'project-1',
+      providerKind,
+      container.id
+    )
+    expect(first).toEqual(container)
+
+    const second = await cloudDeployState.ensureContainerStatus(
+      'project-1',
+      providerKind,
+      container.id
+    )
+    expect(second).toEqual(container)
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('caches container logs with a longer TTL', async () => {
+    invoke.mockResolvedValue({ containerId: container.id, log: 'build ok' })
+    await cloudDeployState.ensureContainerLog('project-1', providerKind, container.id)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(60_000)
+    await cloudDeployState.ensureContainerLog('project-1', providerKind, container.id)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(5 * 60_000 + 1_000)
+    await cloudDeployState.ensureContainerLog('project-1', providerKind, container.id)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('updates a container status without re-fetching', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.ensureContainerStatus('project-1', providerKind, container.id)
+
+    cloudDeployState.setContainerStatus({ ...container, status: 'building' })
+    const updated = await cloudDeployState.ensureContainerStatus(
+      'project-1',
+      providerKind,
+      container.id
+    )
+    expect(updated?.status).toBe('building')
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('force bypasses the TTL and failure cooldown', async () => {
+    invoke.mockRejectedValue(new Error('boom'))
+    await expect(cloudDeployState.ensureOverview('project-1', providerKind)).rejects.toThrow('boom')
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    invoke.mockResolvedValue(overview)
+    const result = await cloudDeployState.ensureOverview('project-1', providerKind, true)
+    expect(result).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+})
