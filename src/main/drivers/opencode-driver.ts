@@ -101,6 +101,37 @@ function textValue(value: unknown): string | undefined {
   return text || undefined
 }
 
+/**
+ * Map a thread's permission level onto opencode's per-session permission rules.
+ * opencode turns a prompt's `tools` field into session permission rules
+ * (`{permission, action: "allow"|"deny", pattern: "*"}`), so a blanket
+ * `{"*": false}` becomes a hard deny-all that also blocks `external_directory`
+ * reads (e.g. `/tmp/...`) before the engine's `permission.asked` auto-replies
+ * can approve them. Mirror the permission modes of the other drivers:
+ *
+ *  - `full_access` → dangerously skip: `{"*": true}` allows every tool and
+ *    permission, so nothing is ever asked or denied.
+ *  - `auto_review` → auto-approve: the app's tool allow-list stays a hard deny
+ *    for non-listed tools, but `external_directory` is allowed outright so
+ *    external reads are auto-approved instead of hard-denied.
+ *
+ * Returns `undefined` when the prompt should not constrain tools at all.
+ */
+export function opencodePermissionTools(
+  opts: Pick<SendPromptOptions, 'settings' | 'allowedTools'>
+): Record<string, boolean> | undefined {
+  if (opts.settings.permissionLevel === 'full_access') {
+    return { '*': true }
+  }
+  const tools: Record<string, boolean> = {}
+  if (opts.allowedTools !== undefined) {
+    tools['*'] = false
+    for (const tool of opts.allowedTools) tools[tool] = true
+  }
+  tools['external_directory'] = true
+  return tools
+}
+
 /** Parse `opencode models --verbose`: model ref line followed by one JSON object. */
 export function parseOpenCodeModels(output: string): Array<Record<string, unknown>> {
   const models: Array<Record<string, unknown>> = []
@@ -1209,11 +1240,9 @@ export class OpenCodeDriver implements HarnessDriver {
     if (opts.systemPrompt) {
       body['system'] = opts.systemPrompt
     }
-    if (opts.allowedTools) {
-      body['tools'] = Object.fromEntries([
-        ['*', false],
-        ...opts.allowedTools.map((tool) => [tool, true] as const)
-      ])
+    const tools = opencodePermissionTools(opts)
+    if (tools !== undefined) {
+      body['tools'] = tools
     }
     if (opts.structuredOutput) {
       body['format'] = {

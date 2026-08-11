@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mapOpenCodeEvent, mapOpenCodePart, parseOpenCodeModels } from './opencode-driver'
+import {
+  mapOpenCodeEvent,
+  mapOpenCodePart,
+  opencodePermissionTools,
+  parseOpenCodeModels
+} from './opencode-driver'
 
 vi.mock('child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }))
 
@@ -447,5 +452,56 @@ describe('mapOpenCodeEvent', () => {
         reply: 'reject'
       }
     ])
+  })
+})
+
+describe('opencodePermissionTools', () => {
+  const settings = (permissionLevel: 'auto_review' | 'full_access') =>
+    ({
+      harnessId: 'opencode',
+      providerId: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+      thinkingLevel: 'medium',
+      permissionLevel,
+      engineeringMode: false
+    }) as const
+
+  it('maps full_access to an allow-all bypass so nothing is asked or denied', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('full_access'), allowedTools: undefined })
+    ).toEqual({
+      '*': true
+    })
+    expect(
+      opencodePermissionTools({ settings: settings('full_access'), allowedTools: ['read', 'bash'] })
+    ).toEqual({ '*': true })
+  })
+
+  it('auto-approves external directories while keeping the app allow-list restrictive', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: ['read', 'glob'] })
+    ).toEqual({
+      '*': false,
+      read: true,
+      glob: true,
+      external_directory: true
+    })
+  })
+
+  it('auto-approves external directories when no tool allow-list is set', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: undefined })
+    ).toEqual({
+      external_directory: true
+    })
+  })
+
+  it('keeps an empty allow-list fully restrictive for auto_review', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: [] })
+    ).toEqual({
+      '*': false,
+      external_directory: true
+    })
   })
 })
