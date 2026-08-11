@@ -69,18 +69,45 @@ class FixtureCliDriver extends PersistentCliDriver {
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
-    void context
     if (!isRecord(value) || value['type'] !== 'result') return null
+    const authenticationFailure = value['authenticationFailure'] === true
     const message: AgentMessage = {
       id: 'assistant-1',
       role: 'assistant',
-      parts: [],
+      parts: authenticationFailure
+        ? [
+            {
+              type: 'text',
+              id: 'assistant-1:text',
+              messageID: 'assistant-1',
+              text: 'Arbitrary provider failure text that must never become a title'
+            }
+          ]
+        : [],
       createdAt: 10,
       completedAt: 20
     }
     return {
       nativeSessionId: 'native-1',
-      messages: [message]
+      messages: [message],
+      ...(authenticationFailure
+        ? {
+            events: [
+              {
+                type: 'message.completed' as const,
+                sessionId: context.sessionId,
+                messageId: message.id,
+                error: 'Authentication failed',
+                issue: {
+                  kind: 'authentication' as const,
+                  message: 'Provider authentication failed.',
+                  harnessId: 'fixture-cli',
+                  retryable: true
+                }
+              }
+            ]
+          }
+        : {})
     }
   }
 }
@@ -179,5 +206,29 @@ describe('PersistentCliDriver', () => {
     await driver.abort('/project', sessionId)
 
     expect(child.killed).toBe(true)
+  })
+
+  it('rejects a structured authentication failure instead of using its response as a title', async () => {
+    const storage = await createStorage()
+    const driver = new FixtureCliDriver(storage)
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChild()
+      queueMicrotask(() => {
+        child.stdout.emit('data', Buffer.from('{"type":"result","authenticationFailure":true}\n'))
+      })
+      return child as unknown as ChildProcess
+    })
+
+    const title = await driver.generateTitle('/project', {
+      settings: {
+        ...prompt.settings,
+        providerId: 'fixture-provider',
+        modelId: 'fixture-model'
+      },
+      message: 'Fix my account'
+    })
+
+    expect(title).toBeNull()
+    expect(spawnMock).toHaveBeenCalledOnce()
   })
 })

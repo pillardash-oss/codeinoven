@@ -6,11 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../lib/types'
 import { StorageEngine } from '../storage-engine'
-import {
-  ClaudeCodeDriver,
-  filterClaudeGeneratedTitle,
-  mapClaudeCodeRecord
-} from './claude-code-driver'
+import { ClaudeCodeDriver, mapClaudeCodeRecord } from './claude-code-driver'
 import type { CliLineParseContext } from './persistent-cli-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -221,6 +217,38 @@ describe('ClaudeCodeDriver', () => {
     ).toBe(false)
   })
 
+  it('maps Claude authentication_failed metadata to a structured authentication issue', () => {
+    const result = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        error: 'authentication_failed',
+        session_id: 'native-auth',
+        message: {
+          id: 'assistant-auth',
+          content: [{ type: 'text', text: 'Provider-supplied failure text' }]
+        }
+      },
+      {
+        sessionId: 'title-session',
+        session: {
+          id: 'title-session',
+          title: 'Thread title',
+          projectPathHash: 'hash',
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1
+        }
+      }
+    )
+
+    expect(result?.events).toContainEqual(
+      expect.objectContaining({
+        type: 'message.completed',
+        issue: expect.objectContaining({ kind: 'authentication' })
+      })
+    )
+  })
+
   it('streams supported prompt attachments as Claude content blocks', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
@@ -264,22 +292,6 @@ describe('ClaudeCodeDriver', () => {
       })}\n`
     )
     child.emit('exit', 0, null)
-  })
-})
-
-describe('Claude title response filtering', () => {
-  it.each([
-    'Failed to authenticate',
-    'Failed to authenticate. OAuth session expired and could not be refreshed',
-    'OAuth session expired and could not be refreshed'
-  ])('rejects authentication text so the user-message fallback remains: %s', (response) => {
-    expect(filterClaudeGeneratedTitle(response)).toBeNull()
-  })
-
-  it('preserves a valid generated title', () => {
-    expect(filterClaudeGeneratedTitle('Repair Claude OAuth title generation')).toBe(
-      'Repair Claude OAuth title generation'
-    )
   })
 })
 

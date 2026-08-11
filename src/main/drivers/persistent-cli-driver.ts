@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentPart,
+  AgentProviderIssue,
   AgentQuestionRequest,
   HarnessCommand,
   PermissionReply,
@@ -36,6 +37,13 @@ interface TitleTurnWaiter {
   resolve: () => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+class TitleTurnProviderIssueError extends Error {
+  constructor(readonly issue: AgentProviderIssue) {
+    super(issue.message)
+    this.name = 'TitleTurnProviderIssueError'
+  }
 }
 
 const TITLE_GENERATION_TIMEOUT_MS = 180_000
@@ -202,6 +210,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         await completion.promise
         const messages = await this.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
+        if (response?.error) continue
         const raw = response?.parts
           .filter((part) => part.type === 'text')
           .map((part) => part.text)
@@ -209,6 +218,9 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         const title = raw ? sanitizeGeneratedTitle(raw) : null
         if (title) return title
       } catch (error) {
+        if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
+          return null
+        }
         Logger.dev(
           `${this.name} title model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
@@ -705,7 +717,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       const waiter = this.titleTurnWaiters.get(event.sessionId)
       if (event.type === 'session.error') {
         this.clearTitleTurnWaiter(event.sessionId)
-        waiter?.reject(new Error(event.error ?? `${this.name} title generation failed`))
+        waiter?.reject(
+          event.issue
+            ? new TitleTurnProviderIssueError(event.issue)
+            : new Error(event.error ?? `${this.name} title generation failed`)
+        )
+      } else if (event.type === 'message.completed' && event.issue) {
+        this.clearTitleTurnWaiter(event.sessionId)
+        waiter?.reject(new TitleTurnProviderIssueError(event.issue))
       } else if (
         event.type === 'session.idle' ||
         (event.type === 'session.status' && event.status.state === 'idle')
