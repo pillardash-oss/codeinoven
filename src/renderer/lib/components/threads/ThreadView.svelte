@@ -1133,6 +1133,9 @@
     refreshResponseHighlights()
     updateResponseBubblePositions()
     closeResponseSelection()
+    // Open the comment editor by default so the user can start typing right
+    // away; the selection is already attached to the chat component.
+    commentEditorReferenceId = id
   }
 
   function removeResponseReference(id: string): void {
