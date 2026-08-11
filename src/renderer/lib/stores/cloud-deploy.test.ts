@@ -190,6 +190,54 @@ describe('CloudDeployState store', () => {
     expect(toastMock.message).toHaveBeenCalledTimes(2)
   })
 
+  it('monitorContainers fetches authoritative status per configured container, keyed by project', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.monitorContainers('project-1', [
+      container,
+      { ...container, id: 'app-2' }
+    ])
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    // A second pass within the TTL serves cache and does not over-fetch.
+    await cloudDeployState.monitorContainers('project-1', [
+      container,
+      { ...container, id: 'app-2' }
+    ])
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('monitorContainers does not share status caches across projects', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.monitorContainers('project-1', [container])
+    await cloudDeployState.monitorContainers('project-2', [container])
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('monitorContainers revalidates a container status after its TTL elapses', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.monitorContainers('project-1', [container])
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    vi.advanceTimersByTime(61_000)
+    await cloudDeployState.monitorContainers('project-1', [container])
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('monitorContainers keeps stale data on screen during a failure cooldown', async () => {
+    invoke.mockResolvedValue(container)
+    await cloudDeployState.monitorContainers('project-1', [container])
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    invoke.mockRejectedValue(new Error('boom'))
+    vi.advanceTimersByTime(61_000)
+    await cloudDeployState.monitorContainers('project-1', [container])
+    expect(invoke).toHaveBeenCalledTimes(2)
+
+    // Inside the cooldown the failed key is not retried and stale data is kept.
+    await cloudDeployState.monitorContainers('project-1', [container])
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
   it('does not collide overview cache entries across projects for the same provider', async () => {
     invoke.mockResolvedValue(overview)
     await cloudDeployState.ensureOverview('project-1', providerKind)
