@@ -1101,9 +1101,9 @@ export class GitState {
     }
   }
 
-  async getLog(projectId: string, limit = 30): Promise<GitCommitInfo[]> {
+  async getLog(projectId: string, limit = 30, offset = 0): Promise<GitCommitInfo[]> {
     try {
-      return await invoke('git:log', projectId, limit)
+      return await invoke('git:log', projectId, limit, offset)
     } catch {
       return []
     }

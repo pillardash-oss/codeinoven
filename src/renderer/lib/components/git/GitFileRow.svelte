@@ -22,6 +22,8 @@
     onIgnore?: (path: string) => void
     onDiscard?: (path: string) => void
     readonly?: boolean
+    /** Overrides the label shown for the path (e.g. just the basename inside a tree). */
+    displayPath?: string
   }
 
   let {
@@ -39,7 +41,8 @@
     onOpenInEditor,
     onIgnore,
     onDiscard,
-    readonly = false
+    readonly = false,
+    displayPath
   }: Props = $props()
 
   const hasActions = $derived(
@@ -150,7 +153,8 @@
             {letter}
           </span>
           <FileTypeIcon path={change.path} size={13} />
-          <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{change.path}</span
+          <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted"
+            >{displayPath ?? change.path}</span
           >
           {#if change.oldPath}
             <span class="shrink-0 text-[9px] text-dimmed">from {change.oldPath}</span>

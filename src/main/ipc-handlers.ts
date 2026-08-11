@@ -3006,13 +3006,18 @@ export function registerIpcHandlers(
       validateBranchName(name)
     )
   })
-  ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown) => {
-    const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
-    return gitService.log(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      bounded
-    )
-  })
+  ipcMain.handle(
+    'git:log',
+    async (_, projectId: unknown, limit?: unknown, offset?: unknown) => {
+      const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
+      const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)
+      return gitService.log(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        bounded,
+        boundedOffset
+      )
+    }
+  )
   ipcMain.handle('git:commitDiff', async (_, projectId: unknown, hash: unknown) => {
     const safeHash = validateEntityId(hash, 'Commit hash')
     return gitService.commitDiff(

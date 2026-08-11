@@ -15,12 +15,17 @@
   } from '$shared/types'
   import {
     Archive,
+    ArrowDownToLine,
     ArrowLeft,
+    ArrowUpFromLine,
     Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
+    Download,
     FileDiff,
+    Folder,
+    FolderOpen,
     GitBranch,
     GitCommit,
     GitFork,
@@ -102,6 +107,10 @@
   let commitTextarea = $state<HTMLTextAreaElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
+  let loadingMoreHistory = $state(false)
+  /** False once a page comes back shorter than requested — there's nothing older left. */
+  let historyHasMore = $state(true)
+  const HISTORY_PAGE_SIZE = 30
   let commitMessage = $state('')
   let selectedCommit = $state<GitCommitInfo | null>(null)
   let commitDiffChanges = $state<GitFileChange[]>([])
@@ -120,6 +129,8 @@
   let commitExpanded = $state<Record<string, boolean>>({})
   let loadingCommitDiffFile = $state<Record<string, boolean>>({})
   let commitDiffErrors = $state<Record<string, string | null>>({})
+  /** Directories collapsed by the user in the commit diff's tree view — expanded by default. */
+  let commitTreeCollapsedDirs = $state<Record<string, boolean>>({})
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
   let selectedStash = $state<GitStashEntry | null>(null)
@@ -151,6 +162,9 @@
   )
   const untracked = $derived(changes.filter((change) => change.status === 'untracked'))
   const conflicted = $derived(changes.filter((change) => change.status === 'conflicted'))
+  const commitTree = $derived(buildCommitTree(commitDiffChanges))
+  /** Local commits not yet on the upstream remote, oldest-first-among-them — matches history order. */
+  const unpushedCount = $derived(status?.upstream ? Math.max(0, status.ahead) : 0)
 
   const busy = $derived(gitState.isBusy(['refresh', 'init', 'commit', 'amend', 'reset']))
   const commitBusy = $derived(gitState.isBusy(['commit', 'amend']))
@@ -389,8 +403,27 @@
   async function loadHistory(): Promise<void> {
     if (commitHistory.length > 0) return
     loadingHistory = true
-    commitHistory = await gitState.getLog(projectId, 30)
+    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
+    commitHistory = page
+    historyHasMore = page.length === HISTORY_PAGE_SIZE
     loadingHistory = false
+  }
+
+  /** Pages in older commits as the history list scrolls toward its end. */
+  async function loadMoreHistory(): Promise<void> {
+    if (loadingHistory || loadingMoreHistory || !historyHasMore) return
+    loadingMoreHistory = true
+    const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
+    commitHistory = [...commitHistory, ...page]
+    historyHasMore = page.length === HISTORY_PAGE_SIZE
+    loadingMoreHistory = false
+  }
+
+  /** Infinite scroll for the History tab — the panel's tabs share one scroll container. */
+  function handleContentScroll(event: Event): void {
+    if (activeTab !== 'history') return
+    const el = event.currentTarget as HTMLDivElement
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) void loadMoreHistory()
   }
 
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
@@ -402,7 +435,51 @@
     commitExpanded = {}
     loadingCommitDiffFile = {}
     commitDiffErrors = {}
+    commitTreeCollapsedDirs = {}
     loadingCommitDiff = false
+  }
+
+  interface CommitTreeNode {
+    name: string
+    path: string
+    dirs: Map<string, CommitTreeNode>
+    files: GitFileChange[]
+  }
+
+  /** Groups a flat commit diff into a folder tree — read-only mirror of GitChangesTree's layout. */
+  function buildCommitTree(files: GitFileChange[]): CommitTreeNode {
+    const root: CommitTreeNode = { name: '', path: '', dirs: new Map(), files: [] }
+    for (const change of files) {
+      const segments = change.path.split('/')
+      let node = root
+      for (let i = 0; i < segments.length - 1; i++) {
+        const seg = segments[i] ?? ''
+        let child = node.dirs.get(seg)
+        if (!child) {
+          child = {
+            name: seg,
+            path: segments.slice(0, i + 1).join('/'),
+            dirs: new Map(),
+            files: []
+          }
+          node.dirs.set(seg, child)
+        }
+        node = child
+      }
+      node.files.push(change)
+    }
+    return root
+  }
+
+  function sortCommitDirs(dirs: Map<string, CommitTreeNode>): CommitTreeNode[] {
+    return [...dirs.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  function toggleCommitDir(path: string): void {
+    commitTreeCollapsedDirs = {
+      ...commitTreeCollapsedDirs,
+      [path]: !(commitTreeCollapsedDirs[path] ?? false)
+    }
   }
 
   const selectedCommitIndex = $derived.by(() => {
@@ -412,12 +489,15 @@
   })
   const canGoNewer = $derived(selectedCommitIndex > 0)
   const canGoOlder = $derived(
-    selectedCommitIndex >= 0 && selectedCommitIndex < commitHistory.length - 1
+    selectedCommitIndex >= 0 && (selectedCommitIndex < commitHistory.length - 1 || historyHasMore)
   )
 
-  function navigateCommit(direction: -1 | 1): void {
+  async function navigateCommit(direction: -1 | 1): Promise<void> {
     const index = selectedCommitIndex
     const next = index + direction
+    if (next >= commitHistory.length - 1 && direction > 0 && historyHasMore) {
+      await loadMoreHistory()
+    }
     const commit = commitHistory[next]
     if (commit) void selectCommit(commit)
   }
@@ -520,8 +600,7 @@
     await gitState.deleteCommit(projectId, target.hash)
     if (!gitState.error) {
       clearSelectedCommit()
-      commitHistory = []
-      void loadHistory()
+      void reloadHistory()
       void refreshStatus()
     }
   }
@@ -549,8 +628,7 @@
     await gitState.reset(projectId, pending.mode, pending.target)
     if (!gitState.error) {
       clearSelectedCommit()
-      commitHistory = []
-      void loadHistory()
+      void reloadHistory()
       void refreshStatus()
     }
   }
@@ -573,6 +651,7 @@
 
   async function reloadHistory(): Promise<void> {
     commitHistory = []
+    historyHasMore = true
     await loadHistory()
   }
 
@@ -602,7 +681,9 @@
   })
 
   $effect(() => {
-    if (activeTab === 'history') void loadHistory()
+    // Loaded eagerly (not just when the History tab opens) so the composer
+    // knows whether there's a commit to amend before the user gets there.
+    if (repoState === 'git' || activeTab === 'history') void loadHistory()
   })
 
   $effect(() => {
@@ -945,6 +1026,45 @@
   )
 </script>
 
+{#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
+  {#each sortCommitDirs(node.dirs) as dir (dir.path)}
+    {@const dirCollapsed = commitTreeCollapsedDirs[dir.path] ?? false}
+    <button
+      type="button"
+      class="flex h-7 w-full cursor-pointer items-center gap-1.5 pr-2 text-left transition-colors hover:bg-elevated/50"
+      style={`padding-left: ${8 + depth * 14}px`}
+      onclick={() => toggleCommitDir(dir.path)}
+    >
+      {#if dirCollapsed}
+        <ChevronRight size={12} class="shrink-0 text-dimmed" />
+        <Folder size={13} class="shrink-0 text-dimmed" />
+      {:else}
+        <ChevronDown size={12} class="shrink-0 text-dimmed" />
+        <FolderOpen size={13} class="shrink-0 text-dimmed" />
+      {/if}
+      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">{dir.name}</span>
+    </button>
+    {#if !dirCollapsed}
+      {@render commitTreeNode(dir, depth + 1)}
+    {/if}
+  {/each}
+  {#each node.files as change (change.path)}
+    <div style={`padding-left: ${8 + depth * 14}px`}>
+      <GitFileRow
+        {change}
+        displayPath={change.path.split('/').pop() ?? change.path}
+        diff={commitDiffs[change.path] ?? null}
+        loadingDiff={loadingCommitDiffFile[change.path] ?? false}
+        error={commitDiffErrors[change.path] ?? null}
+        expanded={commitExpanded[change.path] ?? false}
+        readonly
+        onToggleDiff={() => void toggleCommitDiff(change)}
+        onToggleStage={() => {}}
+      />
+    </div>
+  {/each}
+{/snippet}
+
 <div class="flex h-full min-h-0 flex-col bg-app">
   <!-- Header: branch picker + tabs + actions -->
   <div class="flex shrink-0 flex-col border-b border-border">
@@ -1103,7 +1223,7 @@
   </div>
 
   <!-- Content (scrollable) -->
-  <div class="min-h-0 flex-1 overflow-auto">
+  <div class="min-h-0 flex-1 overflow-auto" onscroll={handleContentScroll}>
     {#if repoState === 'loading'}
       <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
         <Loader2 size={14} class="animate-spin" />
@@ -1286,6 +1406,38 @@
                   Amend
                 </button>
               {/if}
+              <div
+                class="flex shrink-0 items-center rounded-md bg-elevated/50 p-0.5"
+                role="group"
+                aria-label="Changed files view"
+              >
+                <button
+                  type="button"
+                  class={[
+                    'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                    changesView === 'list'
+                      ? 'bg-surface text-foreground shadow-sm'
+                      : 'text-dimmed hover:text-foreground'
+                  ]}
+                  aria-pressed={changesView === 'list'}
+                  onclick={() => (changesView = 'list')}
+                >
+                  List
+                </button>
+                <button
+                  type="button"
+                  class={[
+                    'flex h-5 items-center gap-1 rounded px-2 text-[10px] font-medium transition-colors',
+                    changesView === 'tree'
+                      ? 'bg-surface text-foreground shadow-sm'
+                      : 'text-dimmed hover:text-foreground'
+                  ]}
+                  aria-pressed={changesView === 'tree'}
+                  onclick={() => (changesView = 'tree')}
+                >
+                  Tree
+                </button>
+              </div>
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger
                   class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1339,18 +1491,22 @@
                     {commitDiffChanges.length}
                   </span>
                 </div>
-                {#each commitDiffChanges as change (change.path)}
-                  <GitFileRow
-                    {change}
-                    diff={commitDiffs[change.path] ?? null}
-                    loadingDiff={loadingCommitDiffFile[change.path] ?? false}
-                    error={commitDiffErrors[change.path] ?? null}
-                    expanded={commitExpanded[change.path] ?? false}
-                    readonly
-                    onToggleDiff={() => void toggleCommitDiff(change)}
-                    onToggleStage={() => {}}
-                  />
-                {/each}
+                {#if changesView === 'tree'}
+                  {@render commitTreeNode(commitTree, 0)}
+                {:else}
+                  {#each commitDiffChanges as change (change.path)}
+                    <GitFileRow
+                      {change}
+                      diff={commitDiffs[change.path] ?? null}
+                      loadingDiff={loadingCommitDiffFile[change.path] ?? false}
+                      error={commitDiffErrors[change.path] ?? null}
+                      expanded={commitExpanded[change.path] ?? false}
+                      readonly
+                      onToggleDiff={() => void toggleCommitDiff(change)}
+                      onToggleStage={() => {}}
+                    />
+                  {/each}
+                {/if}
               </div>
             {/if}
           </div>
@@ -1412,8 +1568,18 @@
                 </p>
               </div>
             {:else if status}
-              <!-- Stable header: selection + actions + view toggle -->
+              <!-- Stable header: stage all + selection + view toggle -->
               <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+                {#if unstaged.length + untracked.length > 0}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
+                    disabled={gitState.isBusy('stage')}
+                    onclick={() => void stageAll()}
+                  >
+                    Stage all
+                  </button>
+                {/if}
                 {#if changes.length > 0 && selectedPathList.length > 0}
                   <span class="shrink-0 text-[10px] font-medium tabular-nums text-foreground">
                     {selectedPathList.length} selected
@@ -1747,6 +1913,16 @@
             <div class="space-y-0.5">
               {#each commitHistory as commit, index (commit.hash)}
                 {@const isCurrentHead = index === 0}
+                {@const isUnpushed = index < unpushedCount}
+                {#if unpushedCount > 0 && index === unpushedCount}
+                  <div class="flex items-center gap-2 px-2 py-1">
+                    <span class="h-px flex-1 bg-border"></span>
+                    <span class="shrink-0 text-[9px] font-medium text-dimmed">
+                      Pushed to {status?.upstream}
+                    </span>
+                    <span class="h-px flex-1 bg-border"></span>
+                  </div>
+                {/if}
                 <ContextMenu.Root>
                   <ContextMenu.Trigger
                     class="block w-full"
@@ -1763,7 +1939,15 @@
                       onclick={() => void selectCommit(commit)}
                     >
                       <div class="flex items-start gap-2">
-                        <div class="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/40"></div>
+                        <div
+                          class={[
+                            'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+                            isUnpushed ? 'bg-warning' : 'bg-primary/40'
+                          ]}
+                          title={isUnpushed
+                            ? `Not pushed to ${status?.upstream ?? 'the remote'} yet`
+                            : undefined}
+                        ></div>
                         <div class="min-w-0 flex-1">
                           <p class="truncate text-[11px] leading-snug text-foreground">
                             {commit.message.split('\n')[0]}
@@ -1774,6 +1958,13 @@
                             <span>{commit.author}</span>
                             <span>·</span>
                             <span>{relativeTime(commit.date)}</span>
+                            {#if isUnpushed}
+                              <span
+                                class="rounded px-1 py-px text-[8px] font-medium uppercase tracking-wide text-warning"
+                              >
+                                local
+                              </span>
+                            {/if}
                           </div>
                         </div>
                       </div>
@@ -1801,6 +1992,14 @@
                   </ContextMenu.Portal>
                 </ContextMenu.Root>
               {/each}
+              {#if loadingMoreHistory}
+                <div class="flex items-center justify-center gap-2 py-4 text-[10px] text-dimmed">
+                  <Loader2 size={12} class="animate-spin" />
+                  Loading older commits
+                </div>
+              {:else if !historyHasMore}
+                <p class="py-4 text-center text-[9px] text-dimmed">Start of history</p>
+              {/if}
             </div>
           {/if}
         </div>
@@ -1998,8 +2197,8 @@
     {/if}
   </div>
 
-  <!-- Pinned composer: only while looking at working changes -->
-  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (changes.length > 0 || amendMode)}
+  <!-- Pinned composer: only once something is staged (or an amend was started from History) -->
+  {#if repoState === 'git' && status && !selectedCommit && activeTab === 'changes' && (staged.length > 0 || amendMode)}
     <div class="shrink-0 border-t border-border bg-surface">
       {#if amendMode}
         <div class="flex items-center gap-2 border-b border-border bg-warning/10 px-3 py-1.5">
@@ -2024,25 +2223,6 @@
           bind:value={commitMessage}></textarea>
       </div>
       <div class="flex items-center gap-1.5 px-2 py-2">
-        <button
-          type="button"
-          class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
-          disabled={gitState.isBusy('stage') || unstaged.length + untracked.length === 0}
-          onclick={() => void stageAll()}
-        >
-          Stage all
-        </button>
-        {#if !amendMode}
-          <button
-            type="button"
-            class="rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Amend the most recent commit instead of creating a new one"
-            aria-label="Amend the most recent commit instead of creating a new one"
-            onclick={() => (amendMode = true)}
-          >
-            Amend
-          </button>
-        {/if}
         <span class="flex-1"></span>
         <button
           type="button"
@@ -2161,7 +2341,9 @@
         onclick={() => void gitState.fetch(projectId)}
       >
         {#if gitState.isBusy('fetch')}
-          <Loader2 size={10} class="animate-spin" />
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <Download size={11} />
         {/if}
         Fetch
       </button>
@@ -2175,7 +2357,9 @@
         onclick={() => void gitState.pull(projectId)}
       >
         {#if gitState.isBusy('pull')}
-          <Loader2 size={10} class="animate-spin" />
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <ArrowDownToLine size={11} />
         {/if}
         Pull{status.behind > 0 ? ` ${status.behind}` : ''}
       </button>
@@ -2189,7 +2373,9 @@
         onclick={() => void pushAction()}
       >
         {#if gitState.isBusy('push')}
-          <Loader2 size={10} class="animate-spin" />
+          <Loader2 size={11} class="animate-spin" />
+        {:else}
+          <ArrowUpFromLine size={11} />
         {/if}
         Push{status.ahead > 0 ? ` ${status.ahead}` : ''}
       </button>

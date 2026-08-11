@@ -1,7 +1,7 @@
 import { stat, open, access, readFile, writeFile, rm, unlink } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep } from 'path'
 import { simpleGit } from 'simple-git'
-import type { SimpleGit, StatusResult } from 'simple-git'
+import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -297,12 +297,21 @@ export class GitService {
     })
   }
 
-  async log(projectPath: string, limit = DEFAULT_LOG_LIMIT): Promise<GitCommitInfo[]> {
+  /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
+  async log(
+    projectPath: string,
+    limit = DEFAULT_LOG_LIMIT,
+    offset = 0
+  ): Promise<GitCommitInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const history = await git.log({ maxCount: Math.max(1, Math.min(limit, 200)) })
+        const options: LogOptions & { '--skip'?: number } = {
+          maxCount: Math.max(1, Math.min(limit, 200))
+        }
+        if (offset > 0) options['--skip'] = Math.max(0, offset)
+        const history = await git.log(options)
         return history.all.map((entry): GitCommitInfo => ({
           hash: entry.hash,
           shortHash: entry.hash.slice(0, 7),

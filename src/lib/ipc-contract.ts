@@ -727,7 +727,7 @@ export interface IpcInvokeContract {
   'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
   'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
-  'git:log': Contract<[projectId: string, limit?: number], GitCommitInfo[]>
+  'git:log': Contract<[projectId: string, limit?: number, offset?: number], GitCommitInfo[]>
   'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
   'git:commitFileDiff': Contract<[projectId: string, hash: string, path: string], GitDiff>
   'git:amend': Contract<[projectId: string, message: string], GitStatus>
