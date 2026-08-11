@@ -350,6 +350,20 @@ export class GitState {
     }
   }
 
+  /** Updates one branch's remote-tracking ref only — the working tree is untouched. */
+  async fetchBranch(projectId: string, remote: string, branch: string): Promise<void> {
+    this.markBusy('fetch', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:fetchBranch', projectId, remote, branch)
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Fetch failed')
+    } finally {
+      this.markBusy('fetch', false)
+    }
+  }
+
   async pull(projectId: string): Promise<void> {
     this.markBusy('pull', true)
     this.error = null

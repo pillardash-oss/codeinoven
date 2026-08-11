@@ -743,6 +743,7 @@ export interface IpcInvokeContract {
   'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>
   'git:removeRemote': Contract<[projectId: string, name: string], GitRemoteInfo[]>
   'git:fetch': Contract<[projectId: string], GitStatus>
+  'git:fetchBranch': Contract<[projectId: string, remote: string, branch: string], GitStatus>
   'git:pull': Contract<[projectId: string], GitStatus>
   'git:pullIntegrate': Contract<
     [projectId: string, options: { remote?: string; branch?: string; rebase: boolean }],

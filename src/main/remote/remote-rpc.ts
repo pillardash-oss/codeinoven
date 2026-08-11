@@ -1342,6 +1342,12 @@ export class RemoteRpcDispatcher {
         )
       case 'git:fetch':
         return this.gitService.fetch(await this.resolveProjectPath(this.string(args[0])))
+      case 'git:fetchBranch':
+        return this.gitService.fetchBranch(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
       case 'git:pull':
         return this.gitService.pull(await this.resolveProjectPath(this.string(args[0])))
       case 'git:pullIntegrate': {
