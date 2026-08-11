@@ -58,6 +58,7 @@ import {
   validateMergeMethod,
   validateMergeTarget,
   MAX_GITHUB_NUMERIC_ID,
+  validatePrResolveOptions,
   validatePrCreateInput,
   validatePrNumber,
   validatePrState,
@@ -3301,6 +3302,12 @@ export function registerIpcHandlers(
     gitService.rebase(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
       validateMergeTarget(target)
+    )
+  )
+  ipcMain.handle('git:preparePrResolve', async (_, projectId: unknown, options: unknown) =>
+    gitService.preparePrResolve(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validatePrResolveOptions(options)
     )
   )
   ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown, paths?: unknown) =>

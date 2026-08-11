@@ -78,6 +78,7 @@ import type {
   PrAgentReport,
   PrMergeMethod,
   PrReviewEvent,
+  PrResolveOptions,
   PrState,
   PullRequestBundle,
   PullRequestComment,
@@ -759,6 +760,7 @@ export interface IpcInvokeContract {
   'git:removeCredential': Contract<[projectId: string], GitCredentialStatus>
   'git:merge': Contract<[projectId: string, target: string], MergeSummary>
   'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
+  'git:preparePrResolve': Contract<[projectId: string, options: PrResolveOptions], GitStatus>
   'git:stash': Contract<[projectId: string, message?: string, paths?: string[]], GitStatus>
   'git:ignore': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:discard': Contract<[projectId: string, paths: string[]], GitStatus>

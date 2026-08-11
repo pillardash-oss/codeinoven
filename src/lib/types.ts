@@ -2944,6 +2944,15 @@ export interface MergeSummary {
   aborted: boolean
 }
 
+/** Request to prepare a local merge to resolve a PR's online conflicts. */
+export interface PrResolveOptions {
+  /** Remote to fetch the PR head and base from (e.g. `origin`). */
+  remote: string
+  pullNumber: number
+  /** Base branch to merge into the checked-out PR head (e.g. `main`). */
+  baseBranch: string
+}
+
 /** Merge method accepted by provider merge endpoints. */
 export type PrMergeMethod = 'merge' | 'squash' | 'rebase'
 

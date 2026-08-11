@@ -46,9 +46,22 @@
     onAgentReview: (pr: PullRequestSummary) => void
     /** Reopen the thread that owns this PR's agent review. */
     onOpenThread: (threadId: string) => void
+    /** Resolve a conflicting PR locally: check out the head, merge base, show conflict UI. */
+    onResolveLocally?: (pr: PullRequestSummary) => void
+    /** Hand a conflicting PR to an agent to resolve and push. */
+    onResolveWithAgent?: (pr: PullRequestSummary) => void
   }
 
-  let { projectId, identity, summary, onBack, onAgentReview, onOpenThread }: Props = $props()
+  let {
+    projectId,
+    identity,
+    summary,
+    onBack,
+    onAgentReview,
+    onOpenThread,
+    onResolveLocally,
+    onResolveWithAgent
+  }: Props = $props()
 
   type DetailTab = 'conversation' | 'commits' | 'files' | 'checks' | 'agent'
 
@@ -63,6 +76,7 @@
   let method = $state<PrMergeMethod>('squash')
   let mergeConfirm = $state(false)
   let closeConfirm = $state(false)
+  let resolveConfirm = $state(false)
   let commitTitle = $state('')
   let commitMessage = $state('')
   let notice = $state('')
@@ -89,6 +103,8 @@
    */
   let mergePending = $state(false)
   const merging = $derived(gitState.isBusy('pr-merge') || mergePending)
+  /** True while a local conflict-resolution checkout+merge is being prepared. */
+  const resolving = $derived(gitState.isBusy('merge'))
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const closing = $derived(gitState.isBusy('pr-close'))
   const prState = $derived(detail?.state ?? summary.state)
@@ -830,6 +846,45 @@
       and a third loose button.
     -->
     <div class="border-t border-border bg-elevated/40 px-3 py-2.5">
+      {#if open && detail?.mergeable === false}
+        <div class="mb-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
+          <div class="flex items-center gap-1.5">
+            <TriangleAlert size={13} class="shrink-0 text-warning" />
+            <p class="text-[10px] font-semibold text-warning">
+              This pull request has merge conflicts
+            </p>
+          </div>
+          <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+            {summary.baseRef} has changes that conflict with {summary.headRef}. Resolve them and
+            push, or have the agent fix them for you.
+          </p>
+          <div class="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-warning/40 bg-warning/10 px-2.5 text-[10px] font-medium text-warning transition-colors hover:bg-warning/20 disabled:cursor-default disabled:opacity-40"
+              title="Check out this branch locally, merge the base in, and resolve the conflicts in your editor"
+              disabled={resolving}
+              onclick={() => (resolveConfirm = true)}
+            >
+              {#if resolving}
+                <Loader2 size={12} class="animate-spin" />
+              {:else}
+                <Merge size={12} />
+              {/if}
+              Resolve locally
+            </button>
+            <button
+              type="button"
+              class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+              title="Have an agent resolve the conflicts and push the fix"
+              onclick={() => onResolveWithAgent?.(summary)}
+            >
+              <Bot size={12} />
+              Resolve with agent
+            </button>
+          </div>
+        </div>
+      {/if}
       {#if open}
         <div class="flex items-center justify-end gap-1.5">
           {#if mergeBlocker}
@@ -1024,6 +1079,42 @@
           onclick={() => void merge()}
         >
           Merge
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>
+
+<AlertDialog.Root open={resolveConfirm} onOpenChange={(value) => (resolveConfirm = value)}>
+  <AlertDialog.Portal>
+    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-black/40" />
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Resolve conflicts for PR #{number}?
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        This checks out the <strong class="text-foreground">{summary.headRef}</strong> branch
+        locally as <code class="font-mono">pr-{number}</code>, merges
+        <strong class="text-foreground">{summary.baseRef}</strong> into it, and switches the Git panel
+        to the changes tab. You'll resolve each conflicted file in your editor, then commit and push to
+        update the pull request.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="h-8 cursor-pointer rounded-lg bg-warning px-3 text-xs font-medium text-on-primary hover:bg-warning/90"
+          onclick={() => {
+            resolveConfirm = false
+            onResolveLocally?.(summary)
+          }}
+        >
+          Resolve locally
         </AlertDialog.Action>
       </div>
     </AlertDialog.Content>
