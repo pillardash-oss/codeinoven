@@ -176,6 +176,17 @@ describe('GitService', () => {
 
     const summary = await service.syncSummary(working)
     expect(summary.ahead).toBe(1)
+
+    const comparison = await service.comparePullRequestBranches(working, branchName, branchName)
+    expect(comparison).toMatchObject({
+      source: 'local',
+      status: 'ahead',
+      aheadBy: 1,
+      behindBy: 0,
+      totalCommits: 1,
+      filesChanged: 1,
+      hasChanges: true
+    })
   })
 
   it('removes a remote', async () => {

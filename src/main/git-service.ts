@@ -14,7 +14,8 @@ import type {
   GitStashEntry,
   GitStatus,
   GitSyncSummary,
-  MergeSummary
+  MergeSummary,
+  PullRequestCompare
 } from '../lib/types'
 import { Logger } from './logger'
 
@@ -540,6 +541,65 @@ export class GitService {
   async syncSummary(projectPath: string): Promise<GitSyncSummary> {
     const status = await this.getStatus(projectPath)
     return { ahead: status.ahead, behind: status.behind }
+  }
+
+  /**
+   * Compare a local head with the selected merge target without requiring the
+   * head to exist on the remote yet. The remote-tracking base is preferred so
+   * the result matches the branch GitHub will merge into as closely as the
+   * repository's latest fetch allows.
+   */
+  async comparePullRequestBranches(
+    projectPath: string,
+    base: string,
+    head: string
+  ): Promise<PullRequestCompare | null> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        const localHead = `refs/heads/${head}`
+        if (!(await this.refExists(git, localHead))) return null
+
+        const remoteBase = `refs/remotes/origin/${base}`
+        const localBase = `refs/heads/${base}`
+        const baseRef = (await this.refExists(git, remoteBase))
+          ? remoteBase
+          : (await this.refExists(git, localBase))
+            ? localBase
+            : null
+        if (!baseRef) return null
+
+        const counts = await git.raw([
+          'rev-list',
+          '--left-right',
+          '--count',
+          `${baseRef}...${localHead}`
+        ])
+        const [behindBy = 0, aheadBy = 0] = counts
+          .trim()
+          .split(/\s+/u)
+          .map((value) => Number.parseInt(value, 10))
+        const status: PullRequestCompare['status'] =
+          aheadBy > 0 && behindBy > 0
+            ? 'diverged'
+            : aheadBy > 0
+              ? 'ahead'
+              : behindBy > 0
+                ? 'behind'
+                : 'identical'
+        const summary = await git.diffSummary([`${baseRef}...${localHead}`])
+        return {
+          source: 'local',
+          status,
+          aheadBy,
+          behindBy,
+          totalCommits: aheadBy,
+          filesChanged: summary.files.length,
+          hasChanges: aheadBy > 0
+        }
+      })
+    })
   }
 
   // ─── Merge / rebase / stash (Phase 4) ────────────────────────────────────
