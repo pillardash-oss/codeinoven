@@ -17,7 +17,12 @@ export function piCustomProvidersExtension(providers: BaseUrlProvider[]): string
         provider.apiKeyRef && provider.apiKeyEnvVar
           ? `apiKey: ${json(envRef(provider.apiKeyEnvVar))},`
           : 'apiKey: "local",'
-      const api = provider.npm === '@ai-sdk/openai' ? 'openai-responses' : 'openai-completions'
+      const api =
+        provider.npm === '@ai-sdk/openai'
+          ? 'openai-responses'
+          : provider.npm === '@ai-sdk/anthropic'
+            ? 'anthropic-messages'
+            : 'openai-completions'
       const headers = provider.headers ? `headers: ${json(provider.headers)},\n    ` : ''
       const models = provider.models
         .map((model) => {
