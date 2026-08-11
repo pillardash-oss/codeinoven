@@ -1282,7 +1282,8 @@ export class RemoteRpcDispatcher {
       case 'git:log':
         return this.gitService.log(
           await this.resolveProjectPath(this.string(args[0])),
-          typeof args[1] === 'number' ? args[1] : undefined
+          typeof args[1] === 'number' ? args[1] : undefined,
+          typeof args[2] === 'number' ? args[2] : undefined
         )
       case 'git:commitDiff':
         return this.gitService.commitDiff(
