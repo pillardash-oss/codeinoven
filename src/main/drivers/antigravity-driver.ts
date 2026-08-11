@@ -9,7 +9,8 @@ import type {
   ProviderModel,
   SessionAgentEvent,
   ThinkingLevel,
-  ThinkingPreset
+  ThinkingPreset,
+  UsageTotalSemantics
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
@@ -222,24 +223,93 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
   }
 }
 
-/** Map one Antigravity token-accounting object into the shared usage shape. */
-function mapAntigravityUsage(value: unknown): AgentTokenUsage | undefined {
+/**
+ * Provider-normalized accounting carried alongside the legacy `AgentTokenUsage`
+ * on the driver result path. Every category is nullable because Antigravity
+ * does not report every field for every provider; `rawProviderUsage` and
+ * `rawTotal` keep the provider's own numbers verbatim so normalization never
+ * fabricates or destroys evidence.
+ */
+export interface AntigravityNormalizedUsage {
+  uncachedInput: number | null
+  cachedInput: number | null
+  cacheWrite: number | null
+  output: number | null
+  reasoning: number | null
+  /** Untouched provider token payload as reported by Antigravity. */
+  rawProviderUsage: Record<string, unknown>
+  /** Provider-reported total verbatim; null when Antigravity did not report one. */
+  rawTotal: number | null
+  /** Whether the raw provider total includes cache or its categories overlap. */
+  totalSemantics: UsageTotalSemantics
+}
+
+/**
+ * Distinct, optional normalized usage metadata attached to messages and
+ * step-finish parts. Keeping it separate from the legacy `AgentTokenUsage`
+ * guarantees a synthesized number is never mistaken for the raw provider total.
+ */
+interface AntigravityUsageCarrier {
+  usage?: AntigravityNormalizedUsage
+}
+
+/** AgentMessage that may also carry normalized usage metadata. */
+type AntigravityAgentMessage = AgentMessage & AntigravityUsageCarrier
+
+/**
+ * Map one Antigravity token-accounting object into both the legacy chat-engine
+ * shape and the distinct normalized usage metadata. The legacy shape is only
+ * populated when Antigravity reports a total, so the chat engine's `rawTotal`
+ * is always a verbatim provider number and never a synthesized comparable total.
+ */
+export function mapAntigravityUsage(value: unknown): {
+  legacy: AgentTokenUsage | undefined
+  usage: AntigravityNormalizedUsage | undefined
+} {
   const usage = record(value)
-  if (!usage) return undefined
-  const input = numberProperty(usage, 'input_tokens', 'inputTokens') ?? 0
-  const output = numberProperty(usage, 'output_tokens', 'outputTokens') ?? 0
-  const reasoning = numberProperty(usage, 'thinking_tokens', 'thinkingTokens') ?? 0
-  const cacheRead = numberProperty(usage, 'cache_read_tokens', 'cacheReadTokens') ?? 0
-  const cacheWrite = numberProperty(usage, 'cache_write_tokens', 'cacheWriteTokens') ?? 0
-  // Only a provider-reported total is trustworthy. Antigravity reports total
-  // with thinking as a subset of output and cache reads as a subset of input,
-  // so the overlap between categories is unknown and a synthesized input+output
-  // total would hide cache or reasoning usage. When total_tokens is absent the
-  // semantics are unavailable, so no comparable total is fabricated and the
-  // payload is left without token accounting rather than emit a misleading one.
-  const total = numberProperty(usage, 'total_tokens', 'totalTokens')
-  if (total === undefined) return undefined
-  return { input, output, reasoning, cacheRead, cacheWrite, total }
+  if (!usage) return { legacy: undefined, usage: undefined }
+  const input = numberProperty(usage, 'input_tokens', 'inputTokens')
+  const output = numberProperty(usage, 'output_tokens', 'outputTokens')
+  const reasoning = numberProperty(usage, 'thinking_tokens', 'thinkingTokens')
+  const cachedInput = numberProperty(usage, 'cache_read_tokens', 'cacheReadTokens')
+  const cacheWrite = numberProperty(usage, 'cache_write_tokens', 'cacheWriteTokens')
+  const rawTotal = numberProperty(usage, 'total_tokens', 'totalTokens')
+  const reported =
+    input !== undefined ||
+    output !== undefined ||
+    reasoning !== undefined ||
+    cachedInput !== undefined ||
+    cacheWrite !== undefined ||
+    rawTotal !== undefined
+  if (!reported) return { legacy: undefined, usage: undefined }
+  // Antigravity reports thinking as a subset of output and cache reads as a
+  // subset of input, so the provider total's categories overlap when one is
+  // reported. A synthesized input+output total would hide cache or reasoning
+  // usage, so no comparable total is fabricated and the semantics are declared
+  // explicitly: `categories_may_overlap` when the provider reports a total and
+  // `unavailable` when it does not.
+  const normalized: AntigravityNormalizedUsage = {
+    uncachedInput: input ?? null,
+    cachedInput: cachedInput ?? null,
+    cacheWrite: cacheWrite ?? null,
+    output: output ?? null,
+    reasoning: reasoning ?? null,
+    rawProviderUsage: { ...usage },
+    rawTotal: rawTotal ?? null,
+    totalSemantics: rawTotal === undefined ? 'unavailable' : 'categories_may_overlap'
+  }
+  const legacy: AgentTokenUsage | undefined =
+    rawTotal === undefined
+      ? undefined
+      : {
+          input: input ?? 0,
+          output: output ?? 0,
+          reasoning: reasoning ?? 0,
+          cacheRead: cachedInput ?? 0,
+          cacheWrite: cacheWrite ?? 0,
+          total: rawTotal
+        }
+  return { legacy, usage: normalized }
 }
 
 /** Normalize quota maps used by Antigravity's API and status-line payload. */
@@ -288,15 +358,18 @@ interface AntigravityTurnState {
   parts: AgentPart[]
   /** True once any assistant part has been emitted (message exists on disk). */
   started: boolean
+  /** Latest normalized usage metadata reported for this turn, when any. */
+  usage?: AntigravityNormalizedUsage
 }
 
-function antigravityMessage(state: AntigravityTurnState): AgentMessage {
+function antigravityMessage(state: AntigravityTurnState): AntigravityAgentMessage {
   return {
     id: state.messageId,
     role: 'assistant',
     parts: [...state.parts],
     createdAt: state.createdAt,
-    harnessId: 'antigravity'
+    harnessId: 'antigravity',
+    ...(state.usage ? { usage: state.usage } : {})
   }
 }
 
@@ -323,9 +396,10 @@ function usageEvent(
   sessionId: string
 ): SessionAgentEvent | null {
   if (!state.started) return null
-  const tokens = mapAntigravityUsage(rawUsage)
-  if (!tokens) return null
-  return { type: 'usage.updated', sessionId, messageId: state.messageId, tokens }
+  const mapped = mapAntigravityUsage(rawUsage)
+  if (mapped.usage) state.usage = mapped.usage
+  if (!mapped.legacy) return null
+  return { type: 'usage.updated', sessionId, messageId: state.messageId, tokens: mapped.legacy }
 }
 
 /**
@@ -377,7 +451,9 @@ export function mapAntigravityRecord(
           part: textPart(state)
         })
       }
-      const usage = mapAntigravityUsage(result['usage'])
+      const mappedUsage = mapAntigravityUsage(result['usage'])
+      const usage = mappedUsage.legacy
+      if (mappedUsage.usage) state.usage = mappedUsage.usage
       const structuredRateLimits = mapAntigravityRateLimits(result)
       const issue = error ? antigravityIssue(error) : undefined
       const rateLimits =
