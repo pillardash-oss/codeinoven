@@ -488,9 +488,6 @@
               bind:value={baseUrl}
             />
           </label>
-          <p class="text-[11px] text-muted">
-            Must be an explicit, verified URL. localhost is only allowed in development.
-          </p>
           {#if baseUrl.trim() !== '' && !baseUrlValidation.ok}
             <p class="text-[11px] text-error">{baseUrlValidation.reason}</p>
           {/if}
