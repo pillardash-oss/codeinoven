@@ -382,6 +382,8 @@ function isStructuredOutputHistoryDecodeError(error: unknown): boolean {
 /** Directory used as the working-directory root for standalone (inbox) chats,
  *  ensuring the agent never sees a real project directory. */
 const CHATS_CWD_DIR = 'chats-cwd'
+const COORDINATOR_HANDOFF_QUEUE_DIR = 'coordinator-handoff-queue'
+const MAX_COORDINATOR_HANDOFFS = 50
 
 export const MERMAID_OUTPUT_INSTRUCTION = [
   'Use a fenced `mermaid` block when a multi-step flow, lifecycle, hierarchy, or relationship is materially clearer as a diagram.',
@@ -894,6 +896,30 @@ interface PendingMemoryDecision {
   settings: ThreadSettings
 }
 
+interface QueuedCoordinatorHandoff {
+  schemaVersion: 1
+  id: string
+  projectId: string
+  threadId: string
+  settings: ThreadSettings
+  text: string
+  attachments: PromptAttachment[]
+  specAction?: SpecActionIntent
+  promptContext?: string
+  promptReferences: PromptReference[]
+  projectReferences: PromptProjectReference[]
+  presentation?: UserMessagePresentation
+  taskReferences: PromptAssignmentTaskReference[]
+  createdAt: number
+}
+
+interface CoordinatorHandoffQueue {
+  schemaVersion: 1
+  projectId: string
+  threadId: string
+  items: QueuedCoordinatorHandoff[]
+}
+
 interface PendingInitialSpecGeneration {
   schemaVersion: 1
   generationVersion: number
@@ -1102,6 +1128,12 @@ export class ChatEngine {
   private readonly assignmentApiCapabilities = new Map<string, AssignmentApiCapability>()
   /** Per-Assignment request tails prevent stale whole-plan snapshots from overwriting each other. */
   private readonly assignmentApiQueues = new Map<string, Promise<void>>()
+  /** Serializes durable child-to-coordinator queue reads and writes per Sr. Engineer thread. */
+  private readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
+  /** Prevents concurrent idle signals from dispatching the same queued handoff twice. */
+  private readonly coordinatorHandoffDrains = new Map<string, Promise<void>>()
+  /** Identifies the one queued handoff currently being delivered through sendPrompt. */
+  private readonly dispatchingCoordinatorHandoffIds = new Set<string>()
   private memoryService: MemoryService
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
@@ -1232,6 +1264,7 @@ export class ChatEngine {
       async (thread) => {
         await this.deleteThreadSession(thread.projectId, thread.id)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
+        await this.storage.remove(this.coordinatorHandoffQueuePath(thread.projectId, thread.id))
       },
       async (threads) => {
         for (const thread of threads) broadcastThreadDeleted(thread)
@@ -1718,6 +1751,11 @@ export class ChatEngine {
       ChatEngine.IDLE_REAP_INTERVAL_MS
     )
     this.idleReaperTimer.unref?.()
+    void this.restoreCoordinatorHandoffQueues().catch((error) =>
+      Logger.error('Coordinator handoff queue recovery failed', {
+        error: rawErrorMessage(error)
+      })
+    )
     void this.recoverInterruptedBrainstormEntries()
     void this.resumePendingWork()
     void this.materializeAuditReportArtifacts()
@@ -1975,6 +2013,9 @@ export class ChatEngine {
     this.providerCache.clear()
     this.assignmentApiCapabilities.clear()
     this.assignmentApiQueues.clear()
+    this.coordinatorHandoffQueueLocks.clear()
+    this.coordinatorHandoffDrains.clear()
+    this.dispatchingCoordinatorHandoffIds.clear()
   }
 
   /**
@@ -3713,6 +3754,261 @@ export class ChatEngine {
     return withoutTransportParts(userMessage)
   }
 
+  private coordinatorHandoffQueueKey(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
+  }
+
+  private coordinatorHandoffQueuePath(projectId: string, threadId: string): string {
+    return join(COORDINATOR_HANDOFF_QUEUE_DIR, projectId, `${threadId}.json`)
+  }
+
+  private isCoordinatorThread(thread: Thread | null): boolean {
+    return thread?.assignmentRole === 'coordinator' || thread?.achievementRole === 'coordinator'
+  }
+
+  private queuedCoordinatorHandoffMessage(item: QueuedCoordinatorHandoff): AgentMessage {
+    const visible = item.presentation !== undefined
+    return {
+      id: item.id,
+      role: 'user',
+      origin: visible ? 'user' : 'orchestrator',
+      visibility: visible ? 'conversation' : 'hidden',
+      parts: item.presentation
+        ? [
+            {
+              type: 'user-presentation',
+              id: `${item.id}-presentation`,
+              messageID: item.id,
+              presentation: item.presentation
+            }
+          ]
+        : [
+            {
+              type: 'text',
+              id: `${item.id}-text`,
+              messageID: item.id,
+              text: item.text
+            }
+          ],
+      createdAt: item.createdAt,
+      completedAt: item.createdAt
+    }
+  }
+
+  private async withCoordinatorHandoffQueueLock<T>(
+    projectId: string,
+    threadId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const key = this.coordinatorHandoffQueueKey(projectId, threadId)
+    const previous = this.coordinatorHandoffQueueLocks.get(key) ?? Promise.resolve()
+    let release = (): void => undefined
+    const gate = new Promise<void>((resolveGate) => {
+      release = resolveGate
+    })
+    const tail = previous.catch(() => undefined).then(() => gate)
+    this.coordinatorHandoffQueueLocks.set(key, tail)
+    await previous.catch(() => undefined)
+    try {
+      return await operation()
+    } finally {
+      release()
+      if (this.coordinatorHandoffQueueLocks.get(key) === tail) {
+        this.coordinatorHandoffQueueLocks.delete(key)
+      }
+    }
+  }
+
+  private async readCoordinatorHandoffQueue(
+    projectId: string,
+    threadId: string
+  ): Promise<CoordinatorHandoffQueue> {
+    const raw = await this.storage.read<unknown>(
+      this.coordinatorHandoffQueuePath(projectId, threadId)
+    )
+    if (raw === null) return { schemaVersion: 1, projectId, threadId, items: [] }
+    if (
+      !isRecord(raw) ||
+      raw.schemaVersion !== 1 ||
+      raw.projectId !== projectId ||
+      raw.threadId !== threadId ||
+      !Array.isArray(raw.items)
+    ) {
+      throw new Error(`Invalid coordinator handoff queue for thread ${threadId}`)
+    }
+    const items = raw.items.map((item): QueuedCoordinatorHandoff => {
+      if (
+        !isRecord(item) ||
+        item.schemaVersion !== 1 ||
+        item.projectId !== projectId ||
+        item.threadId !== threadId ||
+        typeof item.id !== 'string' ||
+        typeof item.text !== 'string' ||
+        typeof item.createdAt !== 'number' ||
+        !Array.isArray(item.attachments) ||
+        !Array.isArray(item.promptReferences) ||
+        !Array.isArray(item.projectReferences) ||
+        !Array.isArray(item.taskReferences)
+      ) {
+        throw new Error(`Invalid coordinator handoff entry for thread ${threadId}`)
+      }
+      const specAction = item.specAction
+      if (
+        specAction !== undefined &&
+        specAction !== 'request' &&
+        specAction !== 'review' &&
+        specAction !== 'implement'
+      ) {
+        throw new Error(`Invalid coordinator handoff action for thread ${threadId}`)
+      }
+      let presentation: UserMessagePresentation | undefined
+      if (item.presentation !== undefined) {
+        if (
+          !isRecord(item.presentation) ||
+          typeof item.presentation.action !== 'string' ||
+          (item.presentation.body !== undefined && typeof item.presentation.body !== 'string')
+        ) {
+          throw new Error(`Invalid coordinator handoff presentation for thread ${threadId}`)
+        }
+        presentation = {
+          action: validateBoundedString(
+            item.presentation.action,
+            'Coordinator handoff action',
+            1,
+            120
+          ),
+          ...(typeof item.presentation.body === 'string'
+            ? {
+                body: validateBoundedString(
+                  item.presentation.body,
+                  'Coordinator handoff body',
+                  1,
+                  20_000
+                )
+              }
+            : {})
+        }
+      }
+      return {
+        schemaVersion: 1,
+        id: validateEntityId(item.id, 'Coordinator handoff ID', 256),
+        projectId,
+        threadId,
+        settings: validateThreadSettings(item.settings),
+        text: validateBoundedString(item.text, 'Coordinator handoff', 0, 200_000),
+        attachments: item.attachments as PromptAttachment[],
+        ...(specAction ? { specAction } : {}),
+        ...(typeof item.promptContext === 'string' ? { promptContext: item.promptContext } : {}),
+        promptReferences: item.promptReferences as PromptReference[],
+        projectReferences: item.projectReferences as PromptProjectReference[],
+        ...(presentation ? { presentation } : {}),
+        taskReferences: item.taskReferences as PromptAssignmentTaskReference[],
+        createdAt: item.createdAt
+      }
+    })
+    return { schemaVersion: 1, projectId, threadId, items }
+  }
+
+  private async enqueueCoordinatorHandoff(item: QueuedCoordinatorHandoff): Promise<void> {
+    await this.withCoordinatorHandoffQueueLock(item.projectId, item.threadId, async () => {
+      const queue = await this.readCoordinatorHandoffQueue(item.projectId, item.threadId)
+      if (queue.items.some((candidate) => candidate.id === item.id)) return
+      if (queue.items.length >= MAX_COORDINATOR_HANDOFFS) {
+        throw new Error(
+          `The Sr. Engineer handoff queue reached its ${MAX_COORDINATOR_HANDOFFS}-message limit`
+        )
+      }
+      queue.items.push(item)
+      await this.storage.write(
+        this.coordinatorHandoffQueuePath(item.projectId, item.threadId),
+        queue
+      )
+    })
+  }
+
+  private async completeCoordinatorHandoff(
+    projectId: string,
+    threadId: string,
+    messageId: string
+  ): Promise<void> {
+    await this.withCoordinatorHandoffQueueLock(projectId, threadId, async () => {
+      const queue = await this.readCoordinatorHandoffQueue(projectId, threadId)
+      const items = queue.items.filter((item) => item.id !== messageId)
+      if (items.length === queue.items.length) return
+      const path = this.coordinatorHandoffQueuePath(projectId, threadId)
+      if (items.length === 0) {
+        await this.storage.remove(path)
+        return
+      }
+      await this.storage.write(path, { ...queue, items })
+    })
+  }
+
+  private async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<void> {
+    const key = this.coordinatorHandoffQueueKey(projectId, threadId)
+    const active = this.coordinatorHandoffDrains.get(key)
+    if (active) return active
+    const drain = (async () => {
+      const queue = await this.withCoordinatorHandoffQueueLock(projectId, threadId, () =>
+        this.readCoordinatorHandoffQueue(projectId, threadId)
+      )
+      const next = queue.items[0]
+      if (!next) return
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (!thread || !this.isCoordinatorThread(thread)) {
+        await this.storage.remove(this.coordinatorHandoffQueuePath(projectId, threadId))
+        return
+      }
+      const status = thread.sessionId ? this.sessionStatuses.get(thread.sessionId) : undefined
+      if (status?.state === 'working' || status?.state === 'waiting' || status?.state === 'error') {
+        return
+      }
+      this.dispatchingCoordinatorHandoffIds.add(next.id)
+      try {
+        await this.sendPrompt(
+          projectId,
+          threadId,
+          next.settings,
+          next.text,
+          next.attachments,
+          next.specAction,
+          next.id,
+          next.promptContext,
+          next.promptReferences,
+          next.projectReferences,
+          'internal',
+          next.presentation,
+          next.taskReferences
+        )
+      } finally {
+        this.dispatchingCoordinatorHandoffIds.delete(next.id)
+      }
+    })().finally(() => {
+      if (this.coordinatorHandoffDrains.get(key) === drain) {
+        this.coordinatorHandoffDrains.delete(key)
+      }
+    })
+    this.coordinatorHandoffDrains.set(key, drain)
+    return drain
+  }
+
+  private async restoreCoordinatorHandoffQueues(): Promise<void> {
+    for (const projectId of await this.storage.listDirectories(COORDINATOR_HANDOFF_QUEUE_DIR)) {
+      const projectQueuePath = join(COORDINATOR_HANDOFF_QUEUE_DIR, projectId)
+      for (const entry of await this.storage.list(projectQueuePath)) {
+        if (!entry.endsWith('.json')) continue
+        const threadId = entry.slice(0, -'.json'.length)
+        void this.drainCoordinatorHandoffQueue(projectId, threadId).catch((error) =>
+          Logger.error('Queued coordinator handoff could not be restored', {
+            projectId,
+            threadId,
+            error: rawErrorMessage(error)
+          })
+        )
+      }
+    }
+  }
+
   /** Send a prompt to the agent (non-blocking; the reply streams over events). */
   async sendPrompt(
     projectId: string,
@@ -3748,13 +4044,14 @@ export class ChatEngine {
       throw new TypeError('Prompt must be a string between 1 and 200000 characters')
     }
     this.markProjectActive(projectId)
-    const targetThread = await this.threadManager.getThread(projectId, threadId)
+    let targetThread = await this.threadManager.getThread(projectId, threadId)
     if (
       specAction === 'implement' &&
       settings.loopMode === true &&
       !this.assignmentEngine.getActive(projectId, threadId)
     ) {
       await this.ensureAchievementScope(projectId, threadId)
+      targetThread = await this.threadManager.getThread(projectId, threadId)
     }
     if (
       targetThread?.userInputLocked &&
@@ -3813,6 +4110,32 @@ export class ChatEngine {
       settings = { ...settings, engineeringMode: false }
     }
     const messageId = validateEntityId(userMessageId ?? createMessageId(), 'Message ID', 256)
+    const coordinatorHandoff = (createdAt: number): QueuedCoordinatorHandoff => ({
+      schemaVersion: 1,
+      id: messageId,
+      projectId,
+      threadId,
+      settings,
+      text,
+      attachments,
+      ...(specAction ? { specAction } : {}),
+      ...(hiddenPromptContext ? { promptContext: hiddenPromptContext } : {}),
+      promptReferences: validatedPromptReferences,
+      projectReferences: validatedProjectReferences,
+      ...(validatedPresentation ? { presentation: validatedPresentation } : {}),
+      taskReferences: taskReferences ?? [],
+      createdAt
+    })
+    if (
+      origin === 'internal' &&
+      this.isCoordinatorThread(targetThread) &&
+      !this.dispatchingCoordinatorHandoffIds.has(messageId)
+    ) {
+      const handoff = coordinatorHandoff(Date.now())
+      await this.enqueueCoordinatorHandoff(handoff)
+      await this.drainCoordinatorHandoffQueue(projectId, threadId)
+      return this.queuedCoordinatorHandoffMessage(handoff)
+    }
 
     // Decide auto-title against the pre-prompt mirror BEFORE the user message
     // is persisted below, so a fresh thread's first prompt still auto-titles.
@@ -3959,10 +4282,21 @@ export class ChatEngine {
     // A new turn resolves any pending auto-resume for this session — the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
+    const activeSessionState = this.sessionStatuses.get(sessionId)?.state
+    if (
+      origin === 'internal' &&
+      this.isCoordinatorThread(targetThread) &&
+      (activeSessionState === 'working' || activeSessionState === 'waiting')
+    ) {
+      await this.enqueueCoordinatorHandoff(coordinatorHandoff(userMessage.createdAt))
+      return publicUserMessage
+    }
     // Renderer callers normally use agent:steerPrompt while a turn is active.
     // Keep sendPrompt safe as a second line of defense: an accidental regular
-    // dispatch must steer the live turn, never reject and poison its task status.
-    if (this.sessionStatuses.get(sessionId)?.state === 'working') {
+    // USER dispatch must steer the live turn, never reject and poison its task
+    // status. Internal coordinator handoffs are queued above so worker/auditor
+    // reports cannot interrupt or confuse the Sr. Engineer's current reasoning.
+    if (activeSessionState === 'working') {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }
@@ -4286,6 +4620,18 @@ export class ChatEngine {
             : undefined,
         userMessageId: messageId
       })
+      if (origin === 'internal' && this.isCoordinatorThread(targetThread)) {
+        try {
+          await this.completeCoordinatorHandoff(projectId, threadId, messageId)
+        } catch (error) {
+          Logger.error('Dispatched coordinator handoff could not be removed from its queue', {
+            projectId,
+            threadId,
+            messageId,
+            error: rawErrorMessage(error)
+          })
+        }
+      }
       this.preparedImplementationSessions.delete(sessionId)
       this.startSessionWatchdog(sessionId)
       // Proactively sync the driver's transcript into the mirror so the next
@@ -5383,9 +5729,28 @@ export class ChatEngine {
     driverId: string,
     maxInputTokens?: number
   ): Promise<string> {
-    const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+    const [persistedMirror, thread] = await Promise.all([
+      this.threadManager.loadMessageRecords(projectId, threadId),
+      this.threadManager.getThread(projectId, threadId)
+    ])
+    let queuedHandoffIds = new Set<string>()
+    if (this.isCoordinatorThread(thread)) {
+      try {
+        const queue = await this.readCoordinatorHandoffQueue(projectId, threadId)
+        queuedHandoffIds = new Set(queue.items.map((item) => item.id))
+      } catch (error) {
+        Logger.error('Coordinator handoff queue could not be excluded from history recap', {
+          projectId,
+          threadId,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+    // A queued child report has not reached the harness yet. Exclude it from a
+    // fresh-session recap so it appears exactly once as the next prompt when
+    // the Sr. Engineer becomes idle, never once in history and again as input.
+    const mirror = persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
     if (mirror.length === 0) return ''
-    const thread = await this.threadManager.getThread(projectId, threadId)
     const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
     const fallbackBudget = this.selectedModelInputBudget(
       thread?.settings?.providerId,
@@ -12454,6 +12819,15 @@ export class ChatEngine {
           error: rawErrorMessage(error)
         })
       }
+    }
+    try {
+      await this.drainCoordinatorHandoffQueue(info.projectId, info.threadId)
+    } catch (error) {
+      Logger.error('Queued coordinator handoff dispatch failed', {
+        projectId: info.projectId,
+        threadId: info.threadId,
+        error: rawErrorMessage(error)
+      })
     }
     if (pendingMemory && assistantResponse && memoryParentTurnId) {
       const driver = this.drivers.get(info.driverId)
