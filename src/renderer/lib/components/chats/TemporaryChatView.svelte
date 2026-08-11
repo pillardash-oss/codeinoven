@@ -32,6 +32,7 @@
   } from '$lib/stores/context-sidebar.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { INBOX_PROJECT_ID } from '$shared/types'
   import type {
@@ -728,8 +729,8 @@
             hidePermissionSelector
             enableImageDescriptorGate={false}
             favoriteModels={rendererRecovery.chatFavoriteModels}
-            onToggleFavorite={(providerId, modelId) =>
-              rendererRecovery.toggleChatFavorite(`${providerId}:${modelId}`)}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
             onReorderFavorite={(draggedKey, targetKey, position) =>
               rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
             recentModels={rendererRecovery.chatRecentModels}

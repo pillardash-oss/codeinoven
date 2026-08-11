@@ -15,7 +15,7 @@
     recentModels?: string[]
     onRetry: (requestId: string, selection: AgentModelSelection) => Promise<void>
     onIgnore: (requestId: string) => Promise<void>
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,

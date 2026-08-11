@@ -24,7 +24,7 @@
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
