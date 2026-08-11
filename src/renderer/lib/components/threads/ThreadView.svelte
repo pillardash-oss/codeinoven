@@ -1383,6 +1383,7 @@
   let assignmentPanelWidth = $state(320)
   let assignmentBusy = $state(false)
   let assignmentError = $state('')
+  let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
@@ -1530,6 +1531,15 @@
       harnessId: agentDefaults.worker?.harnessId ?? settings.harnessId,
       providerId: agentDefaults.worker?.providerId ?? settings.providerId,
       modelId: agentDefaults.worker?.modelId ?? settings.modelId,
+      thinkingLevel: settings.thinkingLevel
+    }
+  }
+
+  function seniorModelForThread(): AssignmentModelSelection {
+    return {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
       thinkingLevel: settings.thinkingLevel
     }
   }
@@ -3693,6 +3703,7 @@
     assignmentBusy = true
     assignmentError = ''
     try {
+      await assignmentSeniorSettingsPersistence
       if (!assignment || JSON.stringify(assignment.content) !== JSON.stringify(content)) {
         assignment = await invoke('assignment:saveDraft', thread.projectId, thread.id, content, {
           source: 'manual',
@@ -3723,6 +3734,39 @@
     } finally {
       assignmentBusy = false
     }
+  }
+
+  function updateAssignmentSeniorModel(selection: AssignmentModelSelection): void {
+    const previousHarnessId = settings.harnessId
+    const previousProviderId = settings.providerId
+    const updated: ThreadSettings = {
+      ...settings,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      thinkingLevel: selection.thinkingLevel
+    }
+
+    settings = updated
+    assignmentError = ''
+    if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
+      contextUsageDisplay = undefined
+      liveAccountUsage = []
+    }
+    syncAgentRole('seniorEngineer', selection)
+    commitSettings(updated)
+
+    assignmentSeniorSettingsPersistence = assignmentSeniorSettingsPersistence
+      .catch(() => undefined)
+      .then(async () => {
+        await invoke('thread:updateSettings', thread.projectId, thread.id, updated)
+      })
+    void assignmentSeniorSettingsPersistence.catch((error) => {
+      assignmentError =
+        error instanceof Error
+          ? error.message
+          : 'The Sr. Engineer model could not be saved to the task.'
+    })
   }
 
   async function generateAssignmentDraft(): Promise<void> {
@@ -5697,6 +5741,7 @@
           {providers}
           harnessId={settings.harnessId}
           fallbackModel={workerModelForThread()}
+          seniorModel={seniorModelForThread()}
           favoriteModels={rendererRecovery.favoriteModels}
           recentModels={rendererRecovery.recentModels}
           busy={assignmentBusy || busy}
@@ -5723,6 +5768,7 @@
           onOpenInEditor={openAssignmentInEditor}
           onRevealInAppFile={revealAssignmentInAppFile}
           onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
+          onSeniorModelChange={updateAssignmentSeniorModel}
           onTaskModelChange={updateAssignmentTaskModel}
           onToggleFavorite={(providerId, modelId) =>
             rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
@@ -6597,6 +6643,7 @@
               projectId={thread.projectId}
               harnessId={settings.harnessId}
               fallbackModel={workerModelForThread()}
+              seniorModel={seniorModelForThread()}
               favoriteModels={rendererRecovery.favoriteModels}
               recentModels={rendererRecovery.recentModels}
               busy={assignmentBusy}
@@ -6605,6 +6652,7 @@
               onApprove={(content) => void approveAssignment(content)}
               onOpenFullscreen={openAssignmentStudio}
               onWorkerModelChange={(selection) => syncAgentRole('worker', selection)}
+              onSeniorModelChange={updateAssignmentSeniorModel}
               onToggleFavorite={(providerId, modelId) =>
                 rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
               onReorderFavorite={(draggedKey, targetKey, position) =>
