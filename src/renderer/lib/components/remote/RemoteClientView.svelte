@@ -1,19 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Check, Copy, ExternalLink, Globe2 } from '@lucide/svelte'
+  import { Check, Copy, ExternalLink, Globe2, RefreshCw } from '@lucide/svelte'
   import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
   import EnrollmentQr from '$lib/components/remote/EnrollmentQr.svelte'
   import StepUpApproval from '$lib/components/remote/StepUpApproval.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { copyText } from '$lib/copy-text'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import type { RemoteModeStatus, RemotePendingStepUpApproval } from '$shared/ipc-contract'
+  import type { AccountAuthProvider, AccountProfileState } from '$shared/types'
 
   let remoteStatus = $state<RemoteModeStatus | null>(null)
   let pendingApprovals = $state<RemotePendingStepUpApproval[]>([])
   let loading = $state(true)
   let busy = $state(false)
   let copied = $state<'code' | 'link' | null>(null)
+  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
+  let activeProvider = $state<AccountAuthProvider | null>(null)
+  let accountError = $state('')
 
   let mobileAppUrl = $derived.by(() => {
     const apiOrigin = remoteStatus?.cloud.apiOrigin
@@ -71,10 +76,39 @@
   async function beginCloudEnrollment(): Promise<void> {
     if (busy) return
     busy = true
+    accountError = ''
     try {
       remoteStatus = await invoke('remote:beginCloudEnrollment')
+    } catch {
+      accountError =
+        'Desktop enrollment could not be started. Check the remote service and try again.'
     } finally {
       busy = false
+    }
+  }
+
+  async function beginAccountSignIn(provider: AccountAuthProvider): Promise<void> {
+    if (busy) return
+    busy = true
+    activeProvider = provider
+    accountError = ''
+    try {
+      const signIn = await invoke('account:beginSignIn', provider)
+      await invoke('shell:openExternal', signIn.url)
+      accountState = { status: 'pending', profile: null }
+    } catch {
+      accountError = 'Sign-in could not be opened. Check the remote service and try again.'
+    } finally {
+      busy = false
+      activeProvider = null
+    }
+  }
+
+  async function syncAccountState(): Promise<void> {
+    try {
+      accountState = await invoke('account:getProfile')
+    } catch {
+      accountState = { status: 'signed-out', profile: null }
     }
   }
 
@@ -107,6 +141,7 @@
         loading = false
       })
       .catch(() => void syncRemoteStatus())
+    void syncAccountState()
     const unsubStatus = subscribe('remote:status', (status) => {
       remoteStatus = status
       loading = false
@@ -153,12 +188,9 @@
     {:else if remoteStatus.cloud.state === 'enrollment-pending'}
       <div class="mt-4">
         <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
-          <p class="text-xs font-semibold text-foreground">
-            First, create or sign in to your CodeInOven account.
-          </p>
+          <p class="text-xs font-semibold text-foreground">Your account is ready</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Continue with Google or Apple. A new account is created automatically when one does not
-            already exist.
+            Now add this desktop from your phone using the same Google or Apple account.
           </p>
         </div>
 
@@ -186,10 +218,7 @@
                 class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
                 >2</span
               >
-              <span>
-                Choose <strong>Continue with Google</strong> or
-                <strong>Continue with Apple</strong>.
-              </span>
+              <span> Sign in with the same Google or Apple account if your phone asks. </span>
             </li>
             <li class="flex gap-2.5">
               <span
@@ -255,6 +284,55 @@
           </div>
         {/if}
       </div>
+    {:else if !remoteStatus.cloud.desktopId && accountState.status === 'signed-out'}
+      <div class="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+        <p class="text-xs font-semibold text-foreground">Sign in before enrolling this desktop</p>
+        <p class="mt-1 text-xs leading-relaxed text-muted">
+          Continue with Google or Apple. If the account does not exist, it is created automatically.
+          GitHub sidebar access remains separate.
+        </p>
+        <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+          <button
+            type="button"
+            class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
+            disabled={busy}
+            onclick={() => void beginAccountSignIn('google')}
+          >
+            <VendorIcon name="Google" size={16} />
+            {activeProvider === 'google' ? 'Opening Google…' : 'Continue with Google'}
+          </button>
+          <button
+            type="button"
+            class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 text-xs font-semibold text-foreground transition hover:bg-elevated disabled:opacity-50"
+            disabled={busy}
+            onclick={() => void beginAccountSignIn('apple')}
+          >
+            <VendorIcon name="Apple" size={16} />
+            {activeProvider === 'apple' ? 'Opening Apple…' : 'Continue with Apple'}
+          </button>
+        </div>
+      </div>
+    {:else if !remoteStatus.cloud.desktopId && accountState.status === 'pending'}
+      <div class="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
+        <div class="flex items-start gap-2">
+          <RefreshCw size={14} class="mt-0.5 shrink-0 text-primary" />
+          <div>
+            <p class="text-xs font-semibold text-foreground">Finish signing in in your browser</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              After Google or Apple returns you to the remote page, come back here and continue to
+              desktop enrollment.
+            </p>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="mt-3 h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
+          disabled={busy}
+          onclick={() => void beginCloudEnrollment()}
+        >
+          I’ve signed in — enroll desktop
+        </button>
+      </div>
     {:else}
       {#if !remoteStatus.cloud.desktopId}
         <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
@@ -284,7 +362,13 @@
       {/if}
     {/if}
 
-    {#if remoteStatus}
+    {#if accountError}
+      <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        {accountError}
+      </p>
+    {/if}
+
+    {#if remoteStatus && (remoteStatus.cloud.desktopId || accountState.status === 'signed-in')}
       <div class="mt-3 flex gap-2">
         <button
           type="button"

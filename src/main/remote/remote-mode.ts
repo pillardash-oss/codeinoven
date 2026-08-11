@@ -998,14 +998,10 @@ export class RemoteModeController {
 
   async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
     if (provider !== 'google' && provider !== 'apple') throw new Error('Invalid account provider')
-    const status = await this.beginCloudEnrollment()
-    const code = status.cloud.enrollmentCode
-    const expiresAt = status.cloud.enrollmentExpiresAt
-    const origin = status.cloud.apiOrigin
-    if (!code || !expiresAt || !origin) throw new Error('Account enrollment could not be started')
-    const url = new URL('/', origin)
-    url.hash = new URLSearchParams({ enroll: code, provider }).toString()
-    return { url: url.toString(), expiresAt }
+    if (!this.cloudApiOrigin) throw new Error('REMOTE_API_ORIGIN is not configured')
+    const url = new URL('/', this.cloudApiOrigin)
+    url.hash = new URLSearchParams({ provider }).toString()
+    return { url: url.toString() }
   }
 
   async syncAccountProfile(): Promise<AccountProfileState> {
