@@ -2546,11 +2546,50 @@ export interface AuditFinding {
   evidence: string
 }
 
+export type AuditVerificationCheckKind =
+  'format' | 'lint' | 'typecheck' | 'test' | 'build' | 'other'
+
+export type AuditVerificationStatus = 'passed' | 'failed' | 'not_applicable'
+
+export interface AuditVerificationCheck {
+  id: string
+  kind: AuditVerificationCheckKind
+  command: string
+  files: string[]
+  status: AuditVerificationStatus
+  exitCode?: number
+  evidence: string
+  findingIds: string[]
+}
+
+export interface AuditVerificationUtility {
+  name: string
+  status: 'used' | 'unavailable' | 'not_applicable'
+  evidence: string
+}
+
+export interface AuditVerificationEvidence {
+  repositoryRevision: string
+  scope: string
+  checks: AuditVerificationCheck[]
+  utilities: AuditVerificationUtility[]
+  limitations: string[]
+}
+
+export interface AuditedFileEvidence {
+  path: string
+  reason: string
+}
+
 export interface AuditReportContent {
   executiveSummary: string
   findings: AuditFinding[]
   resolutionRecommendation: string
   conclusion: string
+  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  auditedFiles?: AuditedFileEvidence[]
+  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  verification?: AuditVerificationEvidence
 }
 
 export interface AuditAnnotation {

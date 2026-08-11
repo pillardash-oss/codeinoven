@@ -14,6 +14,31 @@ export function exportAuditReportMarkdown(report: AuditReport): string {
           .join('\n\n')
       : 'No findings.'
 
+  const auditedFiles = report.content.auditedFiles?.length
+    ? report.content.auditedFiles.map((file) => `- \`${file.path}\` — ${file.reason}`).join('\n')
+    : 'Not recorded for this legacy report.'
+  const checks = report.content.verification?.checks.length
+    ? report.content.verification.checks
+        .map((check) => {
+          const command = check.command ? `\n  - Command: \`${check.command}\`` : ''
+          const exitCode = check.exitCode === undefined ? '' : `\n  - Exit code: ${check.exitCode}`
+          const files = check.files.length ? `\n  - Files: ${check.files.join(', ')}` : ''
+          const findingIds = check.findingIds.length
+            ? `\n  - Findings: ${check.findingIds.join(', ')}`
+            : ''
+          return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}`
+        })
+        .join('\n\n')
+    : 'Not recorded for this legacy report.'
+  const utilities = report.content.verification?.utilities.length
+    ? report.content.verification.utilities
+        .map((utility) => `- **${utility.name} (${utility.status})** — ${utility.evidence}`)
+        .join('\n')
+    : 'Not recorded for this legacy report.'
+  const limitations = report.content.verification?.limitations.length
+    ? report.content.verification.limitations.map((limitation) => `- ${limitation}`).join('\n')
+    : 'None recorded.'
+
   return [
     '# Audit Report',
     '',
@@ -33,6 +58,30 @@ export function exportAuditReportMarkdown(report: AuditReport): string {
     '## Findings',
     '',
     findings,
+    '',
+    '## Audited Files',
+    '',
+    auditedFiles,
+    '',
+    '## Verification',
+    '',
+    ...(report.content.verification
+      ? [
+          `Repository revision: ${report.content.verification.repositoryRevision}`,
+          '',
+          report.content.verification.scope,
+          ''
+        ]
+      : []),
+    checks,
+    '',
+    '### Utilities and MCPs',
+    '',
+    utilities,
+    '',
+    '### Limitations',
+    '',
+    limitations,
     '',
     '## Resolution & Recommendation',
     '',
