@@ -41,6 +41,7 @@ import type {
   BrainstormContent,
   BrainstormDocument,
   CloudDeploymentConfig,
+  CloudDeploymentContainer,
   EngineeringSpec,
   EngineeringSpecContent
 } from '../lib/types'
@@ -780,6 +781,28 @@ describe('cloudDeploy IPC', () => {
       credentials: { coolify: { activeAccountId: company?.id } }
     })
 
+    const mappedConfig = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const now = Date.now()
+    const mapped: CloudDeploymentConfig = {
+      ...mappedConfig,
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-1',
+            label: 'My App',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    }
+    const save = handlers.get('cloudDeploy:saveConfig')
+    await save?.(trustedEvent(), 'proj-a', mapped)
+
     const fetchMock = vi.fn(
       async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
         new Response(
@@ -806,6 +829,157 @@ describe('cloudDeploy IPC', () => {
       expect(String(url)).toContain('http://localhost:8080')
       expect((init as RequestInit).headers).toMatchObject({
         Authorization: 'Bearer company-token'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('filters provider containers to project mappings and preserves custom labels', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const overview = handlers.get('cloudDeploy:overview')
+
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )
+    const existing = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const now = Date.now()
+    const mapped: CloudDeploymentConfig = {
+      ...existing,
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-1',
+            label: 'My Custom API',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: 'app-not-yet',
+            label: 'Pending App',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    }
+    await save?.(trustedEvent(), 'proj-a', mapped)
+
+    // The provider returns an extra un-mapped container plus a label that must
+    // be overridden by the project's custom label.
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
+        new Response(
+          JSON.stringify([
+            {
+              uuid: 'app-1',
+              name: 'Provider-Assigned Name',
+              status: 'running',
+              fqdn: 'https://app-1.example.dev'
+            },
+            {
+              uuid: 'unrelated-app',
+              name: 'Unrelated App',
+              status: 'running',
+              fqdn: 'https://unrelated.example.dev'
+            }
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = (await overview?.(trustedEvent(), 'proj-a', 'coolify')) as {
+        containers: CloudDeploymentContainer[]
+        accessError?: string
+      }
+      expect(result.accessError).toBeUndefined()
+      const ids = result.containers.map((container) => container.id).sort()
+      // The un-mapped provider container is excluded; the pending one is kept.
+      expect(ids).toEqual(['app-1', 'app-not-yet'])
+      expect(result.containers).not.toContainEqual(expect.objectContaining({ id: 'unrelated-app' }))
+      const live = result.containers.find((container) => container.id === 'app-1')
+      expect(live?.label).toBe('My Custom API')
+      expect(live?.status).toBe('success')
+      const pending = result.containers.find((container) => container.id === 'app-not-yet')
+      expect(pending?.label).toBe('Pending App')
+      expect(pending?.status).toBe('unknown')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('represents every configured container even when the provider returns none', async () => {
+    const storageRoot = await setupStorage()
+    const set = handlers.get('cloudDeploy:setCredential')
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const overview = handlers.get('cloudDeploy:overview')
+
+    await set?.(
+      trustedEvent(),
+      'proj-a',
+      'coolify',
+      'Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )
+    const existing = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    const now = Date.now()
+    const mapped: CloudDeploymentConfig = {
+      ...existing,
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-ghost',
+            label: 'Ghost App',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    }
+    await save?.(trustedEvent(), 'proj-a', mapped)
+
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
+        new Response(JSON.stringify([]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = (await overview?.(trustedEvent(), 'proj-a', 'coolify')) as {
+        containers: CloudDeploymentContainer[]
+      }
+      expect(result.containers).toHaveLength(1)
+      expect(result.containers[0]).toMatchObject({
+        id: 'app-ghost',
+        label: 'Ghost App',
+        status: 'unknown'
       })
     } finally {
       vi.unstubAllGlobals()
