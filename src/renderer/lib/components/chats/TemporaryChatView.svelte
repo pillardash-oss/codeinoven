@@ -58,9 +58,11 @@
   let previewFile = $state<Extract<AgentPart, { type: 'file' }> | null>(null)
   let imageUrls = new FileBlobUrlManager()
   let references = $derived<PromptReference[]>(
-    tab.selectionAttached
-      ? [{ id: `${tab.id}:selection`, label: 'Selection 1', text: tab.selection }]
-      : []
+    tab.selections.map((selection, index) => ({
+      id: `${tab.id}:selection:${index}`,
+      label: `Selection ${index + 1}`,
+      text: selection
+    }))
   )
   let modelLabel = $derived.by((): string | null => {
     const modelId = tab.settings.modelId
@@ -350,22 +352,19 @@
     if (!prompt || tab.busy || tab.expired) return
     touch()
     const temporaryChatId = tab.temporaryChatId
-    const attachedSelection = tab.selectionAttached ? tab.selection : undefined
+    const attachedSelections = tab.selectionAttached ? [...tab.selections] : []
     const outgoing = userMessage(
       presentationText,
       attachments,
-      attachedSelection
-        ? [
-            {
-              id: `${temporaryChatId}:selection`,
-              label: 'Selection 1',
-              text: attachedSelection
-            }
-          ]
-        : []
+      attachedSelections.map((selection, index) => ({
+        id: `${temporaryChatId}:selection:${index}`,
+        label: `Selection ${index + 1}`,
+        text: selection
+      }))
     )
     tab.messages = [...tab.messages, outgoing]
-    if (attachedSelection) tab.selectionMessageId = outgoing.id
+    if (attachedSelections.length > 0) tab.selectionMessageId = outgoing.id
+    tab.selections = []
     tab.selectionAttached = false
     tab.draft = ''
     tab.busy = true
@@ -380,7 +379,7 @@
         tab.settings,
         prompt,
         attachments,
-        attachedSelection,
+        attachedSelections,
         tab.messages.length === 1 ? tab.initialContext : undefined
       )
       if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
@@ -736,7 +735,12 @@
             recentModels={rendererRecovery.chatRecentModels}
             onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
             {references}
-            onRemoveReference={() => (tab.selectionAttached = false)}
+            onRemoveReference={(id) => {
+              const index = references.findIndex((reference) => reference.id === id)
+              if (index < 0) return
+              tab.selections = tab.selections.filter((_, i) => i !== index)
+              tab.selectionAttached = tab.selections.length > 0
+            }}
             initialValue={tab.draft}
             onValueChange={(value) => {
               tab.draft = value

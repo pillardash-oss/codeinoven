@@ -101,7 +101,7 @@ export interface TemporaryChatContextTab {
   temporaryChatId: string
   sessionId: string | null
   mode: TemporaryChatMode
-  selection: string
+  selections: string[]
   initialContext: string
   settings: ThreadSettings
   messages: AgentMessage[]
@@ -641,6 +641,28 @@ class ContextSidebarState {
     selectionAttached = true
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
+
+    // Combine repeated "Quick chat" selections into the same tab as long as it
+    // has not yet sent its first message, so a user can build up one quick chat
+    // with multiple selections and ask across all of them. Once the tab has a
+    // message, further selections open a fresh tab.
+    if (mode === 'quick' && selectionAttached) {
+      const existing = context.tabs.find(
+        (tab): tab is TemporaryChatContextTab =>
+          tab.kind === 'temporary-chat' &&
+          tab.mode === 'quick' &&
+          !tab.expired &&
+          !tab.busy &&
+          tab.messages.length === 0
+      )
+      if (existing) {
+        existing.selections = [...existing.selections, selection]
+        this.focusInContext(context, existing.id)
+        this.touchTemporaryChat(existing)
+        return existing
+      }
+    }
+
     const temporaryChatId = crypto.randomUUID()
     const tab: TemporaryChatContextTab = {
       id: `temporary-chat:${temporaryChatId}`,
@@ -651,7 +673,7 @@ class ContextSidebarState {
       temporaryChatId,
       sessionId: null,
       mode,
-      selection: selectionAttached ? selection : '',
+      selections: selectionAttached ? [selection] : [],
       initialContext,
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
       messages: [],
@@ -696,7 +718,7 @@ class ContextSidebarState {
       temporaryChatId,
       sessionId: null,
       mode: 'audit',
-      selection: '',
+      selections: [],
       initialContext: '',
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
       messages: [],
@@ -748,9 +770,9 @@ class ContextSidebarState {
     tab.busy = false
     tab.error = ''
     tab.draft = ''
-    // Re-attach the selection on restart only when there is one — a quick chat
+    // Re-attach the selections on restart only when there are any — a quick chat
     // opened from the last agent turn has no selection attached.
-    tab.selectionAttached = tab.selection.length > 0
+    tab.selectionAttached = tab.selections.length > 0
     tab.selectionMessageId = null
     tab.autoPromptSent = false
     tab.sessionStarted = false
