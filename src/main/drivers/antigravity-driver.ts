@@ -13,6 +13,7 @@ import type {
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
+import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -166,10 +167,7 @@ interface ParsedAntigravityCatalog {
 
 /** Collapse effort-suffixed slugs into one model with dedicated thinking presets. */
 function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
-  const slugs = output
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !/^error\b/iu.test(line))
+  const slugs = antigravityModelSlugs(output)
   const variants = new Map<string, Map<ThinkingLevel, string>>()
   const standalone = new Set<string>()
   for (const slug of slugs) {

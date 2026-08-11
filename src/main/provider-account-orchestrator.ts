@@ -12,6 +12,7 @@ import type {
   HarnessLoginOptions
 } from './drivers/driver.interface'
 import { buildHarnessEnvironment } from './drivers/cli-environment'
+import { antigravityModelSlugs } from './drivers/antigravity-model-output'
 
 const STATUS_TIMEOUT_MS = 10_000
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
@@ -163,7 +164,7 @@ function parseAntigravityStatus(output: string, succeeded: boolean): HarnessAuth
   if (/please sign in|sign in to view|authentication required/iu.test(clean)) {
     return { state: 'unauthenticated', accounts: [] }
   }
-  const hasSlugs = clean.split(/\r?\n/u).some((line) => /^[a-z0-9][a-z0-9.-]*$/iu.test(line.trim()))
+  const hasSlugs = antigravityModelSlugs(clean).length > 0
   if (hasSlugs) {
     return {
       state: 'authenticated',
