@@ -3108,6 +3108,15 @@ export function registerIpcHandlers(
   ipcMain.handle('git:fetch', async (_, projectId: unknown) =>
     gitService.fetch(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )
+  ipcMain.handle(
+    'git:fetchBranch',
+    async (_, projectId: unknown, remote: unknown, branch: unknown) =>
+      gitService.fetchBranch(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateRemoteName(remote),
+        validateBranchName(branch)
+      )
+  )
   ipcMain.handle('git:pull', async (_, projectId: unknown) =>
     gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )

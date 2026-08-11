@@ -6,6 +6,7 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import type {
+    GitBranchInfo,
     GitCommitInfo,
     GitDiff,
     GitFileChange,
@@ -36,6 +37,7 @@
     Loader2,
     MoreHorizontal,
     NetworkIcon,
+    Plus,
     RefreshCw,
     RotateCcwClock,
     Trash2,
@@ -45,6 +47,7 @@
   import { onMount } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import BranchActionsMenu from './BranchActionsMenu.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -97,6 +100,10 @@
   let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
+  let checkoutConfirm = $state<string | null>(null)
+  let deleteBranchConfirm = $state<string | null>(null)
+  let creatingBranch = $state(false)
+  let newBranchName = $state('')
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
   let activeTab = $state<TabId>('changes')
@@ -105,6 +112,7 @@
   let discardConfirm = $state<string[] | null>(null)
   let commitSelection = $state(false)
   let commitTextarea = $state<HTMLTextAreaElement | null>(null)
+  let newBranchInput = $state<HTMLInputElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
@@ -265,6 +273,45 @@
 
   async function deleteBranchAction(name: string): Promise<void> {
     await gitState.deleteBranch(projectId, name)
+  }
+
+  /** Checking out switches the working tree, so it always confirms first from the Branches tab. */
+  function requestCheckout(name: string): void {
+    if (!name || name === status?.branch) return
+    checkoutConfirm = name
+  }
+
+  async function confirmCheckoutBranch(): Promise<void> {
+    const target = checkoutConfirm
+    if (!target) return
+    checkoutConfirm = null
+    await checkoutBranch(target)
+  }
+
+  function requestDeleteBranch(name: string): void {
+    deleteBranchConfirm = name
+  }
+
+  async function confirmDeleteBranch(): Promise<void> {
+    const target = deleteBranchConfirm
+    if (!target) return
+    deleteBranchConfirm = null
+    await deleteBranchAction(target)
+  }
+
+  /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
+  async function fetchBranchAction(branch: GitBranchInfo): Promise<void> {
+    const remote = branch.remote ?? primaryRemote?.name
+    if (!remote) return
+    await gitState.fetchBranch(projectId, remote, branch.name)
+  }
+
+  async function submitNewBranch(): Promise<void> {
+    const name = newBranchName.trim()
+    if (!name) return
+    creatingBranch = false
+    newBranchName = ''
+    await createBranchAction(name)
   }
 
   async function loadGitHubAuth(): Promise<void> {
@@ -655,6 +702,20 @@
     await loadHistory()
   }
 
+  /** Stable background colour for a branch's avatar, keyed off its name. */
+  const branchAvatarPalette = [
+    'bg-primary/20 text-primary',
+    'bg-success/20 text-success',
+    'bg-warning/20 text-warning',
+    'bg-danger/20 text-danger',
+    'bg-accent/20 text-accent'
+  ]
+  function branchAvatarClass(name: string): string {
+    let hash = 0
+    for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) | 0
+    return branchAvatarPalette[Math.abs(hash) % branchAvatarPalette.length]
+  }
+
   function relativeTime(timestamp: number): string {
     const seconds = Math.floor((Date.now() - timestamp) / 1000)
     if (seconds < 60) return 'just now'
@@ -709,6 +770,10 @@
       commitTextarea?.focus()
       commitSelection = false
     }
+  })
+
+  $effect(() => {
+    if (creatingBranch) newBranchInput?.focus()
   })
 
   onMount(() => {
@@ -2004,39 +2069,182 @@
           {/if}
         </div>
       {:else if activeTab === 'branches'}
-        <div class="p-2">
-          <div class="space-y-0.5">
-            {#each gitState.branches as branch (branch.name)}
+        <div class="flex h-full min-h-0 flex-col">
+          <!-- New branch -->
+          <div class="shrink-0 border-b border-border px-3 py-1.5">
+            {#if creatingBranch}
+              <div class="flex items-center gap-1.5">
+                <input
+                  bind:this={newBranchInput}
+                  class="min-w-0 flex-1 rounded-md border border-border bg-elevated px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+                  placeholder="new-feature"
+                  bind:value={newBranchName}
+                  onkeydown={(event: KeyboardEvent) => {
+                    if (event.key === 'Enter') void submitNewBranch()
+                    if (event.key === 'Escape') {
+                      creatingBranch = false
+                      newBranchName = ''
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer rounded-md bg-primary px-2 py-1 text-[10px] font-medium text-on-primary hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  disabled={!newBranchName.trim() || gitState.isBusy('checkout')}
+                  onclick={() => void submitNewBranch()}
+                >
+                  Create
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
+                  onclick={() => {
+                    creatingBranch = false
+                    newBranchName = ''
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            {:else}
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50 disabled:opacity-60"
-                disabled={branch.current}
-                onclick={() => void checkoutBranch(branch.name)}
+                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md px-1 py-1 text-[11px] font-medium text-muted transition-colors hover:text-foreground"
+                onclick={() => (creatingBranch = true)}
               >
-                <GitBranch size={11} class="shrink-0 text-dimmed" />
-                <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">
-                  {branch.name}
-                </span>
-                {#if branch.current}
-                  <span
-                    class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold text-primary"
-                  >
-                    current
-                  </span>
-                {:else}
-                  {#if branch.ahead > 0 || branch.behind > 0}
-                    <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
-                      {#if branch.ahead > 0}
-                        <span class="text-success">+{branch.ahead}</span>
-                      {/if}
-                      {#if branch.behind > 0}
-                        <span class="text-danger">−{branch.behind}</span>
-                      {/if}
-                    </span>
-                  {/if}
-                {/if}
+                <Plus size={12} class="shrink-0" />
+                New branch
               </button>
-            {/each}
+            {/if}
+          </div>
+
+          <div class="min-h-0 flex-1 overflow-y-auto p-2">
+            {#if gitState.branches.length === 0}
+              <div class="flex flex-col items-center justify-center py-12 text-center">
+                <GitBranch size={22} class="mx-auto mb-2 text-dimmed" />
+                <p class="text-xs font-medium text-muted">No branches</p>
+              </div>
+            {:else}
+              {@const localBranches = gitState.branches.filter((b) => !b.remote)}
+              {@const remoteBranches = gitState.branches.filter((b) => b.remote)}
+              {#snippet branchRow(branch: GitBranchInfo)}
+                {@const canFetch = Boolean(branch.remote ?? primaryRemote?.name)}
+                <ContextMenu.Root>
+                  <ContextMenu.Trigger
+                    class="block w-full"
+                    aria-label={`Actions for branch ${branch.name}`}
+                  >
+                    <div
+                      class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
+                    >
+                      <span
+                        class={[
+                          'flex size-5 shrink-0 items-center justify-center rounded-full',
+                          branchAvatarClass(branch.name)
+                        ]}
+                      >
+                        <GitBranch size={11} />
+                      </span>
+                      <button
+                        type="button"
+                        class="min-w-0 flex-1 cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
+                        disabled={branch.current}
+                        title={branch.current ? undefined : `Check out ${branch.name}`}
+                        onclick={() => requestCheckout(branch.name)}
+                      >
+                        {branch.remote ? `${branch.remote}/${branch.name}` : branch.name}
+                      </button>
+                      {#if branch.ahead > 0 || branch.behind > 0}
+                        <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
+                          {#if branch.ahead > 0}
+                            <span class="text-success">+{branch.ahead}</span>
+                          {/if}
+                          {#if branch.behind > 0}
+                            <span class="text-danger">−{branch.behind}</span>
+                          {/if}
+                        </span>
+                      {/if}
+                      <DropdownMenu.Root>
+                        <DropdownMenu.Trigger
+                          class="flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                          aria-label={`More actions for branch ${branch.name}`}
+                          title={`More actions for branch ${branch.name}`}
+                        >
+                          <MoreHorizontal size={13} />
+                        </DropdownMenu.Trigger>
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content
+                            class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                            side="bottom"
+                            align="end"
+                            sideOffset={4}
+                            collisionPadding={8}
+                          >
+                            <BranchActionsMenu
+                              isCurrent={branch.current}
+                              {canFetch}
+                              busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                              onCheckout={() => requestCheckout(branch.name)}
+                              onFetch={() => void fetchBranchAction(branch)}
+                              onDelete={() => requestDeleteBranch(branch.name)}
+                            />
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu.Root>
+                      {#if branch.current}
+                        <span
+                          class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[8px] font-semibold text-primary"
+                        >
+                          current
+                        </span>
+                      {/if}
+                    </div>
+                  </ContextMenu.Trigger>
+                  <ContextMenu.Portal>
+                    <ContextMenu.Content
+                      class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                      side="bottom"
+                      align="start"
+                      sideOffset={4}
+                      collisionPadding={8}
+                    >
+                      <BranchActionsMenu
+                        isCurrent={branch.current}
+                        {canFetch}
+                        busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                        onCheckout={() => requestCheckout(branch.name)}
+                        onFetch={() => void fetchBranchAction(branch)}
+                        onDelete={() => requestDeleteBranch(branch.name)}
+                      />
+                    </ContextMenu.Content>
+                  </ContextMenu.Portal>
+                </ContextMenu.Root>
+              {/snippet}
+
+              {#if localBranches.length > 0}
+                <p class="px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
+                  Local
+                </p>
+                <div class="space-y-0.5">
+                  {#each localBranches as branch (branch.name)}
+                    {@render branchRow(branch)}
+                  {/each}
+                </div>
+              {/if}
+
+              {#if remoteBranches.length > 0}
+                <p
+                  class="mt-2 px-2 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
+                >
+                  Remote
+                </p>
+                <div class="space-y-0.5">
+                  {#each remoteBranches as branch (branch.remote + '/' + branch.name)}
+                    {@render branchRow(branch)}
+                  {/each}
+                </div>
+              {/if}
+            {/if}
           </div>
         </div>
       {:else if activeTab === 'pulls'}
@@ -2743,6 +2951,79 @@
                 <Loader2 size={12} class="animate-spin" />
               {/if}
               Delete commit
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  {#if checkoutConfirm}
+    {@const target = checkoutConfirm}
+    <AlertDialog.Root open onOpenChange={() => (checkoutConfirm = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Check out “{target}”?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            This switches the working tree to <strong class="font-medium text-foreground"
+              >{target}</strong
+            >. Any uncommitted changes come with you if they don't conflict.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              disabled={gitState.isBusy('checkout')}
+              onclick={() => void confirmCheckoutBranch()}
+            >
+              {#if gitState.isBusy('checkout')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Check out
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  {#if deleteBranchConfirm}
+    {@const target = deleteBranchConfirm}
+    <AlertDialog.Root open onOpenChange={() => (deleteBranchConfirm = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Delete branch “{target}”?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Branch <strong class="font-medium text-foreground">{target}</strong> will be permanently deleted.
+            This cannot be undone.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('checkout')}
+              onclick={() => void confirmDeleteBranch()}
+            >
+              {#if gitState.isBusy('checkout')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Delete branch
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

@@ -479,6 +479,17 @@ export class GitService {
     })
   }
 
+  /** Updates just one branch's remote-tracking ref — doesn't touch the working tree. */
+  async fetchBranch(projectPath: string, remote: string, branch: string): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).fetch(remote, branch)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async pull(projectPath: string): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
