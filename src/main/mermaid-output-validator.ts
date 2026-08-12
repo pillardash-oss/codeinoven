@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { Logger } from './logger'
 
 const MAX_MERMAID_BLOCKS = 12
 const MAX_MERMAID_SOURCE_CHARS = 50_000
@@ -56,6 +57,13 @@ function errorDetail(error: unknown): string {
   return detail.slice(0, ERROR_DETAIL_LIMIT)
 }
 
+function isModuleLoadFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = 'code' in error ? error.code : undefined
+  if (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') return true
+  return error instanceof Error && /Cannot find module .+ imported from/u.test(error.message)
+}
+
 export async function validateMermaidOutput(markdown: string): Promise<MermaidOutputValidation> {
   const sources = extractMermaidSources(markdown)
   if (sources.length === 0) return { diagramCount: 0, failures: [] }
@@ -71,7 +79,13 @@ export async function validateMermaidOutput(markdown: string): Promise<MermaidOu
     }
   }
 
-  const parser = await loadParser()
+  let parser: MermaidParser
+  try {
+    parser = await loadParser()
+  } catch (error) {
+    Logger.error('Mermaid output validation unavailable; preserving completed response', error)
+    return { diagramCount: sources.length, failures: [] }
+  }
   const failures: MermaidValidationFailure[] = []
   for (const [index, source] of sources.entries()) {
     if (!source) {
@@ -91,6 +105,13 @@ export async function validateMermaidOutput(markdown: string): Promise<MermaidOu
         failures.push({ block: index + 1, detail: 'Mermaid parser rejected the diagram.' })
       }
     } catch (error) {
+      if (isModuleLoadFailure(error)) {
+        Logger.error('Mermaid output validation unavailable; preserving completed response', error)
+        return {
+          diagramCount: sources.length,
+          failures: []
+        }
+      }
       failures.push({ block: index + 1, detail: errorDetail(error) })
     }
   }
