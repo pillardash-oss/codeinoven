@@ -31,7 +31,8 @@ import type {
   PullRequestCompare,
   PullRequestFile,
   PullRequestPage,
-  PullRequestReference
+  PullRequestReference,
+  PullRequestSummary
 } from '$shared/types'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
@@ -90,6 +91,18 @@ const DEPLOYMENT_LOG_CACHE_TTL_MS = 5 * 60_000
  */
 const PR_ERROR_COOLDOWN_MS = 120_000
 
+/** Store-owned poll cadence while a project is active. */
+const GIT_POLL_INTERVAL_MS = 15_000
+
+/** How long a positive GitHub connection probe is trusted without re-probing. */
+const GITHUB_PROBE_TTL_MS = 30_000
+
+/** How fresh a successful PR conflict check is before it is refetched. */
+const PR_ISSUE_FRESHNESS_MS = 60_000
+
+/** Persisted open-PR conflict indicators, keyed by `owner/repo`. */
+const PR_CONFLICTS_STORAGE_KEY = `${APP_SLUG}.prConflicts.v2`
+
 function errorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback
   return error.message
@@ -123,13 +136,30 @@ export class GitState {
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
 
-  /** `owner/repo` → count of open PRs that currently have merge conflicts. */
-  prConflictIndicators: Record<string, number> = $state(GitState.loadPrConflictIndicators())
-  /** When the indicator was last fetched, for a lightweight refresh cooldown. */
-  private prConflictFetchedAt: Record<string, number> = {}
+  /**
+   * Open PRs that need conflict resolution, keyed by `owner/repo`. This is the
+   * single source of truth every subscribed surface (header button, PR list
+   * rows, PR detail) reads from — seeded from local storage so it survives a
+   * restart, then kept current by the store's own connection-gated refreshes.
+   */
+  prConflictsByRepo: Record<string, PullRequestSummary[]> = $state(GitState.loadPrConflicts())
+  /** When the conflict check last SUCCEEDED per repo — set only on success. */
+  private prIssueFetchedAt: Record<string, number> = {}
+  /** In-flight conflict checks per project, so concurrent refreshes share one. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private readonly prIssueChecks = new Map<string, Promise<void>>()
 
-  static readonly PR_CONFLICT_STORAGE_KEY = `${APP_SLUG}.prConflictIndicators.v1`
-  private static readonly PR_CONFLICT_COOLDOWN_MS = 5 * 60 * 1000
+  /**
+   * GitHub connection state, owned by the store. Every online git operation
+   * awaits `ensureGitHubConnection()` first, so a cold start can never race
+   * the connection: online checks simply run whenever the connection is ready.
+   */
+  githubConnection: 'unknown' | 'connecting' | 'connected' | 'disconnected' = $state('unknown')
+  private githubProbe: Promise<boolean> | null = null
+  private lastGithubProbeAt = 0
+
+  /** Store-owned poll timer for the active project. */
+  private pollTimer: ReturnType<typeof setInterval> | null = null
 
   /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
   get reviewPermission(): GitHubPermissionRequired | null {
@@ -183,6 +213,7 @@ export class GitState {
     if (this.activeProjectId === projectId) return
     this.activeProjectId = projectId
     this.clearProjectState()
+    this.startPolling()
   }
 
   /** Clear Git state when the active thread has no Git-capable project. */
@@ -190,6 +221,66 @@ export class GitState {
     if (this.activeProjectId === null) return
     this.activeProjectId = null
     this.clearProjectState()
+    this.stopPolling()
+  }
+
+  /**
+   * The store owns git polling: as long as a project is active, local git
+   * state and the connection-gated online indicators are refreshed on a fixed
+   * cadence regardless of which panel is open. No subscriber manages timers.
+   */
+  private startPolling(): void {
+    this.stopPolling()
+    this.pollTimer = setInterval(() => {
+      const projectId = this.activeProjectId
+      if (projectId) void this.refresh(projectId)
+    }, GIT_POLL_INTERVAL_MS)
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer)
+      this.pollTimer = null
+    }
+  }
+
+  /**
+   * Guarantee the GitHub connection before any online git operation. Offline
+   * operations (status, stage, commit, stash…) never touch this — only online
+   * ones (pull requests, deployments) await it. A negative probe is always
+   * re-checked, so signing in mid-session is picked up on the next attempt.
+   */
+  async ensureGitHubConnection(): Promise<boolean> {
+    if (this.githubConnection === 'connected') return true
+    if (this.githubProbe) return this.githubProbe
+    this.githubProbe = this.probeGitHubConnection()
+    try {
+      return await this.githubProbe
+    } finally {
+      this.githubProbe = null
+    }
+  }
+
+  private async probeGitHubConnection(): Promise<boolean> {
+    const now = Date.now()
+    // A positive probe is trusted briefly; a negative one always re-probes.
+    if (
+      this.githubConnection === 'connected' &&
+      now - this.lastGithubProbeAt < GITHUB_PROBE_TTL_MS
+    ) {
+      return true
+    }
+    this.lastGithubProbeAt = now
+    this.githubConnection = 'connecting'
+    const status = await this.githubAuthStatus()
+    const connected = status.connected
+    this.githubConnection = connected ? 'connected' : 'disconnected'
+    if (connected && this.activeProjectId) {
+      // The connection just became ready — run the online refreshes now
+      // instead of waiting for the next poll tick.
+      void this.refreshPrConflictIndicators(this.activeProjectId)
+    }
+    return connected
   }
 
   private clearProjectState(): void {
@@ -205,13 +296,22 @@ export class GitState {
 
   /**
    * Number of open PRs with merge conflicts for the active project's origin
-   * remote. Read straight from the persisted indicator so it's available
-   * immediately on app restart; refreshed in the background by
-   * `refreshPrConflictIndicators`.
+   * remote. Read from the persisted indicator so it's available immediately
+   * on app restart; kept current by the store's connection-gated refreshes.
    */
   get activePrConflictCount(): number {
     const repo = this.originRepo
-    return repo ? (this.prConflictIndicators[`${repo.owner}/${repo.repo}`] ?? 0) : 0
+    if (!repo) return 0
+    return (this.prConflictsByRepo[`${repo.owner}/${repo.repo}`] ?? []).length
+  }
+
+  /**
+   * Whether an open PR currently needs conflict resolution. All indicator UI
+   * (header button, PR list rows, PR detail) reads this one store-owned fact,
+   * so every subscribed surface shows exactly the same state.
+   */
+  hasPrIssue(owner: string, repo: string, pullNumber: number): boolean {
+    return (this.prConflictsByRepo[`${owner}/${repo}`] ?? []).some((pr) => pr.number === pullNumber)
   }
 
   /** `{ owner, repo }` parsed from the active project's origin remote URL. */
@@ -226,71 +326,118 @@ export class GitState {
   }
 
   /**
-   * Fetch the first page of open PRs for the active project and record how many
-   * need conflict resolution, persisting the count so the header badge survives
-   * an app restart. A cooldown keeps the repeated calls from `refresh()` cheap.
-   *
-   * The count is only persisted after an *authoritative* fetch: an unauthenticated
-   * or denied response must never overwrite the last known value with a zero —
-   * otherwise a cold start before GitHub is connected would poison the indicator
-   * for the whole cooldown window (exactly the "nothing shows after restart"
-   * failure this is designed to prevent).
+   * Refresh the open-PR conflict indicator for the active project. Gated on
+   * the GitHub connection — the store guarantees the connection before any
+   * online operation, so this never runs (or records anything) before GitHub
+   * is reachable. A fresh successful result is served without a round trip; a
+   * failed check records nothing, so the next poll simply tries again.
    */
   async refreshPrConflictIndicators(projectId: string): Promise<void> {
     const repo = this.originRepo
-    if (!repo) return
+    if (!repo || projectId !== this.activeProjectId) return
     const key = `${repo.owner}/${repo.repo}`
-    const now = Date.now()
-    // The cooldown is only recorded on an authoritative fetch, so a failed check
-    // (e.g. GitHub not connected yet right after launch) retries on the next
-    // refresh instead of being suppressed for the whole cooldown window.
-    if (now - (this.prConflictFetchedAt[key] ?? 0) < GitState.PR_CONFLICT_COOLDOWN_MS) return
+    if (Date.now() - (this.prIssueFetchedAt[key] ?? 0) < PR_ISSUE_FRESHNESS_MS) return
+    const inflight = this.prIssueChecks.get(projectId)
+    if (inflight) return inflight
+    const check = this.runPrConflictCheck(projectId, repo.owner, repo.repo, key)
+    this.prIssueChecks.set(projectId, check)
     try {
-      const page = await invoke('pr:page', projectId, repo.owner, repo.repo, 'open', 1)
+      await check
+    } finally {
+      if (this.prIssueChecks.get(projectId) === check) this.prIssueChecks.delete(projectId)
+    }
+  }
+
+  private async runPrConflictCheck(
+    projectId: string,
+    owner: string,
+    repo: string,
+    key: string
+  ): Promise<void> {
+    if (!(await this.ensureGitHubConnection())) return
+    try {
+      const page = await invoke('pr:page', projectId, owner, repo, 'open', 1)
       if (page.accessError) return
       // `mergeable` is frequently null in list payloads (GitHub computes it
       // lazily); `mergeable_state` (e.g. `dirty`) is the reliable list signal,
-      // so a conflict counts if either flags it. PRs with no computed state
-      // probe the detail endpoint, which forces GitHub to compute mergeability.
-      let conflicts = page.items.filter(
+      // so a PR counts if either flags it. PRs with no computed state probe
+      // the detail endpoint, which forces GitHub to compute mergeability.
+      const conflicted = page.items.filter(
         (item) => item.mergeable === false || item.mergeableState === 'dirty'
-      ).length
+      )
       const uncomputed = page.items.filter(
         (item) => item.mergeable === null && item.mergeableState !== 'dirty'
       )
       for (const pr of uncomputed) {
         try {
-          const detail = await invoke('pr:detail', projectId, repo.owner, repo.repo, pr.number)
-          if (detail.mergeable === false) conflicts += 1
+          const detail = await invoke('pr:detail', projectId, owner, repo, pr.number)
+          if (detail.mergeable === false) conflicted.push(pr)
         } catch {
           // A single PR failing its probe must not discard the whole check.
         }
       }
-      this.prConflictIndicators = { ...this.prConflictIndicators, [key]: conflicts }
-      this.prConflictFetchedAt[key] = now
+      this.prConflictsByRepo = { ...this.prConflictsByRepo, [key]: conflicted }
+      this.prIssueFetchedAt[key] = Date.now()
       try {
         window.localStorage.setItem(
-          GitState.PR_CONFLICT_STORAGE_KEY,
-          JSON.stringify(this.prConflictIndicators)
+          PR_CONFLICTS_STORAGE_KEY,
+          JSON.stringify(
+            Object.fromEntries(
+              Object.entries(this.prConflictsByRepo).map(([repoKey, prs]) => [
+                repoKey,
+                prs.map((pr) => ({ number: pr.number, title: pr.title }))
+              ])
+            )
+          )
         )
       } catch {
         // Persistence is best-effort — an unavailable store must not break the badge.
       }
     } catch {
-      // No GitHub connection yet — keep the last persisted indicator until we can refresh.
+      // GitHub unreachable — keep the last known result. Nothing is persisted
+      // and no freshness is recorded, so the next poll retries.
     }
   }
 
-  private static loadPrConflictIndicators(): Record<string, number> {
+  private static loadPrConflicts(): Record<string, PullRequestSummary[]> {
     if (typeof window === 'undefined') return {}
     try {
-      const raw = window.localStorage.getItem(GitState.PR_CONFLICT_STORAGE_KEY)
+      const raw = window.localStorage.getItem(PR_CONFLICTS_STORAGE_KEY)
       if (!raw) return {}
       const parsed = JSON.parse(raw) as unknown
       if (typeof parsed !== 'object' || parsed === null) return {}
-      const result: Record<string, number> = {}
+      const result: Record<string, PullRequestSummary[]> = {}
       for (const [key, value] of Object.entries(parsed)) {
-        if (typeof value === 'number' && value >= 0) result[key] = value
+        if (!Array.isArray(value)) continue
+        const prs: PullRequestSummary[] = []
+        for (const entry of value) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const record = entry as Record<string, unknown>
+          if (typeof record['number'] !== 'number' || record['number'] <= 0) continue
+          prs.push({
+            number: record['number'],
+            title:
+              typeof record['title'] === 'string'
+                ? record['title']
+                : `Pull request #${record['number']}`,
+            url: typeof record['url'] === 'string' ? record['url'] : '',
+            state:
+              record['state'] === 'closed' || record['state'] === 'merged'
+                ? record['state']
+                : 'open',
+            draft: record['draft'] === true,
+            authorLogin:
+              typeof record['authorLogin'] === 'string' ? record['authorLogin'] : 'unknown',
+            headRef: typeof record['headRef'] === 'string' ? record['headRef'] : '',
+            baseRef: typeof record['baseRef'] === 'string' ? record['baseRef'] : '',
+            createdAt: typeof record['createdAt'] === 'string' ? record['createdAt'] : '',
+            updatedAt: typeof record['updatedAt'] === 'string' ? record['updatedAt'] : '',
+            comments: typeof record['comments'] === 'number' ? record['comments'] : 0,
+            mergeable: false,
+            mergeableState: 'dirty'
+          })
+        }
+        result[key] = prs
       }
       return result
     } catch {

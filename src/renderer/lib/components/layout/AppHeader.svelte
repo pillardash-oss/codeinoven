@@ -488,18 +488,6 @@
     // while another is active.
     gitState.activate(projectId)
     queueMicrotask(() => void gitState.refresh(projectId))
-    // Keep the header indicator current without requiring the git panel to be
-    // open: a periodic light refresh catches PR conflicts that appear hours
-    // after the last project switch. The store's cooldown keeps the GitHub
-    // conflict check itself at 5-minute granularity.
-    const timer = setInterval(
-      () => {
-        const current = workspaceState.selectedThread
-        if (current?.projectId === projectId) void gitState.refresh(projectId)
-      },
-      5 * 60 * 1000
-    )
-    return () => clearInterval(timer)
   })
 
   function openGitPanel(): void {

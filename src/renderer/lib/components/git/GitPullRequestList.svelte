@@ -86,13 +86,10 @@
   function stateClass(pr: PullRequestSummary): string {
     if (pr.state === 'merged') return 'text-primary'
     if (pr.state === 'closed') return 'text-danger'
-    if (needsResolution(pr)) return 'text-danger'
+    if (identity && gitState.hasPrIssue(identity.owner, identity.repo, pr.number)) {
+      return 'text-danger'
+    }
     return pr.draft ? 'text-dimmed' : 'text-success'
-  }
-
-  /** Open PRs that can't be merged as-is because the branches conflict. */
-  function needsResolution(pr: PullRequestSummary): boolean {
-    return pr.mergeable === false || pr.mergeableState === 'dirty'
   }
 
   $effect(() => {
@@ -195,6 +192,9 @@
         </div>
       {:else}
         {#each items as pr (pr.number)}
+          {@const hasIssue = identity
+            ? gitState.hasPrIssue(identity.owner, identity.repo, pr.number)
+            : false}
           {@const Icon = icon(pr)}
           <button
             type="button"
@@ -211,7 +211,7 @@
                 {pr.headRef} → {pr.baseRef}
               </p>
             </div>
-            {#if needsResolution(pr)}
+            {#if hasIssue}
               <span
                 class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[9px] font-semibold text-danger"
                 title="This pull request has merge conflicts and needs resolution"

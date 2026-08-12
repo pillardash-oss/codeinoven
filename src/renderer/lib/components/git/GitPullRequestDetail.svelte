@@ -113,7 +113,9 @@
   /** Why merging may not be a good idea right now — shown next to the button. */
   const mergeBlocker = $derived.by(() => {
     if (!open) return ''
-    if (detail?.mergeable === false) return 'conflicts with the base branch'
+    if (gitState.hasPrIssue(identity.owner, identity.repo, number)) {
+      return 'conflicts with the base branch'
+    }
     if (checks?.state === 'failure') return 'checks are failing'
     if (checks?.state === 'pending') return 'checks are still running'
     return ''
@@ -519,7 +521,7 @@
         <span class="text-danger">−{detail.deletions}</span>
         <span>{detail.changedFiles} files</span>
         <span>{detail.commitCount} commits</span>
-        {#if open && detail.mergeable === false}
+        {#if open && gitState.hasPrIssue(identity.owner, identity.repo, number)}
           <span class="flex items-center gap-1 text-warning">
             <TriangleAlert size={10} />
             conflicts
