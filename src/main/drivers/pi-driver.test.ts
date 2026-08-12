@@ -1,34 +1,87 @@
-import { EventEmitter } from 'events'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChildProcess } from 'child_process'
 import { StorageEngine } from '../storage-engine'
 import { PiDriver, mapPiRecord } from './pi-driver'
 import type { CliLineParseContext, PersistentCliSession } from './persistent-cli-driver'
 
-const spawnMock = vi.hoisted(() => vi.fn())
-vi.mock('child_process', async (importOriginal) => {
-  const original = await importOriginal<typeof import('child_process')>()
-  return { ...original, spawn: spawnMock }
+const sdkMock = vi.hoisted(() => {
+  const createCalls: Array<Record<string, unknown>> = []
+  const loaderOptions: Array<Record<string, unknown>> = []
+  const sessions: Array<{
+    sessionId: string
+    model: { id: string; provider: string }
+    prompt: ReturnType<typeof vi.fn>
+    steer: ReturnType<typeof vi.fn>
+    abort: ReturnType<typeof vi.fn>
+    dispose: ReturnType<typeof vi.fn>
+    setModel: ReturnType<typeof vi.fn>
+    setThinkingLevel: ReturnType<typeof vi.fn>
+    emit: (event: unknown) => void
+  }> = []
+  const runtime = {
+    getModel: vi.fn((provider: string, model: string) => ({ id: model, provider })),
+    getModels: vi.fn(() => []),
+    registerProvider: vi.fn(),
+    setRuntimeApiKey: vi.fn()
+  }
+  const createAgentSession = vi.fn(async (options: Record<string, unknown>) => {
+    createCalls.push(options)
+    const listeners = new Set<(event: unknown) => void>()
+    const session = {
+      sessionId: `native-${sessions.length + 1}`,
+      model: { id: 'qwen/qwen3.5-9b', provider: 'lmstudio' },
+      prompt: vi.fn(async () => undefined),
+      steer: vi.fn(async () => undefined),
+      abort: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+      setModel: vi.fn(async (model: { id: string; provider: string }) => {
+        session.model = model
+      }),
+      setThinkingLevel: vi.fn(),
+      subscribe: vi.fn((listener: (event: unknown) => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+      emit: (event: unknown) => {
+        for (const listener of listeners) listener(event)
+      }
+    }
+    sessions.push(session)
+    return { session }
+  })
+  return { createAgentSession, createCalls, loaderOptions, runtime, sessions }
 })
 
-class FakeChild extends EventEmitter {
-  stdout = new EventEmitter()
-  stderr = new EventEmitter()
-  stdin = { write: vi.fn(), end: vi.fn() }
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    this.emit('exit', null, 'SIGTERM')
-    return true
+vi.mock('@earendil-works/pi-coding-agent', () => {
+  class DefaultResourceLoader {
+    static options: unknown[] = []
+    constructor(options: Record<string, unknown>) {
+      DefaultResourceLoader.options.push(options)
+      sdkMock.loaderOptions.push(options)
+    }
+    async reload(): Promise<void> {}
   }
-}
+  return {
+    createAgentSession: sdkMock.createAgentSession,
+    DefaultResourceLoader,
+    getAgentDir: () => '/agent',
+    ModelRuntime: { create: vi.fn(async () => sdkMock.runtime) },
+    SessionManager: { inMemory: vi.fn(() => ({ kind: 'memory' })) }
+  }
+})
 
 const roots: string[] = []
 afterEach(async () => {
-  spawnMock.mockReset()
+  sdkMock.createAgentSession.mockClear()
+  sdkMock.createCalls.splice(0)
+  sdkMock.loaderOptions.splice(0)
+  sdkMock.runtime.getModel.mockClear()
+  sdkMock.runtime.getModels.mockClear()
+  sdkMock.runtime.registerProvider.mockClear()
+  sdkMock.runtime.setRuntimeApiKey.mockClear()
+  sdkMock.sessions.splice(0)
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -68,53 +121,30 @@ function sessionContext(
 }
 
 describe('PiDriver', () => {
-  it('runs new and resumed turns with JSON mode, provider, model, and thinking level', async () => {
+  it('runs multiple logical sessions in one embedded model runtime', async () => {
     const driver = new PiDriver(await storage())
-    const child = new FakeChild()
-    spawnMock.mockReturnValue(child as unknown as ChildProcess)
-    const sessionId = await driver.createSession('/project', 'Pi')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'first', attachments: [] })
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
-      '--mode',
-      'json',
-      '-p',
-      '--provider',
-      'lmstudio',
-      '--model',
-      'qwen/qwen3.5-9b',
-      '--thinking',
-      'medium',
-      'first'
+    const first = await driver.createSession('/project', 'First')
+    const second = await driver.createSession('/project', 'Second')
+    await Promise.all([
+      driver.sendPrompt('/project', { sessionId: first, settings, text: 'first', attachments: [] }),
+      driver.sendPrompt('/project', {
+        sessionId: second,
+        settings,
+        text: 'second',
+        attachments: []
+      })
     ])
-    child.stdout.emit('data', Buffer.from('{"type":"session","id":"native-1"}\n'))
-    child.emit('exit', 0, null)
     await new Promise((resolve) => setTimeout(resolve, 0))
-    await driver.sendPrompt('/project', {
-      sessionId,
-      settings: { ...settings, thinkingLevel: 'max' },
-      text: 'second',
-      attachments: []
-    })
-    expect(spawnMock.mock.calls[1]?.[1]).toEqual([
-      '--mode',
-      'json',
-      '-p',
-      '--session-id',
-      'native-1',
-      '--provider',
-      'lmstudio',
-      '--model',
-      'qwen/qwen3.5-9b',
-      '--thinking',
-      'xhigh',
-      'second'
-    ])
+
+    expect(sdkMock.createAgentSession).toHaveBeenCalledTimes(2)
+    expect(sdkMock.createCalls[0]?.['modelRuntime']).toBe(sdkMock.runtime)
+    expect(sdkMock.createCalls[1]?.['modelRuntime']).toBe(sdkMock.runtime)
+    expect(sdkMock.sessions[0]?.prompt).toHaveBeenCalledWith('first', { source: 'rpc' })
+    expect(sdkMock.sessions[1]?.prompt).toHaveBeenCalledWith('second', { source: 'rpc' })
   })
 
-  it('restricts Pi to read-only tools and appends the system prompt for read-only turns', async () => {
+  it('restricts embedded Pi to read-only tools and scopes its system prompt', async () => {
     const driver = new PiDriver(await storage())
-    const child = new FakeChild()
-    spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Pi')
     await driver.sendPrompt('/project', {
       sessionId,
@@ -124,34 +154,51 @@ describe('PiDriver', () => {
       readOnly: true,
       systemPrompt: 'Be surgical.'
     })
-    expect(spawnMock.mock.calls[0]?.[1]).toContain('--tools')
-    expect(spawnMock.mock.calls[0]?.[1]).toContain('read,grep,find,ls')
-    expect(spawnMock.mock.calls[0]?.[1]).toContain('--append-system-prompt')
-    expect(spawnMock.mock.calls[0]?.[1]).toContain('Be surgical.')
-    child.emit('exit', 0, null)
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    const options = sdkMock.createCalls[0]
+    expect(options?.['tools']).toEqual(['read', 'grep', 'find', 'ls'])
+    expect(sdkMock.loaderOptions).toContainEqual(
+      expect.objectContaining({ appendSystemPrompt: ['Be surgical.'] })
+    )
   })
 
-  it('maps Pi JSONL events into assistant messages, deltas, and tool states', async () => {
+  it('maps embedded Pi events into assistant messages, deltas, and tool states', async () => {
     const driver = new PiDriver(await storage())
-    const child = new FakeChild()
-    spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Pi')
     await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
-    child.stdout.emit(
-      'data',
-      Buffer.from(
-        [
-          '{"type":"session","id":"native-9"}',
-          '{"type":"turn_start"}',
-          '{"type":"message_start","message":{"role":"assistant","content":[]}}',
-          '{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello"}}',
-          '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Hello world"}],"usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":1,"cost":{"total":0.001}}}}',
-          '{"type":"turn_end","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"bash","arguments":{"command":"ls"}}]},"toolResults":[{"toolCallId":"call-1","toolName":"bash","content":[{"type":"text","text":"out"}],"isError":false}]}'
-        ].join('\n') + '\n'
-      )
-    )
-    child.emit('exit', 0, null)
+    const sdkSession = sdkMock.sessions[0]
+    sdkSession?.emit({ type: 'turn_start' })
+    sdkSession?.emit({ type: 'message_start', message: { role: 'assistant', content: [] } })
+    sdkSession?.emit({
+      type: 'message_update',
+      message: {},
+      assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'Hello' }
+    })
+    sdkSession?.emit({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Hello world' },
+          { type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'ls' } }
+        ],
+        usage: { input: 10, output: 5, cacheRead: 2, cacheWrite: 1, cost: { total: 0.001 } }
+      }
+    })
+    sdkSession?.emit({
+      type: 'turn_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'ls' } }]
+      },
+      toolResults: [
+        {
+          toolCallId: 'call-1',
+          toolName: 'bash',
+          content: [{ type: 'text', text: 'out' }],
+          isError: false
+        }
+      ]
+    })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const messages = await driver.loadMessages('/project', sessionId)

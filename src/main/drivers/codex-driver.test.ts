@@ -14,6 +14,8 @@ vi.mock('child_process', async (importOriginal) => {
 })
 
 class FakeChild extends EventEmitter {
+  private threadSequence = 0
+  private turnSequence = 0
   stdout = new EventEmitter()
   stderr = new EventEmitter()
   stdin = {
@@ -25,9 +27,22 @@ class FakeChild extends EventEmitter {
       const params = payload['params'] as Record<string, unknown> | undefined
       const result =
         method === 'thread/start' || method === 'thread/resume'
-          ? { thread: { id: method === 'thread/resume' ? params?.['threadId'] : 'native-1' } }
+          ? {
+              thread: {
+                id:
+                  method === 'thread/resume'
+                    ? params?.['threadId']
+                    : `native-${++this.threadSequence}`
+              }
+            }
           : method === 'turn/start'
-            ? { turn: { id: 'turn-1', status: 'inProgress', items: [] } }
+            ? {
+                turn: {
+                  id: `turn-${++this.turnSequence}`,
+                  status: 'inProgress',
+                  items: []
+                }
+              }
             : method === 'turn/steer'
               ? { turnId: 'turn-1' }
               : {}
@@ -76,17 +91,14 @@ const settings = {
 }
 
 describe('CodexDriver', () => {
-  it('runs new and resumed turns through app-server with the selected sandbox', async () => {
+  it('runs new and resumed turns through one shared app-server with the selected sandbox', async () => {
     const driver = new CodexDriver(await storage())
-    const firstChild = new FakeChild()
-    const secondChild = new FakeChild()
-    spawnMock
-      .mockReturnValueOnce(firstChild as unknown as ChildProcess)
-      .mockReturnValueOnce(secondChild as unknown as ChildProcess)
+    const sharedChild = new FakeChild()
+    spawnMock.mockReturnValue(sharedChild as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Codex')
     await driver.sendPrompt('/project', { sessionId, settings, text: 'first', attachments: [] })
     expect(spawnMock.mock.calls[0]?.[1]).toEqual(['app-server', '--listen', 'stdio://'])
-    expect(firstChild.requests()).toContainEqual(
+    expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
         method: 'turn/start',
         params: expect.objectContaining({
@@ -102,7 +114,7 @@ describe('CodexDriver', () => {
       attachments: [],
       userMessageId: 'steer-1'
     })
-    expect(firstChild.requests()).toContainEqual({
+    expect(sharedChild.requests()).toContainEqual({
       id: 4,
       method: 'turn/steer',
       params: {
@@ -112,9 +124,27 @@ describe('CodexDriver', () => {
         expectedTurnId: 'turn-1'
       }
     })
-    firstChild.emitPayload({
+    const workerSessionId = await driver.createSession('/project', 'Worker')
+    await driver.sendPrompt('/project', {
+      sessionId: workerSessionId,
+      settings,
+      text: 'work concurrently',
+      attachments: []
+    })
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(sharedChild.requests()).toContainEqual(
+      expect.objectContaining({
+        method: 'turn/start',
+        params: expect.objectContaining({ threadId: 'native-2' })
+      })
+    )
+    sharedChild.emitPayload({
       method: 'turn/completed',
-      params: { turn: { id: 'turn-1', status: 'completed' } }
+      params: { threadId: 'native-1', turn: { id: 'turn-1', status: 'completed' } }
+    })
+    sharedChild.emitPayload({
+      method: 'turn/completed',
+      params: { threadId: 'native-2', turn: { id: 'turn-2', status: 'completed' } }
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
     await driver.sendPrompt('/project', {
@@ -123,12 +153,13 @@ describe('CodexDriver', () => {
       text: 'second',
       attachments: []
     })
-    expect(secondChild.requests()).toContainEqual({
-      id: 2,
+    expect(spawnMock).toHaveBeenCalledTimes(1)
+    expect(sharedChild.requests()).toContainEqual({
+      id: expect.any(Number),
       method: 'thread/resume',
       params: { threadId: 'native-1' }
     })
-    expect(secondChild.requests()).toContainEqual(
+    expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
         method: 'turn/start',
         params: expect.objectContaining({

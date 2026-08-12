@@ -65,21 +65,16 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 
 /** Last-resort catalog for older Codex versions without the app-server model API. */
 const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
-const CODEX_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
 
-interface CodexAppServerTurn {
+interface CodexAppServerHost {
   child: ChildProcess
-  session: PersistentCliSession
-  nativeThreadId?: string
-  turnId?: string
   nextRequestId: number
   stdoutBuffer: string
   stderrBuffer: string
-  failure?: string
-  finished: boolean
+  stopped: boolean
   pending: Map<
     number,
     {
@@ -90,8 +85,41 @@ interface CodexAppServerTurn {
   >
 }
 
+interface CodexAppServerTurn {
+  host: CodexAppServerHost
+  session: PersistentCliSession
+  nativeThreadId?: string
+  turnId?: string
+  failure?: string
+  finished: boolean
+}
+
+interface CodexCompactionRun {
+  session: PersistentCliSession
+  messageId: string
+  basePart: Extract<AgentPart, { type: 'compaction' }>
+  resolve: () => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
+interface CodexContextUsageWaiter {
+  resolve: (usage: ReturnType<typeof mapCodexUsage>) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
+}
+
+function notificationThreadId(params: Record<string, unknown>): string | undefined {
+  const turn = record(params['turn'])
+  return (
+    stringValue(params['threadId']) ??
+    stringValue(params['thread_id']) ??
+    stringValue(turn?.['threadId']) ??
+    stringValue(turn?.['thread_id'])
+  )
 }
 
 function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
@@ -141,114 +169,6 @@ function mapCodexModel(value: unknown): ProviderModel | null {
   }
 }
 
-/** Query the authenticated Codex runtime rather than guessing its current model IDs. */
-async function discoverCodexModels(projectPath: string): Promise<ProviderModel[]> {
-  return await new Promise<ProviderModel[]>((resolve, reject) => {
-    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-      cwd: projectPath,
-      env: buildHarnessEnvironment(),
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
-    let settled = false
-    let stdoutBuffer = ''
-    let stderr = ''
-    let requestId = 1
-    const discovered: ProviderModel[] = []
-    const timer = setTimeout(
-      () => finish(new Error('Codex model discovery timed out')),
-      CODEX_MODEL_DISCOVERY_TIMEOUT_MS
-    )
-
-    const finish = (error?: Error): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (!child.killed) child.kill()
-      if (error) reject(error)
-      else resolve([...new Map(discovered.map((model) => [model.id, model])).values()])
-    }
-
-    const send = (payload: Record<string, unknown>): void => {
-      if (!child.stdin) {
-        finish(new Error('Codex app server did not expose stdin'))
-        return
-      }
-      child.stdin.write(`${JSON.stringify(payload)}\n`)
-    }
-
-    const requestModels = (cursor?: string): void => {
-      requestId += 1
-      send({
-        id: requestId,
-        method: 'model/list',
-        params: { includeHidden: false, limit: 100, ...(cursor ? { cursor } : {}) }
-      })
-    }
-
-    const consumeLine = (line: string): void => {
-      if (!line.trim()) return
-      let message: Record<string, unknown>
-      try {
-        message = record(JSON.parse(line) as unknown) ?? {}
-      } catch {
-        return
-      }
-      if (message['error']) {
-        const detail = stringValue(record(message['error'])?.['message']) ?? 'unknown error'
-        finish(new Error(`Codex model discovery failed: ${detail}`))
-        return
-      }
-      if (message['id'] === 1) {
-        send({ method: 'initialized' })
-        requestModels()
-        return
-      }
-      if (typeof message['id'] !== 'number' || message['id'] < 2) return
-      const result = record(message['result'])
-      const data = result?.['data']
-      if (!Array.isArray(data)) {
-        finish(new Error('Codex model discovery returned an invalid response'))
-        return
-      }
-      for (const value of data) {
-        const model = mapCodexModel(value)
-        if (model) discovered.push(model)
-      }
-      const nextCursor = stringValue(result?.['nextCursor'])
-      if (nextCursor) requestModels(nextCursor)
-      else finish()
-    }
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString()
-      const lines = stdoutBuffer.split('\n')
-      stdoutBuffer = lines.pop() ?? ''
-      for (const line of lines) consumeLine(line)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-2_000)
-    })
-    child.on('error', (error) => finish(error))
-    child.on('exit', (code) => {
-      if (!settled) {
-        finish(
-          new Error(
-            `Codex app server exited before model discovery completed (${code ?? 'signal'})${stderr ? `: ${stderr.trim()}` : ''}`
-          )
-        )
-      }
-    })
-    send({
-      id: 1,
-      method: 'initialize',
-      params: {
-        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-        capabilities: { experimentalApi: true }
-      }
-    })
-  })
-}
-
 function fallbackCodexModels(): ProviderModel[] {
   return CODEX_FALLBACK_MODELS.map((id) => ({
     id,
@@ -288,11 +208,12 @@ function tomlStringMap(values: Record<string, string>): string {
   return `{ ${entries.join(', ')} }`
 }
 
-/** Process-per-turn bridge for Codex CLI's `exec --json` protocol. */
+/** Multiplexed bridge for one resident Codex app-server and many native threads. */
 export class CodexDriver extends PersistentCliDriver {
   readonly id = 'codex'
   readonly name = 'Codex CLI'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'shared_daemon', scope: 'application' },
     streaming: true,
     steering: true,
     nativeResume: true,
@@ -308,6 +229,10 @@ export class CodexDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
+  private compactionsByThreadId = new Map<string, CodexCompactionRun>()
+  private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
+  private host: CodexAppServerHost | null = null
+  private hostStarting: Promise<CodexAppServerHost> | null = null
 
   protected async ensureCliReady(): Promise<void> {
     try {
@@ -332,7 +257,7 @@ export class CodexDriver extends PersistentCliDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     let builtInModels: ProviderModel[]
     try {
-      const discovered = await discoverCodexModels(projectPath)
+      const discovered = await this.discoverModels(projectPath)
       builtInModels = discovered.length > 0 ? discovered : fallbackCodexModels()
     } catch (error) {
       Logger.info('Codex model discovery fell back to the bundled catalog', {
@@ -389,45 +314,18 @@ export class CodexDriver extends PersistentCliDriver {
       throw new Error(`A turn is already active for session ${session.id}`)
     }
 
-    const runtime = this.utilityRuntime(session.id)
-    const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const runtimeArgs = runtime
-      ? runtime.args.map((argument) => this.resolveRuntimePlaceholders(argument, runtime))
-      : []
-    const runtimeEnv = runtime
-      ? Object.fromEntries(
-          Object.entries(runtime.env).map(([key, value]) => [
-            key,
-            this.resolveRuntimePlaceholders(value, runtime)
-          ])
-        )
-      : {}
+    if (this.utilityRuntime(session.id)) {
+      throw new Error('Codex per-session launch overlays cannot bypass the shared app-server host')
+    }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    const fastArgs = fastInference
-      ? ['-c', 'service_tier=fast', '-c', 'features.fast_mode=true']
-      : []
-    const child = spawn(
-      'codex',
-      [...runtimeArgs, ...providerArgs, ...fastArgs, 'app-server', '--listen', 'stdio://'],
-      {
-        cwd: projectPath,
-        env: { ...buildHarnessEnvironment(), ...providerEnv, ...runtimeEnv },
-        stdio: ['pipe', 'pipe', 'pipe']
-      }
-    )
-    this.observeHarnessProcess(session.id, child, 'codex app-server', projectPath)
+    const host = await this.ensureAppServerHost(projectPath, session.id)
     const active: CodexAppServerTurn = {
-      child,
+      host,
       session,
-      nextRequestId: 0,
-      stdoutBuffer: '',
-      stderrBuffer: '',
-      finished: false,
-      pending: new Map()
+      finished: false
     }
     this.activeTurns.set(session.id, active)
-    this.bindAppServer(active)
     this.setTurnProvenance(
       session.id,
       options.settings.providerId,
@@ -436,17 +334,11 @@ export class CodexDriver extends PersistentCliDriver {
     this.appendUserMessage(session, options)
 
     try {
-      await this.appServerRequest(active, 'initialize', {
-        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-        capabilities: { experimentalApi: true }
-      })
-      this.appServerNotify(active, 'initialized')
-
       const threadResult = session.nativeSessionId
-        ? await this.appServerRequest(active, 'thread/resume', {
+        ? await this.appServerRequest(host, 'thread/resume', {
             threadId: session.nativeSessionId
           })
-        : await this.appServerRequest(active, 'thread/start', {
+        : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
             model: options.settings.modelId,
             approvalPolicy: 'never',
@@ -460,7 +352,7 @@ export class CodexDriver extends PersistentCliDriver {
       session.nativeSessionId = nativeThreadId
       await this.persistSession(session)
 
-      const turnResult = await this.appServerRequest(active, 'turn/start', {
+      const turnResult = await this.appServerRequest(host, 'turn/start', {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
         input: await this.codexInput(options.text, options.systemPrompt, options.attachments),
@@ -497,7 +389,7 @@ export class CodexDriver extends PersistentCliDriver {
       throw new Error(`No active Codex turn is available to steer for session ${session.id}`)
     }
     this.appendUserMessage(session, options)
-    await this.appServerRequest(active, 'turn/steer', {
+    await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
       input: await this.codexInput(options.text, undefined, options.attachments),
@@ -511,7 +403,7 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (!active?.nativeThreadId || !active.turnId) return
     try {
-      await this.appServerRequest(active, 'turn/interrupt', {
+      await this.appServerRequest(active.host, 'turn/interrupt', {
         threadId: active.nativeThreadId,
         turnId: active.turnId
       })
@@ -533,39 +425,133 @@ export class CodexDriver extends PersistentCliDriver {
   override dispose(): void {
     for (const active of this.activeTurns.values()) {
       active.finished = true
-      for (const pending of active.pending.values()) {
+    }
+    this.activeTurns.clear()
+    for (const compaction of this.compactionsByThreadId.values()) {
+      clearTimeout(compaction.timer)
+      compaction.reject(new Error('Codex driver disposed'))
+    }
+    this.compactionsByThreadId.clear()
+    for (const waiter of this.contextUsageByThreadId.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
+    this.contextUsageByThreadId.clear()
+    const host = this.host
+    this.host = null
+    this.hostStarting = null
+    if (host) {
+      host.stopped = true
+      for (const pending of host.pending.values()) {
         clearTimeout(pending.timer)
         pending.reject(new Error('Codex driver disposed'))
       }
-      active.pending.clear()
-      if (!active.child.killed) active.child.kill()
+      host.pending.clear()
+      if (!host.child.killed) host.child.kill()
     }
-    this.activeTurns.clear()
     super.dispose()
   }
 
-  private bindAppServer(active: CodexAppServerTurn): void {
-    active.child.stdout?.on('data', (chunk: Buffer) => {
-      active.stdoutBuffer += chunk.toString()
-      const lines = active.stdoutBuffer.split(/\r?\n/u)
-      active.stdoutBuffer = lines.pop() ?? ''
-      for (const line of lines) this.consumeAppServerLine(active, line)
+  private async ensureAppServerHost(
+    projectPath: string,
+    observerSessionId?: string
+  ): Promise<CodexAppServerHost> {
+    if (this.host && !this.host.stopped) {
+      if (observerSessionId) {
+        this.observeHarnessProcess(
+          observerSessionId,
+          this.host.child,
+          'codex app-server',
+          projectPath
+        )
+      }
+      return this.host
+    }
+    if (this.hostStarting) return this.hostStarting
+    const starting = (async (): Promise<CodexAppServerHost> => {
+      const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
+      const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
+        cwd: projectPath,
+        env: { ...buildHarnessEnvironment(), ...providerEnv },
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      const host: CodexAppServerHost = {
+        child,
+        nextRequestId: 0,
+        stdoutBuffer: '',
+        stderrBuffer: '',
+        stopped: false,
+        pending: new Map()
+      }
+      this.host = host
+      this.bindAppServer(host)
+      if (observerSessionId) {
+        this.observeHarnessProcess(observerSessionId, child, 'codex app-server', projectPath)
+      }
+      await this.appServerRequest(host, 'initialize', {
+        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+        capabilities: { experimentalApi: true }
+      })
+      this.appServerNotify(host, 'initialized')
+      return host
+    })()
+    this.hostStarting = starting
+    try {
+      return await starting
+    } catch (error) {
+      if (this.host && !this.host.child.killed) this.host.child.kill()
+      this.host = null
+      throw error
+    } finally {
+      if (this.hostStarting === starting) this.hostStarting = null
+    }
+  }
+
+  private async discoverModels(projectPath: string): Promise<ProviderModel[]> {
+    const host = await this.ensureAppServerHost(projectPath)
+    const discovered: ProviderModel[] = []
+    let cursor: string | undefined
+    do {
+      const result = await this.appServerRequest(host, 'model/list', {
+        includeHidden: false,
+        limit: 100,
+        ...(cursor ? { cursor } : {})
+      })
+      const data = result['data']
+      if (!Array.isArray(data)) {
+        throw new Error('Codex model discovery returned an invalid response')
+      }
+      for (const value of data) {
+        const model = mapCodexModel(value)
+        if (model) discovered.push(model)
+      }
+      cursor = stringValue(result['nextCursor'])
+    } while (cursor)
+    return [...new Map(discovered.map((model) => [model.id, model])).values()]
+  }
+
+  private bindAppServer(host: CodexAppServerHost): void {
+    host.child.stdout?.on('data', (chunk: Buffer) => {
+      host.stdoutBuffer += chunk.toString()
+      const lines = host.stdoutBuffer.split(/\r?\n/u)
+      host.stdoutBuffer = lines.pop() ?? ''
+      for (const line of lines) this.consumeAppServerLine(host, line)
     })
-    active.child.stderr?.on('data', (chunk: Buffer) => {
-      active.stderrBuffer = `${active.stderrBuffer}${chunk.toString()}`.slice(-4_000)
+    host.child.stderr?.on('data', (chunk: Buffer) => {
+      host.stderrBuffer = `${host.stderrBuffer}${chunk.toString()}`.slice(-4_000)
     })
-    active.child.on('error', (error) => void this.finishAppServerTurn(active, error.message))
-    active.child.on('exit', (code, signal) => {
-      if (active.finished) return
-      const detail = active.stderrBuffer.trim()
-      void this.finishAppServerTurn(
-        active,
-        `Codex app-server exited before the turn completed (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`
+    host.child.on('error', (error) => void this.failAppServerHost(host, error.message))
+    host.child.on('exit', (code, signal) => {
+      if (host.stopped) return
+      const detail = host.stderrBuffer.trim()
+      void this.failAppServerHost(
+        host,
+        `Codex app-server exited (${code ?? signal ?? 'unknown'})${detail ? `: ${detail}` : ''}`
       )
     })
   }
 
-  private consumeAppServerLine(active: CodexAppServerTurn, line: string): void {
+  private consumeAppServerLine(host: CodexAppServerHost, line: string): void {
     if (!line.trim()) return
     let payload: Record<string, unknown>
     try {
@@ -577,9 +563,9 @@ export class CodexDriver extends PersistentCliDriver {
     const responseId = appServerRequestId(payload['id'])
     const method = stringValue(payload['method'])
     if (typeof responseId === 'number' && !method) {
-      const pending = active.pending.get(responseId)
+      const pending = host.pending.get(responseId)
       if (!pending) return
-      active.pending.delete(responseId)
+      host.pending.delete(responseId)
       clearTimeout(pending.timer)
       const error = recordValue(payload['error'])
       if (error) {
@@ -592,18 +578,71 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     if (responseId !== undefined && method) {
-      this.respondToUnsupportedAppServerRequest(active, responseId, method)
+      this.respondToUnsupportedAppServerRequest(host, responseId, method)
       return
     }
-    if (method)
-      this.handleAppServerNotification(active, method, recordValue(payload['params']) ?? {})
+    if (method) this.handleAppServerNotification(host, method, recordValue(payload['params']) ?? {})
   }
 
   private handleAppServerNotification(
-    active: CodexAppServerTurn,
+    _host: CodexAppServerHost,
     method: string,
     params: Record<string, unknown>
   ): void {
+    void _host
+    const threadId = notificationThreadId(params)
+    if (threadId && method === 'thread/tokenUsage/updated') {
+      const waiter = this.contextUsageByThreadId.get(threadId)
+      if (waiter) {
+        clearTimeout(waiter.timer)
+        this.contextUsageByThreadId.delete(threadId)
+        waiter.resolve(mapCodexUsage(params['tokenUsage'] ?? params))
+      }
+    }
+    if (threadId) {
+      const compaction = this.compactionsByThreadId.get(threadId)
+      if (compaction && (method === 'item/started' || method === 'item/completed')) {
+        const item = recordValue(params['item'])
+        if (stringValue(item?.['type']) === 'contextCompaction') {
+          const summary = stringValue(item?.['summary']) ?? stringValue(item?.['text'])
+          const part = summary ? { ...compaction.basePart, summary } : compaction.basePart
+          this.applyEventToSession(compaction.session, {
+            type: 'message.part.updated',
+            sessionId: compaction.session.id,
+            part
+          })
+          this.emit({
+            type: 'message.part.updated',
+            sessionId: compaction.session.id,
+            part
+          })
+        }
+        return
+      }
+      if (compaction && method === 'turn/completed') {
+        const turn = recordValue(params['turn'])
+        const status = stringValue(turn?.['status'])
+        clearTimeout(compaction.timer)
+        this.compactionsByThreadId.delete(threadId)
+        if (status === 'failed' || status === 'interrupted') {
+          compaction.reject(new Error(`Codex compaction ${status}`))
+        } else {
+          const completed: AgentEvent = {
+            type: 'message.completed',
+            sessionId: compaction.session.id,
+            messageId: compaction.messageId,
+            compaction: true
+          }
+          this.applyEventToSession(compaction.session, completed)
+          this.emit(completed)
+          this.emit({ type: 'session.idle', sessionId: compaction.session.id })
+          void this.persistSession(compaction.session).then(compaction.resolve, compaction.reject)
+        }
+        return
+      }
+    }
+    const active = this.activeTurnForNotification(params)
+    if (!active) return
     if (method === 'turn/started') {
       const turn = recordValue(params['turn'])
       active.turnId = stringValue(turn?.['id']) ?? active.turnId
@@ -663,6 +702,31 @@ export class CodexDriver extends PersistentCliDriver {
     void this.completeAppServerTurn(active, message)
   }
 
+  private activeTurnForNotification(
+    params: Record<string, unknown>
+  ): CodexAppServerTurn | undefined {
+    const turn = recordValue(params['turn'])
+    const threadId =
+      stringValue(params['threadId']) ??
+      stringValue(params['thread_id']) ??
+      stringValue(turn?.['threadId']) ??
+      stringValue(turn?.['thread_id'])
+    const turnId =
+      stringValue(params['turnId']) ?? stringValue(params['turn_id']) ?? stringValue(turn?.['id'])
+    if (turnId) {
+      const byTurn = [...this.activeTurns.values()].find((active) => active.turnId === turnId)
+      if (byTurn) return byTurn
+    }
+    if (threadId) {
+      const byThread = [...this.activeTurns.values()].find(
+        (active) => active.nativeThreadId === threadId
+      )
+      if (byThread) return byThread
+    }
+    if (this.activeTurns.size === 1) return this.activeTurns.values().next().value
+    return undefined
+  }
+
   private emitAppServerDelta(
     active: CodexAppServerTurn,
     params: Record<string, unknown>,
@@ -696,35 +760,33 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   private appServerRequest(
-    active: CodexAppServerTurn,
+    host: CodexAppServerHost,
     method: string,
     params?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    if (active.finished) return Promise.reject(new Error('Codex turn is no longer active'))
-    if (!active.child.stdin) return Promise.reject(new Error('Codex app-server stdin is closed'))
-    const id = ++active.nextRequestId
+    if (host.stopped) return Promise.reject(new Error('Codex app-server is not running'))
+    if (!host.child.stdin) return Promise.reject(new Error('Codex app-server stdin is closed'))
+    const id = ++host.nextRequestId
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        active.pending.delete(id)
+        host.pending.delete(id)
         reject(new Error(`Codex app-server ${method} request timed out`))
       }, CODEX_APP_SERVER_REQUEST_TIMEOUT_MS)
-      active.pending.set(id, { resolve, reject, timer })
-      active.child.stdin?.write(
-        `${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`
-      )
+      host.pending.set(id, { resolve, reject, timer })
+      host.child.stdin?.write(`${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`)
     })
   }
 
-  private appServerNotify(active: CodexAppServerTurn, method: string): void {
-    active.child.stdin?.write(`${JSON.stringify({ method })}\n`)
+  private appServerNotify(host: CodexAppServerHost, method: string): void {
+    host.child.stdin?.write(`${JSON.stringify({ method })}\n`)
   }
 
   private respondToUnsupportedAppServerRequest(
-    active: CodexAppServerTurn,
+    host: CodexAppServerHost,
     id: string | number,
     method: string
   ): void {
-    active.child.stdin?.write(
+    host.child.stdin?.write(
       `${JSON.stringify({
         id,
         error: {
@@ -738,7 +800,7 @@ export class CodexDriver extends PersistentCliDriver {
   private async completeAppServerTurn(active: CodexAppServerTurn, error?: string): Promise<void> {
     if (!error) {
       try {
-        const result = await this.appServerRequest(active, 'account/rateLimits/read')
+        const result = await this.appServerRequest(active.host, 'account/rateLimits/read')
         const telemetry = mapCodexRateLimits(result)
         const finalMessage = [...active.session.messages]
           .reverse()
@@ -767,12 +829,6 @@ export class CodexDriver extends PersistentCliDriver {
     if (this.activeTurns.get(active.session.id) === active) {
       this.activeTurns.delete(active.session.id)
     }
-    for (const pending of active.pending.values()) {
-      clearTimeout(pending.timer)
-      pending.reject(new Error(error ?? 'Codex turn completed'))
-    }
-    active.pending.clear()
-    if (!active.child.killed) active.child.kill()
     try {
       await this.persistSession(active.session)
     } catch (persistError) {
@@ -781,6 +837,29 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (error) this.emit({ type: 'session.error', sessionId: active.session.id, error })
     this.emit({ type: 'session.idle', sessionId: active.session.id })
+  }
+
+  private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
+    if (host.stopped) return
+    host.stopped = true
+    if (this.host === host) this.host = null
+    for (const pending of host.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error(error))
+    }
+    host.pending.clear()
+    for (const compaction of this.compactionsByThreadId.values()) {
+      clearTimeout(compaction.timer)
+      compaction.reject(new Error(error))
+    }
+    this.compactionsByThreadId.clear()
+    for (const waiter of this.contextUsageByThreadId.values()) {
+      clearTimeout(waiter.timer)
+      waiter.resolve(undefined)
+    }
+    this.contextUsageByThreadId.clear()
+    const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
+    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error)))
   }
 
   private async codexInput(
@@ -949,107 +1028,27 @@ export class CodexDriver extends PersistentCliDriver {
     this.applyEventToSession(session, { type: 'message.part.updated', sessionId, part: basePart })
     this.emit({ type: 'message.part.updated', sessionId, part: basePart })
 
+    const host = await this.ensureAppServerHost(projectPath, sessionId)
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['pipe', 'pipe', 'pipe']
+      const timer = setTimeout(() => {
+        this.compactionsByThreadId.delete(nativeThreadId)
+        reject(new Error('Codex compaction timed out'))
+      }, CODEX_COMPACTION_TIMEOUT_MS)
+      this.compactionsByThreadId.set(nativeThreadId, {
+        session,
+        messageId,
+        basePart,
+        resolve,
+        reject,
+        timer
       })
-      let buffer = ''
-      let settled = false
-      let requestSent = false
-      const timer = setTimeout(
-        () => finish(new Error('Codex compaction timed out')),
-        CODEX_COMPACTION_TIMEOUT_MS
+      void this.appServerRequest(host, 'thread/compact/start', { threadId: nativeThreadId }).catch(
+        (error: unknown) => {
+          clearTimeout(timer)
+          this.compactionsByThreadId.delete(nativeThreadId)
+          reject(error instanceof Error ? error : new Error('Codex compaction failed'))
+        }
       )
-
-      const finish = (error?: Error): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (!child.killed) child.kill()
-        if (error) reject(error)
-        else resolve()
-      }
-
-      const send = (payload: Record<string, unknown>): void => {
-        child.stdin?.write(`${JSON.stringify(payload)}\n`)
-      }
-
-      const consume = (line: string): void => {
-        if (!line.trim()) return
-        let payload: Record<string, unknown>
-        try {
-          payload = record(JSON.parse(line) as unknown) ?? {}
-        } catch {
-          return
-        }
-        if (payload['id'] === 1) {
-          send({ method: 'initialized' })
-          send({ id: 2, method: 'thread/compact/start', params: { threadId: nativeThreadId } })
-          requestSent = true
-          return
-        }
-        if (payload['id'] === 2) {
-          const error = record(payload['error'])
-          if (error) {
-            finish(new Error(stringValue(error['message']) ?? 'Codex compaction failed'))
-          }
-          return
-        }
-        const method = stringValue(payload['method'])
-        const params = record(payload['params'])
-        if (method === 'item/started' || method === 'item/completed') {
-          const item = record(params?.['item'])
-          if (stringValue(item?.['type']) === 'contextCompaction') {
-            const summary =
-              stringValue(item?.['summary']) ?? stringValue(item?.['text']) ?? undefined
-            const part = summary ? { ...basePart, summary } : basePart
-            this.applyEventToSession(session, { type: 'message.part.updated', sessionId, part })
-            this.emit({ type: 'message.part.updated', sessionId, part })
-          }
-          return
-        }
-        if (method === 'turn/completed') {
-          const turn = record(params?.['turn'])
-          const status = stringValue(turn?.['status'])
-          if (status === 'failed' || status === 'interrupted') {
-            finish(new Error(`Codex compaction ${status}`))
-            return
-          }
-          const completed: AgentEvent = {
-            type: 'message.completed',
-            sessionId,
-            messageId,
-            compaction: true
-          }
-          this.applyEventToSession(session, completed)
-          this.emit(completed)
-          this.emit({ type: 'session.idle', sessionId })
-          void this.persistSession(session).then(() => finish(), finish)
-        }
-      }
-
-      child.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString()
-        const lines = buffer.split(/\r?\n/u)
-        buffer = lines.pop() ?? ''
-        for (const line of lines) consume(line)
-      })
-      child.on('error', (error) => finish(error))
-      child.on('exit', (code) => {
-        if (!settled && (!requestSent || code !== 0)) {
-          finish(new Error(`Codex compaction process exited with code ${code ?? 'unknown'}`))
-        }
-      })
-      send({
-        id: 1,
-        method: 'initialize',
-        params: {
-          clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-          capabilities: { experimentalApi: true }
-        }
-      })
     }).catch((error) => {
       const failed: AgentEvent = {
         type: 'message.completed',
@@ -1100,74 +1099,10 @@ export class CodexDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     messageId: string
   ): Promise<void> {
-    const telemetry = await new Promise<{
-      rateLimits: AgentRateLimitWindow[]
-      credits?: AgentUsageCredits
-    }>((resolve) => {
-      const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      let buffer = ''
-      let settled = false
-      const timer = setTimeout(() => finish({ rateLimits: [] }), CODEX_USAGE_TIMEOUT_MS)
-
-      const finish = (value: {
-        rateLimits: AgentRateLimitWindow[]
-        credits?: AgentUsageCredits
-      }): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (!child.killed) child.kill()
-        resolve(value)
-      }
-      const send = (payload: Record<string, unknown>): void => {
-        child.stdin?.write(`${JSON.stringify(payload)}\n`)
-      }
-      const consume = (line: string): void => {
-        if (!line.trim()) return
-        const payload = recordValue(JSON.parse(line) as unknown)
-        if (!payload) return
-        if (payload['id'] === 1) {
-          send({ method: 'initialized' })
-          send({ id: 2, method: 'account/rateLimits/read' })
-          return
-        }
-        if (payload['id'] === 2) {
-          if (payload['error']) {
-            finish({ rateLimits: [] })
-            return
-          }
-          finish(mapCodexRateLimits(payload['result']))
-        }
-      }
-      child.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString()
-        const lines = buffer.split(/\r?\n/u)
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          try {
-            consume(line)
-          } catch {
-            // Ignore malformed side-channel output; the main turn is complete.
-          }
-        }
-      })
-      child.on('error', () => finish({ rateLimits: [] }))
-      child.on('exit', () => {
-        if (!settled) finish({ rateLimits: [] })
-      })
-      send({
-        id: 1,
-        method: 'initialize',
-        params: {
-          clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-          capabilities: { experimentalApi: true }
-        }
-      })
-    })
+    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const telemetry = mapCodexRateLimits(
+      await this.appServerRequest(host, 'account/rateLimits/read')
+    )
 
     if (telemetry.rateLimits.length === 0 && !telemetry.credits) return
     const event: AgentEvent = {
@@ -1183,75 +1118,17 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   /**
-   * Fetch the account's current quota telemetry on demand. Unlike
-   * `refreshRateLimits` this needs no live session: it spawns a fresh app-server
-   * and calls `account/rateLimits/read`, so the battery can show current quota
+   * Fetch current quota telemetry through the resident app-server, including
    * for old threads whose turns predate quota capture.
    */
   async readAccountUsage(
     projectPath: string
   ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
     try {
-      const result = await new Promise<Record<string, unknown> | null>((resolve) => {
-        const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-          cwd: projectPath,
-          env: buildHarnessEnvironment(),
-          stdio: ['pipe', 'pipe', 'pipe']
-        })
-        let buffer = ''
-        let settled = false
-        const timer = setTimeout(() => finish(null), CODEX_USAGE_TIMEOUT_MS)
-        const finish = (value: Record<string, unknown> | null): void => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          if (!child.killed) child.kill()
-          resolve(value)
-        }
-        const send = (payload: Record<string, unknown>): void => {
-          child.stdin?.write(`${JSON.stringify(payload)}\n`)
-        }
-        const consume = (line: string): void => {
-          if (!line.trim()) return
-          const payload = recordValue(JSON.parse(line) as unknown)
-          if (!payload) return
-          if (payload['id'] === 1) {
-            send({ method: 'initialized' })
-            send({ id: 2, method: 'account/rateLimits/read' })
-            return
-          }
-          if (payload['id'] === 2) {
-            if (payload['error']) finish(null)
-            else finish(recordValue(payload['result']))
-          }
-        }
-        child.stdout?.on('data', (chunk: Buffer) => {
-          buffer += chunk.toString()
-          const lines = buffer.split(/\r?\n/u)
-          buffer = lines.pop() ?? ''
-          for (const line of lines) {
-            try {
-              consume(line)
-            } catch {
-              // Ignore malformed side-channel output.
-            }
-          }
-        })
-        child.on('error', () => finish(null))
-        child.on('exit', () => {
-          if (!settled) finish(null)
-        })
-        send({
-          id: 1,
-          method: 'initialize',
-          params: {
-            clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-            capabilities: { experimentalApi: true }
-          }
-        })
-      })
-      if (!result) return null
-      const telemetry = mapCodexRateLimits(result)
+      const host = await this.ensureAppServerHost(projectPath)
+      const telemetry = mapCodexRateLimits(
+        await this.appServerRequest(host, 'account/rateLimits/read')
+      )
       if (telemetry.rateLimits.length === 0 && !telemetry.credits) return null
       return telemetry
     } catch (error) {
@@ -1267,82 +1144,23 @@ export class CodexDriver extends PersistentCliDriver {
     messageId: string,
     nativeThreadId: string
   ): Promise<void> {
-    const usage = await new Promise<
-      | {
-          legacy: AgentTokenUsage | undefined
-          usage: CodexNormalizedUsage | undefined
-          contextWindow?: number
-          contextUsed?: number
-        }
-      | undefined
-    >((resolve) => {
-      const child = spawn('codex', ['app-server', '--listen', 'stdio://'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      let buffer = ''
-      let settled = false
-      const timer = setTimeout(() => finish(undefined), CODEX_USAGE_TIMEOUT_MS)
-
-      const finish = (
-        value:
-          | {
-              legacy: AgentTokenUsage | undefined
-              usage: CodexNormalizedUsage | undefined
-              contextWindow?: number
-              contextUsed?: number
-            }
-          | undefined
-      ): void => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        if (!child.killed) child.kill()
-        resolve(value)
-      }
-      const send = (payload: Record<string, unknown>): void => {
-        child.stdin?.write(`${JSON.stringify(payload)}\n`)
-      }
-      const consume = (line: string): void => {
-        if (!line.trim()) return
-        const payload = recordValue(JSON.parse(line) as unknown)
-        if (!payload) return
-        if (payload['id'] === 1) {
-          send({ method: 'initialized' })
-          send({ id: 2, method: 'thread/resume', params: { threadId: nativeThreadId } })
-          return
-        }
-        if (stringValue(payload['method']) !== 'thread/tokenUsage/updated') return
-        const params = recordValue(payload['params'])
-        const mapped = mapCodexUsage(params?.['tokenUsage'] ?? params?.['token_usage'] ?? params)
-        if (mapped) finish(mapped)
-      }
-      child.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString()
-        const lines = buffer.split(/\r?\n/u)
-        buffer = lines.pop() ?? ''
-        for (const line of lines) {
-          try {
-            consume(line)
-          } catch {
-            // Ignore malformed side-channel output; the main turn is complete.
-          }
-        }
-      })
-      child.on('error', () => finish(undefined))
-      child.on('exit', () => {
-        if (!settled) finish(undefined)
-      })
-      send({
-        id: 1,
-        method: 'initialize',
-        params: {
-          clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-          capabilities: { experimentalApi: true }
-        }
-      })
+    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const usagePromise = new Promise<ReturnType<typeof mapCodexUsage>>((resolve) => {
+      const timer = setTimeout(() => {
+        this.contextUsageByThreadId.delete(nativeThreadId)
+        resolve(undefined)
+      }, CODEX_USAGE_TIMEOUT_MS)
+      this.contextUsageByThreadId.set(nativeThreadId, { resolve, timer })
     })
+    try {
+      await this.appServerRequest(host, 'thread/resume', { threadId: nativeThreadId })
+    } catch (error) {
+      const waiter = this.contextUsageByThreadId.get(nativeThreadId)
+      if (waiter) clearTimeout(waiter.timer)
+      this.contextUsageByThreadId.delete(nativeThreadId)
+      throw error
+    }
+    const usage = await usagePromise
 
     if (!usage) return
     const event: AgentEvent = {

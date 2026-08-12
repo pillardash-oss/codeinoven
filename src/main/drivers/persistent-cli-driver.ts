@@ -130,6 +130,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   private eventCallback: AgentEventCallback | null = null
   private activeProcesses = new Map<string, ChildProcess>()
+  private processReservations = new Set<string>()
+  private processQueue: Array<{
+    sessionId: string
+    resolve: () => void
+    reject: (error: Error) => void
+  }> = []
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
   private sessionCache = new Map<string, PersistentCliSession>()
   private deletedSessions = new Set<string>()
@@ -186,6 +192,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     const session = await this.requireSession(projectPath, sessionId)
     this.deletedSessions.add(session.id)
+    this.cancelQueuedProcess(session.id, 'Session was deleted before its harness turn started')
     const active = this.activeProcesses.get(session.id)
     if (active) {
       active.kill()
@@ -345,6 +352,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           ...runtimeEnv
         }
       : (invocation.env ?? buildHarnessEnvironment())
+    await this.acquireProcessSlot(session.id)
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,
@@ -359,12 +367,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         stdio: ['pipe', 'pipe', 'pipe']
       })
     } catch (error) {
+      this.releaseProcessReservation(session.id)
       invocation.onProcessExit?.()
       throw error
     }
     this.observeHarnessProcess(session.id, child, invocation.command, projectPath)
     this.structuredProcessIssues.delete(session.id)
     this.activeProcesses.set(session.id, child)
+    this.processReservations.delete(session.id)
 
     let stdoutBuffer = ''
     let stderrBuffer = ''
@@ -374,6 +384,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       completed = true
       invocation.onProcessExit?.()
       this.activeProcesses.delete(session.id)
+      this.drainProcessQueue()
       if (!this.deletedSessions.has(session.id)) {
         try {
           await this.persistSession(session)
@@ -448,8 +459,83 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   async abort(projectPath: string, sessionId: string): Promise<void> {
     await this.requireSession(projectPath, sessionId)
+    if (this.cancelQueuedProcess(sessionId, 'Harness turn was aborted before it started')) return
     const child = this.activeProcesses.get(sessionId)
     if (child && !child.killed) child.kill()
+  }
+
+  private processLimit(): number {
+    return this.capabilities.runtimeTopology.maxConcurrentProcesses ?? Number.POSITIVE_INFINITY
+  }
+
+  private acquireProcessSlot(sessionId: string): Promise<void> {
+    if (this.activeProcesses.size + this.processReservations.size < this.processLimit()) {
+      this.processReservations.add(sessionId)
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve, reject) => {
+      this.processQueue.push({ sessionId, resolve, reject })
+      this.emitProcessQueueStatuses()
+    })
+  }
+
+  private releaseProcessReservation(sessionId: string): void {
+    this.processReservations.delete(sessionId)
+    this.drainProcessQueue()
+  }
+
+  private cancelQueuedProcess(sessionId: string, reason: string): boolean {
+    const index = this.processQueue.findIndex((entry) => entry.sessionId === sessionId)
+    if (index === -1) return false
+    const [queued] = this.processQueue.splice(index, 1)
+    queued?.reject(new Error(reason))
+    this.emit({ type: 'session.idle', sessionId })
+    this.emitProcessQueueStatuses()
+    return true
+  }
+
+  private drainProcessQueue(): void {
+    while (
+      this.processQueue.length > 0 &&
+      this.activeProcesses.size + this.processReservations.size < this.processLimit()
+    ) {
+      const queued = this.processQueue.shift()
+      if (!queued) return
+      if (this.deletedSessions.has(queued.sessionId)) {
+        queued.reject(new Error('Session was deleted before its harness turn started'))
+        continue
+      }
+      this.processReservations.add(queued.sessionId)
+      this.emit({
+        type: 'session.status',
+        sessionId: queued.sessionId,
+        status: { state: 'working' }
+      })
+      queued.resolve()
+    }
+    this.emitProcessQueueStatuses()
+  }
+
+  private emitProcessQueueStatuses(): void {
+    const maxConcurrentProcesses = this.processLimit()
+    if (!Number.isFinite(maxConcurrentProcesses)) return
+    this.processQueue.forEach((queued, index) => {
+      const position = index + 1
+      this.emit({
+        type: 'session.status',
+        sessionId: queued.sessionId,
+        status: {
+          state: 'working',
+          activity: {
+            kind: 'harness_queue',
+            label: `Queued for ${this.name} capacity · ${position} ahead`,
+            position,
+            maxConcurrentProcesses,
+            updatedAt: Date.now()
+          }
+        }
+      })
+    })
   }
 
   async listProviders(_projectPath: string): Promise<ProviderCatalog[]> {
@@ -525,6 +611,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   dispose(): void {
     for (const child of this.activeProcesses.values()) child.kill()
     this.activeProcesses.clear()
+    this.processReservations.clear()
+    for (const queued of this.processQueue)
+      queued.reject(new Error(`${this.name} is shutting down`))
+    this.processQueue = []
     for (const runtime of this.utilityRuntimes.values()) {
       void runtime.cleanup().catch((error) => {
         Logger.error(`${this.name} utility runtime cleanup failed:`, error)
