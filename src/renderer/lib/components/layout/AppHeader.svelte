@@ -34,6 +34,7 @@
     FolderKanban,
     GitBranch,
     GitFork,
+    GitPullRequest,
     History,
     Info,
     Kanban,
@@ -1266,6 +1267,15 @@
           </span>
         {:else if gitState.status && !gitState.clean}
           <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>
+        {/if}
+        {#if gitState.activePrConflictCount > 0}
+          <span
+            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-danger"
+            title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
+          >
+            <GitPullRequest size={9} class="shrink-0" />
+            {gitState.activePrConflictCount}
+          </span>
         {/if}
       </button>
     {/if}

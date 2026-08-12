@@ -3014,6 +3014,12 @@ export interface PullRequestSummary {
   updatedAt: string
   /** Issue-comment count as reported by the provider (review comments excluded). */
   comments: number
+  /**
+   * Whether the provider has computed the PR as mergeable (`false` = conflicts).
+   * Populated from list payloads where available; absent for locally-constructed
+   * summaries (e.g. a just-created PR). Null when not yet computed.
+   */
+  mergeable?: boolean | null
 }
 
 /** One page of pull requests, with a cursor the UI can advance. */

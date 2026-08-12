@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { APP_SLUG } from '$shared/brand'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -121,6 +122,14 @@ export class GitState {
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
 
+  /** `owner/repo` → count of open PRs that currently have merge conflicts. */
+  prConflictIndicators: Record<string, number> = $state(GitState.loadPrConflictIndicators())
+  /** When the indicator was last fetched, for a lightweight refresh cooldown. */
+  private prConflictFetchedAt: Record<string, number> = {}
+
+  static readonly PR_CONFLICT_STORAGE_KEY = `${APP_SLUG}.prConflictIndicators.v1`
+  private static readonly PR_CONFLICT_COOLDOWN_MS = 5 * 60 * 1000
+
   /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
   get reviewPermission(): GitHubPermissionRequired | null {
     return this.githubPermission
@@ -179,6 +188,74 @@ export class GitState {
     this.githubPermission = null
   }
 
+  /**
+   * Number of open PRs with merge conflicts for the active project's origin
+   * remote. Read straight from the persisted indicator so it's available
+   * immediately on app restart; refreshed in the background by
+   * `refreshPrConflictIndicators`.
+   */
+  get activePrConflictCount(): number {
+    const repo = this.originRepo
+    return repo ? (this.prConflictIndicators[`${repo.owner}/${repo.repo}`] ?? 0) : 0
+  }
+
+  /** `{ owner, repo }` parsed from the active project's origin remote URL. */
+  private get originRepo(): { owner: string; repo: string } | null {
+    const origin = (this.remotes ?? []).find((remote) => remote.name === 'origin')
+    if (!origin) return null
+    const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(origin.url.trim())
+    if (!match) return null
+    const owner = match[1] ?? ''
+    const repo = match[2] ?? ''
+    return owner && repo ? { owner, repo } : null
+  }
+
+  /**
+   * Fetch the first page of open PRs for the active project and record how many
+   * have merge conflicts, persisting the count so the header badge survives an
+   * app restart. A cooldown keeps the repeated calls from `refresh()` cheap.
+   */
+  async refreshPrConflictIndicators(projectId: string): Promise<void> {
+    const repo = this.originRepo
+    if (!repo) return
+    const key = `${repo.owner}/${repo.repo}`
+    const now = Date.now()
+    if (now - (this.prConflictFetchedAt[key] ?? 0) < GitState.PR_CONFLICT_COOLDOWN_MS) return
+    this.prConflictFetchedAt[key] = now
+    try {
+      const page = await invoke('pr:page', projectId, repo.owner, repo.repo, 'open', 1)
+      const conflicts = page.items.filter((item) => item.mergeable === false).length
+      this.prConflictIndicators = { ...this.prConflictIndicators, [key]: conflicts }
+      try {
+        window.localStorage.setItem(
+          GitState.PR_CONFLICT_STORAGE_KEY,
+          JSON.stringify(this.prConflictIndicators)
+        )
+      } catch {
+        // Persistence is best-effort — an unavailable store must not break the badge.
+      }
+    } catch {
+      // No GitHub connection yet — keep the last persisted indicator until we can refresh.
+    }
+  }
+
+  private static loadPrConflictIndicators(): Record<string, number> {
+    if (typeof window === 'undefined') return {}
+    try {
+      const raw = window.localStorage.getItem(GitState.PR_CONFLICT_STORAGE_KEY)
+      if (!raw) return {}
+      const parsed = JSON.parse(raw) as unknown
+      if (typeof parsed !== 'object' || parsed === null) return {}
+      const result: Record<string, number> = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'number' && value >= 0) result[key] = value
+      }
+      return result
+    } catch {
+      return {}
+    }
+  }
+
   isBusy(operation: GitOperation | GitOperation[]): boolean {
     const operations = Array.isArray(operation) ? operation : [operation]
     return operations.some((name) => this.busy[name] === true)
@@ -229,6 +306,9 @@ export class GitState {
       this.remotes = remotes
       this.credentialStatus = credentialStatus
       this.stashes = stashes
+      // Refresh the open-PR conflict indicator (cooldown-gated) so the header
+      // badge stays current without a GitHub round trip on every mutation.
+      void this.refreshPrConflictIndicators(projectId)
     } catch (reason) {
       if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
       this.error = errorMessage(reason, 'Git status could not be loaded')

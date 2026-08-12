@@ -907,6 +907,7 @@ export class GitHubProvider implements GitProvider {
     const user = this.readRecord(record, 'user')
     const rawState = this.readString(record, 'state') ?? 'open'
     const merged = record['merged'] === true || this.readString(record, 'merged_at') !== null
+    const mergeableRaw = record['mergeable']
     return {
       number,
       title: this.readString(record, 'title') ?? `Pull request #${number}`,
@@ -919,7 +920,8 @@ export class GitHubProvider implements GitProvider {
       baseRef: base ? (this.readString(base, 'ref') ?? '') : '',
       createdAt: this.readString(record, 'created_at') ?? '',
       updatedAt: this.readString(record, 'updated_at') ?? '',
-      comments: this.readNumber(record, 'comments')
+      comments: this.readNumber(record, 'comments'),
+      mergeable: typeof mergeableRaw === 'boolean' ? mergeableRaw : null
     }
   }
 
