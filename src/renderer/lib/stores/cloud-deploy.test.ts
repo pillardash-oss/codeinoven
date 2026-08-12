@@ -65,6 +65,24 @@ describe('CloudDeployState store', () => {
     expect(invoke).toHaveBeenCalledTimes(2)
   })
 
+  it('serves stale overview data immediately and revalidates in the background', async () => {
+    invoke.mockResolvedValue(overview)
+    await cloudDeployState.ensureOverview('project-1', providerKind)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    // Age the cache past the TTL; the refetch is deferred so it hasn't resolved yet.
+    vi.advanceTimersByTime(61_000)
+    invoke.mockClear()
+
+    const stale = await cloudDeployState.ensureOverview('project-1', providerKind)
+    // Stale data is returned right away; the background revalidation is in flight.
+    expect(stale).toEqual(overview)
+    expect(invoke).toHaveBeenCalledTimes(1)
+
+    await vi.runAllTimersAsync()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
   it('does not re-fetch a key during its failure cooldown', async () => {
     invoke.mockRejectedValue(
       new Error("Error invoking remote method 'cloudDeploy:overview': Error: boom")
