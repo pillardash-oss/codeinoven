@@ -198,6 +198,8 @@ const INVOKE_CHANNELS = [
   'cloudDeploy:getConfig',
   'cloudDeploy:saveConfig',
   'cloudDeploy:clearConfig',
+  'cloudDeploy:updateContainer',
+  'cloudDeploy:removeContainer',
   'cloudDeploy:listAccounts',
   'cloudDeploy:createAccount',
   'cloudDeploy:updateAccount',

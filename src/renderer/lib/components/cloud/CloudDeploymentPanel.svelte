@@ -6,9 +6,12 @@
     Cloud,
     ExternalLink,
     Loader2,
+    Pencil,
     Plus,
     RefreshCw,
-    Rocket
+    Rocket,
+    Server,
+    Trash2
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
@@ -18,6 +21,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
   import { DEFAULT_THREAD_TITLE } from '$shared/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
@@ -61,6 +65,8 @@
   // mode it opens in.
   let configSheetOpen = $state(false)
   let configSheetMode = $state<'provider' | 'container'>('provider')
+  /** Container being edited (pre-filled into the config sheet), or null to add. */
+  let editingContainer = $state<CloudDeploymentContainer | null>(null)
 
   const providers = $derived(config?.project.providers ?? [])
 
@@ -109,16 +115,23 @@
     return Object.values(byKey)
   })
 
-  /** Containers grouped by project name, so same-project apps stay together. */
-  const containersByProject = $derived.by(() => {
-    const groups: Record<string, CloudDeploymentContainer[]> = {}
+  /** Containers grouped by provider, then by project name. */
+  const containersByProvider = $derived.by(() => {
+    const groups: Record<
+      string,
+      Array<{ project: string; containers: CloudDeploymentContainer[] }>
+    > = {}
     for (const container of containers) {
-      const key = container.project ?? 'Other'
-      const list = groups[key]
-      if (list) list.push(container)
-      else groups[key] = [container]
+      const providerGroup = groups[container.providerKind] ?? (groups[container.providerKind] = [])
+      const projectName = container.project ?? 'Other'
+      let projectGroup = providerGroup.find((g) => g.project === projectName)
+      if (!projectGroup) {
+        projectGroup = { project: projectName, containers: [] }
+        providerGroup.push(projectGroup)
+      }
+      projectGroup.containers.push(container)
     }
-    return Object.entries(groups)
+    return groups
   })
 
   const hasContainers = $derived(containers.length > 0)
@@ -163,6 +176,29 @@
         // The store surfaces a tailored message via its error channel; the
         // panel keeps stale cached data (if any) on screen.
       }
+    }
+  }
+
+  /** Edit a container: open the config sheet in container mode pre-filled. */
+  function editContainer(container: CloudDeploymentContainer): void {
+    editingContainer = container
+    openConfigSheet('container')
+  }
+
+  /** Remove a container from the project's monitoring. */
+  async function removeContainer(container: CloudDeploymentContainer): Promise<void> {
+    try {
+      config = await invoke(
+        'cloudDeploy:removeContainer',
+        projectId,
+        container.providerKind,
+        container.id
+      )
+      cloudDeployState.setContainerStatus(projectId, { ...container, status: 'unknown' })
+      await loadConfig()
+      if (configured) await refreshAll()
+    } catch (reason) {
+      error = message(reason)
     }
   }
 
@@ -383,71 +419,109 @@
             <Plus size={11} />
           </button>
         </div>
-        {#each containersByProject as [project, projectContainers] (project)}
+        {#each Object.entries(containersByProvider) as [kind, projectGroups] (kind)}
           <section class="border-b border-border">
             <div class="flex items-center gap-1.5 bg-surface px-3 py-1.5">
-              <Cloud size={11} class="shrink-0 text-dimmed" />
-              <span class="text-[10px] font-medium text-muted">{project}</span>
-              <span class="text-[9px] tabular-nums text-dimmed">{projectContainers.length}</span>
+              <CloudProviderIcon
+                providerKind={kind as CloudDeploymentProviderKind}
+                size={10}
+                class="shrink-0 text-dimmed"
+                title={PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
+              />
+              <span class="text-[10px] font-medium text-muted">
+                {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
+              </span>
+              <span class="text-[9px] tabular-nums text-dimmed"
+                >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
+              >
             </div>
-            {#if accessErrors[projectContainers[0]?.providerKind ?? 'coolify']}
+            {#if accessErrors[kind]}
               <p
                 class="border-t border-border bg-danger/10 px-3 py-1.5 text-[9px] leading-relaxed text-danger"
               >
-                {accessErrors[projectContainers[0]?.providerKind ?? 'coolify']}
+                {accessErrors[kind]}
               </p>
             {/if}
-            <div class="divide-y divide-border">
-              {#each projectContainers as container (container.id)}
-                <div class="flex w-full items-center gap-1 transition-colors hover:bg-elevated">
-                  <button
-                    type="button"
-                    class="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2 text-left"
-                    title="View {container.label}"
-                    aria-label="View {container.label}"
-                    onclick={() => openContainer(container)}
-                  >
-                    {#if container.status === 'building'}
-                      <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
-                    {:else if container.status === 'success'}
-                      <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
-                    {:else if container.status === 'failed'}
-                      <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
-                    {:else}
-                      <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
-                    {/if}
-                    <div class="min-w-0 flex-1">
-                      <div class="flex items-center gap-2">
-                        <p class="truncate text-[11px] font-medium text-foreground">
-                          {container.label}
-                        </p>
-                        <StatusPill tone={statusTone(container.status)}>
-                          {statusLabel(container.status)}
-                        </StatusPill>
-                      </div>
-                      <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
-                        <span class="font-mono">{container.id}</span>
-                        {#if container.updatedAt}
-                          <span>·</span>
-                          <span class="shrink-0">{relativeTime(container.updatedAt)}</span>
-                        {/if}
-                      </div>
-                    </div>
-                  </button>
-                  {#if container.url}
-                    <button
-                      type="button"
-                      class="mr-2 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Open deployed site"
-                      aria-label="Open deployed site"
-                      onclick={() => void openInBrowser(container.url ?? '')}
-                    >
-                      <ExternalLink size={11} />
-                    </button>
-                  {/if}
+            {#each projectGroups as projectGroup (projectGroup.project)}
+              <div class="border-t border-border">
+                <div class="flex items-center gap-1.5 bg-surface/50 px-3 py-1">
+                  <Server size={9} class="shrink-0 text-dimmed" />
+                  <span class="text-[9px] font-medium text-muted">{projectGroup.project}</span>
+                  <span class="ml-auto text-[9px] tabular-nums text-dimmed">
+                    {projectGroup.containers.length}
+                  </span>
                 </div>
-              {/each}
-            </div>
+                <div class="divide-y divide-border">
+                  {#each projectGroup.containers as container (container.id)}
+                    <div class="flex w-full items-center gap-1 transition-colors hover:bg-elevated">
+                      <button
+                        type="button"
+                        class="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2 text-left"
+                        title="View {container.label}"
+                        aria-label="View {container.label}"
+                        onclick={() => openContainer(container)}
+                      >
+                        {#if container.status === 'building'}
+                          <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
+                        {:else if container.status === 'success'}
+                          <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
+                        {:else if container.status === 'failed'}
+                          <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
+                        {:else}
+                          <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
+                        {/if}
+                        <div class="min-w-0 flex-1">
+                          <div class="flex items-center gap-2">
+                            <p class="truncate text-[11px] font-medium text-foreground">
+                              {container.label}
+                            </p>
+                            <StatusPill tone={statusTone(container.status)}>
+                              {statusLabel(container.status)}
+                            </StatusPill>
+                          </div>
+                          <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                            <span class="font-mono">{container.id}</span>
+                            {#if container.updatedAt}
+                              <span>·</span>
+                              <span class="shrink-0">{relativeTime(container.updatedAt)}</span>
+                            {/if}
+                          </div>
+                        </div>
+                      </button>
+                      {#if container.url}
+                        <button
+                          type="button"
+                          class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                          title="Open deployed site"
+                          aria-label="Open deployed site"
+                          onclick={() => void openInBrowser(container.url ?? '')}
+                        >
+                          <ExternalLink size={11} />
+                        </button>
+                      {/if}
+                      <button
+                        type="button"
+                        class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        title="Edit {container.label}"
+                        aria-label="Edit {container.label}"
+                        onclick={() => editContainer(container)}
+                      >
+                        <Pencil size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        class="mr-1 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                        title="Remove {container.label}"
+                        aria-label="Remove {container.label}"
+                        onclick={() => void removeContainer(container)}
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/each}
           </section>
         {/each}
       </div>
@@ -469,6 +543,10 @@
   open={configSheetOpen}
   {projectId}
   initialMode={configSheetMode}
-  onClose={() => (configSheetOpen = false)}
+  {editingContainer}
+  onClose={() => {
+    configSheetOpen = false
+    editingContainer = null
+  }}
   onSaved={() => void handleConfigSaved()}
 />

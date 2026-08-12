@@ -969,6 +969,49 @@ describe('cloudDeploy IPC', () => {
     await rm(storageRoot, { recursive: true, force: true })
   })
 
+  it('updates and removes a container in a project config', async () => {
+    const storageRoot = await setupStorage()
+    const accountId = await createCoolifyAccount('Personal', 'personal-token')
+    const attach = handlers.get('cloudDeploy:attachAccount')
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const update = handlers.get('cloudDeploy:updateContainer')
+    const remove = handlers.get('cloudDeploy:removeContainer')
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', accountId)
+
+    const now = Date.now()
+    await save?.(trustedEvent(), 'proj-a', {
+      version: 3,
+      projectId: 'proj-a',
+      project: {
+        providers: ['coolify'],
+        containers: [
+          {
+            id: 'app-1',
+            label: 'Old Label',
+            providerKind: 'coolify',
+            status: 'unknown',
+            createdAt: now,
+            updatedAt: now
+          }
+        ]
+      },
+      updatedAt: now
+    } as CloudDeploymentConfig)
+
+    // Update the label.
+    await update?.(trustedEvent(), 'proj-a', 'coolify', 'app-1', { label: 'New Label' })
+    let config = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    expect(config.project.containers[0]).toMatchObject({ id: 'app-1', label: 'New Label' })
+
+    // Remove it.
+    await remove?.(trustedEvent(), 'proj-a', 'coolify', 'app-1')
+    config = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    expect(config.project.containers).toHaveLength(0)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
   it('rejects container mappings whose provider is not selected', async () => {
     const storageRoot = await setupStorage()
     const save = handlers.get('cloudDeploy:saveConfig')
