@@ -2,7 +2,7 @@
   import {
     ArrowUpRight,
     ChevronLeft,
-    ChevronUp,
+    ChevronRight,
     Loader2,
     Network,
     Play,
@@ -267,7 +267,7 @@
           aria-expanded="true"
           onclick={onToggleCollapsed}
         >
-          <ChevronUp size={15} />
+          <ChevronRight size={15} />
         </button>
       </div>
       <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
