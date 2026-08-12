@@ -1814,7 +1814,6 @@ export class ChatEngine {
       })
     )
     void this.recoverInterruptedBrainstormEntries()
-    void this.resumePendingWork()
     void this.materializeAuditReportArtifacts()
   }
 

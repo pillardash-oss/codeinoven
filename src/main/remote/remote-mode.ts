@@ -451,13 +451,47 @@ export class RemoteModeController {
     const enabled = await this.readPersistedEnabled()
     if (!enabled) return
     await this.loadDeviceNames()
+    const restoreLan = this.hasRestorableLanEnrollment()
+    const restoreCloud = await this.hasRestorableCloudEnrollment()
+    if (!restoreLan && !restoreCloud) {
+      await this.persistEnabled(false)
+      return
+    }
     this.keepAlive.dispatch({ type: 'arm' })
-    await this.startGateway()
-    await this.restoreCloudAccess()
+    this.credentials?.startPeriodicMaintenance()
+    if (restoreLan) await this.startGateway(false)
+    if (restoreCloud) {
+      await this.resolvePeerSecret()
+      await this.restoreCloudAccess()
+    }
+    if (!this.remoteModeActive) return
     this.ensureTray()
     this.syncTray()
     this.broadcast()
     Logger.info('Remote mode restored from previous session')
+  }
+
+  private hasRestorableLanEnrollment(): boolean {
+    return (
+      this.credentials
+        ?.listActiveDevices()
+        .some((device) => this.credentials?.isDeviceActive(device.deviceId, device.authVersion)) ===
+      true
+    )
+  }
+
+  private async hasRestorableCloudEnrollment(): Promise<boolean> {
+    if (!this.storage || !this.vault || !this.cloudApiOrigin) return false
+    const config = await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)
+    if (!config || config.apiOrigin !== this.cloudApiOrigin) return false
+    try {
+      const token = await this.vault.resolve(config.tokenRef)
+      if (!token) return false
+      this.cloudConfig = config
+      return true
+    } catch {
+      return false
+    }
   }
 
   /** Persist the enabled flag so a restart restores the gateway. */
@@ -562,6 +596,7 @@ export class RemoteModeController {
   toggleRemoteMode(enabled: boolean): RemoteModeStatus {
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
+      this.credentials?.startPeriodicMaintenance()
       void this.startGateway().then(() => this.restoreCloudAccess())
       this.ensureTray()
       void this.persistEnabled(true)
@@ -574,6 +609,7 @@ export class RemoteModeController {
       this.tray = null
       this.onSessionActiveChange?.(false)
       this.stopCloudAccess()
+      this.credentials?.stopPeriodicMaintenance()
       void this.persistEnabled(false)
       Logger.info('Remote mode disabled')
     }
@@ -582,15 +618,8 @@ export class RemoteModeController {
     return this.status
   }
 
-  /**
-   * Ensure the LAN gateway is listening, without toggling the keep-alive/Tray
-   * remote-mode behavior. Called when the user opens Settings → Remote so the
-   * QR pairing code is immediately scannable. Idempotent.
-   */
+  /** Status-only compatibility endpoint. Viewing Remote settings must stay cold. */
   async ensureGateway(): Promise<RemoteModeStatus> {
-    if (!this.gateway && this.staticRoot) {
-      await this.startGateway()
-    }
     this.syncTray()
     this.broadcast()
     return this.status
@@ -850,6 +879,7 @@ export class RemoteModeController {
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
+    this.credentials?.stopPeriodicMaintenance()
     this.onSessionActiveChange?.(false)
     if (this.gateway) {
       const gateway = this.gateway
@@ -1148,7 +1178,11 @@ export class RemoteModeController {
       enrollmentExpiresAt: null,
       lastError: null
     }
-    this.broadcast()
+    if (!this.hasRestorableLanEnrollment() && this.remoteModeActive) {
+      this.toggleRemoteMode(false)
+    } else {
+      this.broadcast()
+    }
     return this.status
   }
 
@@ -1216,7 +1250,11 @@ export class RemoteModeController {
       enrollmentExpiresAt: null,
       lastError
     }
-    this.broadcast()
+    if (!this.hasRestorableLanEnrollment() && this.remoteModeActive) {
+      this.toggleRemoteMode(false)
+    } else {
+      this.broadcast()
+    }
   }
 
   private async checkEnrollmentStatus(): Promise<void> {
@@ -1422,7 +1460,7 @@ export class RemoteModeController {
     }
   }
 
-  private async startGateway(): Promise<void> {
+  private async startGateway(prepareEnrollment = true): Promise<void> {
     if (this.gateway) return
     if (!this.staticRoot) {
       Logger.error('Remote gateway not started: renderer static root is not set')
@@ -1430,10 +1468,9 @@ export class RemoteModeController {
     }
     await this.loadDeviceNames()
     await this.resolvePeerSecret()
-    await this.syncPairingState()
-    // syncPairingState may rotate an expired persisted secret. Read the
-    // resolved value only after that rotation so the gateway, QR, credential
-    // bootstrap, cloud grant, and payload encryption all use the same key.
+    if (prepareEnrollment) await this.syncPairingState()
+    // Explicit enrollment may rotate an expired persisted secret. Restoration
+    // deliberately skips that work and reuses the enrolled device's key.
     const peerSecret = this.resolvedPeerSecret
     const gateway = new RemoteGateway({
       port: this.lanPort,

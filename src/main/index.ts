@@ -542,9 +542,6 @@ async function bootPostPaintServices(): Promise<void> {
 
     /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
     remoteCredentials = new DeviceCredentialService(database)
-    // Bound the security audit log and tombstone tables; unref'd so it never
-    // holds the app open.
-    remoteCredentials.startPeriodicMaintenance()
     const accountUsage = new HarnessUsageRepo(database)
     const accountMemory = new MemoryService(storage)
     remoteMode = new RemoteModeController({
