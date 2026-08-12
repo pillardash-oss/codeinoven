@@ -4268,13 +4268,12 @@ export class ChatEngine {
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
     }
-    // TITLE-GENERATION INVARIANT: launch the disposable title session now and
-    // never couple it to the main session's idle/success lifecycle. The thread
-    // ID is sufficient for the later database/UI update. Provider-specific
-    // startup serialization belongs inside its driver; ClaudeCodeDriver gates
-    // only OAuth startup and releases that gate on the process's first output.
+    // Claude Code stores one rotating OAuth credential for the whole OS
+    // account. Never start a disposable Claude title process beside the user's
+    // turn; the deterministic fallback above is already a useful title. Other
+    // harnesses have isolated authentication and can generate a model title.
     const scheduleAutoTitle = createAutoTitleLauncher(
-      shouldAutoTitle && settings.titleMode !== 'deterministic',
+      shouldAutoTitle && settings.titleMode !== 'deterministic' && driverId !== 'claude-code',
       () => this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
     )
     void scheduleAutoTitle()
