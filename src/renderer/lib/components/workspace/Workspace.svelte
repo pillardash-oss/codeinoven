@@ -145,7 +145,16 @@
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
     const root = sidebarScroller ?? document
-    return root.querySelector<HTMLElement>(`[data-thread-row="${threadId}"]`)
+    // All three sidebar modes stay mounted (the inactive ones are `display:none`),
+    // so the same thread id can match several rows. Only the rendered one can be
+    // scrolled to — a hidden row has no layout box and scrollIntoView is a no-op
+    // on it, which is why Projects mode never followed the selection while the
+    // flat Threads list (earlier in the DOM) always matched first.
+    const rows = root.querySelectorAll<HTMLElement>(`[data-thread-row="${threadId}"]`)
+    for (const row of rows) {
+      if (row.offsetParent !== null || row.getClientRects().length > 0) return row
+    }
+    return null
   }
 
   function isThreadRowVisible(threadId: string): boolean {
