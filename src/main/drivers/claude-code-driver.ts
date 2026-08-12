@@ -87,10 +87,11 @@ type ClaudeInputBlock =
 
 /**
  * Claude Code persists one rotating OAuth credential for the whole OS account.
- * Gate app-owned process startup so a turn, catalog probe, or usage probe cannot
- * all read and refresh the same token concurrently. The gate is released after
- * the child produces its first output, which occurs after authentication, so
- * normal Claude turns can still run concurrently once startup is complete.
+ * Serialize app-owned Claude processes for the lifetime of each child. Claude's
+ * rotating OAuth credential is shared across every process in the OS account,
+ * and first stdout is not proof that token rotation has finished. Releasing at
+ * first output allowed another process to race the active child and corrupt the
+ * shared credential.
  */
 class ClaudeOAuthStartupGate {
   private tail: Promise<void> = Promise.resolve()
@@ -1205,7 +1206,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       keepInputOpen: true,
       env,
       provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
-      ...(releaseStartup ? { onStdoutActivity: releaseStartup, onProcessExit: releaseStartup } : {})
+      ...(releaseStartup ? { onProcessExit: releaseStartup } : {})
     }
   }
 

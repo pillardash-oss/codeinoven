@@ -128,7 +128,7 @@ describe('ClaudeCodeDriver', () => {
     next.emit('exit', 0, null)
   })
 
-  it('serializes OAuth startup but allows a title process before the main turn is idle', async () => {
+  it('serializes OAuth processes for their full lifetime', async () => {
     const mainChild = new FakeChild()
     const titleChild = new FakeChild()
     spawnMock
@@ -166,12 +166,12 @@ describe('ClaudeCodeDriver', () => {
       'data',
       Buffer.from('{"type":"system","subtype":"init","session_id":"native-main"}\n')
     )
-    await titleStart
-
-    expect(spawnMock).toHaveBeenCalledTimes(2)
-    expect(mainChild.killed).toBe(false)
+    await Promise.resolve()
+    expect(spawnMock).toHaveBeenCalledTimes(1)
 
     mainChild.emit('exit', 0, null)
+    await titleStart
+    expect(spawnMock).toHaveBeenCalledTimes(2)
     titleChild.emit('exit', 0, null)
   })
 
