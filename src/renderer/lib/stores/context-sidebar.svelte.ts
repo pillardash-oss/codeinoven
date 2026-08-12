@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { gitState } from './git.svelte'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -558,15 +559,19 @@ class ContextSidebarState {
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
       this.focusInContext(context, id)
-      return
+    } else {
+      this.open(context, {
+        id,
+        kind: 'git',
+        title: 'Git',
+        projectId,
+        threadId
+      })
     }
-    this.open(context, {
-      id,
-      kind: 'git',
-      title: 'Git',
-      projectId,
-      threadId
-    })
+    // Opening the git panel is an event-driven refresh trigger: the store
+    // re-reads local status and the connection-gated PR indicators so the
+    // panel never shows data older than the moment it was opened.
+    gitState.notifyGitPanelOpened(projectId)
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {

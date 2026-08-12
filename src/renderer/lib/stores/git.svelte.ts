@@ -248,6 +248,16 @@ export class GitState {
   }
 
   /**
+   * Panel-open hook: opening the git panel refreshes local status and the
+   * connection-gated PR indicators immediately, so what the user sees is
+   * never older than the moment they asked for it.
+   */
+  notifyGitPanelOpened(projectId: string): void {
+    this.activate(projectId)
+    queueMicrotask(() => void this.refresh(projectId))
+  }
+
+  /**
    * Guarantee the GitHub connection before any online git operation. Offline
    * operations (status, stage, commit, stash…) never touch this — only online
    * ones (pull requests, deployments) await it. A negative probe is always
