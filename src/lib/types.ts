@@ -3456,6 +3456,8 @@ export interface CloudDeploymentContainer {
   status: CloudDeploymentStatus
   /** Live URL of the deployed application, when known. */
   url?: string
+  /** Coolify project (or provider grouping) this container belongs to, when known. */
+  project?: string
   /** Epoch ms the container was first seen. */
   createdAt?: number
   /** Epoch ms of the last status change. */
