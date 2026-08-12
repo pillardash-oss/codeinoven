@@ -513,11 +513,7 @@ export class MuseDriver extends PersistentCliDriver {
   readonly id = 'muse'
   readonly name = 'Muse Code'
   readonly capabilities: HarnessCapabilities = {
-    runtimeTopology: {
-      kind: 'turn_process',
-      scope: 'session',
-      maxConcurrentProcesses: 4
-    },
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: false,
     nativeResume: false,

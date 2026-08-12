@@ -24,8 +24,6 @@ export interface HarnessCapabilities {
     scope: 'application' | 'session'
     /** Upstream may still create one worker process for each executing session. */
     sessionWorkers?: boolean
-    /** Hard ceiling for adapters that cannot multiplex logical sessions. */
-    maxConcurrentProcesses?: number
   }
   streaming: boolean
   /** Can append user input to the provider's currently active turn. */

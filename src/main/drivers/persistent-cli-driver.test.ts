@@ -20,7 +20,7 @@ const spawnMock = vi.hoisted(() => vi.fn())
 vi.mock('child_process', () => ({ spawn: spawnMock }))
 
 const capabilities: HarnessCapabilities = {
-  runtimeTopology: { kind: 'turn_process', scope: 'session', maxConcurrentProcesses: 4 },
+  runtimeTopology: { kind: 'turn_process', scope: 'session' },
   streaming: true,
   steering: false,
   nativeResume: true,

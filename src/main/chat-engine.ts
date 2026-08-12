@@ -12377,11 +12377,6 @@ export class ChatEngine {
         event.status.state === 'error'
       ) {
         this.clearSessionWatchdog(event.sessionId)
-      } else if (
-        event.status.state === 'working' &&
-        event.status.activity?.kind === 'harness_queue'
-      ) {
-        this.clearSessionWatchdog(event.sessionId)
       } else if (event.status.state === 'working') {
         this.handledIdleSessions.delete(event.sessionId)
         this.startSessionWatchdog(event.sessionId)
