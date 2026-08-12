@@ -10,14 +10,14 @@ import type {
   AgentMessage,
   AgentPart,
   AgentTokenUsage,
+  NormalizedUsage,
   PermissionLevel,
   PromptAttachment,
   ProviderCatalog,
   SessionAgentEvent,
   ProviderModel,
   ThreadSettings,
-  ThinkingPreset,
-  UsageTotalSemantics
+  ThinkingPreset
 } from '../../lib/types'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../base-url-provider-service'
@@ -719,12 +719,13 @@ export class CodexDriver extends PersistentCliDriver {
         .reverse()
         .find((candidate) => candidate.role === 'assistant')
       if (usage && message) {
-        if (usage.usage) (message as CodexAgentMessage).usage = usage.usage
+        if (usage.normalizedUsage) message.normalizedUsage = usage.normalizedUsage
         const event: AgentEvent = {
           type: 'usage.updated',
           sessionId: active.session.id,
           messageId: message.id,
-          ...(usage.legacy ? { tokens: usage.legacy } : {}),
+          ...(usage.aggregateTokens ? { tokens: usage.aggregateTokens } : {}),
+          ...(usage.normalizedUsage ? { normalizedUsage: usage.normalizedUsage } : {}),
           ...(usage.contextUsed === undefined ? {} : { contextUsed: usage.contextUsed }),
           ...(usage.contextWindow === undefined ? {} : { contextWindow: usage.contextWindow })
         }
@@ -1225,13 +1226,14 @@ export class CodexDriver extends PersistentCliDriver {
       type: 'usage.updated',
       sessionId: session.id,
       messageId,
-      ...(usage.legacy ? { tokens: usage.legacy } : {}),
+      ...(usage.aggregateTokens ? { tokens: usage.aggregateTokens } : {}),
+      ...(usage.normalizedUsage ? { normalizedUsage: usage.normalizedUsage } : {}),
       ...(usage.contextUsed === undefined ? {} : { contextUsed: usage.contextUsed }),
       ...(usage.contextWindow === undefined ? {} : { contextWindow: usage.contextWindow })
     }
-    if (usage.usage) {
+    if (usage.normalizedUsage) {
       const target = session.messages.find((candidate) => candidate.id === messageId)
-      if (target) (target as CodexAgentMessage).usage = usage.usage
+      if (target) target.normalizedUsage = usage.normalizedUsage
     }
     this.applyEventToSession(session, event)
     this.emit(event)
@@ -1266,14 +1268,15 @@ export class CodexDriver extends PersistentCliDriver {
         .reverse()
         .find((message) => message.role === 'assistant')
       if (!latestMessage) return { events: [] }
-      if (usage.usage) (latestMessage as CodexAgentMessage).usage = usage.usage
+      if (usage.normalizedUsage) latestMessage.normalizedUsage = usage.normalizedUsage
       return {
         events: [
           {
             type: 'usage.updated',
             sessionId: context.sessionId,
             messageId: latestMessage.id,
-            ...(usage.legacy ? { tokens: usage.legacy } : {}),
+            ...(usage.aggregateTokens ? { tokens: usage.aggregateTokens } : {}),
+            ...(usage.normalizedUsage ? { normalizedUsage: usage.normalizedUsage } : {}),
             ...(usage.contextUsed === undefined ? {} : { contextUsed: usage.contextUsed }),
             ...(usage.contextWindow === undefined ? {} : { contextWindow: usage.contextWindow })
           }
@@ -1302,12 +1305,13 @@ export class CodexDriver extends PersistentCliDriver {
           : undefined
       const events: SessionAgentEvent[] = finalPhaseUpdate ? [finalPhaseUpdate] : []
       if (usage) {
-        if (usage.usage) (finalMessage as CodexAgentMessage).usage = usage.usage
+        if (usage.normalizedUsage) finalMessage.normalizedUsage = usage.normalizedUsage
         events.push({
           type: 'message.completed',
           sessionId: context.sessionId,
           messageId: finalMessage.id,
-          ...(usage.legacy ? { tokens: usage.legacy } : {}),
+          ...(usage.aggregateTokens ? { tokens: usage.aggregateTokens } : {}),
+          ...(usage.normalizedUsage ? { normalizedUsage: usage.normalizedUsage } : {}),
           ...(usage.contextUsed === undefined ? {} : { contextUsed: usage.contextUsed }),
           ...(usage.contextWindow === undefined ? {} : { contextWindow: usage.contextWindow })
         })
@@ -1337,14 +1341,15 @@ export class CodexDriver extends PersistentCliDriver {
         .reverse()
         .find((message) => message.role === 'assistant')
       if (!latestMessage) return { events: [] }
-      if (usage.usage) (latestMessage as CodexAgentMessage).usage = usage.usage
+      if (usage.normalizedUsage) latestMessage.normalizedUsage = usage.normalizedUsage
       return {
         events: [
           {
             type: 'usage.updated',
             sessionId: context.sessionId,
             messageId: latestMessage.id,
-            ...(usage.legacy ? { tokens: usage.legacy } : {}),
+            ...(usage.aggregateTokens ? { tokens: usage.aggregateTokens } : {}),
+            ...(usage.normalizedUsage ? { normalizedUsage: usage.normalizedUsage } : {}),
             ...(usage.contextUsed === undefined ? {} : { contextUsed: usage.contextUsed }),
             ...(usage.contextWindow === undefined ? {} : { contextWindow: usage.contextWindow })
           }
@@ -1660,48 +1665,10 @@ function appServerRequestId(value: unknown): string | number | undefined {
   return stringValue(value) ?? numberValue(value)
 }
 
-/**
- * Provider-normalized accounting carried alongside the legacy `AgentTokenUsage`
- * on the driver result path. Every category is nullable because Codex does not
- * report every field for every payload; `rawProviderUsage` and `rawTotal` keep
- * the provider's own numbers verbatim so normalization never fabricates or
- * destroys evidence.
- */
-export interface CodexNormalizedUsage {
-  uncachedInput: number | null
-  cachedInput: number | null
-  cacheWrite: number | null
-  output: number | null
-  reasoning: number | null
-  /** Untouched provider token payload as reported by Codex. */
-  rawProviderUsage: Record<string, unknown>
-  /** Provider-reported total verbatim; null when Codex did not report one. */
-  rawTotal: number | null
-  /** Whether the raw provider total includes cache or its categories overlap. */
-  totalSemantics: UsageTotalSemantics
-}
-
-/**
- * Distinct, optional normalized usage metadata attached to messages. Keeping it
- * separate from the legacy `AgentTokenUsage` guarantees a synthesized number is
- * never mistaken for the raw provider total.
- */
-interface CodexUsageCarrier {
-  usage?: CodexNormalizedUsage
-}
-
-/** AgentMessage that may also carry normalized usage metadata. */
-type CodexAgentMessage = AgentMessage & CodexUsageCarrier
-
-/**
- * Map one Codex token-accounting record into both the legacy chat-engine shape
- * and the distinct normalized usage metadata. The legacy shape is only
- * populated when Codex reports a total, so the chat engine's `rawTotal` is
- * always a verbatim provider number and never a synthesized comparable total.
- */
+/** Map Codex accounting into the canonical normalized contract and display aggregates. */
 function mapCodexTokenRecord(value: Record<string, unknown>): {
-  legacy: AgentTokenUsage | undefined
-  usage: CodexNormalizedUsage | undefined
+  aggregateTokens: AgentTokenUsage | undefined
+  normalizedUsage: NormalizedUsage | undefined
 } {
   const input =
     numberValue(value['inputTokens']) ??
@@ -1731,14 +1698,14 @@ function mapCodexTokenRecord(value: Record<string, unknown>): {
     cachedInput !== undefined ||
     cacheWrite !== undefined ||
     rawTotal !== undefined
-  if (!reported) return { legacy: undefined, usage: undefined }
+  if (!reported) return { aggregateTokens: undefined, normalizedUsage: undefined }
   // Codex reports `input` as the cache-inclusive input count, and cached input
   // is a subset of it, so uncached input is the remainder after the reported
   // cache portion is removed. A defensive clamp keeps a malformed cache value
   // that exceeds the input from producing a negative token count; when input is
   // absent uncached input stays null because there is nothing to subtract from.
   const uncachedInput = input === undefined ? null : Math.max(0, input - (cachedInput ?? 0))
-  const usage: CodexNormalizedUsage = {
+  const normalizedUsage: NormalizedUsage = {
     uncachedInput,
     cachedInput: cachedInput ?? null,
     cacheWrite: cacheWrite ?? null,
@@ -1751,7 +1718,7 @@ function mapCodexTokenRecord(value: Record<string, unknown>): {
     // When no total is reported its semantics are unavailable.
     totalSemantics: rawTotal === undefined ? 'unavailable' : 'includes_cache'
   }
-  const legacy: AgentTokenUsage | undefined =
+  const aggregateTokens: AgentTokenUsage | undefined =
     rawTotal === undefined
       ? undefined
       : {
@@ -1762,13 +1729,13 @@ function mapCodexTokenRecord(value: Record<string, unknown>): {
           cacheWrite: cacheWrite ?? 0,
           total: rawTotal
         }
-  return { legacy, usage }
+  return { aggregateTokens, normalizedUsage }
 }
 
 export function mapCodexUsage(value: unknown):
   | {
-      legacy: AgentTokenUsage | undefined
-      usage: CodexNormalizedUsage | undefined
+      aggregateTokens: AgentTokenUsage | undefined
+      normalizedUsage: NormalizedUsage | undefined
       contextWindow?: number
       contextUsed?: number
     }
@@ -1791,8 +1758,8 @@ export function mapCodexUsage(value: unknown):
 
   const lastRecord = mapCodexTokenRecord(last)
   const totalRecord = totalUsage ? mapCodexTokenRecord(totalUsage) : undefined
-  const record = lastRecord.usage !== undefined ? lastRecord : totalRecord
-  if (!record?.usage) return undefined
+  const selectedRecord = lastRecord.normalizedUsage !== undefined ? lastRecord : totalRecord
+  if (!selectedRecord?.normalizedUsage) return undefined
 
   const contextUsed =
     numberValue(last['inputTokens']) ??
@@ -1800,7 +1767,7 @@ export function mapCodexUsage(value: unknown):
     numberValue(last['input']) ??
     numberValue(tokenUsage['contextUsed']) ??
     numberValue(tokenUsage['context_used']) ??
-    totalRecord?.legacy?.total ??
+    totalRecord?.aggregateTokens?.total ??
     numberValue(tokenUsage['totalTokens']) ??
     numberValue(tokenUsage['total_tokens'])
   const contextWindow =
@@ -1809,8 +1776,8 @@ export function mapCodexUsage(value: unknown):
     numberValue(tokenUsage['contextWindow']) ??
     numberValue(tokenUsage['context_window'])
   return {
-    legacy: record.legacy,
-    usage: record.usage,
+    aggregateTokens: selectedRecord.aggregateTokens,
+    normalizedUsage: selectedRecord.normalizedUsage,
     ...(contextUsed === undefined ? {} : { contextUsed }),
     ...(contextWindow === undefined ? {} : { contextWindow })
   }

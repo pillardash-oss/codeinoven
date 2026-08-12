@@ -764,6 +764,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         message.completedAt = Date.now()
         message.error = event.error
         if (event.tokens) message.tokens = event.tokens
+        if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
         if (event.rateLimits) message.rateLimits = event.rateLimits
@@ -775,6 +776,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       const message = session.messages.find((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
+        if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
         if (event.cost !== undefined) message.cost = event.cost

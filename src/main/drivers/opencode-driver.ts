@@ -18,7 +18,7 @@ import type {
   ProviderModel,
   ThinkingPreset,
   ThreadSettings,
-  UsageTotalSemantics
+  NormalizedUsage
 } from '../../lib/types'
 import type {
   AgentEventCallback,
@@ -392,54 +392,16 @@ function extractQuestionAnswer(output: unknown): string | undefined {
   return stringValue(output)
 }
 
-/**
- * Provider-normalized accounting carried alongside the legacy `AgentTokenUsage`
- * on the driver result path. Every category is nullable because OpenCode does
- * not report every field for every provider; `rawProviderUsage` and `rawTotal`
- * keep the provider's own numbers verbatim so normalization never fabricates or
- * destroys evidence.
- */
-export interface OpenCodeNormalizedUsage {
-  uncachedInput: number | null
-  cachedInput: number | null
-  cacheWrite: number | null
-  output: number | null
-  reasoning: number | null
-  /** Untouched provider token payload as reported by OpenCode. */
-  rawProviderUsage: Record<string, unknown>
-  /** Provider-reported total verbatim; null when OpenCode did not report one. */
-  rawTotal: number | null
-  /** Whether the raw provider total includes cache or its categories overlap. */
-  totalSemantics: UsageTotalSemantics
-}
+type OpenCodeAgentPart = AgentPart
+type OpenCodeAgentMessage = AgentMessage
 
-/**
- * Distinct, optional normalized usage metadata attached to messages and
- * step-finish parts. Keeping it separate from the legacy `AgentTokenUsage`
- * guarantees a synthesized number is never mistaken for the raw provider total.
- */
-interface OpenCodeUsageCarrier {
-  usage?: OpenCodeNormalizedUsage
-}
-
-/** AgentPart that may also carry normalized usage metadata. */
-type OpenCodeAgentPart = AgentPart & OpenCodeUsageCarrier
-
-/** AgentMessage that may also carry normalized usage metadata. */
-type OpenCodeAgentMessage = AgentMessage & OpenCodeUsageCarrier
-
-/**
- * Map one OpenCode token-accounting payload into both the legacy chat-engine
- * shape and the distinct normalized usage metadata. The legacy shape is only
- * populated when OpenCode reports a total, so the chat engine's `rawTotal` is
- * always a verbatim provider number and never a synthesized comparable total.
- */
+/** Map OpenCode accounting into the canonical normalized contract and display aggregates. */
 function mapOpenCodeUsage(raw: unknown): {
-  legacy: AgentTokenUsage | undefined
-  usage: OpenCodeNormalizedUsage | undefined
+  aggregateTokens: AgentTokenUsage | undefined
+  normalizedUsage: NormalizedUsage | undefined
 } {
   const tokens = recordValue(raw)
-  if (!tokens) return { legacy: undefined, usage: undefined }
+  if (!tokens) return { aggregateTokens: undefined, normalizedUsage: undefined }
   const cache = recordValue(tokens['cache'])
   const input = numberValue(tokens['input'])
   const output = numberValue(tokens['output'])
@@ -454,13 +416,13 @@ function mapOpenCodeUsage(raw: unknown): {
     cachedInput !== undefined ||
     cacheWrite !== undefined ||
     rawTotal !== undefined
-  if (!reported) return { legacy: undefined, usage: undefined }
+  if (!reported) return { aggregateTokens: undefined, normalizedUsage: undefined }
   // OpenCode reports `input` as the total input token count, which already
   // contains cached read and cached write tokens, so uncached input is the
   // remainder after the reported cache portions are removed. `reasoning` is a
   // subset of `output` and stays separate.
   const uncachedInput = input === undefined ? null : input - (cachedInput ?? 0) - (cacheWrite ?? 0)
-  const usage: OpenCodeNormalizedUsage = {
+  const normalizedUsage: NormalizedUsage = {
     uncachedInput,
     cachedInput: cachedInput ?? null,
     cacheWrite: cacheWrite ?? null,
@@ -472,7 +434,7 @@ function mapOpenCodeUsage(raw: unknown): {
     // cached tokens. When no total is reported its semantics are unavailable.
     totalSemantics: rawTotal === undefined ? 'unavailable' : 'includes_cache'
   }
-  const legacy: AgentTokenUsage | undefined =
+  const aggregateTokens: AgentTokenUsage | undefined =
     rawTotal === undefined
       ? undefined
       : {
@@ -483,7 +445,7 @@ function mapOpenCodeUsage(raw: unknown): {
           cacheWrite: cacheWrite ?? 0,
           total: rawTotal
         }
-  return { legacy, usage }
+  return { aggregateTokens, normalizedUsage }
 }
 
 interface OpenCodeTaskEnvelope {
@@ -723,15 +685,15 @@ export function mapOpenCodePart(raw: unknown): OpenCodeAgentPart | null {
     case 'step-start':
       return { type: 'step-start', id, messageID }
     case 'step-finish': {
-      const { legacy, usage } = mapOpenCodeUsage(part['tokens'])
+      const { aggregateTokens, normalizedUsage } = mapOpenCodeUsage(part['tokens'])
       return {
         type: 'step-finish',
         id,
         messageID,
         reason: stringValue(part['reason']) ?? '',
-        cost: typeof part['cost'] === 'number' ? part['cost'] : undefined,
-        tokens: legacy,
-        ...(usage ? { usage } : {})
+        ...(typeof part['cost'] === 'number' ? { cost: part['cost'] } : {}),
+        ...(aggregateTokens ? { tokens: aggregateTokens } : {}),
+        ...(normalizedUsage ? { normalizedUsage } : {})
       }
     }
     case 'compaction':
@@ -2263,7 +2225,7 @@ export class OpenCodeDriver implements HarnessDriver {
       compactionSummary && isOpenCodeAbortError(info['error'])
         ? undefined
         : (stringValue(errorData?.['message']) ?? stringValue(error?.['message']))
-    const { legacy, usage } = mapOpenCodeUsage(info['tokens'])
+    const { aggregateTokens, normalizedUsage } = mapOpenCodeUsage(info['tokens'])
     const hiddenTransportParts = parts
       .filter(isOpenCodeCompactionContinuePart)
       .map((part, index): AgentPart => ({
@@ -2314,8 +2276,8 @@ export class OpenCodeDriver implements HarnessDriver {
       createdAt: time?.created ?? 0,
       completedAt: time?.completed,
       cost: numberValue(info['cost']),
-      ...(usage ? { usage } : {}),
-      tokens: legacy,
+      ...(normalizedUsage ? { normalizedUsage } : {}),
+      tokens: aggregateTokens,
       error: errorMessage,
       structuredOutput: info['structured'] ?? info['structured_output']
     }
