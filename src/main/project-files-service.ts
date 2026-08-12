@@ -116,6 +116,11 @@ export class ProjectFilesService {
     projectId: string,
     candidates: string[]
   ): Promise<Record<string, string | null>> {
+    const project = await this.projects.getProject(projectId)
+    if (!project) throw new Error(`Project not found: ${projectId}`)
+    if (project.source !== 'local' || !project.path.trim()) {
+      return Object.fromEntries(candidates.map((candidate) => [candidate, null]))
+    }
     const root = await this.projectRoot(projectId)
     const results: Record<string, string | null> = {}
     for (const rawCandidate of candidates) {
