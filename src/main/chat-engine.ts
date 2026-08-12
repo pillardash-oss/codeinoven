@@ -9712,19 +9712,49 @@ export class ChatEngine {
         (part): part is Extract<AgentPart, { type: 'tool' }> =>
           part.type === 'tool' && ['completed', 'error'].includes(part.state.status)
       )
-    const observedCommands = observedTools
-      .filter((part) => /bash|command|shell|exec/iu.test(part.tool))
-      .map((part) =>
-        [part.state.title, JSON.stringify(part.state.input), part.state.output, part.state.error]
-          .filter((value): value is string => Boolean(value))
-          .join('\n')
+    const normalizeCommandEvidence = (value: string): string =>
+      value
+        .normalize('NFKC')
+        .replace(/\\(["'$`])/gu, '$1')
+        .replace(/\\+/gu, '\\')
+        .replace(/["']/gu, '')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    const normalizeInvocationEvidence = (value: string): string =>
+      value
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/gu, ' ')
+        .replace(/\s+/gu, ' ')
+        .trim()
+    const observedInvocations = observedTools.map((part) => {
+      const invocation = [part.tool, part.state.title, JSON.stringify(part.state.input)]
+        .filter((value): value is string => Boolean(value))
+        .join('\n')
+      return {
+        part,
+        invocation,
+        normalizedInvocation: normalizeInvocationEvidence(invocation)
+      }
+    })
+    const observedCommands = observedInvocations
+      .filter(
+        ({ part }) =>
+          part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
       )
+      .map(({ invocation }) => ({
+        invocation,
+        normalizedInvocation: normalizeCommandEvidence(invocation)
+      }))
     const verification = input.content.verification
     for (const check of verification?.checks ?? []) {
       if (check.status === 'not_applicable') continue
       const command = check.command.replace(/^\$\s*/u, '').trim()
+      const normalizedCommand = normalizeCommandEvidence(command)
       const observedCommand = observedCommands.find(
-        (observed) => observed.includes(command) || command.includes(observed.trim())
+        (observed) =>
+          observed.normalizedInvocation.includes(normalizedCommand) ||
+          normalizedCommand.includes(observed.normalizedInvocation)
       )
       if (!observedCommand) {
         issues.push(
@@ -9734,7 +9764,10 @@ export class ChatEngine {
       }
       if (check.kind === 'format' || check.kind === 'lint') {
         for (const file of check.files) {
-          if (!observedCommand.includes(file)) {
+          if (
+            !observedCommand.invocation.includes(file) &&
+            !observedCommand.normalizedInvocation.includes(normalizeCommandEvidence(file))
+          ) {
             issues.push(
               `verification.checks ${check.id} did not explicitly target audited file ${file}`
             )
@@ -9752,15 +9785,15 @@ export class ChatEngine {
     }
     for (const utility of verification?.utilities ?? []) {
       if (utility.status !== 'used') continue
-      const tokens = utility.name
-        .toLowerCase()
-        .split(/[^a-z0-9]+/u)
+      const normalizedUtilityName = normalizeInvocationEvidence(utility.name)
+      const tokens = normalizedUtilityName
+        .split(' ')
         .filter((token) => token.length > 3 && token !== 'utility')
-      const invoked = observedToolNames.some(
-        (name) =>
-          name.includes('utility_invoke') ||
-          name.includes('mcp') ||
-          tokens.some((token) => name.includes(token))
+      const invoked = observedInvocations.some(
+        ({ part, normalizedInvocation }) =>
+          part.state.status === 'completed' &&
+          (normalizedInvocation.includes(normalizedUtilityName) ||
+            (tokens.length > 0 && tokens.every((token) => normalizedInvocation.includes(token))))
       )
       if (!invoked) {
         issues.push(
