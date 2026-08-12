@@ -34,6 +34,7 @@
     FolderKanban,
     GitBranch,
     GitFork,
+    GitMergeConflict,
     GitPullRequest,
     History,
     Info,
@@ -1243,17 +1244,25 @@
       <button
         class={[
           'relative flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 transition-colors duration-150',
-          gitState.conflicted.length > 0
-            ? 'text-warning hover:bg-warning/10'
-            : gitState.clean
-              ? 'text-dimmed hover:bg-elevated hover:text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'
+          gitState.activePrConflictCount > 0
+            ? 'text-danger hover:bg-danger/10'
+            : gitState.conflicted.length > 0
+              ? 'text-warning hover:bg-warning/10'
+              : gitState.clean
+                ? 'text-dimmed hover:bg-elevated hover:text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'
         ]}
         aria-label="Open Git panel"
-        title="Open Git panel"
+        title={gitState.activePrConflictCount > 0
+          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution — open Git panel`
+          : 'Open Git panel'}
         onclick={openGitPanel}
       >
-        <GitBranch size={13} class="shrink-0" />
+        {#if gitState.activePrConflictCount > 0}
+          <GitMergeConflict size={13} class="shrink-0" />
+        {:else}
+          <GitBranch size={13} class="shrink-0" />
+        {/if}
         {#if gitState.branch}
           <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
             {gitState.branch}
