@@ -100,6 +100,8 @@ export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
   instructions: string
+  /** Shell-callable fallback for harnesses that cannot safely load a per-turn MCP runtime. */
+  directInstructions: string
   cleanup(): Promise<void>
 }
 
@@ -217,6 +219,7 @@ export class UtilityOrchestrationService {
         id,
         resolvedUtilities: always,
         instructions: '',
+        directInstructions: '',
         cleanup: async () => undefined
       }
     }
@@ -270,6 +273,16 @@ export class UtilityOrchestrationService {
       instructions: hasOnDemand
         ? `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
         : '',
+      directInstructions: [
+        'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
+        `Gateway: http://127.0.0.1:${address.port}`,
+        `Authorization header: Bearer ${token}`,
+        'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}.',
+        'Activate: POST /activate with {"utility_id":"id-from-search"}.',
+        'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
+        'Describe images directly: POST /image_descriptor with {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
+        'Treat these endpoints exactly like utility_search, utility_activate, utility_invoke, and image_descriptor tool calls.'
+      ].join('\n'),
       cleanup
     }
   }

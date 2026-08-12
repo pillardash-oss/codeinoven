@@ -1,6 +1,7 @@
 <script lang="ts">
   import { AlertTriangle, Check, Loader2, RotateCw, Send } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import Switch from '../ui/Switch.svelte'
   import type {
     AgentModelSelection,
     ImageDescriptorErrorRequest,
@@ -13,7 +14,7 @@
     projectId: string
     favoriteModels?: string[]
     recentModels?: string[]
-    onRetry: (requestId: string, selection: AgentModelSelection) => Promise<void>
+    onRetry: (requestId: string, selection: AgentModelSelection, remember: boolean) => Promise<void>
     onIgnore: (requestId: string) => Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
@@ -37,29 +38,26 @@
 
   /** User-chosen replacement model; null falls back to the failed selection. */
   let override = $state<AgentModelSelection | null>(null)
-  let visionSelection = $derived(
-    override ?? {
-      harnessId: request.selection.harnessId,
-      providerId: request.selection.providerId,
-      modelId: request.selection.modelId
-    }
-  )
+  let remember = $state(false)
+  let visionSelection = $derived(override ?? request.selection ?? null)
   let changed = $derived(
     override !== null &&
-      (override.providerId !== request.selection.providerId ||
-        override.modelId !== request.selection.modelId ||
-        override.harnessId !== request.selection.harnessId)
+      (override.providerId !== request.selection?.providerId ||
+        override.modelId !== request.selection?.modelId ||
+        override.harnessId !== request.selection?.harnessId)
   )
   let networkRelated = $derived(request.kind === 'network')
+  let needsSelection = $derived(request.selection === undefined)
   let working = $state(false)
   let actionError = $state('')
 
   async function retry(): Promise<void> {
-    if (working) return
+    const selection = visionSelection
+    if (working || !selection) return
     actionError = ''
     working = true
     try {
-      await onRetry(request.id, visionSelection)
+      await onRetry(request.id, selection, remember)
     } catch (error) {
       actionError = error instanceof Error ? error.message : 'The retry could not be sent.'
     } finally {
@@ -89,7 +87,11 @@
     <div class="flex min-w-0 items-center gap-2">
       <AlertTriangle size={15} class="shrink-0 text-danger" />
       <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-        {networkRelated ? 'Upload or network interrupted' : 'Vision model failed'}
+        {needsSelection
+          ? `${request.assignmentTaskTitle ?? 'Task'} needs an image model`
+          : networkRelated
+            ? 'Upload or network interrupted'
+            : 'Vision model failed'}
       </p>
     </div>
     <button
@@ -106,9 +108,11 @@
   <div class="space-y-4 p-4">
     <div>
       <p class="text-sm font-semibold text-foreground">
-        {networkRelated
-          ? 'The image upload or vision response was interrupted'
-          : 'The vision model could not describe this image'}
+        {needsSelection
+          ? `${request.workerTitle ?? 'The agent'} needs vision assistance`
+          : networkRelated
+            ? 'The image upload or vision response was interrupted'
+            : 'The vision model could not describe this image'}
       </p>
       <p
         class="mt-1.5 break-words whitespace-pre-wrap rounded-lg bg-danger/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-danger"
@@ -116,11 +120,13 @@
         {request.error}
       </p>
       <p class="mt-2 text-xs leading-relaxed text-muted">
-        {networkRelated
-          ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model or continue without the description.'
-          : changed
-            ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
-            : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
+        {needsSelection
+          ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
+          : networkRelated
+            ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model or continue without the description.'
+            : changed
+              ? 'Retry with the selected vision model, ignore, or type a new message below to steer the agent another way.'
+              : 'Pick a different vision model and retry, ignore, or type a new message below to steer the agent another way.'}
       </p>
     </div>
 
@@ -131,9 +137,9 @@
       <ModelPicker
         {providers}
         {projectId}
-        harnessId={visionSelection.harnessId}
-        providerId={visionSelection.providerId}
-        modelId={visionSelection.modelId}
+        harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
+        providerId={visionSelection?.providerId ?? ''}
+        modelId={visionSelection?.modelId ?? ''}
         {favoriteModels}
         {recentModels}
         visionOnly
@@ -146,6 +152,13 @@
         {onToggleFavorite}
         {onReorderFavorite}
       />
+      <div class="mt-3">
+        <Switch
+          bind:checked={remember}
+          label="Don't ask again"
+          aria-label="Don't ask again for worker image model selection"
+        />
+      </div>
     </div>
 
     {#if actionError}
@@ -164,7 +177,7 @@
     </button>
     <button
       class="flex min-h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-40"
-      disabled={working}
+      disabled={working || !visionSelection}
       onclick={() => void retry()}
     >
       {#if working}
@@ -172,7 +185,13 @@
       {:else}
         <RotateCw size={13} />
       {/if}
-      {changed ? 'Retry with this model' : networkRelated ? 'Retry with more time' : 'Retry'}
+      {needsSelection
+        ? 'Continue worker'
+        : changed
+          ? 'Retry with this model'
+          : networkRelated
+            ? 'Retry with more time'
+            : 'Retry'}
     </button>
   </div>
 </section>

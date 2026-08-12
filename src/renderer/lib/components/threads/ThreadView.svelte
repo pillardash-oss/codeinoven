@@ -2829,12 +2829,12 @@
         break
       }
       case 'imageDescriptor.error': {
-        if (event.sessionId !== sessionId) return
+        if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
         pendingImageDescriptorError = event.request
         break
       }
       case 'imageDescriptor.resolved': {
-        if (event.sessionId !== sessionId) return
+        if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
         if (pendingImageDescriptorError?.id === event.requestId) {
           pendingImageDescriptorError = null
         }
@@ -6942,8 +6942,17 @@
                   projectId={thread.projectId}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
-                  onRetry={(requestId, selection) =>
-                    replyImageDescriptor(requestId, 'retry', selection)}
+                  onRetry={async (requestId, selection, remember) => {
+                    if (remember) {
+                      agentDefaults = { ...agentDefaults, imageDescriptor: selection }
+                      imageDescriptorAskAgain = true
+                      await invoke('config:update', {
+                        agentDefaults,
+                        imageDescriptorAskAgain: true
+                      })
+                    }
+                    await replyImageDescriptor(requestId, 'retry', selection)
+                  }}
                   onIgnore={(requestId) => replyImageDescriptor(requestId, 'ignore')}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
