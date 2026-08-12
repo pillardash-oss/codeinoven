@@ -6730,10 +6730,10 @@ export class ChatEngine {
       'Assign ready tasks using the deterministic local API. For a worker task, the API creates and prompts its durable worker thread. For a Sr. Engineer task, the API returns the task and you perform it in this coordinator thread.',
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
-      'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks.',
+      'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks. A rework review automatically returns the same approved task and your complete review findings to its worker; do not create a replacement Assignment or ask the user to sign off again.',
       'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for routine implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
       'A task whose worker crashed or whose deliverable was rejected is marked failed — that is not terminal. A stopped worker leaves an attention task without a report. Re-dispatch either state by calling assign-task again: the API retires the stale worker and returns a fresh worker thread. Attention tasks that contain a report must be reviewed instead.',
-      'If a reviewed task is in rework because the signed graph lacks a prerequisite, dependency, or required file scope, call propose-rework-assignment with the complete amended graph. The application will preserve completed work and pause for user sign-off on the repair. Do not wait for the final audit: that audit cannot begin until implementation finishes.',
+      'Task rework remains inside the signed Assignment. Let review-task dispatch it directly. Only propose a new Assignment when the user has requested genuinely new product scope that is not a correction of the approved task.',
       this.assignmentApiInstructions(
         this.assignmentApiCapability({
           role: 'coordinator',
@@ -6940,10 +6940,10 @@ export class ChatEngine {
       '- /v1/assignments/get — { "assignmentId": "..." }',
       '- /v1/assignments/assign-task — { "assignmentId": "...", "taskId": "...", "operationId": "unique-id" }. Assigns ready/rework/failed tasks and retries stopped attention tasks that have no report.',
       ...workerEndpoints,
-      '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }',
+      '- /v1/assignments/review-task — { "assignmentId": "...", "taskId": "...", "coordinatorThreadId": "...", "operationId": "unique-id", "review": { "decision": "pass|rework|fail", "checklistResults": [{ "item": "...", "passed": true, "evidence": "..." }], "notes": "..." } }. A rework decision automatically reassigns the approved task and sends these findings to its worker; do not call assign-task or propose-rework-assignment afterward.',
       '- /v1/assignments/reopen-task — { "assignmentId": "...", "taskId": "..." }',
       '- /v1/assignments/add-followup-task — { "assignmentId": "...", "task": { "id": "...", "phaseId": "...", "title": "...", "description": "...", "prompt": "...", "owner": "senior|worker", "dependsOn": [], "expectedFiles": [], "auditChecklist": [] } }',
-      '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }. When an active task is in rework because its signed scope is insufficient, submit the complete amended graph here. This creates a reviewable draft for user sign-off; it does not wait for the final Assignment audit.',
+      '- /v1/assignments/propose-rework-assignment (coordinator only) — { "assignmentId": "...", "assignment": { "title": "...", "summary": "...", "phases": [], "tasks": [] } }. Reserved for genuinely new product scope outside the signed Assignment; never use it for task corrections, review findings, or audit rework.',
       '- /v1/assignments/request-reaudit (coordinator only, after direct Sr. Engineer corrections are checked) — { "assignmentId": "..." }',
       '- /v1/assignments/steer-worker — { "assignmentId": "...", "workerThreadId": "...", "instruction": "1-20000 characters of user instruction" }',
       '- /v1/assignments/stop-worker — { "assignmentId": "...", "workerThreadId": "..." }. Reassign the resulting attention task with assign-task when a fresh worker should retry it.'
@@ -7112,13 +7112,34 @@ export class ChatEngine {
           return
         }
         if (path === '/v1/assignments/review-task') {
-          const result = await this.assignmentEngine.reviewTask(
+          const review = this.apiTaskReview(body.review)
+          const operationId = this.apiString(body.operationId, 'operationId')
+          let result = await this.assignmentEngine.reviewTask(
             this.apiString(body.assignmentId, 'assignmentId'),
             this.apiString(body.taskId, 'taskId'),
             this.apiString(body.coordinatorThreadId, 'coordinatorThreadId'),
-            this.apiTaskReview(body.review),
-            this.apiString(body.operationId, 'operationId')
+            review,
+            operationId
           )
+          let automaticReworkDispatch = false
+          if (!result.idempotent && review.decision === 'rework' && result.task) {
+            result = await this.assignmentEngine.assignTask(
+              result.assignment.id,
+              result.task.id,
+              `review-rework-${createHash('sha256').update(operationId).digest('hex').slice(0, 24)}`
+            )
+            automaticReworkDispatch = true
+            if (result.task?.owner === 'worker') {
+              void this.dispatchAssignmentWorker(result, review).catch((error: unknown) => {
+                Logger.error('Assignment task rework dispatch failed', {
+                  assignmentId: result.assignment.id,
+                  taskId: result.task?.id,
+                  threadId: result.thread?.id,
+                  error: error instanceof Error ? error.message : String(error)
+                })
+              })
+            }
+          }
           let automaticReaudit = false
           if (
             result.assignment.status === 'completed' &&
@@ -7160,6 +7181,18 @@ export class ChatEngine {
           }
           this.writeAssignmentApiResponse(response, 200, {
             ...result,
+            ...(automaticReworkDispatch
+              ? {
+                  nextAction: {
+                    status:
+                      result.task?.owner === 'worker' ? 'rework_dispatched' : 'senior_rework_ready',
+                    message:
+                      result.task?.owner === 'worker'
+                        ? 'The approved task and review findings were returned directly to its worker. No user sign-off is required.'
+                        : 'The approved task was returned directly to the Sr. Engineer. Continue the correction without requesting user sign-off.'
+                  }
+                }
+              : {}),
             ...(automaticReaudit
               ? {
                   nextAction: {
@@ -7334,7 +7367,10 @@ export class ChatEngine {
     }
   }
 
-  private async dispatchAssignmentWorker(result: AssignmentToolResult): Promise<void> {
+  private async dispatchAssignmentWorker(
+    result: AssignmentToolResult,
+    reworkReview?: AssignmentTaskReview
+  ): Promise<void> {
     if (result.task?.owner !== 'worker' || !result.thread?.settings) return
     const coordinator = await this.threadManager.getThread(
       result.assignment.projectId,
@@ -7355,7 +7391,25 @@ export class ChatEngine {
       result.assignment.projectId,
       result.thread.id,
       result.thread.settings,
-      `${this.assignmentEngine.workerPrompt(result.assignment, result.task, featureSlug)}\n\n${reportInstruction}`,
+      [
+        this.assignmentEngine.workerPrompt(result.assignment, result.task, featureSlug),
+        ...(reworkReview
+          ? [
+              '## Sr. Engineer rework review',
+              'Correct the existing approved task directly. Address every failed checklist item and the review notes below, then submit fresh baseline/check evidence and report the task again. No new user sign-off is required.',
+              JSON.stringify(
+                {
+                  checklistResults: reworkReview.checklistResults,
+                  notes: reworkReview.notes,
+                  reviewedAt: reworkReview.reviewedAt
+                },
+                null,
+                2
+              )
+            ]
+          : []),
+        reportInstruction
+      ].join('\n\n'),
       [],
       undefined,
       undefined,
@@ -9501,7 +9555,7 @@ export class ChatEngine {
           marker,
           `Audit report v${report.version} and the user's review are ready for your decision. No new Assignment version has been created.`,
           'You are the Sr. Engineer. First digest the audit findings, open annotations, and user feedback below, then explain your proposed response in this coordinator conversation.',
-          'If you can correct the work yourself, do so here and call request-reaudit only after the corrections and checks are complete. If coordinated worker tasks are needed, call propose-rework-assignment with a focused corrective graph, then stop. That creates a draft Assignment for the user to review and sign off; do not dispatch or begin its tasks before approval.',
+          'Apply the corrections without another user approval gate. Use reopen-task for completed tasks that require correction and add-followup-task only when an audit finding genuinely needs an additional task; assign every ready worker task immediately. Perform senior-owned corrections here. Call request-reaudit only after every correction and focused check is complete. Never call propose-rework-assignment for audit findings or corrective rework.',
           this.assignmentApiInstructions(coordinatorToken),
           `Assignment ${updated.id} v${updated.version}`,
           `Audit report: ${auditPath}`,
