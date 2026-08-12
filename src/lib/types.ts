@@ -766,6 +766,8 @@ export interface ThreadSettings {
   /** Model provider exposed by the harness, e.g. anthropic or openai. */
   providerId: string
   modelId: string
+  /** Use only the immediate deterministic fallback title, skipping auxiliary model calls. */
+  titleMode?: 'model' | 'deterministic'
   thinkingLevel: ThinkingLevel
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode

@@ -72,6 +72,8 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** Whether the selected model needs the app-owned image descriptor tool. */
+  modelNeedsImageDescriptor: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -120,7 +122,10 @@ type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) =
 export class UtilityOrchestrationService {
   private readonly registry: UtilityRegistryService
   private readonly vault: SecretVault
-  private readonly turns = new Map<string, { server: Server; state: TurnState }>()
+  private readonly turns = new Map<
+    string,
+    { server: Server; state: TurnState; scriptPath: string }
+  >()
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
   private cuaActivityListener: ((pid: number, threadId: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
@@ -203,6 +208,18 @@ export class UtilityOrchestrationService {
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
+    const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
+    const gatewayTools = GATEWAY_TOOLS.filter((tool) =>
+      tool.name === IMAGE_DESCRIPTOR_TOOL_NAME ? request.modelNeedsImageDescriptor : hasOnDemand
+    )
+    if (gatewayTools.length === 0) {
+      return {
+        id,
+        resolvedUtilities: always,
+        instructions: '',
+        cleanup: async () => undefined
+      }
+    }
     const state: TurnState = {
       id,
       request,
@@ -227,12 +244,13 @@ export class UtilityOrchestrationService {
       server.close()
       throw new Error('Utility gateway could not bind to loopback')
     }
-    await this.storage.writeRaw(BRIDGE_SCRIPT_PATH, UTILITY_GATEWAY_SCRIPT)
-    this.turns.set(id, { server, state })
+    const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
+    await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
+    this.turns.set(id, { server, state, scriptPath })
 
     const gateway = gatewayUtility(
       request,
-      this.storage.resolve(BRIDGE_SCRIPT_PATH),
+      this.storage.resolve(scriptPath),
       `http://127.0.0.1:${address.port}`,
       token
     )
@@ -249,7 +267,9 @@ export class UtilityOrchestrationService {
     return {
       id,
       resolvedUtilities: [...always, gateway],
-      instructions: `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`,
+      instructions: hasOnDemand
+        ? `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
+        : '',
       cleanup
     }
   }
@@ -264,6 +284,7 @@ export class UtilityOrchestrationService {
     this.turns.delete(id)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     await new Promise<void>((resolve) => turn.server.close(() => resolve()))
+    await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
@@ -881,14 +902,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Build the stdio MCP gateway script. The tool list and the tools/call route
  *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
  *  matches the catalog — no hand-synchronized copy to drift. */
-function buildUtilityGatewayScript(): string {
-  const tools = GATEWAY_TOOLS.map(({ name, description, inputSchema }) => ({
+function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
+  const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
     name,
     description,
     inputSchema
   }))
   const routes: Record<string, string> = {}
-  for (const tool of GATEWAY_TOOLS) routes[tool.name] = tool.route
+  for (const tool of gatewayTools) routes[tool.name] = tool.route
   return String.raw`import readline from 'node:readline'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
@@ -951,5 +972,3 @@ for await (const line of lines) {
 }
 `
 }
-
-const UTILITY_GATEWAY_SCRIPT = buildUtilityGatewayScript()
