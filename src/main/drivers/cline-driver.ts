@@ -768,9 +768,15 @@ export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
   readonly name = 'Cline'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: {
+      kind: 'shared_daemon',
+      scope: 'application',
+      sessionWorkers: true,
+      maxConcurrentProcesses: 4
+    },
     streaming: true,
     steering: false,
-    nativeResume: false,
+    nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
     attachments: true,
@@ -785,6 +791,7 @@ export class ClineDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, ClineTurnState>()
   private turnCounts = new Map<string, number>()
+  private hubReady: Promise<void> | null = null
 
   constructor(
     storage: StorageEngine,
@@ -824,6 +831,26 @@ export class ClineDriver extends PersistentCliDriver {
         }
       })
     })
+    this.hubReady ??= new Promise<void>((resolve, reject) => {
+      const child = spawn('cline', ['hub', 'ensure'], {
+        cwd: projectPath,
+        env: buildHarnessEnvironment(),
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
+      let stderr = ''
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
+      child.on('error', (error) => reject(new Error(`Cline hub is unavailable: ${error.message}`)))
+      child.on('exit', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`Cline hub startup failed${stderr ? `: ${stderr.trim()}` : ''}`))
+      })
+    }).catch((error: unknown) => {
+      this.hubReady = null
+      throw error
+    })
+    await this.hubReady
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {
@@ -950,6 +977,7 @@ export class ClineDriver extends PersistentCliDriver {
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
     const args: string[] = ['--json']
+    if (session.nativeSessionId) args.push('--id', session.nativeSessionId)
     const previousTurnCount = Math.max(
       this.turnCounts.get(session.id) ?? 0,
       session.messages.filter((message) => message.role === 'assistant').length
@@ -1021,6 +1049,11 @@ export class ClineDriver extends PersistentCliDriver {
     const env = buildHarnessEnvironment()
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
+    } else {
+      // The CLI remains a stream client, while Cline's singleton hub owns the
+      // session and its spoke. Never silently fall back to a private local
+      // backend for an ordinary CodeInOven turn.
+      env['CLINE_SESSION_BACKEND_MODE'] = 'hub'
     }
 
     return { command: 'cline', args, env }

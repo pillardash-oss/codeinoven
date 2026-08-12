@@ -126,8 +126,12 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<
     string,
-    { server: Server; state: TurnState; scriptPath: string }
+    { state: TurnState; scriptPath: string; token: string }
   >()
+  private readonly turnIdsByToken = new Map<string, string>()
+  private gatewayServer: Server | null = null
+  private gatewayBaseUrl: string | null = null
+  private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
   private cuaActivityListener: ((pid: number, threadId: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
@@ -231,32 +235,14 @@ export class UtilityOrchestrationService {
       clients: new Map(),
       attributionSequence: 0
     }
+    const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
-    const server = createServer((incoming, response) => {
-      void this.handleRequest(state, token, incoming, response)
-    })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    const address = server.address()
-    if (!address || typeof address === 'string') {
-      server.close()
-      throw new Error('Utility gateway could not bind to loopback')
-    }
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    this.turns.set(id, { server, state, scriptPath })
+    this.turns.set(id, { state, scriptPath, token })
+    this.turnIdsByToken.set(token, id)
 
-    const gateway = gatewayUtility(
-      request,
-      this.storage.resolve(scriptPath),
-      `http://127.0.0.1:${address.port}`,
-      token
-    )
+    const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -275,7 +261,7 @@ export class UtilityOrchestrationService {
         : '',
       directInstructions: [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
-        `Gateway: http://127.0.0.1:${address.port}`,
+        `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
         'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}.',
@@ -289,32 +275,32 @@ export class UtilityOrchestrationService {
 
   async dispose(): Promise<void> {
     await Promise.all([...this.turns.keys()].map((id) => this.cleanupTurn(id)))
+    const server = this.gatewayServer
+    this.gatewayServer = null
+    this.gatewayBaseUrl = null
+    this.gatewayStarting = null
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
   private async cleanupTurn(id: string): Promise<void> {
     const turn = this.turns.get(id)
     if (!turn) return
     this.turns.delete(id)
+    this.turnIdsByToken.delete(turn.token)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
-    await new Promise<void>((resolve) => turn.server.close(() => resolve()))
     await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
   }
 
-  private async handleRequest(
-    state: TurnState,
-    token: string,
-    request: IncomingMessage,
-    response: ServerResponse
-  ): Promise<void> {
+  private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (
-        request.method !== 'POST' ||
-        request.headers.authorization !== `Bearer ${token}` ||
-        !request.url
-      ) {
+      const authorization = request.headers.authorization
+      const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
+      const turnId = this.turnIdsByToken.get(token)
+      const state = turnId ? this.turns.get(turnId)?.state : undefined
+      if (request.method !== 'POST' || !state || !request.url) {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
@@ -330,6 +316,42 @@ export class UtilityOrchestrationService {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
       })
+    }
+  }
+
+  /**
+   * All utility turns share one loopback listener. Per-turn bearer capabilities
+   * select isolated state; opening another port is never part of starting a turn.
+   */
+  private async ensureGatewayServer(): Promise<string> {
+    if (this.gatewayBaseUrl) return this.gatewayBaseUrl
+    if (this.gatewayStarting) return this.gatewayStarting
+    const starting = new Promise<string>((resolve, reject) => {
+      const server = createServer((request, response) => {
+        void this.handleRequest(request, response)
+      })
+      const fail = (error: Error): void => {
+        server.close()
+        reject(error)
+      }
+      server.once('error', fail)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', fail)
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          fail(new Error('Utility gateway could not bind to loopback'))
+          return
+        }
+        this.gatewayServer = server
+        this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
+        resolve(this.gatewayBaseUrl)
+      })
+    })
+    this.gatewayStarting = starting
+    try {
+      return await starting
+    } finally {
+      if (this.gatewayStarting === starting) this.gatewayStarting = null
     }
   }
 

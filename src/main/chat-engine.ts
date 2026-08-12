@@ -4420,10 +4420,10 @@ export class ChatEngine {
       modelNeedsImageDescriptor,
       // Web-only chat deliberately has no app gateway.
       isChatThread && !chatFileSystemEnabled,
-      // OpenCode workers use the same gateway through scoped loopback calls
-      // while remaining on the pooled project server. This preserves utilities
-      // without recreating the N+1 opencode.db locking cascade.
-      targetThread?.assignmentRole === 'worker' && driver instanceof OpenCodeDriver
+      // OpenCode sessions use the shared project server. The app gateway is
+      // session-scoped by its capability token, so utilities do not justify a
+      // second `opencode serve` process or listening port for any normal turn.
+      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -10362,7 +10362,9 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
-            await this.modelLacksVision(projectId, auditorSettings)
+            await this.modelLacksVision(projectId, auditorSettings),
+            false,
+            driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
           )
           utilityRuntimeAvailable = Boolean(utilityInstructions)
         } catch (error) {
@@ -12373,6 +12375,11 @@ export class ChatEngine {
         event.status.state === 'waiting' ||
         event.status.state === 'idle' ||
         event.status.state === 'error'
+      ) {
+        this.clearSessionWatchdog(event.sessionId)
+      } else if (
+        event.status.state === 'working' &&
+        event.status.activity?.kind === 'harness_queue'
       ) {
         this.clearSessionWatchdog(event.sessionId)
       } else if (event.status.state === 'working') {

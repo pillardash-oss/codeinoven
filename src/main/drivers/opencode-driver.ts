@@ -928,9 +928,9 @@ export function mapOpenCodeEvent(type: string, props: Record<string, unknown>): 
 /**
  * OpenCodeDriver — headless harness driver for the OpenCode CLI.
  *
- * Spawns a pooled `opencode serve` instance per project directory and
- * communicates over HTTP. Streaming events arrive via a persistent SSE
- * subscription and are forwarded to the registered AgentEventCallback.
+ * Reuses one application-wide `opencode serve` process. Every request and SSE
+ * subscription is scoped with OpenCode's `x-opencode-directory` header, so
+ * projects retain isolated OpenCode instances without multiplying ports.
  *
  * This driver is transport-only: it knows nothing about threads, projects,
  * or permission policy. Coordination lives in the ChatEngine.
@@ -939,6 +939,7 @@ export class OpenCodeDriver implements HarnessDriver {
   readonly id = 'opencode'
   readonly name = 'OpenCode'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'shared_server', scope: 'application' },
     streaming: true,
     steering: true,
     nativeResume: true,
@@ -960,8 +961,9 @@ export class OpenCodeDriver implements HarnessDriver {
     scheduledRetry: true
   }
 
-  private servers = new Map<string, ServerHandle>()
-  private starting = new Map<string, Promise<ServerHandle>>()
+  private server: ServerHandle | null = null
+  private starting: Promise<ServerHandle> | null = null
+  private projectSubscriptions = new Map<string, AbortController>()
   private turnServers = new Map<string, ServerHandle>()
   private turnStarting = new Map<string, Promise<ServerHandle>>()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
@@ -1219,9 +1221,7 @@ export class OpenCodeDriver implements HarnessDriver {
       } finally {
         if (isolated) {
           this.titleSessions.delete(isolated.sessionId)
-          await this.deleteSessionOnHandle(isolated.baseUrl, isolated.sessionId).catch(
-            () => undefined
-          )
+          await this.deleteSessionOnHandle(isolated, isolated.sessionId).catch(() => undefined)
           this.disposeIsolatedSession(isolated)
         }
       }
@@ -1255,7 +1255,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private async createSessionOnHandle(handle: ServerHandle, title: string): Promise<string> {
     const res = await fetch(`${handle.baseUrl}/session`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ title })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to create session')
@@ -1333,7 +1333,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
     const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify(body)
     })
     if (!res.ok) {
@@ -1376,7 +1376,7 @@ export class OpenCodeDriver implements HarnessDriver {
     }
     const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ messageID: opts.userMessageId, parts })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to steer active OpenCode session')
@@ -1409,6 +1409,7 @@ export class OpenCodeDriver implements HarnessDriver {
       isolated ?? this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     await fetch(`${handle.baseUrl}/session/${sessionId}/abort`, {
       method: 'POST',
+      headers: this.headersFor(handle),
       signal: AbortSignal.timeout(5_000)
     })
   }
@@ -1439,13 +1440,13 @@ export class OpenCodeDriver implements HarnessDriver {
    */
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     const turnHandle = this.turnServers.get(sessionId)
-    const handle = turnHandle ?? this.servers.get(projectPath)
+    const handle = turnHandle ?? (this.server ? this.scopedHandle(this.server, projectPath) : null)
     if (!handle) {
       await this.deleteSessionViaTransientServer(projectPath, sessionId)
       return
     }
     try {
-      await this.deleteSessionOnHandle(handle.baseUrl, sessionId)
+      await this.deleteSessionOnHandle(handle, sessionId)
     } finally {
       if (turnHandle) await this.stopTurnServer(sessionId)
     }
@@ -1472,7 +1473,7 @@ export class OpenCodeDriver implements HarnessDriver {
       handle.process.on('exit', () => {
         this.isolatedServers.delete(handle)
       })
-      await this.deleteSessionOnHandle(handle.baseUrl, sessionId)
+      await this.deleteSessionOnHandle(handle, sessionId)
     } catch (error) {
       Logger.dev('Transient opencode session deletion was incomplete:', error)
     } finally {
@@ -1480,9 +1481,10 @@ export class OpenCodeDriver implements HarnessDriver {
     }
   }
 
-  private async deleteSessionOnHandle(baseUrl: string, sessionId: string): Promise<void> {
-    const res = await fetch(`${baseUrl}/session/${sessionId}`, {
+  private async deleteSessionOnHandle(handle: ServerHandle, sessionId: string): Promise<void> {
+    const res = await fetch(`${handle.baseUrl}/session/${sessionId}`, {
       method: 'DELETE',
+      headers: this.headersFor(handle),
       signal: AbortSignal.timeout(10_000)
     })
     if (!res.ok && res.status !== 404) {
@@ -1546,7 +1548,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
   async listCommands(projectPath: string): Promise<HarnessCommand[]> {
     const handle = await this.ensureServer(projectPath)
-    const res = await fetch(`${handle.baseUrl}/command`)
+    const res = await fetch(`${handle.baseUrl}/command`, { headers: this.headersFor(handle) })
     if (!res.ok) return []
     const data = (await res.json()) as Array<Record<string, unknown>>
     return data
@@ -1568,7 +1570,7 @@ export class OpenCodeDriver implements HarnessDriver {
     url.searchParams.set('provider', providerId)
     url.searchParams.set('model', modelId)
     url.searchParams.set('directory', projectPath)
-    const res = await fetch(url)
+    const res = await fetch(url, { headers: this.headersFor(handle) })
     if (!res.ok) {
       throw await errorFromResponse(res, 'Failed to list agent tools')
     }
@@ -1591,7 +1593,7 @@ export class OpenCodeDriver implements HarnessDriver {
     const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     const res = await fetch(`${handle.baseUrl}/session/${sessionId}/command`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ command, arguments: args })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to run command')
@@ -1605,7 +1607,7 @@ export class OpenCodeDriver implements HarnessDriver {
     const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     const res = await fetch(`${handle.baseUrl}/session/${sessionId}/summarize`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         providerID: settings.providerId,
         modelID: settings.modelId
@@ -1629,7 +1631,7 @@ export class OpenCodeDriver implements HarnessDriver {
     try {
       const res = await fetch(`${handle.baseUrl}/permission/${requestId}/reply`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ reply, ...(message !== undefined ? { message } : {}) })
       })
       if (!res.ok) Logger.error(`permission reply rejected (${res.status})`)
@@ -1647,7 +1649,7 @@ export class OpenCodeDriver implements HarnessDriver {
     const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     const res = await fetch(`${handle.baseUrl}/question/${encodeURIComponent(requestId)}/reply`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({ answers })
     })
     if (!res.ok) {
@@ -1658,7 +1660,8 @@ export class OpenCodeDriver implements HarnessDriver {
   async rejectQuestion(projectPath: string, sessionId: string, requestId: string): Promise<void> {
     const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     const res = await fetch(`${handle.baseUrl}/question/${encodeURIComponent(requestId)}/reject`, {
-      method: 'POST'
+      method: 'POST',
+      headers: this.headersFor(handle)
     })
     if (!res.ok) {
       throw await errorFromResponse(res, 'Failed to dismiss question')
@@ -1673,7 +1676,9 @@ export class OpenCodeDriver implements HarnessDriver {
     ]
     const pending = await Promise.all(
       handles.map(async (handle) => {
-        const response = await fetch(`${handle.baseUrl}/question`)
+        const response = await fetch(`${handle.baseUrl}/question`, {
+          headers: this.headersFor(handle)
+        })
         if (!response.ok) {
           throw await errorFromResponse(response, 'Failed to list pending questions')
         }
@@ -1690,11 +1695,12 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   dispose(): void {
-    for (const handle of this.servers.values()) {
-      handle.abortController.abort()
-      handle.process.kill()
-    }
-    this.servers.clear()
+    for (const controller of this.projectSubscriptions.values()) controller.abort()
+    this.projectSubscriptions.clear()
+    this.server?.abortController.abort()
+    this.server?.process.kill()
+    this.server = null
+    this.starting = null
     for (const handle of this.turnServers.values()) {
       handle.abortController.abort()
       handle.process.kill()
@@ -1706,7 +1712,6 @@ export class OpenCodeDriver implements HarnessDriver {
     }
     this.isolatedServers.clear()
     this.titleSessions.clear()
-    this.starting.clear()
     this.turnStarting.clear()
     for (const runtime of this.utilityRuntimes.values()) {
       void runtime.cleanup().catch((error) => {
@@ -1720,20 +1725,47 @@ export class OpenCodeDriver implements HarnessDriver {
   // ─── Server pool ──────────────────────────────────────────────────────────
 
   private async ensureServer(projectPath: string): Promise<ServerHandle> {
-    const existing = this.servers.get(projectPath)
-    if (existing) return existing
-    const pending = this.starting.get(projectPath)
-    if (pending) return pending
+    if (this.server) {
+      this.ensureProjectSubscription(this.server, projectPath)
+      return this.scopedHandle(this.server, projectPath)
+    }
+    if (this.starting) {
+      const handle = await this.starting
+      this.ensureProjectSubscription(handle, projectPath)
+      return this.scopedHandle(handle, projectPath)
+    }
 
     const promise = this.startServer(projectPath)
-    this.starting.set(projectPath, promise)
+    this.starting = promise
     try {
       const handle = await promise
-      this.servers.set(projectPath, handle)
-      return handle
+      this.server = handle
+      this.ensureProjectSubscription(handle, projectPath)
+      return this.scopedHandle(handle, projectPath)
     } finally {
-      if (this.starting.get(projectPath) === promise) this.starting.delete(projectPath)
+      if (this.starting === promise) this.starting = null
     }
+  }
+
+  private scopedHandle(handle: ServerHandle, projectPath: string): ServerHandle {
+    return handle.projectPath === projectPath ? handle : { ...handle, projectPath }
+  }
+
+  private headersFor(
+    handle: ServerHandle,
+    headers: Record<string, string> = {}
+  ): Record<string, string> {
+    const directory = [...handle.projectPath].some((character) => character.codePointAt(0)! > 127)
+      ? encodeURIComponent(handle.projectPath)
+      : handle.projectPath
+    return { ...headers, 'x-opencode-directory': directory }
+  }
+
+  private ensureProjectSubscription(handle: ServerHandle, projectPath: string): void {
+    if (this.projectSubscriptions.has(projectPath)) return
+    const controller = new AbortController()
+    this.projectSubscriptions.set(projectPath, controller)
+    this.subscribeEvents(this.scopedHandle(handle, projectPath), controller.signal)
   }
 
   private async ensureTurnServer(
@@ -1915,13 +1947,17 @@ export class OpenCodeDriver implements HarnessDriver {
     })
   }
 
-  /** Spawn `opencode serve` for a project and wait for it to announce its port. */
-  private startServer(projectPath: string): Promise<ServerHandle> {
+  /** Spawn the application-wide `opencode serve` host and wait for its port. */
+  private async startServer(projectPath: string): Promise<ServerHandle> {
+    const providerOverlay = await this.prepareUtilityRuntime({
+      projectPath,
+      resolvedUtilities: []
+    })
     return new Promise((resolve, reject) => {
       const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
       const child = spawn('opencode', args, {
         cwd: projectPath,
-        env: this.buildEnv(),
+        env: buildHarnessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) }),
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
@@ -1950,8 +1986,7 @@ export class OpenCodeDriver implements HarnessDriver {
             process: child,
             abortController: new AbortController()
           }
-          Logger.dev(`opencode server up for ${projectPath} on :${port}`)
-          this.subscribeEvents(handle)
+          Logger.dev(`shared opencode server up on :${port}`)
           resolve(handle)
         }
       })
@@ -1969,10 +2004,11 @@ export class OpenCodeDriver implements HarnessDriver {
       })
 
       child.on('exit', (code) => {
-        const current = this.servers.get(projectPath)
-        if (current?.process === child) {
-          current.abortController.abort()
-          this.servers.delete(projectPath)
+        if (this.server?.process === child) {
+          this.server.abortController.abort()
+          this.server = null
+          for (const controller of this.projectSubscriptions.values()) controller.abort()
+          this.projectSubscriptions.clear()
         }
         if (!settled) {
           settled = true
@@ -2004,32 +2040,16 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /**
-   * Stop the pooled server for a project (and any isolated servers bound to
-   * it), releasing its process and ports. Sessions persist in opencode's own
-   * store and rehydrate when the project is next used.
+   * Release project-scoped streams and exceptional isolated work. The shared
+   * host stays resident for other projects and is closed only by `dispose`.
    */
   async releaseProjectResources(projectPath: string): Promise<void> {
     await this.stopProjectServers(projectPath)
   }
 
   private async stopProjectServers(projectPath: string): Promise<void> {
-    const pending = this.starting.get(projectPath)
-    if (pending) {
-      try {
-        const pendingHandle = await pending
-        pendingHandle.abortController.abort()
-        pendingHandle.process.kill()
-      } catch {
-        // A failed start has no live server to stop.
-      }
-      if (this.starting.get(projectPath) === pending) this.starting.delete(projectPath)
-    }
-    const handle = this.servers.get(projectPath)
-    if (handle) {
-      handle.abortController.abort()
-      handle.process.kill()
-      this.servers.delete(projectPath)
-    }
+    this.projectSubscriptions.get(projectPath)?.abort()
+    this.projectSubscriptions.delete(projectPath)
     for (const isolated of this.isolatedServers) {
       if (isolated.projectPath !== projectPath) continue
       this.disposeIsolatedSession(isolated)
@@ -2043,14 +2063,16 @@ export class OpenCodeDriver implements HarnessDriver {
   // ─── Event stream ─────────────────────────────────────────────────────────
 
   /** Subscribe to the server's SSE bus and forward events, reconnecting on drops. */
-  private subscribeEvents(handle: ServerHandle): void {
-    const { signal } = handle.abortController
+  private subscribeEvents(
+    handle: ServerHandle,
+    signal: AbortSignal = handle.abortController.signal
+  ): void {
     void (async () => {
       while (!signal.aborted) {
         try {
           const res = await fetch(`${handle.baseUrl}/event`, {
             signal,
-            headers: { Accept: 'text/event-stream' }
+            headers: this.headersFor(handle, { Accept: 'text/event-stream' })
           })
           if (!res.ok || !res.body) break
           const reader = res.body.getReader()
@@ -2176,7 +2198,9 @@ export class OpenCodeDriver implements HarnessDriver {
   // ─── Wire-format mapping ──────────────────────────────────────────────────
 
   private async fetchMessages(handle: ServerHandle, sessionId: string): Promise<AgentMessage[]> {
-    const res = await fetch(`${handle.baseUrl}/session/${sessionId}/message`)
+    const res = await fetch(`${handle.baseUrl}/session/${sessionId}/message`, {
+      headers: this.headersFor(handle)
+    })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to load messages')
     const raw = (await res.json()) as Array<{
       info: Record<string, unknown>

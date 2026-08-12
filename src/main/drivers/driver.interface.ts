@@ -18,6 +18,15 @@ export type AgentEventCallback = (event: AgentEvent) => void
 
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
+  /** Truthful process topology used for app-wide host and RAM policy. */
+  runtimeTopology: {
+    kind: 'shared_server' | 'shared_daemon' | 'embedded' | 'turn_process'
+    scope: 'application' | 'session'
+    /** Upstream may still create one worker process for each executing session. */
+    sessionWorkers?: boolean
+    /** Hard ceiling for adapters that cannot multiplex logical sessions. */
+    maxConcurrentProcesses?: number
+  }
   streaming: boolean
   /** Can append user input to the provider's currently active turn. */
   steering: boolean
