@@ -189,7 +189,6 @@ export type DatabaseWorkerResult =
 
 export type DatabaseWorkerMessage =
   | { type: 'response'; id: number; result: DatabaseWorkerResult }
-  | { type: 'telemetry'; telemetry: WorkerSizeTelemetry }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
 
 export type DatabaseWorkerOutbound = { type: 'request'; id: number; request: DatabaseWorkerRequest }
@@ -437,17 +436,6 @@ export class DatabaseWorker {
       if (pending) {
         this.pending.delete(message.id)
         pending.resolve(message.result)
-      }
-      return
-    }
-    if (message.type === 'telemetry') {
-      if (message.telemetry.ok) {
-        this.logger.info('SQLite database size telemetry', {
-          dbBytes: message.telemetry.dbBytes,
-          walBytes: message.telemetry.walBytes,
-          pageCount: message.telemetry.pageCount,
-          schemaVersion: message.telemetry.schemaVersion
-        })
       }
       return
     }

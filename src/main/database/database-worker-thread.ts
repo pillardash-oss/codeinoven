@@ -78,16 +78,11 @@ function connection(): DatabaseType {
 }
 
 function emit(message: {
-  type: 'telemetry' | 'log'
+  type: 'log'
   level?: 'info' | 'warn' | 'error'
   message?: string
-  telemetry?: WorkerSizeTelemetry
 }): void {
   if (!port) return
-  if (message.type === 'telemetry') {
-    port.postMessage({ type: 'telemetry', telemetry: message.telemetry })
-    return
-  }
   port.postMessage({ type: 'log', level: message.level ?? 'info', message: message.message ?? '' })
 }
 
@@ -684,12 +679,6 @@ function markRun(key: string, at: number): void {
 
 function runMaintenancePass(): void {
   const now = Date.now()
-  try {
-    const telemetry = sizeTelemetry()
-    if (telemetry.ok) emit({ type: 'telemetry', telemetry })
-  } catch (error) {
-    emit({ type: 'log', level: 'error', message: `maintenance telemetry failed: ${String(error)}` })
-  }
   if (now - lastRun('checkpoint_at') >= DAY_MS) {
     const result = checkpoint({ kind: 'checkpoint', mode: 'passive' })
     markRun('checkpoint_at', now)
