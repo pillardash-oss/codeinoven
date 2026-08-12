@@ -1377,6 +1377,18 @@ export interface UsageEventDetails {
 /** Durable, replay-safe accounting record for one attempt. */
 export type UsageEvent = UsageEventDetails & UsageEventCost
 
+/** One main-agent cache measurement grouped by its telemetry provenance. */
+export interface UsageCacheHitBreakdown {
+  harnessId: string | null
+  providerId: string | null
+  modelId: string | null
+  mainAttempts: number
+  reportedAttempts: number
+  uncachedInputTokens: number
+  cachedInputTokens: number
+  cacheHitRatio: number | null
+}
+
 /** Provider-neutral efficiency metrics derived only from normalized usage events. */
 export interface UsageEfficiencyKpis {
   successfulTurns: number
@@ -1384,7 +1396,15 @@ export interface UsageEfficiencyKpis {
   outputTokens: number
   reasoningTokens: number
   cachedInputTokens: number
+  /** Main-agent cache hit ratio; auxiliary model and utility calls are excluded. */
   cacheHitRatio: number | null
+  cacheEligibleEvents: number
+  cacheReportedEvents: number
+  cacheCoverageRatio: number | null
+  cacheBreakdown: UsageCacheHitBreakdown[]
+  auxiliaryUncachedInputTokens: number
+  auxiliaryCachedInputTokens: number
+  auxiliaryCacheHitRatio: number | null
   mainAttempts: number
   retryAmplification: number | null
   auxiliaryCostUsd: number

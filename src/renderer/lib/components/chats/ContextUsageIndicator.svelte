@@ -9,6 +9,7 @@
     AgentHarnessUsage,
     AgentRateLimitWindow,
     HarnessModelUsage,
+    UsageCacheHitBreakdown,
     UsageEfficiencyKpis
   } from '$shared/types'
 
@@ -70,8 +71,10 @@
   const multiHarness = $derived(harnessUsage.length > 1)
 
   const hasEfficiency = $derived(efficiencyKpis !== undefined)
+  const CACHE_HIT_TARGET = 0.95
 
   const successfulTurns = $derived(efficiencyKpis?.successfulTurns ?? 0)
+  const noCompletedTurns = $derived(successfulTurns <= 0)
   /** Primary metric is uncached input + output (excludes reasoning) per completed user turn. */
   const primaryPerTurn = $derived(
     efficiencyKpis && successfulTurns > 0
@@ -79,38 +82,57 @@
       : null
   )
   const uncachedPerTurnLabel = $derived(
-    efficiencyKpis == null || successfulTurns <= 0
-      ? 'Unknown'
+    efficiencyKpis == null || noCompletedTurns
+      ? 'No completed turns'
       : compactNumber(efficiencyKpis.uncachedInputTokens / successfulTurns)
   )
   const outputPerTurnLabel = $derived(
-    efficiencyKpis == null || successfulTurns <= 0
-      ? 'Unknown'
+    efficiencyKpis == null || noCompletedTurns
+      ? 'No completed turns'
       : compactNumber(efficiencyKpis.outputTokens / successfulTurns)
   )
   const reasoningPerTurnLabel = $derived(
-    efficiencyKpis == null || successfulTurns <= 0
-      ? 'Unknown'
+    efficiencyKpis == null || noCompletedTurns
+      ? 'No completed turns'
       : compactNumber(efficiencyKpis.reasoningTokens / successfulTurns)
   )
-  const cacheHitLabel = $derived(
+  const cacheHitLabel = $derived.by(() => {
+    if (noCompletedTurns) return 'No completed turns'
+    if ((efficiencyKpis?.cacheEligibleEvents ?? 0) <= 0) return 'No main attempts'
+    if ((efficiencyKpis?.cacheReportedEvents ?? 0) <= 0) return 'Not reported'
+    if (efficiencyKpis?.cacheHitRatio == null) return 'No input tokens'
+    return `${Math.round(efficiencyKpis.cacheHitRatio * 100)}%`
+  })
+  const cacheHitClass = $derived(
     efficiencyKpis?.cacheHitRatio == null
-      ? 'Unknown'
-      : `${Math.round(efficiencyKpis.cacheHitRatio * 100)}%`
+      ? 'text-dimmed'
+      : efficiencyKpis.cacheHitRatio >= CACHE_HIT_TARGET
+        ? 'text-success'
+        : 'text-warning'
+  )
+  const cacheCoverageLabel = $derived(
+    (efficiencyKpis?.cacheEligibleEvents ?? 0) > 0
+      ? `${efficiencyKpis?.cacheReportedEvents ?? 0}/${efficiencyKpis?.cacheEligibleEvents ?? 0} main attempts reported cache data`
+      : 'No main cache telemetry yet'
+  )
+  const auxiliaryCacheLabel = $derived(
+    efficiencyKpis?.auxiliaryCacheHitRatio == null
+      ? 'Not reported'
+      : `${Math.round(efficiencyKpis.auxiliaryCacheHitRatio * 100)}%`
   )
   const retryLabel = $derived(
     efficiencyKpis?.retryAmplification == null
-      ? 'Unknown'
+      ? 'No completed turns'
       : `${efficiencyKpis.retryAmplification.toFixed(2)}×`
   )
   const auxShareLabel = $derived(
     efficiencyKpis?.auxiliaryCostShare == null
-      ? 'Unknown'
+      ? 'No priced cost'
       : `${Math.round(efficiencyKpis.auxiliaryCostShare * 100)}%`
   )
   const toolResultPerTurnLabel = $derived(
     efficiencyKpis?.perSuccessfulTurn.toolResultTokens == null
-      ? 'Unknown'
+      ? 'No completed turns'
       : compactNumber(efficiencyKpis.perSuccessfulTurn.toolResultTokens)
   )
   const coverageLabel = $derived(
@@ -123,10 +145,10 @@
   /** Known and estimated totals are only authoritative when at least one cost event is priced. */
   const hasPricedCost = $derived((efficiencyKpis?.pricedCostEvents ?? 0) > 0)
   const knownCostLabel = $derived(
-    !hasPricedCost ? 'Unknown' : formatMoney(efficiencyKpis?.knownCostUsd ?? 0)
+    !hasPricedCost ? 'Not reported' : formatMoney(efficiencyKpis?.knownCostUsd ?? 0)
   )
   const estimatedCostLabel = $derived(
-    !hasPricedCost ? 'Unknown' : formatMoney(efficiencyKpis?.estimatedCostUsd ?? 0)
+    !hasPricedCost ? 'Not reported' : formatMoney(efficiencyKpis?.estimatedCostUsd ?? 0)
   )
 
   /** Collapsed harness sections — sections are open by default. */
@@ -138,6 +160,19 @@
 
   function harnessKey(entry: AgentHarnessUsage): string {
     return entry.harnessId
+  }
+
+  function cacheBreakdownName(entry: UsageCacheHitBreakdown): string {
+    const harnessName = entry.harnessId
+      ? (getAgentIcon(entry.harnessId)?.name ?? entry.harnessId)
+      : 'Unattributed harness'
+    return entry.modelId ? `${harnessName} · ${entry.modelId}` : harnessName
+  }
+
+  function cacheBreakdownLabel(entry: UsageCacheHitBreakdown): string {
+    if (entry.reportedAttempts <= 0) return 'Not reported'
+    if (entry.cacheHitRatio == null) return 'No input tokens'
+    return `${Math.round(entry.cacheHitRatio * 100)}%`
   }
 
   function compactNumber(value: number): string {
@@ -449,7 +484,7 @@
             <div class="flex items-baseline justify-between gap-3">
               <span class="text-[9px] text-dimmed">Uncached input + output</span>
               <span class="text-xs font-semibold tabular-nums text-foreground">
-                {primaryPerTurn == null ? 'Unknown' : compactNumber(primaryPerTurn)}
+                {primaryPerTurn == null ? 'No completed turns' : compactNumber(primaryPerTurn)}
               </span>
             </div>
             <p class="mt-0.5 text-[9px] text-dimmed">
@@ -463,10 +498,39 @@
             </div>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
-            <span>Cache hit {cacheHitLabel}</span>
+            <span>
+              Main cache hit
+              <strong class={`font-semibold tabular-nums ${cacheHitClass}`}>{cacheHitLabel}</strong>
+            </span>
             <span>Retry amplification {retryLabel}</span>
             <span>Auxiliary share {auxShareLabel}</span>
             <span>Tool results {toolResultPerTurnLabel}/turn</span>
+          </div>
+          <div class="mt-2 rounded-md border border-border bg-app/40 p-2 text-[9px] text-dimmed">
+            <div class="flex items-center justify-between gap-3">
+              <span>{cacheCoverageLabel}</span>
+              <span class="shrink-0 font-medium text-muted">Target ≥95%</span>
+            </div>
+            {#if efficiencyKpis && efficiencyKpis.cacheBreakdown.length > 1}
+              <div class="mt-1.5 space-y-1 border-t border-border/60 pt-1.5">
+                {#each efficiencyKpis.cacheBreakdown as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}`)}
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="min-w-0 truncate">{cacheBreakdownName(entry)}</span>
+                    <span class="shrink-0 tabular-nums text-foreground">
+                      {cacheBreakdownLabel(entry)} · {entry.reportedAttempts}/{entry.mainAttempts}
+                    </span>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+            {#if efficiencyKpis && (efficiencyKpis.auxiliaryUncachedInputTokens > 0 || efficiencyKpis.auxiliaryCachedInputTokens > 0)}
+              <div
+                class="mt-1.5 flex items-center justify-between gap-3 border-t border-border/60 pt-1.5"
+              >
+                <span>Auxiliary cache hit</span>
+                <span class="tabular-nums text-foreground">{auxiliaryCacheLabel}</span>
+              </div>
+            {/if}
           </div>
           <div class="mt-2 border-t border-border/60 pt-2">
             <p class="mb-1 text-[9px] text-dimmed">{coverageLabel}</p>

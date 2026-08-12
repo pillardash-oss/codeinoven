@@ -279,7 +279,7 @@ describe('OpenCode token usage normalization', () => {
         total: 130
       },
       normalizedUsage: {
-        uncachedInput: 55,
+        uncachedInput: 100,
         cachedInput: 40,
         cacheWrite: 5,
         output: 30,
@@ -292,7 +292,7 @@ describe('OpenCode token usage normalization', () => {
           cache: { read: 40, write: 5 }
         },
         rawTotal: 130,
-        totalSemantics: 'includes_cache'
+        totalSemantics: 'provider_defined'
       }
     })
   })
@@ -312,7 +312,7 @@ describe('OpenCode token usage normalization', () => {
       messageID: 'message-1',
       reason: 'stop',
       normalizedUsage: {
-        uncachedInput: 60,
+        uncachedInput: 100,
         cachedInput: 40,
         cacheWrite: null,
         output: 30,
@@ -347,12 +347,12 @@ describe('OpenCode token usage normalization', () => {
         reasoning: null,
         rawProviderUsage: { input: 50, total: 50 },
         rawTotal: 50,
-        totalSemantics: 'includes_cache'
+        totalSemantics: 'provider_defined'
       }
     })
   })
 
-  it('clamps uncached input to zero when cached read plus write exceed input', () => {
+  it('keeps uncached input separate when cache reads and writes exceed it', () => {
     expect(
       mapOpenCodePart({
         type: 'step-finish',
@@ -368,14 +368,14 @@ describe('OpenCode token usage normalization', () => {
       reason: 'stop',
       tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 8, cacheWrite: 9, total: 15 },
       normalizedUsage: {
-        uncachedInput: 0,
+        uncachedInput: 10,
         cachedInput: 8,
         cacheWrite: 9,
         output: 5,
         reasoning: null,
         rawProviderUsage: { input: 10, output: 5, total: 15, cache: { read: 8, write: 9 } },
         rawTotal: 15,
-        totalSemantics: 'includes_cache'
+        totalSemantics: 'provider_defined'
       }
     })
   })
