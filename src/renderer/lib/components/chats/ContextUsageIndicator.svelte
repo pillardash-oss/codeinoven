@@ -8,11 +8,14 @@
     AgentContextUsage,
     AgentHarnessUsage,
     AgentRateLimitWindow,
-    HarnessModelUsage
+    HarnessModelUsage,
+    UsageEfficiencyKpis
   } from '$shared/types'
 
   interface Props {
     usage?: AgentContextUsage
+    /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
+    efficiency?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
     harnessUsage?: AgentHarnessUsage[]
     canCompact?: boolean
@@ -28,6 +31,7 @@
 
   let {
     usage,
+    efficiency,
     harnessUsage = [],
     canCompact = false,
     compacting = false,
@@ -64,6 +68,59 @@
     boundedPercent === undefined ? '' : `${Math.round(boundedPercent)}%`
   )
   const multiHarness = $derived(harnessUsage.length > 1)
+
+  const hasEfficiency = $derived(efficiency !== undefined)
+
+  const primaryPerTurn = $derived(
+    efficiency?.perSuccessfulTurn.uncachedInputTokens != null &&
+      efficiency.perSuccessfulTurn.outputAndReasoningTokens != null
+      ? efficiency.perSuccessfulTurn.uncachedInputTokens +
+          efficiency.perSuccessfulTurn.outputAndReasoningTokens
+      : null
+  )
+  const uncachedPerTurnLabel = $derived(
+    efficiency?.perSuccessfulTurn.uncachedInputTokens == null
+      ? 'Unknown'
+      : compactNumber(efficiency.perSuccessfulTurn.uncachedInputTokens)
+  )
+  const outputPerTurnLabel = $derived(
+    efficiency?.perSuccessfulTurn.outputAndReasoningTokens == null
+      ? 'Unknown'
+      : compactNumber(efficiency.perSuccessfulTurn.outputAndReasoningTokens)
+  )
+  const cacheHitLabel = $derived(
+    efficiency?.cacheHitRatio == null ? 'Unknown' : `${Math.round(efficiency.cacheHitRatio * 100)}%`
+  )
+  const retryLabel = $derived(
+    efficiency?.retryAmplification == null
+      ? 'Unknown'
+      : `${efficiency.retryAmplification.toFixed(2)}×`
+  )
+  const auxShareLabel = $derived(
+    efficiency?.auxiliaryCostShare == null
+      ? 'Unknown'
+      : `${Math.round(efficiency.auxiliaryCostShare * 100)}%`
+  )
+  const toolResultPerTurnLabel = $derived(
+    efficiency?.perSuccessfulTurn.toolResultTokens == null
+      ? 'Unknown'
+      : compactNumber(efficiency.perSuccessfulTurn.toolResultTokens)
+  )
+  const coverageLabel = $derived(
+    efficiency?.costCoverageRatio == null
+      ? 'No cost reported'
+      : `${Math.round(efficiency.costCoverageRatio * 100)}% of cost accounted`
+  )
+  const hasUnavailableCost = $derived((efficiency?.unavailableCostEvents ?? 0) > 0)
+
+  /** Known and estimated totals are only authoritative when at least one cost event is priced. */
+  const hasPricedCost = $derived((efficiency?.pricedCostEvents ?? 0) > 0)
+  const knownCostLabel = $derived(
+    !hasPricedCost ? 'Unknown' : formatMoney(efficiency?.knownCostUsd ?? 0)
+  )
+  const estimatedCostLabel = $derived(
+    !hasPricedCost ? 'Unknown' : formatMoney(efficiency?.estimatedCostUsd ?? 0)
+  )
 
   /** Collapsed harness sections — sections are open by default. */
   const collapsedHarnesses = new SvelteSet<string>()
@@ -375,6 +432,59 @@
             : 'Unavailable'}</span
         >
       </div>
+
+      {#if hasEfficiency}
+        <div class="mt-3 border-t border-border pt-3">
+          <p class="mb-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted">
+            Efficiency
+          </p>
+          <div class="rounded-md bg-elevated p-2">
+            <div class="flex items-baseline justify-between gap-3">
+              <span class="text-[9px] text-dimmed">Uncached input + output</span>
+              <span class="text-xs font-semibold tabular-nums text-foreground">
+                {primaryPerTurn == null ? 'Unknown' : compactNumber(primaryPerTurn)}
+              </span>
+            </div>
+            <p class="mt-0.5 text-[9px] text-dimmed">
+              per {efficiency?.successfulTurns ?? 0} completed turn
+              {(efficiency?.successfulTurns ?? 0) === 1 ? '' : 's'}
+            </p>
+            <div class="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
+              <span>Uncached input {uncachedPerTurnLabel}/turn</span>
+              <span>Output {outputPerTurnLabel}/turn</span>
+            </div>
+          </div>
+          <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
+            <span>Cache hit {cacheHitLabel}</span>
+            <span>Retry amplification {retryLabel}</span>
+            <span>Auxiliary share {auxShareLabel}</span>
+            <span>Tool results {toolResultPerTurnLabel}/turn</span>
+          </div>
+          <div class="mt-2 border-t border-border/60 pt-2">
+            <p class="mb-1 text-[9px] text-dimmed">{coverageLabel}</p>
+            <div class="flex items-center gap-2">
+              <span class="rounded bg-app/40 px-1.5 py-0.5 text-[9px] tabular-nums text-foreground">
+                Known {knownCostLabel}
+              </span>
+              <span
+                class="rounded bg-warning/10 px-1.5 py-0.5 text-[9px] tabular-nums text-warning"
+              >
+                Est. {estimatedCostLabel}
+              </span>
+              {#if hasUnavailableCost}
+                <span class="rounded bg-overlay px-1.5 py-0.5 text-[9px] text-dimmed">
+                  {efficiency?.unavailableCostEvents} unavailable
+                </span>
+              {/if}
+            </div>
+            {#if hasPricedCost && efficiency?.knownCostUsd === 0 && efficiency?.estimatedCostUsd === 0}
+              <p class="mt-1.5 text-[9px] text-dimmed">
+                Priced events are zero — no known cost accrued.
+              </p>
+            {/if}
+          </div>
+        </div>
+      {/if}
 
       <button
         type="button"
