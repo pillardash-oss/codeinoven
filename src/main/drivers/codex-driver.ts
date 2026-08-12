@@ -420,6 +420,12 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
+    this.stopResidentHostIfIdle()
+  }
+
+  override releaseProjectResources(projectPath: string): void {
+    super.releaseProjectResources(projectPath)
+    this.stopResidentHostIfIdle()
   }
 
   override dispose(): void {
@@ -440,16 +446,69 @@ export class CodexDriver extends PersistentCliDriver {
     const host = this.host
     this.host = null
     this.hostStarting = null
-    if (host) {
-      host.stopped = true
-      for (const pending of host.pending.values()) {
-        clearTimeout(pending.timer)
-        pending.reject(new Error('Codex driver disposed'))
-      }
-      host.pending.clear()
-      if (!host.child.killed) host.child.kill()
-    }
+    if (host) this.stopAppServerHost(host, 'Codex driver disposed')
     super.dispose()
+  }
+
+  private stopAppServerHost(host: CodexAppServerHost, reason: string): void {
+    if (host.stopped) return
+    host.stopped = true
+    for (const pending of host.pending.values()) {
+      clearTimeout(pending.timer)
+      pending.reject(new Error(reason))
+    }
+    host.pending.clear()
+    if (!host.child.killed) host.child.kill()
+  }
+
+  private stopResidentHostIfIdle(): void {
+    const host = this.host
+    if (!host || this.hostStarting) return
+    if (
+      this.activeTurns.size > 0 ||
+      this.compactionsByThreadId.size > 0 ||
+      this.contextUsageByThreadId.size > 0 ||
+      host.pending.size > 0
+    ) {
+      return
+    }
+    this.host = null
+    this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
+  }
+
+  private async createAppServerHost(
+    projectPath: string,
+    observerSessionId?: string
+  ): Promise<CodexAppServerHost> {
+    const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
+    const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
+      cwd: projectPath,
+      env: { ...buildHarnessEnvironment(), ...providerEnv },
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    const host: CodexAppServerHost = {
+      child,
+      nextRequestId: 0,
+      stdoutBuffer: '',
+      stderrBuffer: '',
+      stopped: false,
+      pending: new Map()
+    }
+    this.bindAppServer(host)
+    if (observerSessionId) {
+      this.observeHarnessProcess(observerSessionId, child, 'codex app-server', projectPath)
+    }
+    try {
+      await this.appServerRequest(host, 'initialize', {
+        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
+        capabilities: { experimentalApi: true }
+      })
+      this.appServerNotify(host, 'initialized')
+      return host
+    } catch (error) {
+      this.stopAppServerHost(host, 'Codex app-server initialization failed')
+      throw error
+    }
   }
 
   private async ensureAppServerHost(
@@ -469,30 +528,8 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (this.hostStarting) return this.hostStarting
     const starting = (async (): Promise<CodexAppServerHost> => {
-      const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-      const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
-        cwd: projectPath,
-        env: { ...buildHarnessEnvironment(), ...providerEnv },
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      const host: CodexAppServerHost = {
-        child,
-        nextRequestId: 0,
-        stdoutBuffer: '',
-        stderrBuffer: '',
-        stopped: false,
-        pending: new Map()
-      }
+      const host = await this.createAppServerHost(projectPath, observerSessionId)
       this.host = host
-      this.bindAppServer(host)
-      if (observerSessionId) {
-        this.observeHarnessProcess(observerSessionId, child, 'codex app-server', projectPath)
-      }
-      await this.appServerRequest(host, 'initialize', {
-        clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
-        capabilities: { experimentalApi: true }
-      })
-      this.appServerNotify(host, 'initialized')
       return host
     })()
     this.hostStarting = starting
@@ -508,26 +545,36 @@ export class CodexDriver extends PersistentCliDriver {
   }
 
   private async discoverModels(projectPath: string): Promise<ProviderModel[]> {
-    const host = await this.ensureAppServerHost(projectPath)
-    const discovered: ProviderModel[] = []
-    let cursor: string | undefined
-    do {
-      const result = await this.appServerRequest(host, 'model/list', {
-        includeHidden: false,
-        limit: 100,
-        ...(cursor ? { cursor } : {})
-      })
-      const data = result['data']
-      if (!Array.isArray(data)) {
-        throw new Error('Codex model discovery returned an invalid response')
+    let temporaryHost: CodexAppServerHost | null = null
+    try {
+      const host =
+        this.host || this.hostStarting
+          ? await this.ensureAppServerHost(projectPath)
+          : (temporaryHost = await this.createAppServerHost(projectPath))
+      const discovered: ProviderModel[] = []
+      let cursor: string | undefined
+      do {
+        const result = await this.appServerRequest(host, 'model/list', {
+          includeHidden: false,
+          limit: 100,
+          ...(cursor ? { cursor } : {})
+        })
+        const data = result['data']
+        if (!Array.isArray(data)) {
+          throw new Error('Codex model discovery returned an invalid response')
+        }
+        for (const value of data) {
+          const model = mapCodexModel(value)
+          if (model) discovered.push(model)
+        }
+        cursor = stringValue(result['nextCursor'])
+      } while (cursor)
+      return [...new Map(discovered.map((model) => [model.id, model])).values()]
+    } finally {
+      if (temporaryHost) {
+        this.stopAppServerHost(temporaryHost, 'Codex model discovery completed')
       }
-      for (const value of data) {
-        const model = mapCodexModel(value)
-        if (model) discovered.push(model)
-      }
-      cursor = stringValue(result['nextCursor'])
-    } while (cursor)
-    return [...new Map(discovered.map((model) => [model.id, model])).values()]
+    }
   }
 
   private bindAppServer(host: CodexAppServerHost): void {
@@ -842,22 +889,25 @@ export class CodexDriver extends PersistentCliDriver {
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
-    if (this.host === host) this.host = null
+    const resident = this.host === host
+    if (resident) this.host = null
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(error))
     }
     host.pending.clear()
-    for (const compaction of this.compactionsByThreadId.values()) {
-      clearTimeout(compaction.timer)
-      compaction.reject(new Error(error))
+    if (resident) {
+      for (const compaction of this.compactionsByThreadId.values()) {
+        clearTimeout(compaction.timer)
+        compaction.reject(new Error(error))
+      }
+      this.compactionsByThreadId.clear()
+      for (const waiter of this.contextUsageByThreadId.values()) {
+        clearTimeout(waiter.timer)
+        waiter.resolve(undefined)
+      }
+      this.contextUsageByThreadId.clear()
     }
-    this.compactionsByThreadId.clear()
-    for (const waiter of this.contextUsageByThreadId.values()) {
-      clearTimeout(waiter.timer)
-      waiter.resolve(undefined)
-    }
-    this.contextUsageByThreadId.clear()
     const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
     await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error)))
   }
@@ -1124,8 +1174,12 @@ export class CodexDriver extends PersistentCliDriver {
   async readAccountUsage(
     projectPath: string
   ): Promise<{ rateLimits: AgentRateLimitWindow[]; credits?: AgentUsageCredits } | null> {
+    let temporaryHost: CodexAppServerHost | null = null
     try {
-      const host = await this.ensureAppServerHost(projectPath)
+      const host =
+        this.host || this.hostStarting
+          ? await this.ensureAppServerHost(projectPath)
+          : (temporaryHost = await this.createAppServerHost(projectPath))
       const telemetry = mapCodexRateLimits(
         await this.appServerRequest(host, 'account/rateLimits/read')
       )
@@ -1134,6 +1188,10 @@ export class CodexDriver extends PersistentCliDriver {
     } catch (error) {
       Logger.dev('Codex on-demand account usage refresh unavailable:', error)
       return null
+    } finally {
+      if (temporaryHost) {
+        this.stopAppServerHost(temporaryHost, 'Codex account usage probe completed')
+      }
     }
   }
 

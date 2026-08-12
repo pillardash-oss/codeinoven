@@ -195,6 +195,7 @@ describe('provider-neutral session helpers', () => {
           id: 'fixture',
           name: 'Fixture',
           capabilities: {
+            runtimeTopology: { kind: 'turn_process', scope: 'session' },
             streaming: true,
             nativeResume: true,
             messageHistory: 'mirrored',
@@ -236,6 +237,7 @@ describe('provider-neutral session helpers', () => {
           id: 'headless',
           name: 'Headless',
           capabilities: {
+            runtimeTopology: { kind: 'turn_process', scope: 'session' },
             streaming: true,
             nativeResume: false,
             messageHistory: 'mirrored',

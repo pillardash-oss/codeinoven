@@ -69,6 +69,24 @@ const CLAUDE_TEXT_MIMES = new Set([
 ])
 
 type ClaudeImageMime = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+type ClaudeAccountUsage = {
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  contextWindow?: number
+  contextUsed?: number
+}
+
+interface ClaudeUsageProbe {
+  usageRequestId: string
+  contextRequestId: string
+  rateLimitsPayload: Record<string, unknown> | null
+  rateLimitsResponded: boolean
+  contextPayload: Record<string, unknown> | null
+  contextResponded: boolean
+  timer: ReturnType<typeof setTimeout>
+  promise: Promise<Record<string, unknown> | null>
+  resolve: (value: Record<string, unknown> | null) => void
+}
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
   | {
@@ -84,42 +102,6 @@ type ClaudeInputBlock =
         | { type: 'url'; url: string }
       title?: string
     }
-
-/**
- * Claude Code persists one rotating OAuth credential for the whole OS account.
- * Serialize app-owned Claude process startup until the provider begins an
- * assistant response. At that point authentication and any startup refresh have
- * succeeded, so another process can safely read the current shared credential
- * while the first turn continues working.
- */
-class ClaudeOAuthStartupGate {
-  private tail: Promise<void> = Promise.resolve()
-
-  async acquire(): Promise<() => void> {
-    const previous = this.tail
-    let unlock: () => void = () => undefined
-    this.tail = new Promise<void>((resolve) => {
-      unlock = resolve
-    })
-    await previous
-    let released = false
-    return () => {
-      if (released) return
-      released = true
-      unlock()
-    }
-  }
-}
-
-const claudeOAuthStartupGate = new ClaudeOAuthStartupGate()
-
-function isClaudeProviderReadyRecord(value: unknown): boolean {
-  const entry = record(value)
-  const type = string(entry?.['type'])
-  if (type === 'assistant') return entry?.['error'] !== 'authentication_failed'
-  if (type !== 'stream_event') return false
-  return string(record(entry?.['event'])?.['type']) === 'message_start'
-}
 
 function fallbackClaudeModel(): ProviderModel {
   return {
@@ -170,36 +152,31 @@ function keepClaudeDiscoveryOpen(): AsyncIterable<SDKUserMessage> {
 }
 
 async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[]> {
-  const releaseStartup = await claudeOAuthStartupGate.acquire()
-  try {
-    const { query } = await import('@anthropic-ai/claude-agent-sdk')
-    const handle = query({
-      prompt: keepClaudeDiscoveryOpen(),
-      options: {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        pathToClaudeCodeExecutable: 'claude',
-        tools: []
-      }
-    })
-    let timer: ReturnType<typeof setTimeout> | undefined
-    try {
-      const models = await Promise.race([
-        handle.supportedModels(),
-        new Promise<ModelInfo[]>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('Claude Code model discovery timed out')),
-            CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS
-          )
-        })
-      ])
-      return models.map(mapClaudeModel)
-    } finally {
-      if (timer) clearTimeout(timer)
-      handle.close()
+  const { query } = await import('@anthropic-ai/claude-agent-sdk')
+  const handle = query({
+    prompt: keepClaudeDiscoveryOpen(),
+    options: {
+      cwd: projectPath,
+      env: buildHarnessEnvironment(),
+      pathToClaudeCodeExecutable: 'claude',
+      tools: []
     }
+  })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const models = await Promise.race([
+      handle.supportedModels(),
+      new Promise<ModelInfo[]>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Claude Code model discovery timed out')),
+          CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS
+        )
+      })
+    ])
+    return models.map(mapClaudeModel)
   } finally {
-    releaseStartup()
+    if (timer) clearTimeout(timer)
+    handle.close()
   }
 }
 
@@ -1010,6 +987,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
+  private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
+  private usageProbeSequence = 0
 
   constructor(
     storage: StorageEngine,
@@ -1203,25 +1182,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     else args.push('--permission-mode', 'dontAsk')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
-    const releaseStartup =
-      !options.settings.providerId || options.settings.providerId === 'anthropic'
-        ? await claudeOAuthStartupGate.acquire()
-        : undefined
     return {
       command: 'claude',
       args,
       input,
       keepInputOpen: true,
       env,
-      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
-      ...(releaseStartup
-        ? {
-            onJsonRecord: (value: unknown) => {
-              if (isClaudeProviderReadyRecord(value)) releaseStartup()
-            },
-            onProcessExit: releaseStartup
-          }
-        : {})
+      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal')
     }
   }
 
@@ -1243,6 +1210,114 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return env
   }
 
+  private readUsageFromActiveSession(sessionId: string): Promise<Record<string, unknown> | null> {
+    const existing = this.activeUsageProbes.get(sessionId)
+    if (existing) return existing.promise
+
+    const sequence = ++this.usageProbeSequence
+    const usageRequestId = `codeinoven-usage-${sequence}`
+    const contextRequestId = `codeinoven-context-${sequence}`
+    let resolveProbe: (value: Record<string, unknown> | null) => void = () => undefined
+    const promise = new Promise<Record<string, unknown> | null>((resolve) => {
+      resolveProbe = resolve
+    })
+    const probe: ClaudeUsageProbe = {
+      usageRequestId,
+      contextRequestId,
+      rateLimitsPayload: null,
+      rateLimitsResponded: false,
+      contextPayload: null,
+      contextResponded: false,
+      timer: setTimeout(
+        () => this.finishActiveUsageProbe(sessionId, null),
+        CLAUDE_USAGE_TIMEOUT_MS
+      ),
+      promise,
+      resolve: resolveProbe
+    }
+    this.activeUsageProbes.set(sessionId, probe)
+    try {
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: usageRequestId,
+          request: { subtype: 'get_usage' }
+        })}\n`
+      )
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: contextRequestId,
+          request: { subtype: 'get_context_usage' }
+        })}\n`
+      )
+    } catch {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    return promise
+  }
+
+  private finishActiveUsageProbe(sessionId: string, value: Record<string, unknown> | null): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe) return
+    this.activeUsageProbes.delete(sessionId)
+    clearTimeout(probe.timer)
+    probe.resolve(value)
+  }
+
+  private captureActiveUsageResponse(
+    sessionId: string,
+    entry: Record<string, unknown> | null
+  ): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe || entry?.['type'] !== 'control_response') return
+    const response = record(entry['response'])
+    const inner = record(response?.['response'])
+    const requestId = string(response?.['request_id'])
+    if (requestId === probe.usageRequestId) {
+      probe.rateLimitsResponded = true
+      const rateLimits = record(inner?.['rate_limits'])
+      probe.rateLimitsPayload =
+        inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+    } else if (requestId === probe.contextRequestId) {
+      probe.contextResponded = true
+      probe.contextPayload = inner
+    } else {
+      return
+    }
+
+    if (probe.rateLimitsResponded && probe.rateLimitsPayload === null) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: null,
+        context: probe.contextPayload
+      })
+    } else if (probe.rateLimitsResponded && probe.contextResponded) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: probe.rateLimitsPayload,
+        context: probe.contextPayload
+      })
+    }
+  }
+
+  private mapAccountUsage(telemetry: Record<string, unknown> | null): ClaudeAccountUsage | null {
+    if (!telemetry) return null
+    const usage = record(telemetry['rateLimits'])
+    const context = record(telemetry['context'])
+    const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
+    if (rateLimits.length === 0 && !context) return null
+    const contextWindow =
+      context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
+    const contextUsed =
+      context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
+    return {
+      rateLimits,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed })
+    }
+  }
+
   /**
    * Fetch the account's current plan rate-limit windows and live context-window
    * usage on demand via the `get_usage` + `get_context_usage` control requests.
@@ -1251,13 +1326,11 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * turns predate capture. Returns null when the session has no plan limits
    * (API key, Bedrock, Vertex) or on any failure.
    */
-  async readAccountUsage(projectPath: string): Promise<{
-    rateLimits: AgentRateLimitWindow[]
-    credits?: AgentUsageCredits
-    contextWindow?: number
-    contextUsed?: number
-  } | null> {
-    const releaseStartup = await claudeOAuthStartupGate.acquire()
+  async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
+    const activeSessionId = this.activeSessionIds()[0]
+    if (activeSessionId) {
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
+    }
     try {
       const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
         const child = spawn(
@@ -1354,30 +1427,23 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           })}\n`
         )
       })
-      if (!telemetry) return null
-      const usage = record(telemetry['rateLimits'])
-      const context = record(telemetry['context'])
-      const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
-      if (rateLimits.length === 0 && !context) return null
-      const contextWindow =
-        context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
-      const contextUsed =
-        context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
-      return {
-        rateLimits,
-        ...(contextWindow === undefined ? {} : { contextWindow }),
-        ...(contextUsed === undefined ? {} : { contextUsed })
-      }
+      return this.mapAccountUsage(telemetry)
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
       return null
-    } finally {
-      releaseStartup()
     }
+  }
+
+  override dispose(): void {
+    for (const sessionId of this.activeUsageProbes.keys()) {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    super.dispose()
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
+    this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
     if (type === 'rate_limit_event' && !latestAssistant(context)) {
       const limits = rateLimitWindows(entry?.['rate_limit_info'] ?? entry?.['rateLimitInfo'])
@@ -1385,7 +1451,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
 
     const result = mapClaudeCodeRecord(value, context)
-    if (type === 'result') this.closeActiveInput(context.sessionId)
+    if (type === 'result') {
+      this.finishActiveUsageProbe(context.sessionId, null)
+      this.closeActiveInput(context.sessionId)
+    }
     if (!result) return null
     const assistant = result.messages?.find((message) => message.role === 'assistant')
     const pending = this.pendingRateLimits.get(context.sessionId)

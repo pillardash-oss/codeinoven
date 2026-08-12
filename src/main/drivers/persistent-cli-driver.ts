@@ -576,6 +576,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.activeProcesses.get(sessionId)?.stdin?.end()
   }
 
+  /** Logical sessions that currently own a live provider process. */
+  protected activeSessionIds(): string[] {
+    return [...this.activeProcesses.keys()]
+  }
+
   protected observeHarnessProcess(
     sessionId: string,
     child: ChildProcess,

@@ -830,6 +830,10 @@ export class ClineDriver extends PersistentCliDriver {
         }
       })
     })
+  }
+
+  /** Start or reuse Cline's singleton hub only when a turn is actually sent. */
+  private async ensureHubReady(projectPath: string): Promise<void> {
     this.hubReady ??= new Promise<void>((resolve, reject) => {
       const child = spawn('cline', ['hub', 'ensure'], {
         cwd: projectPath,
@@ -1049,6 +1053,7 @@ export class ClineDriver extends PersistentCliDriver {
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
     } else {
+      await this.ensureHubReady(projectPath)
       // The CLI remains a stream client, while Cline's singleton hub owns the
       // session and its spoke. Never silently fall back to a private local
       // backend for an ordinary CodeInOven turn.

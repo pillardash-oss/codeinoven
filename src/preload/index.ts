@@ -362,6 +362,7 @@ const INVOKE_CHANNELS = [
   'thread:setPinned',
   'thread:setContextUsage',
   'thread:harnessUsage',
+  'thread:efficiencyKpis',
   'thread:setStatus',
   'thread:update',
   'thread:updateSettings',

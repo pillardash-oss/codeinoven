@@ -52,6 +52,7 @@ describe('decideImageDescriptorBatch', () => {
 describe('imageDescriptorBatchCapability', () => {
   it('derives batch support from the harness attachments capability', () => {
     const withAttachments = {
+      runtimeTopology: { kind: 'shared_server', scope: 'application' },
       attachments: true,
       streaming: true,
       steering: true,
@@ -73,6 +74,7 @@ describe('imageDescriptorBatchCapability', () => {
 
   it('disables batching for a harness that cannot attach images', () => {
     const withoutAttachments = {
+      runtimeTopology: { kind: 'turn_process', scope: 'session' },
       attachments: false,
       streaming: true,
       steering: true,
