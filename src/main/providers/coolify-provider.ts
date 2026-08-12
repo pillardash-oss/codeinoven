@@ -159,7 +159,12 @@ export class CoolifyProvider implements DeploymentProvider {
       }
       throw failure
     })
-    const items = Array.isArray(response) ? response : []
+    // Some Coolify versions wrap the list in a `{ data: [...] }` envelope.
+    const items = Array.isArray(response)
+      ? response
+      : Array.isArray((response as Record<string, unknown>)['data'])
+        ? ((response as Record<string, unknown>)['data'] as unknown[])
+        : []
     const deployments: CloudDeploymentDeployment[] = []
     for (const item of items) {
       const deployment = this.toDeployment(item)

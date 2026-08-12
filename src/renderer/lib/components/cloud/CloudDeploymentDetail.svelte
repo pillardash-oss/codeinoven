@@ -9,8 +9,7 @@
     Copy,
     ExternalLink,
     Loader2,
-    RefreshCw,
-    Terminal
+    RefreshCw
   } from '@lucide/svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
@@ -36,8 +35,9 @@
   let deployments = $state<CloudDeploymentDeployment[]>([])
   let deploymentsLoading = $state(false)
   let selectedDeploymentId = $state<string | null>(null)
+  let logLoading = $state(false)
+  let logError = $state('')
 
-  /** Detail is served from the store cache so re-entering the view is instant. */
   const logKey = $derived(
     selectedDeploymentId
       ? `${CloudDeployState.containerKey(projectId, container.providerKind, container.id)}/${selectedDeploymentId}`
@@ -78,9 +78,6 @@
         error = 'No deployments found for this container.'
         return
       }
-      // Auto-select the most recent deployment.
-      if (!selectedDeploymentId) selectedDeploymentId = deployments[0].id
-      await loadLog(selectedDeploymentId, force)
       const fresh = await cloudDeployState.ensureContainerStatus(
         projectId,
         container.providerKind,
@@ -95,24 +92,22 @@
     }
   }
 
-  async function loadLog(deploymentId: string | null, force = false): Promise<void> {
+  async function selectDeployment(deployment: CloudDeploymentDeployment): Promise<void> {
+    selectedDeploymentId = deployment.id
+    logError = ''
+    logLoading = true
     try {
       await cloudDeployState.ensureContainerLog(
         projectId,
         container.providerKind,
         container.id,
-        deploymentId ?? undefined,
-        force
+        deployment.id
       )
     } catch (reason) {
-      error = message(reason)
+      logError = message(reason)
+    } finally {
+      logLoading = false
     }
-  }
-
-  async function selectDeployment(deployment: CloudDeploymentDeployment): Promise<void> {
-    selectedDeploymentId = deployment.id
-    error = ''
-    await loadLog(deployment.id)
   }
 
   async function copyLog(): Promise<void> {
@@ -145,15 +140,27 @@
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center gap-1">
-      <button
-        type="button"
-        class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to deployments"
-        aria-label="Back to deployments"
-        onclick={onBack}
-      >
-        <ArrowLeft size={13} />
-      </button>
+      {#if selectedDeployment}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Back to deployments"
+          aria-label="Back to deployments"
+          onclick={() => (selectedDeploymentId = null)}
+        >
+          <ArrowLeft size={13} />
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Back to cloud deployments"
+          aria-label="Back to cloud deployments"
+          onclick={onBack}
+        >
+          <ArrowLeft size={13} />
+        </button>
+      {/if}
       {#if status.status === 'building'}
         <Clock3 size={12} class="shrink-0 text-warning" />
       {:else if status.status === 'success'}
@@ -167,7 +174,7 @@
         {container.label}
       </span>
       <StatusPill tone={tone(status.status)}>{label(status.status)}</StatusPill>
-      {#if status.status === 'failed'}
+      {#if status.status === 'failed' && !selectedDeployment}
         <button
           type="button"
           class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -201,89 +208,34 @@
       {/if}
     </div>
     <div class="mt-1 flex items-center gap-1.5 text-[9px] text-dimmed">
-      <span class="font-mono">{container.id}</span>
-      <span>·</span>
-      <span>{container.providerKind}</span>
+      {#if selectedDeployment}
+        <span class="font-mono">{selectedDeployment.id.slice(0, 12)}</span>
+        {#if selectedDeployment.commit}
+          <span>·</span>
+          <span class="font-mono">{selectedDeployment.commit.slice(0, 7)}</span>
+        {/if}
+        {#if selectedDeployment.updatedAt}
+          <span>·</span>
+          <span>{relativeTime(selectedDeployment.updatedAt)}</span>
+        {/if}
+      {:else}
+        <span class="font-mono">{container.id}</span>
+        <span>·</span>
+        <span>{container.providerKind}</span>
+      {/if}
     </div>
   </div>
 
   <!-- Body -->
-  <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
-    <!-- Deployment list -->
-    <div class="min-h-0 overflow-y-auto border-r border-border">
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    {#if selectedDeployment}
+      <!-- Single deployment detail + its log -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <Terminal size={11} class="text-dimmed" />
-        <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">Deployments</h3>
-      </div>
-      {#if deploymentsLoading && deployments.length === 0}
-        <div class="flex items-center justify-center gap-2 px-3 py-6 text-[11px] text-dimmed">
-          <Loader2 size={13} class="animate-spin" />
-          Loading
-        </div>
-      {:else if deployments.length === 0}
-        <div class="flex flex-col items-center gap-3 px-3 py-6 text-center">
-          {#if error}
-            <p class="text-[10px] leading-relaxed text-dimmed">{error}</p>
-          {:else}
-            <p class="text-[10px] leading-relaxed text-dimmed">No deployments yet.</p>
-          {/if}
-          <button
-            type="button"
-            class="h-7 cursor-pointer rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground hover:bg-elevated"
-            onclick={() => void loadDeployments(true)}
-          >
-            Try again
-          </button>
-        </div>
-      {:else}
-        <div class="divide-y divide-border">
-          {#each deployments as deployment (deployment.id)}
-            {@const active = deployment.id === selectedDeploymentId}
-            <button
-              type="button"
-              class="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors {active
-                ? 'bg-selected'
-                : 'hover:bg-elevated'}"
-              aria-pressed={active}
-              onclick={() => void selectDeployment(deployment)}
-            >
-              {#if deployment.status === 'building'}
-                <Clock3 size={12} class="shrink-0 text-warning" />
-              {:else if deployment.status === 'success'}
-                <CircleCheck size={12} class="shrink-0 text-success" />
-              {:else if deployment.status === 'failed'}
-                <CircleX size={12} class="shrink-0 text-danger" />
-              {:else}
-                <Cloud size={12} class="shrink-0 text-muted" />
-              {/if}
-              <span class="min-w-0 flex-1">
-                <span class="block truncate font-mono text-[10px] text-foreground">
-                  {deployment.id.slice(0, 8)}
-                </span>
-                {#if deployment.commit}
-                  <span class="block truncate font-mono text-[9px] text-dimmed">
-                    {deployment.commit.slice(0, 7)}
-                  </span>
-                {/if}
-              </span>
-              {#if deployment.updatedAt}
-                <span class="shrink-0 text-[9px] text-dimmed">
-                  {relativeTime(deployment.updatedAt)}
-                </span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- Log -->
-    <div class="min-h-0 overflow-y-auto">
-      <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <Terminal size={11} class="text-dimmed" />
-        <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">Build log</h3>
-        {#if selectedDeployment?.status}
-          <span class="ml-auto">
+        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Deployment log
+        </span>
+        {#if selectedDeployment.status}
+          <span class="ml-1">
             <StatusPill tone={tone(selectedDeployment.status)}>
               {label(selectedDeployment.status)}
             </StatusPill>
@@ -292,7 +244,7 @@
         {#if log}
           <button
             type="button"
-            class="ml-2 flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            class="ml-auto flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy build log"
             aria-label="Copy build log"
             onclick={() => void copyLog()}
@@ -302,21 +254,57 @@
           </button>
         {/if}
       </div>
-
-      {#if log}
-        <div class="p-3">
-          <pre
-            class="max-h-[calc(100vh-16rem)] overflow-auto rounded-md bg-elevated p-3 font-mono text-[10px] leading-relaxed text-muted">{log}</pre>
-        </div>
-      {:else if deploymentsLoading}
+      {#if logLoading}
         <div class="flex items-center justify-center gap-2 px-6 py-8 text-[11px] text-dimmed">
           <Loader2 size={13} class="animate-spin" />
           Loading log
         </div>
-      {:else if error}
+      {:else if log}
+        <div class="p-3">
+          <pre
+            class="overflow-auto rounded-md bg-elevated p-3 font-mono text-[10px] leading-relaxed text-muted">{log}</pre>
+        </div>
+      {:else if logError}
         <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
           <CircleX size={18} class="text-danger" />
-          <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">{error}</p>
+          <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">{logError}</p>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
+            onclick={() => void selectDeployment(selectedDeployment)}
+          >
+            Try again
+          </button>
+        </div>
+      {:else}
+        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[11px] text-dimmed">
+          <Loader2 size={13} class="animate-spin" />
+          Loading log
+        </div>
+      {/if}
+    {:else}
+      <!-- Deployment history list -->
+      <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
+        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Deployment history
+        </span>
+        {#if deployments.length > 0}
+          <span class="ml-auto text-[9px] tabular-nums text-dimmed">{deployments.length}</span>
+        {/if}
+      </div>
+      {#if deploymentsLoading && deployments.length === 0}
+        <div class="flex items-center justify-center gap-2 px-3 py-8 text-[11px] text-dimmed">
+          <Loader2 size={13} class="animate-spin" />
+          Loading deployments
+        </div>
+      {:else if deployments.length === 0}
+        <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
+          {#if error}
+            <CircleX size={18} class="text-danger" />
+          {/if}
+          <p class="max-w-[42ch] text-[10px] leading-relaxed text-dimmed">
+            {error || 'No deployments found for this container.'}
+          </p>
           <button
             type="button"
             class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground hover:bg-elevated"
@@ -326,10 +314,41 @@
           </button>
         </div>
       {:else}
-        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[11px] text-dimmed">
-          Select a deployment to view its build log.
+        <div class="divide-y divide-border">
+          {#each deployments as deployment (deployment.id)}
+            <button
+              type="button"
+              class="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-elevated"
+              title="View this deployment's log"
+              aria-label="View deployment {deployment.id}"
+              onclick={() => void selectDeployment(deployment)}
+            >
+              {#if deployment.status === 'building'}
+                <Clock3 size={14} class="shrink-0 text-warning" />
+              {:else if deployment.status === 'success'}
+                <CircleCheck size={14} class="shrink-0 text-success" />
+              {:else if deployment.status === 'failed'}
+                <CircleX size={14} class="shrink-0 text-danger" />
+              {:else}
+                <Cloud size={14} class="shrink-0 text-muted" />
+              {/if}
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-xs font-medium text-foreground">
+                  {deployment.id}
+                </span>
+                <span class="mt-0.5 block text-[10px] text-dimmed">
+                  {#if deployment.commit}
+                    <span class="font-mono">{deployment.commit.slice(0, 7)}</span>
+                    <span> · </span>
+                  {/if}
+                  {deployment.updatedAt ? relativeTime(deployment.updatedAt) : '—'}
+                </span>
+              </span>
+              <StatusPill tone={tone(deployment.status)}>{label(deployment.status)}</StatusPill>
+            </button>
+          {/each}
         </div>
       {/if}
-    </div>
+    {/if}
   </div>
 </div>
