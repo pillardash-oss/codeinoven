@@ -166,6 +166,21 @@
   /** Chats must feel like chat — no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats')
 
+  /** Git controls and polling exist only for local projects configured for Git tracking. */
+  let gitAvailable = $derived.by(() => {
+    const thread = workspaceState.selectedThread
+    const project = workspaceState.activeProject
+    return Boolean(
+      thread &&
+      project &&
+      thread.projectId === project.id &&
+      project.id !== INBOX_PROJECT_ID &&
+      project.source === 'local' &&
+      project.path.trim() &&
+      project.changeTrackingMode === 'git'
+    )
+  })
+
   /** "Settings · <Section>" while a settings tab is on screen. */
   let settingsTitle = $derived(
     settingsUiState.activeTabLabel ? `Settings · ${settingsUiState.activeTabLabel}` : 'Settings'
@@ -462,7 +477,10 @@
   /** Refresh git status whenever the active thread's project changes. */
   $effect(() => {
     const thread = workspaceState.selectedThread
-    if (!thread) return
+    if (!thread || !gitAvailable) {
+      gitState.deactivate()
+      return
+    }
     gitState.ensureProjectEvents(thread.projectId)
     const projectId = thread.projectId
     // Claim this project first so the shared state is cleared of the previous
@@ -474,7 +492,7 @@
 
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
-    if (!thread) return
+    if (!thread || !gitAvailable) return
     if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git') {
       contextSidebarState.hide()
     } else {
@@ -1241,7 +1259,7 @@
     {/if}
 
     <!-- Git status chip — only when a thread is open in a project view -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread}
+    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
       <button
         class={[
           'relative flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 transition-colors duration-150',

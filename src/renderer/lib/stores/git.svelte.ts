@@ -33,6 +33,7 @@ import type {
   PullRequestPage,
   PullRequestReference
 } from '$shared/types'
+import { INBOX_PROJECT_ID } from '$shared/types'
 
 /** One in-flight git operation, tracked per project for busy/disabled UI. */
 export type GitOperation =
@@ -156,6 +157,9 @@ export class GitState {
   // subscriptions, so SvelteSet is the wrong tool here.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private subscriptions = new Set<string>()
+  // In-flight request bookkeeping is intentionally non-reactive.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private readonly refreshes = new Map<string, Promise<void>>()
 
   get conflicted(): string[] {
     return this.status?.conflicted ?? []
@@ -178,6 +182,17 @@ export class GitState {
   activate(projectId: string): void {
     if (this.activeProjectId === projectId) return
     this.activeProjectId = projectId
+    this.clearProjectState()
+  }
+
+  /** Clear Git state when the active thread has no Git-capable project. */
+  deactivate(): void {
+    if (this.activeProjectId === null) return
+    this.activeProjectId = null
+    this.clearProjectState()
+  }
+
+  private clearProjectState(): void {
     this.status = null
     this.branches = []
     this.remotes = []
@@ -274,6 +289,7 @@ export class GitState {
 
   /** Subscribe to agent turn completion so the panel reflects external changes. */
   ensureProjectEvents(projectId: string): void {
+    if (projectId === INBOX_PROJECT_ID) return
     if (this.subscriptions.has(projectId)) return
     this.subscriptions.add(projectId)
     subscribe('agent:event', (...args: unknown[]) => {
@@ -285,6 +301,20 @@ export class GitState {
   }
 
   async refresh(projectId: string): Promise<void> {
+    if (projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
+    const inflight = this.refreshes.get(projectId)
+    if (inflight) return inflight
+
+    const refresh = this.runRefresh(projectId)
+    this.refreshes.set(projectId, refresh)
+    try {
+      await refresh
+    } finally {
+      if (this.refreshes.get(projectId) === refresh) this.refreshes.delete(projectId)
+    }
+  }
+
+  private async runRefresh(projectId: string): Promise<void> {
     this.markBusy('refresh', true)
     // The refresh targets whichever project is active right now; if the panel
     // has already switched to another project, the result is stale and must
