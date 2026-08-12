@@ -176,12 +176,15 @@ export class CoolifyProvider implements DeploymentProvider {
     if (!uuid) return null
     const fqdn = this.readString(record, 'fqdn')
     const rawStatus = this.readString(record, 'status')
+    const project =
+      this.readString(record, 'project_name') ?? this.readString(record, 'project') ?? undefined
     return {
       id: uuid,
       label: this.readString(record, 'name') ?? fqdn ?? uuid,
       providerKind: 'coolify',
       status: mapApplicationStatus(rawStatus),
       url: fqdn ?? undefined,
+      ...(project ? { project } : {}),
       createdAt: this.parseEpochMs(this.readString(record, 'created_at')),
       updatedAt: this.parseEpochMs(this.readString(record, 'updated_at'))
     }

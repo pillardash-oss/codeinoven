@@ -50,6 +50,7 @@ describe('CoolifyProvider', () => {
           {
             uuid: 'app-1',
             name: 'My App',
+            project_name: 'Marketing',
             status: 'running',
             fqdn: 'https://app.example.dev',
             created_at: '2024-01-01T00:00:00.000Z',
@@ -73,6 +74,7 @@ describe('CoolifyProvider', () => {
           providerKind: 'coolify',
           status: 'success',
           url: 'https://app.example.dev',
+          project: 'Marketing',
           createdAt: Date.parse('2024-01-01T00:00:00.000Z'),
           updatedAt: Date.parse('2024-01-02T00:00:00.000Z')
         }

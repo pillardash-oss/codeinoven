@@ -102,7 +102,13 @@
       const known = config?.project.containers.find(
         (mapping) => mapping.id === container.id && mapping.providerKind === container.providerKind
       )
-      const haystack = [container.label, container.id, container.url ?? '', known?.label ?? '']
+      const haystack = [
+        container.label,
+        container.id,
+        container.url ?? '',
+        container.project ?? '',
+        known?.label ?? ''
+      ]
         .join(' ')
         .toLowerCase()
       return haystack.includes(query)
@@ -789,7 +795,16 @@
                       onclick={() => pickContainer(container)}
                     >
                       <span class="min-w-0">
-                        <span class="block truncate text-xs font-medium">{container.label}</span>
+                        <span class="flex items-center gap-1.5">
+                          {#if container.project}
+                            <span
+                              class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[9px] text-muted"
+                            >
+                              {container.project}
+                            </span>
+                          {/if}
+                          <span class="block truncate text-xs font-medium">{container.label}</span>
+                        </span>
                         <span class="block truncate font-mono text-[10px] text-dimmed">
                           {container.id}
                         </span>
