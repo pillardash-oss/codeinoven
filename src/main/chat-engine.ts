@@ -204,7 +204,32 @@ const MEMORY_SYSTEM_INSTRUCTION = [
 
 /** Guidance injected for models that cannot see images (attachment: false). */
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
-  'You cannot see images. When the user (or a discovered file) provides an image, call the image_descriptor tool to obtain a text description of it before proceeding — pass each image as an entry with a unique id, its file path or URL as the source and type "path", or base64 image data as the source and type "binary". The tool accepts several images per call, so you can describe them in batches. If the attachment is a video file you cannot read directly, first check whether ffmpeg is available on the user\'s system and use it to extract representative frames, then pass those frames to image_descriptor as multiple image entries.'
+  'You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. The image_descriptor tool remains available when you need to inspect another image or request a fresh description — pass each image as an entry with a unique id, its file path or URL as the source and type "path", or base64 image data as the source and type "binary". The tool accepts several images per call, so you can describe them in batches. If the attachment is a video file you cannot read directly, first check whether ffmpeg is available on the user\'s system and use it to extract representative frames, then pass those frames to image_descriptor as multiple image entries.'
+
+function isImagePromptAttachment(attachment: PromptAttachment): boolean {
+  if (attachment.mime.toLocaleLowerCase().startsWith('image/')) return true
+  const candidate = attachment.filename ?? attachment.url
+  return /\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)(?:$|[?#])/iu.test(candidate)
+}
+
+function imageDescriptionSource(source: string): string {
+  return source.startsWith('data:') ? '[attached binary image]' : source
+}
+
+function formatAttachedImageDescriptions(results: readonly ImageDescriptorResult[]): string {
+  if (results.length === 0) return ''
+  const evidence = results.map((result) => ({
+    id: result.id,
+    source: imageDescriptionSource(result.source),
+    description: result.description,
+    ...(result.error ? { error: result.error } : {})
+  }))
+  return [
+    'Image evidence generated before dispatch by the configured vision model:',
+    JSON.stringify(evidence, null, 2),
+    'Use this evidence when answering the user. The image_descriptor tool remains available for follow-up inspection.'
+  ].join('\n\n')
+}
 
 const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
 
@@ -2094,7 +2119,6 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
-    modelNeedsImageDescriptor: boolean,
     skipRuntime = false,
     directGateway = false
   ): Promise<string> {
@@ -2124,7 +2148,6 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
-        modelNeedsImageDescriptor,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -3853,15 +3876,13 @@ export class ChatEngine {
       projectReferences
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
-    const hiddenContext = [hiddenPromptContext, projectReferenceContext]
-      .filter(Boolean)
-      .join('\n\n')
+    let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
     const steerInputBudget = this.selectedModelInputBudget(
       thread.settings?.providerId,
       thread.settings?.modelId,
       projectId
     )
-    const driverText = hiddenContext
+    let driverText = hiddenContext
       ? `${this.budgetHiddenContext(hiddenContext, steerInputBudget)}\n\nUser message:\n${text}`
       : text
     const userMessage = await this.persistOutboundMessage(
@@ -3876,6 +3897,24 @@ export class ChatEngine {
       validatedPresentation,
       'user'
     )
+    if (thread.settings && (await this.modelLacksVision(projectId, thread.settings))) {
+      const imageDescriptionContext = await this.describePromptAttachments(
+        attachments,
+        projectId,
+        threadId,
+        projectPath,
+        activeSessionId
+      )
+      if (imageDescriptionContext) {
+        hiddenContext = [imageDescriptionContext, hiddenContext].filter(Boolean).join('\n\n')
+        driverText = `${this.budgetHiddenContext(hiddenContext, steerInputBudget)}\n\nUser message:\n${text}`
+        const transportPart = userMessage.transportParts?.[0]
+        if (transportPart && transportPart.type === 'text') {
+          transportPart.text = driverText
+          await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+        }
+      }
+    }
     await this.routeTaggedAssignmentWorkers(thread, 'user', text, taskReferences)
     const outboundIds = this.outboundMessageIdsBySession.get(activeSessionId) ?? new Set<string>()
     outboundIds.add(messageId)
@@ -4210,9 +4249,7 @@ export class ChatEngine {
       projectReferences
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
-    const hiddenContext = [hiddenPromptContext, projectReferenceContext]
-      .filter(Boolean)
-      .join('\n\n')
+    let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
     // One aggregate selected-model input budget for the turn (A-13). The
     // session-dependent system/behavior/tool layers are not assembled yet, so
     // driverText's hidden orchestration context is capped against an early
@@ -4425,6 +4462,25 @@ export class ChatEngine {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
     }
+    const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
+    if (modelNeedsImageDescriptor) {
+      const imageDescriptionContext = await this.describePromptAttachments(
+        attachments,
+        projectId,
+        threadId,
+        projectPath,
+        sessionId
+      )
+      if (imageDescriptionContext) {
+        hiddenContext = [imageDescriptionContext, hiddenContext].filter(Boolean).join('\n\n')
+        driverText = hiddenContext ? `${hiddenContext}\n\nUser message:\n${text}` : text
+        const transportPart = userMessage.transportParts?.[0]
+        if (transportPart && transportPart.type === 'text') {
+          transportPart.text = driverText
+          await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+        }
+      }
+    }
     if (origin === 'user') {
       this.mermaidRepairAttempts.delete(sessionId)
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
@@ -4492,7 +4548,6 @@ export class ChatEngine {
       composedTurnTokens: earlyLayers.totalTokens,
       parentTurnId: messageId
     }
-    const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -4501,7 +4556,6 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
-      modelNeedsImageDescriptor,
       // Web-only chat deliberately has no app gateway.
       isChatThread && !chatFileSystemEnabled,
       // OpenCode sessions use the shared project server. The app gateway is
@@ -5240,6 +5294,38 @@ export class ChatEngine {
   }
 
   // ─── Image descriptor — vision model for text-only models ──────────────
+
+  /**
+   * Describe image attachments before a text-only primary model receives the
+   * turn. The normal descriptor executor owns selection persistence, retries,
+   * and the existing user-facing error card, so automatic and tool-initiated
+   * descriptions have identical failure behaviour.
+   */
+  private async describePromptAttachments(
+    attachments: readonly PromptAttachment[],
+    projectId: string,
+    threadId: string,
+    projectPath: string,
+    sessionId: string
+  ): Promise<string> {
+    const images: ResolvedImageEntry[] = attachments
+      .filter(isImagePromptAttachment)
+      .map((attachment, index) => ({
+        id: `attached-image-${index + 1}`,
+        source: attachment.url,
+        type: attachment.url.startsWith('data:') ? 'binary' : 'path',
+        attachment
+      }))
+    if (images.length === 0) return ''
+    const results = await this.executeImageDescriptor({
+      images,
+      projectId,
+      threadId,
+      projectPath,
+      sessionId
+    })
+    return formatAttachedImageDescriptions(results)
+  }
 
   /**
    * Run the image descriptor agent: resolve the thread's (or global) vision
@@ -10516,7 +10602,6 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
-            await this.modelLacksVision(projectId, auditorSettings),
             false,
             driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
           )
