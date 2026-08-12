@@ -9118,15 +9118,11 @@ export class ChatEngine {
       temporary.driverId === 'opencode' &&
       settings.providerId === 'opencode' &&
       settings.modelId.endsWith('-free')
-    const formatModes =
-      driver.capabilities?.structuredOutput && !isZenFreeModel
-        ? [true, false]
-        : isZenFreeModel
-          ? [false, false, false]
-          : [false]
     let lastError: Error | null = null
 
-    for (const [attemptIndex, useStructuredOutput] of formatModes.entries()) {
+    for (let attemptIndex = 0; ; attemptIndex += 1) {
+      const useStructuredOutput =
+        attemptIndex === 0 && driver.capabilities?.structuredOutput === true && !isZenFreeModel
       this.refreshTemporaryChatExpiry(temporary)
       const completion = this.waitForSessionCompletion(
         temporary.sessionId,
@@ -9149,9 +9145,7 @@ export class ChatEngine {
           attachments: [],
           systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
           allowedTools: AUDIT_ALLOWED_TOOLS,
-          ...(useStructuredOutput
-            ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA, retryCount: 2 } }
-            : {})
+          ...(useStructuredOutput ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA } } : {})
         }
         if (temporary.isolated && driver instanceof OpenCodeDriver) {
           await driver.sendPrompt(temporary.projectPath, auditPrompt, temporary.isolated)
@@ -9206,6 +9200,11 @@ export class ChatEngine {
         return report
       } catch (error) {
         lastError = error instanceof Error ? error : new Error('The audit agent failed.')
+        const correctableOutput =
+          lastError instanceof AuditReportValidationError ||
+          lastError instanceof SyntaxError ||
+          lastError.message === 'The audit agent returned no response'
+        if (!correctableOutput) break
       } finally {
         this.clearCompletionWaiter(temporary.sessionId)
       }
@@ -9400,6 +9399,60 @@ export class ChatEngine {
       assignment.coordinatorThreadId,
       settings
     )
+  }
+
+  private async resumeInterruptedAssignmentAudit(
+    assignment: AssignmentPlan,
+    fallbackSettings?: ThreadSettings
+  ): Promise<void> {
+    try {
+      Logger.info('Resuming interrupted Assignment audit', {
+        projectId: assignment.projectId,
+        threadId: assignment.coordinatorThreadId,
+        assignmentId: assignment.id,
+        auditorThreadId: assignment.auditorThreadId,
+        startedAt: assignment.auditCycle?.startedAt
+      })
+      await this.startAssignmentReaudit(assignment, fallbackSettings)
+    } catch (error) {
+      const failure = rawErrorMessage(error)
+      Logger.error('Interrupted Assignment audit recovery failed', {
+        projectId: assignment.projectId,
+        threadId: assignment.coordinatorThreadId,
+        auditorThreadId: assignment.auditorThreadId,
+        error: failure
+      })
+      const current = this.assignmentEngine.getActive(
+        assignment.projectId,
+        assignment.coordinatorThreadId
+      )
+      if (current?.status === 'completed' && current.auditCycle?.status === 'running') {
+        await this.assignmentEngine.failAuditCycle(
+          assignment.projectId,
+          assignment.coordinatorThreadId,
+          failure
+        )
+        await this.threadManager.setAuditState(
+          assignment.projectId,
+          assignment.coordinatorThreadId,
+          'offered'
+        )
+        await this.threadManager.setStatus(
+          assignment.projectId,
+          assignment.coordinatorThreadId,
+          'awaiting_approval',
+          { read: false }
+        )
+        if (assignment.auditorThreadId) {
+          await this.threadManager.setStatus(
+            assignment.projectId,
+            assignment.auditorThreadId,
+            'failed',
+            { read: false }
+          )
+        }
+      }
+    }
   }
 
   async generateAssignmentAudit(
@@ -10132,7 +10185,6 @@ export class ChatEngine {
     // Durable sessions must remain loadable after the run. OpenCode accepts a
     // JSON-schema request but cannot decode that persisted message later, so
     // enforce the same contract through JSON-only prompts and validation.
-    const formatModes = [false, false, false]
     const specPath = await this.artifactRef(
       projectId,
       coordinatorThreadId,
@@ -10173,8 +10225,12 @@ export class ChatEngine {
       'Treat the expected-file lists as the minimum scope, then use the reported commits, repository status/history, imports, and affected consumers to enumerate every additional implementation file that must be audited.',
       `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
     ].join('\n\n')
-    let lastError: Error | null = null
-    const auditStartedAt = Date.now()
+    let terminalFailure: Error
+    const resumingAudit = assignment.auditCycle?.status === 'running'
+    const auditStartedAt =
+      resumingAudit && assignment.auditCycle?.startedAt !== undefined
+        ? assignment.auditCycle.startedAt
+        : Date.now()
     const runId = `${auditStartedAt}-${randomBytes(4).toString('hex')}`
     const priorRepair = await this.readAssignmentAuditRepairManifest(projectId, coordinatorThreadId)
     let repairManifest: AssignmentAuditRepairManifest | null =
@@ -10188,7 +10244,9 @@ export class ChatEngine {
     let recoveredContent: AuditReportContent | null = null
     if (
       repairManifest === null &&
-      (assignment.auditCycle?.status === 'failed' || auditorThread.status === 'failed')
+      (resumingAudit ||
+        assignment.auditCycle?.status === 'failed' ||
+        auditorThread.status === 'failed')
     ) {
       const previousOutput = this.latestAssignmentAuditOutput(
         await driver.loadMessages(projectPath, sessionId)
@@ -10258,7 +10316,9 @@ export class ChatEngine {
       }
     }
 
-    await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
+    if (!resumingAudit) {
+      await this.assignmentEngine.beginAuditCycle(projectId, coordinatorThreadId)
+    }
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
       read: false
@@ -10274,7 +10334,7 @@ export class ChatEngine {
         auditorSettings
       })
     }
-    for (const [attemptIndex, useStructuredOutput] of formatModes.entries()) {
+    for (let attemptIndex = 0; ; attemptIndex += 1) {
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
@@ -10356,10 +10416,7 @@ export class ChatEngine {
           attachments: [],
           systemPrompt: auditSystemPrompt,
           allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
-          userMessageId: messageId,
-          ...(useStructuredOutput
-            ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA, retryCount: 2 } }
-            : {})
+          userMessageId: messageId
         })
         this.startSessionWatchdog(sessionId)
         const streamed = await completion
@@ -10414,7 +10471,6 @@ export class ChatEngine {
         } catch (error) {
           const errors =
             error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
-          lastError = new AuditReportValidationError(errors)
           const invalidManifest: AssignmentAuditRepairManifest = {
             schemaVersion: 1,
             status: 'invalid',
@@ -10457,7 +10513,8 @@ export class ChatEngine {
           auditorSettings
         })
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error('The Assignment auditor failed.')
+        terminalFailure =
+          error instanceof Error ? error : new Error('The Assignment auditor failed.')
         break
       } finally {
         this.clearCompletionWaiter(sessionId)
@@ -10472,7 +10529,7 @@ export class ChatEngine {
       }
     }
 
-    const failure = lastError ?? new Error('The Assignment auditor failed.')
+    const failure = terminalFailure
     Logger.error('Assignment audit failed', {
       projectId,
       threadId: coordinatorThreadId,
@@ -10525,7 +10582,7 @@ export class ChatEngine {
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
       read: false
     })
-    for (const attemptIndex of [0, 1, 2]) {
+    for (let attemptIndex = 0; ; attemptIndex += 1) {
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
@@ -10795,6 +10852,10 @@ export class ChatEngine {
         if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
           assignment = await this.reconcileUnavailableAssignmentWorkers(assignment)
           await this.resumeAssignmentAttentionInternal(assignment.projectId, thread.id)
+          continue
+        }
+        if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'running') {
+          void this.resumeInterruptedAssignmentAudit(assignment, thread.settings)
           continue
         }
         if (thread.settings?.loopMode !== true) continue
