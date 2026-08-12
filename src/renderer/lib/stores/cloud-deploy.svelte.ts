@@ -186,6 +186,11 @@ export class CloudDeployState {
    * the cache. `force` bypasses both the TTL and the failure cooldown (explicit
    * refresh). Failures rethrow so the caller can surface a tailored message
    * while any stale cache stays on screen.
+   *
+   * Uses stale-while-revalidate: when a cache entry exists but is older than the
+   * TTL, the stale value is returned immediately and a background revalidation
+   * is kicked off, so re-opening the panel never shows a spinner over data we
+   * already have (mirrors the git branch list).
    */
   async ensureOverview(
     projectId: string,
@@ -195,7 +200,12 @@ export class CloudDeployState {
     if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.overviewKey(projectId, providerKind)
     const cached = this.overviews[key]
-    if (!force && cached && Date.now() - cached.fetchedAt < OVERVIEW_CACHE_TTL_MS) {
+    if (cached && !force) {
+      if (Date.now() - cached.fetchedAt < OVERVIEW_CACHE_TTL_MS) return cached.value
+      if (!this.coolingDown(key)) {
+        // Serve stale immediately and revalidate in the background.
+        void this.dedupe(key, () => this.loadOverview(projectId, providerKind, key))
+      }
       return cached.value
     }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
@@ -233,7 +243,13 @@ export class CloudDeployState {
     if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
     const cached = this.containerStatuses[key]
-    if (!force && cached && Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) {
+    if (cached && !force) {
+      if (Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) return cached.value
+      if (!this.coolingDown(key)) {
+        void this.dedupe(key, () =>
+          this.loadContainerStatus(projectId, providerKind, containerId, key)
+        )
+      }
       return cached.value
     }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
@@ -286,7 +302,13 @@ export class CloudDeployState {
     const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
     const logKey = deploymentId ? `${key}/${deploymentId}` : key
     const cached = this.containerLogs[logKey]
-    if (!force && cached && Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) {
+    if (cached && !force) {
+      if (Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) return cached.value
+      if (!this.coolingDown(logKey)) {
+        void this.dedupe(logKey, () =>
+          this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId)
+        )
+      }
       return cached.value
     }
     if (!force && this.coolingDown(logKey)) return cached?.value ?? null
@@ -308,7 +330,11 @@ export class CloudDeployState {
     if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
     const cached = this.containerDeployments[key]
-    if (!force && cached && Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) {
+    if (cached && !force) {
+      if (Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) return cached.value
+      if (!this.coolingDown(key)) {
+        void this.dedupe(key, () => this.loadDeployments(projectId, providerKind, containerId, key))
+      }
       return cached.value
     }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
