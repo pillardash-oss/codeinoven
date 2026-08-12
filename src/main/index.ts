@@ -29,6 +29,7 @@ import type { ComputerUsePipService } from './computer-use-pip-service'
 import type { UpdaterService } from './updater-service'
 import type { PowerWakeService } from './power-wake-service'
 import type { RetrySchedulerService } from './retry-scheduler-service'
+import { ModelPricingService } from './model-pricing-service'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import type { PtyService } from './pty-service'
 import type { ProviderConnectionService } from './provider-connection'
@@ -324,6 +325,7 @@ let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
+let modelPricingService: ModelPricingService | null = null
 const threadCreation = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -472,6 +474,7 @@ async function bootPostPaintServices(): Promise<void> {
   installFilePreviewProtocol(projectFilesService)
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
+  modelPricingService = new ModelPricingService(storage)
   chatEngine = new ChatEngine(
     storage,
     database,
@@ -617,6 +620,12 @@ async function bootPostPaintServices(): Promise<void> {
       await retryScheduler?.start()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await modelPricingService?.start()
+    } catch (error) {
+      Logger.error('Model pricing startup failed (non-fatal):', error)
     }
 
     try {
@@ -1062,6 +1071,12 @@ async function runShutdownPipeline(): Promise<void> {
     retryScheduler?.dispose()
   } catch (error) {
     Logger.error('Retry scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
+    modelPricingService?.stop()
+  } catch (error) {
+    Logger.error('Model pricing cleanup failed during shutdown:', error)
   }
 
   try {
