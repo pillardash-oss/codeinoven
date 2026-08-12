@@ -344,10 +344,19 @@
     {:else if containers.length === 0 && !anyAccessError}
       <EmptyState
         icon={Cloud}
-        title="No containers found"
-        description="Configured providers returned no containers yet. Status appears here once available."
-      />
-    {:else}
+        title="No containers added yet"
+        description="Pick the containers (projects or applications) on your provider account to monitor. Status and logs appear here once added."
+      >
+        {#snippet action()}
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+            onclick={() => openConfigSheet('container')}
+          >
+            Add container
+          </button>
+        {/snippet}
+      </EmptyState>{:else}
       <div class="min-h-0 flex-1 overflow-y-auto">
         <div class="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5">
           <Cloud size={11} class="text-dimmed" />
