@@ -10,10 +10,12 @@ import type {
   AgentPart,
   AgentProviderIssue,
   AgentQuestionRequest,
+  AgentTokenUsage,
   HarnessCommand,
   PermissionReply,
   ProviderCatalog,
-  SessionAgentEvent
+  SessionAgentEvent,
+  UsagePricingProvenance
 } from '../../lib/types'
 import { Logger } from '../logger'
 import { estimateTokenCostUsd } from '../pricing'
@@ -33,6 +35,28 @@ import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
 export interface TitleModelCandidate {
   providerId: string
   modelId: string
+}
+
+/** Provider-reported usage for one title-candidate attempt, when available. */
+export interface TitleAttemptUsage {
+  tokens?: AgentTokenUsage
+  cost?: number
+  costProvenance?: UsagePricingProvenance
+}
+
+/** Outcome of one title-candidate attempt, for event-level ledger integration. */
+export interface TitleAttemptAccounting {
+  /** 1-based position of this attempt in the candidate sequence. */
+  attempt: number
+  /** Model/provider asked to produce the title. */
+  providerId: string
+  modelId: string
+  /** Whether this attempt produced a usable title. */
+  success: boolean
+  /** Why this attempt fell back, or null when it succeeded. */
+  fallbackReason: string | null
+  /** Provider-reported usage retained from this attempt, or null when absent. */
+  usage: TitleAttemptUsage | null
 }
 
 interface TitleTurnWaiter {
@@ -115,6 +139,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private turnProvenance = new Map<string, { providerId?: string; modelId?: string }>()
   private titleSessions = new Set<string>()
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
+  /** Outcomes of the most recent title-candidate run, for ledger integration. */
+  private lastTitleAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
 
   constructor(protected readonly storage: StorageEngine) {}
@@ -187,8 +213,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
             other.providerId === candidate.providerId && other.modelId === candidate.modelId
         ) === index
     )
+    const accounted: TitleAttemptAccounting[] = []
 
-    for (const candidate of attempts) {
+    for (let index = 0; index < attempts.length; index++) {
+      const candidate = attempts[index]
       const sessionId = await this.createSession(projectPath, 'Thread title')
       this.titleSessions.add(sessionId)
       const completion = this.waitForTitleTurn(sessionId)
@@ -212,21 +240,43 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         await completion.promise
         const messages = await this.loadMessages(projectPath, sessionId)
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
-        if (response?.error) continue
+        if (response?.error) {
+          accounted.push(
+            this.buildTitleAttempt(index + 1, candidate, false, response.error, response)
+          )
+          continue
+        }
         const raw = response?.parts
           .filter((part) => part.type === 'text')
           .map((part) => part.text)
           .join('\n')
         const title = raw ? sanitizeGeneratedTitle(raw) : null
-        if (title) return title
+        if (title) {
+          accounted.push(this.buildTitleAttempt(index + 1, candidate, true, null, response))
+          this.lastTitleAttempts = accounted
+          return title
+        }
+        accounted.push(
+          this.buildTitleAttempt(
+            index + 1,
+            candidate,
+            false,
+            'No usable title text produced',
+            response
+          )
+        )
       } catch (error) {
+        const fallbackReason = this.describeTitleFailure(error)
         if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
+          accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
+          this.lastTitleAttempts = accounted
           return null
         }
         Logger.dev(
           `${this.name} title model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
         )
+        accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
       } finally {
         completion.cancel()
         await this.abort(projectPath, sessionId).catch(() => undefined)
@@ -234,11 +284,22 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         this.titleSessions.delete(sessionId)
       }
     }
+    this.lastTitleAttempts = accounted
     return null
   }
 
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(projectPath, options, [])
+  }
+
+  /**
+   * Outcomes of the most recent title-candidate run. Each entry exposes the
+   * candidate identity, whether it produced a usable title, why it fell back,
+   * and the provider-reported usage when available. Intended for the event-level
+   * usage ledger to record one attempt per candidate.
+   */
+  getTitleAttempts(): readonly TitleAttemptAccounting[] {
+    return this.lastTitleAttempts
   }
 
   /**
@@ -802,5 +863,37 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (!waiter) return
     clearTimeout(waiter.timer)
     this.titleTurnWaiters.delete(sessionId)
+  }
+
+  private buildTitleAttempt(
+    attempt: number,
+    candidate: TitleModelCandidate,
+    success: boolean,
+    fallbackReason: string | null,
+    response?: AgentMessage
+  ): TitleAttemptAccounting {
+    const usage: TitleAttemptUsage | null =
+      response &&
+      (response.tokens || response.cost !== undefined || response.costProvenance !== undefined)
+        ? {
+            tokens: response.tokens,
+            cost: response.cost,
+            costProvenance: response.costProvenance
+          }
+        : null
+    return {
+      attempt,
+      providerId: candidate.providerId,
+      modelId: candidate.modelId,
+      success,
+      fallbackReason,
+      usage
+    }
+  }
+
+  private describeTitleFailure(error: unknown): string {
+    if (error instanceof TitleTurnProviderIssueError) return error.issue.message
+    if (error instanceof Error) return error.message
+    return String(error)
   }
 }
