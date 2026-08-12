@@ -11,6 +11,7 @@ import type {
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
   LocalProfileUsageBreakdown,
+  UsageEfficiencyKpis,
   UsageEvent
 } from '../../../lib/types'
 
@@ -220,6 +221,100 @@ export class HarnessUsageRepo {
       estimatedUsd: row?.estimated_usd ?? 0,
       unavailableEvents: row?.unavailable_events ?? 0,
       totalEvents: row?.total_events ?? 0
+    }
+  }
+
+  /** Economically comparable metrics for completed successful user turns. */
+  efficiencyKpis(range?: LocalProfileAnalyticsRange): UsageEfficiencyKpis {
+    const row = this.db.get<{
+      successful_turns: number
+      uncached_input: number
+      cached_input: number
+      output: number
+      reasoning: number
+      main_attempts: number
+      auxiliary_cost: number
+      known_cost: number
+      estimated_cost: number
+      unavailable_cost_events: number
+      priced_cost_events: number
+      total_cost_events: number
+      tool_result_tokens: number
+    }>(
+      `WITH successful_turns AS (
+         SELECT DISTINCT parent_turn_id
+         FROM usage_events
+         WHERE feature = 'main' AND success = 1
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at < ?)
+       ), scoped AS (
+         SELECT event.*
+         FROM usage_events event
+         JOIN successful_turns turn ON turn.parent_turn_id = event.parent_turn_id
+       )
+       SELECT
+         (SELECT COUNT(*) FROM successful_turns) AS successful_turns,
+         COALESCE(SUM(tokens_uncached_input), 0) AS uncached_input,
+         COALESCE(SUM(tokens_cached_input), 0) AS cached_input,
+         COALESCE(SUM(tokens_output), 0) AS output,
+         COALESCE(SUM(tokens_reasoning), 0) AS reasoning,
+         COALESCE(SUM(CASE WHEN feature = 'main' THEN 1 ELSE 0 END), 0) AS main_attempts,
+         COALESCE(SUM(CASE WHEN feature <> 'main' AND cost_status <> 'unavailable'
+                           THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS auxiliary_cost,
+         COALESCE(SUM(CASE WHEN cost_status = 'known' THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS known_cost,
+         COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS estimated_cost,
+         COALESCE(SUM(CASE WHEN cost_status = 'unavailable' THEN 1 ELSE 0 END), 0) AS unavailable_cost_events,
+         COALESCE(SUM(CASE WHEN cost_status <> 'unavailable' THEN 1 ELSE 0 END), 0) AS priced_cost_events,
+         COUNT(*) AS total_cost_events,
+         COALESCE(SUM(CASE WHEN feature IN ('web', 'computer_use')
+                           THEN COALESCE(tokens_output, 0) ELSE 0 END), 0) AS tool_result_tokens
+       FROM scoped`,
+      range?.startAt ?? null,
+      range?.startAt ?? null,
+      range?.endAt ?? null,
+      range?.endAt ?? null
+    )
+    const successfulTurns = row?.successful_turns ?? 0
+    const uncachedInputTokens = row?.uncached_input ?? 0
+    const cachedInputTokens = row?.cached_input ?? 0
+    const outputTokens = row?.output ?? 0
+    const reasoningTokens = row?.reasoning ?? 0
+    const mainAttempts = row?.main_attempts ?? 0
+    const knownCostUsd = row?.known_cost ?? 0
+    const estimatedCostUsd = row?.estimated_cost ?? 0
+    const totalPricedCostUsd = knownCostUsd + estimatedCostUsd
+    const pricedCostEvents = row?.priced_cost_events ?? 0
+    const totalCostEvents = row?.total_cost_events ?? 0
+    const toolResultTokens = row?.tool_result_tokens ?? 0
+    return {
+      successfulTurns,
+      uncachedInputTokens,
+      outputTokens,
+      reasoningTokens,
+      cachedInputTokens,
+      cacheHitRatio:
+        uncachedInputTokens + cachedInputTokens > 0
+          ? cachedInputTokens / (uncachedInputTokens + cachedInputTokens)
+          : null,
+      mainAttempts,
+      retryAmplification: successfulTurns > 0 ? mainAttempts / successfulTurns : null,
+      auxiliaryCostUsd: row?.auxiliary_cost ?? 0,
+      totalPricedCostUsd,
+      auxiliaryCostShare:
+        totalPricedCostUsd > 0 ? (row?.auxiliary_cost ?? 0) / totalPricedCostUsd : null,
+      toolResultTokens,
+      knownCostUsd,
+      estimatedCostUsd,
+      unavailableCostEvents: row?.unavailable_cost_events ?? 0,
+      pricedCostEvents,
+      totalCostEvents,
+      costCoverageRatio: totalCostEvents > 0 ? pricedCostEvents / totalCostEvents : null,
+      perSuccessfulTurn: {
+        uncachedInputTokens: successfulTurns > 0 ? uncachedInputTokens / successfulTurns : null,
+        outputAndReasoningTokens:
+          successfulTurns > 0 ? (outputTokens + reasoningTokens) / successfulTurns : null,
+        toolResultTokens: successfulTurns > 0 ? toolResultTokens / successfulTurns : null
+      }
     }
   }
 

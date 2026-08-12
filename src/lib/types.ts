@@ -1363,6 +1363,33 @@ export interface UsageEventDetails {
 /** Durable, replay-safe accounting record for one attempt. */
 export type UsageEvent = UsageEventDetails & UsageEventCost
 
+/** Provider-neutral efficiency metrics derived only from normalized usage events. */
+export interface UsageEfficiencyKpis {
+  successfulTurns: number
+  uncachedInputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cachedInputTokens: number
+  cacheHitRatio: number | null
+  mainAttempts: number
+  retryAmplification: number | null
+  auxiliaryCostUsd: number
+  totalPricedCostUsd: number
+  auxiliaryCostShare: number | null
+  toolResultTokens: number
+  knownCostUsd: number
+  estimatedCostUsd: number
+  unavailableCostEvents: number
+  pricedCostEvents: number
+  totalCostEvents: number
+  costCoverageRatio: number | null
+  perSuccessfulTurn: {
+    uncachedInputTokens: number | null
+    outputAndReasoningTokens: number | null
+    toolResultTokens: number | null
+  }
+}
+
 /** Optional account quota telemetry exposed by a provider. */
 export interface AgentRateLimitWindow {
   id: string
