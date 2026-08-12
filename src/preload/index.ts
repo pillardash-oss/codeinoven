@@ -190,6 +190,7 @@ const INVOKE_CHANNELS = [
   'pr:reopen',
   'pr:close',
   'pr:page',
+  'pr:detail',
   'deployment:overview',
   'deployment:detail',
   'deployment:runDetail',

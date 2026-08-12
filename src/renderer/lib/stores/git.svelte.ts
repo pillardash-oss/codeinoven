@@ -227,21 +227,45 @@ export class GitState {
 
   /**
    * Fetch the first page of open PRs for the active project and record how many
-   * have merge conflicts, persisting the count so the header badge survives an
-   * app restart. A cooldown keeps the repeated calls from `refresh()` cheap.
+   * need conflict resolution, persisting the count so the header badge survives
+   * an app restart. A cooldown keeps the repeated calls from `refresh()` cheap.
+   *
+   * The count is only persisted after an *authoritative* fetch: an unauthenticated
+   * or denied response must never overwrite the last known value with a zero —
+   * otherwise a cold start before GitHub is connected would poison the indicator
+   * for the whole cooldown window (exactly the "nothing shows after restart"
+   * failure this is designed to prevent).
    */
   async refreshPrConflictIndicators(projectId: string): Promise<void> {
     const repo = this.originRepo
     if (!repo) return
     const key = `${repo.owner}/${repo.repo}`
     const now = Date.now()
-    // The cooldown is only recorded on a successful fetch, so a failed check
+    // The cooldown is only recorded on an authoritative fetch, so a failed check
     // (e.g. GitHub not connected yet right after launch) retries on the next
     // refresh instead of being suppressed for the whole cooldown window.
     if (now - (this.prConflictFetchedAt[key] ?? 0) < GitState.PR_CONFLICT_COOLDOWN_MS) return
     try {
       const page = await invoke('pr:page', projectId, repo.owner, repo.repo, 'open', 1)
-      const conflicts = page.items.filter((item) => item.mergeable === false).length
+      if (page.accessError) return
+      // `mergeable` is frequently null in list payloads (GitHub computes it
+      // lazily); `mergeable_state` (e.g. `dirty`) is the reliable list signal,
+      // so a conflict counts if either flags it. PRs with no computed state
+      // probe the detail endpoint, which forces GitHub to compute mergeability.
+      let conflicts = page.items.filter(
+        (item) => item.mergeable === false || item.mergeableState === 'dirty'
+      ).length
+      const uncomputed = page.items.filter(
+        (item) => item.mergeable === null && item.mergeableState !== 'dirty'
+      )
+      for (const pr of uncomputed) {
+        try {
+          const detail = await invoke('pr:detail', projectId, repo.owner, repo.repo, pr.number)
+          if (detail.mergeable === false) conflicts += 1
+        } catch {
+          // A single PR failing its probe must not discard the whole check.
+        }
+      }
       this.prConflictIndicators = { ...this.prConflictIndicators, [key]: conflicts }
       this.prConflictFetchedAt[key] = now
       try {

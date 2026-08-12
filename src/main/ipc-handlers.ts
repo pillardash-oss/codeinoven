@@ -3490,7 +3490,10 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
       const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
       const safePage = validatePrPage(page)
-      if (!provider) return { items: [], page: safePage, hasMore: false }
+      // An unauthenticated page is NOT an empty page — the renderer must be
+      // able to tell "no open PRs" from "GitHub isn't connected yet", or the
+      // header conflict indicator would treat a cold start as zero conflicts.
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
       try {
         return await provider.listPullRequestPage({
           owner: validateBoundedString(owner, 'PR owner', 1, 128),
@@ -3948,6 +3951,23 @@ export function registerIpcHandlers(
         },
         validateEntityId(sha, 'Commit sha')
       )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:detail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const {
+        provider,
+        owner: safeOwner,
+        repo: safeRepo,
+        pullNumber: safeNumber
+      } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.getPullRequest({
+        owner: safeOwner,
+        repo: safeRepo,
+        pullNumber: safeNumber
+      })
     }
   )
 
