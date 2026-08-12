@@ -9994,6 +9994,9 @@ export class ChatEngine {
   private assignmentAuditRepairPrompt(manifest: AssignmentAuditRepairManifest): string {
     const previousErrors = new Set(manifest.previousErrors ?? [])
     const resolvedErrors = [...previousErrors].filter((error) => !manifest.errors.includes(error))
+    const needsExecutedEvidence = manifest.errors.some((error) =>
+      error.includes('requires at least one executed verification check')
+    )
     return [
       `The persisted audit report at ${manifest.attemptPath} failed deterministic validation.`,
       `This is incremental correction attempt ${manifest.attempt}. Continue from that persisted report; do not restart the audit.`,
@@ -10006,8 +10009,14 @@ export class ChatEngine {
           ]
         : []),
       'Read that file, preserve its audit findings and evidence, and return exactly one complete corrected audit-report JSON object with no Markdown fences or commentary.',
-      'For a missing auditedFiles entry, add the exact named file and retain the existing inventory. For an unmatched verification claim, correct it to match an observed command or utility; when no matching invocation exists, use not_applicable with the concrete limitation. Never invent execution evidence.',
-      'Do not repeat the audit, specification, Assignment, or project inspection.'
+      ...(needsExecutedEvidence
+        ? [
+            'This attempt contains no executed verification evidence and is not a usable audit. Do not pad it with expected filenames or describe the failed artifact as the audited implementation. Resume only the missing implementation inspection and verification work, then report evidence actually observed in this auditor session. Never invent execution evidence.'
+          ]
+        : [
+            'For a missing auditedFiles entry, add the exact named file only when the persisted report contains evidence that it was inspected, and retain the existing inventory. For an unmatched verification claim, correct it to match an observed command or utility; when no matching invocation exists, use not_applicable with the concrete limitation. Never invent execution evidence.',
+            'Do not repeat the audit, specification, Assignment, or project inspection.'
+          ])
     ].join('\n')
   }
 

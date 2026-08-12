@@ -321,6 +321,14 @@ export function validateAuditReportContent(
       issues.push('auditedFiles is required for an Assignment audit')
     }
     if (!verification) issues.push('verification is required for an Assignment audit')
+    if (
+      verification &&
+      !verification.checks.some((check) => check.status === 'passed' || check.status === 'failed')
+    ) {
+      issues.push(
+        'Assignment audit requires at least one executed verification check backed by auditor evidence'
+      )
+    }
   }
   if (auditedFiles) content.auditedFiles = auditedFiles
   if (verification) content.verification = verification
