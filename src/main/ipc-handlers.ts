@@ -4473,7 +4473,7 @@ export function registerIpcHandlers(
           ? undefined
           : validateEntityId(checkpointId, 'Checkpoint ID', 256)
       const safeMessageId =
-        messageId === undefined ? undefined : validateEntityId(messageId, 'Message ID', 256)
+        messageId === undefined ? undefined : validateBoundedString(messageId, 'Message ID', 1, 256)
       const safeTargetProjectId =
         targetProjectId === undefined
           ? undefined
