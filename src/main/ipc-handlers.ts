@@ -4381,6 +4381,12 @@ export function registerIpcHandlers(
     await threadCreation.awaitReady(safeThreadId)
     return threadManager.harnessUsageFor(safeProjectId, safeThreadId)
   })
+  ipcMain.handle('thread:efficiencyKpis', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
+  })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
     await threadCreation.awaitReady(threadId)
     return threadManager.markRead(projectId, threadId)

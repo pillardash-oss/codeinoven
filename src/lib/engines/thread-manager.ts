@@ -135,6 +135,11 @@ export class ThreadManager {
     return this.harnessUsageRepo.listByThread(projectId, threadId)
   }
 
+  /** Efficiency and cost-coverage KPIs for a thread's completed successful user turns. */
+  efficiencyKpisFor(_projectId: string, threadId: string): import('../types').UsageEfficiencyKpis {
+    return this.harnessUsageRepo.efficiencyKpisForThread(threadId)
+  }
+
   /** Accumulate a completed turn's harness usage (ledger-guarded, idempotent). */
   accumulateHarnessUsage(
     projectId: string,
