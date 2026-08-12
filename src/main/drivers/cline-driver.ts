@@ -771,8 +771,7 @@ export class ClineDriver extends PersistentCliDriver {
     runtimeTopology: {
       kind: 'shared_daemon',
       scope: 'application',
-      sessionWorkers: true,
-      maxConcurrentProcesses: 4
+      sessionWorkers: true
     },
     streaming: true,
     steering: false,

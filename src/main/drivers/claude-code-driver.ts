@@ -993,11 +993,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   readonly id = 'claude-code'
   readonly name = 'Claude Code'
   readonly capabilities: HarnessCapabilities = {
-    runtimeTopology: {
-      kind: 'turn_process',
-      scope: 'session',
-      maxConcurrentProcesses: 4
-    },
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: true,
     nativeResume: true,

@@ -1856,21 +1856,13 @@ export type AgentSessionStatus =
       /** Authoritative start of the owning workflow, preserved across renderer reloads. */
       startedAt?: number
       /** Human-readable progress from an internal coordinator-owned worker. */
-      activity?:
-        | {
-            kind: 'spec_generation'
-            label: string
-            attempt: number
-            maxAttempts: number
-            updatedAt: number
-          }
-        | {
-            kind: 'harness_queue'
-            label: string
-            position: number
-            maxConcurrentProcesses: number
-            updatedAt: number
-          }
+      activity?: {
+        kind: 'spec_generation'
+        label: string
+        attempt: number
+        maxAttempts: number
+        updatedAt: number
+      }
     }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }
