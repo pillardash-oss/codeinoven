@@ -170,7 +170,7 @@ async function serveFile(
       end: range.end,
       autoClose: true
     })
-    return new Response(Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+    return new Response(Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>, {
       status: isPartial ? 206 : 200,
       headers
     })
