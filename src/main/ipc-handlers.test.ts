@@ -885,6 +885,45 @@ describe('cloudDeploy IPC', () => {
     await rm(storageRoot, { recursive: true, force: true })
   })
 
+  it('lists available containers the account can see via availableContainers', async () => {
+    const storageRoot = await setupStorage()
+    const accountId = await createCoolifyAccount('Personal', 'personal-token')
+    const attach = handlers.get('cloudDeploy:attachAccount')
+    const available = handlers.get('cloudDeploy:availableContainers')
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', accountId)
+
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
+        new Response(
+          JSON.stringify([
+            { uuid: 'app-1', name: 'My App', status: 'running', fqdn: 'https://app.example.dev' },
+            {
+              uuid: 'app-2',
+              name: 'Other App',
+              status: 'stopped',
+              fqdn: 'https://other.example.dev'
+            }
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = (await available?.(
+        trustedEvent(),
+        'proj-a',
+        'coolify'
+      )) as CloudDeploymentContainer[]
+      expect(Array.isArray(result)).toBe(true)
+      const ids = (result as CloudDeploymentContainer[]).map((container) => container.id)
+      expect(ids).toEqual(['app-1', 'app-2'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
   it('rejects container mappings whose provider is not selected', async () => {
     const storageRoot = await setupStorage()
     const save = handlers.get('cloudDeploy:saveConfig')

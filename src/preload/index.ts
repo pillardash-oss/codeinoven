@@ -207,6 +207,7 @@ const INVOKE_CHANNELS = [
   'cloudDeploy:detachAccount',
   'cloudDeploy:setActiveAccount',
   'cloudDeploy:overview',
+  'cloudDeploy:availableContainers',
   'cloudDeploy:containerStatus',
   'cloudDeploy:containerLog',
   'pr:bundle',

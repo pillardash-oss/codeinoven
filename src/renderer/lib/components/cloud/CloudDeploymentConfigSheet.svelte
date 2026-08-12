@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckCircle2, Cloud, Loader2 } from '@lucide/svelte'
+  import { CheckCircle2, Cloud, Loader2, Search } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
@@ -73,6 +73,10 @@
   let containerProviderKind = $state<CloudDeploymentProviderKind | ''>('')
   let containerId = $state('')
   let containerLabel = $state('')
+  let containerSearch = $state('')
+  let availableContainers = $state<CloudDeploymentContainer[]>([])
+  let availableLoading = $state(false)
+  let availableError = $state('')
   let saving = $state(false)
   let error = $state('')
   /** The project's current config, loaded on open. */
@@ -82,6 +86,15 @@
 
   let containerProviders = $derived(
     PROVIDER_KINDS.filter((kind) => configuredProviders.includes(kind))
+  )
+
+  let filteredAvailable = $derived(
+    availableContainers.filter(
+      (container) =>
+        containerSearch.trim() === '' ||
+        container.label.toLowerCase().includes(containerSearch.toLowerCase()) ||
+        container.id.toLowerCase().includes(containerSearch.toLowerCase())
+    )
   )
 
   let baseUrlValidation = $derived(validateBaseUrl(baseUrl))
@@ -121,6 +134,10 @@
     containerProviderKind = ''
     containerId = ''
     containerLabel = ''
+    containerSearch = ''
+    availableContainers = []
+    availableLoading = false
+    availableError = ''
     config = null
     error = ''
     saving = false
@@ -175,6 +192,9 @@
     containerProviderKind = ''
     containerId = ''
     containerLabel = ''
+    containerSearch = ''
+    availableContainers = []
+    availableError = ''
     error = ''
   }
 
@@ -252,17 +272,47 @@
     }
   }
 
+  async function loadAvailableContainers(): Promise<void> {
+    if (!projectId || containerProviderKind === '') return
+    availableLoading = true
+    availableError = ''
+    availableContainers = []
+    containerId = ''
+    containerLabel = ''
+    try {
+      const result = await invoke(
+        'cloudDeploy:availableContainers',
+        projectId,
+        containerProviderKind
+      )
+      if (Array.isArray(result)) {
+        availableContainers = result
+      } else {
+        availableError = result.accessError
+      }
+    } catch (loadError) {
+      availableError =
+        loadError instanceof Error ? loadError.message : 'Containers could not be loaded.'
+    } finally {
+      availableLoading = false
+    }
+  }
+
+  /** Pick an available container, filling its id and defaulting the label. */
+  function pickContainer(container: CloudDeploymentContainer): void {
+    containerId = container.id
+    containerLabel = container.label
+    containerSearch = ''
+    error = ''
+  }
+
   async function saveContainer(): Promise<void> {
     if (containerProviderKind === '') return
     if (!projectId) return
     const id = containerId.trim()
-    const label = containerLabel.trim()
+    const label = containerLabel.trim() || id
     if (id === '') {
-      error = 'Enter the container or resource ID.'
-      return
-    }
-    if (label === '') {
-      error = 'Enter a label for the container.'
+      error = 'Choose a container to add.'
       return
     }
     saving = true
@@ -651,6 +701,7 @@
           <select
             class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
             bind:value={containerProviderKind}
+            onchange={() => void loadAvailableContainers()}
           >
             <option value="">Select a provider</option>
             {#each containerProviders as kind (kind)}
@@ -658,6 +709,92 @@
             {/each}
           </select>
         </label>
+
+        {#if containerProviderKind !== ''}
+          {#if availableLoading}
+            <div class="flex h-24 items-center justify-center">
+              <Loader2 size={17} class="animate-spin text-dimmed" />
+            </div>
+          {:else if availableError}
+            <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+              {availableError}
+            </p>
+          {:else}
+            {#if containerId !== ''}
+              <div
+                class="flex items-center justify-between gap-2 rounded-lg border bg-elevated px-3 py-2"
+              >
+                <div class="min-w-0">
+                  <p class="truncate text-xs font-medium">{containerLabel || containerId}</p>
+                  <p class="truncate font-mono text-[10px] text-dimmed">{containerId}</p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 rounded px-2 py-1 text-[11px] font-medium text-muted hover:bg-overlay hover:text-foreground"
+                  onclick={() => {
+                    containerId = ''
+                    containerLabel = ''
+                  }}
+                >
+                  Change
+                </button>
+              </div>
+            {:else}
+              <div class="relative">
+                <Search
+                  size={13}
+                  class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+                />
+                <input
+                  class="h-9 w-full rounded-lg border bg-elevated pl-8 pr-3 text-sm outline-none focus:border-primary"
+                  placeholder="Search your {PROVIDER_DISPLAY_NAMES[
+                    containerProviderKind
+                  ]} containers"
+                  autocomplete="off"
+                  spellcheck="false"
+                  bind:value={containerSearch}
+                />
+              </div>
+              {#if availableContainers.length === 0}
+                <p class="rounded-lg border bg-elevated px-3 py-2 text-[11px] text-muted">
+                  No containers were found on this account. Pick a different provider or add the
+                  container manually below.
+                </p>
+              {:else if filteredAvailable.length === 0}
+                <p class="rounded-lg border bg-elevated px-3 py-2 text-[11px] text-muted">
+                  No containers match your search.
+                </p>
+              {:else}
+                <div class="max-h-52 space-y-1 overflow-y-auto pr-0.5">
+                  {#each filteredAvailable as container (container.id)}
+                    <button
+                      type="button"
+                      class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors hover:bg-overlay"
+                      onclick={() => pickContainer(container)}
+                    >
+                      <span class="min-w-0">
+                        <span class="block truncate text-xs font-medium">{container.label}</span>
+                        <span class="block truncate font-mono text-[10px] text-dimmed">
+                          {container.id}
+                        </span>
+                      </span>
+                      <span class="shrink-0 text-[10px] text-dimmed">{container.status}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            {/if}
+          {/if}
+        {/if}
+
+        {#if containerProviderKind !== ''}
+          <div class="flex items-center gap-2 text-[11px] text-dimmed">
+            <span class="h-px flex-1 bg-border"> </span>
+            or enter manually
+            <span class="h-px flex-1 bg-border"> </span>
+          </div>
+        {/if}
+
         <label class="block space-y-1 text-xs font-medium">
           <span>Container / resource ID</span>
           <input
@@ -672,7 +809,7 @@
           <span>Label</span>
           <input
             class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-            placeholder="e.g. API server"
+            placeholder="e.g. API server (optional — defaults to the container name)"
             bind:value={containerLabel}
           />
         </label>
