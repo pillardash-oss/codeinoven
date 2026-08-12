@@ -226,6 +226,18 @@ export class HarnessUsageRepo {
 
   /** Economically comparable metrics for completed successful user turns. */
   efficiencyKpis(range?: LocalProfileAnalyticsRange): UsageEfficiencyKpis {
+    return this.computeEfficiencyKpis(range)
+  }
+
+  /** Economically comparable metrics scoped to a single thread's completed turns. */
+  efficiencyKpisForThread(threadId: string): UsageEfficiencyKpis {
+    return this.computeEfficiencyKpis(undefined, threadId)
+  }
+
+  private computeEfficiencyKpis(
+    range?: LocalProfileAnalyticsRange,
+    threadId?: string
+  ): UsageEfficiencyKpis {
     const row = this.db.get<{
       successful_turns: number
       uncached_input: number
@@ -247,6 +259,7 @@ export class HarnessUsageRepo {
          WHERE feature = 'main' AND success = 1
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at < ?)
+           AND (? IS NULL OR thread_id = ?)
        ), scoped AS (
          SELECT event.*
          FROM usage_events event
@@ -272,7 +285,9 @@ export class HarnessUsageRepo {
       range?.startAt ?? null,
       range?.startAt ?? null,
       range?.endAt ?? null,
-      range?.endAt ?? null
+      range?.endAt ?? null,
+      threadId ?? null,
+      threadId ?? null
     )
     const successfulTurns = row?.successful_turns ?? 0
     const uncachedInputTokens = row?.uncached_input ?? 0

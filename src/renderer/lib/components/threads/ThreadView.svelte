@@ -164,7 +164,8 @@
     ImageDescriptorErrorRequest,
     ImageDescriptorReplyAction,
     UserMessagePresentation,
-    UserMessageSummary
+    UserMessageSummary,
+    UsageEfficiencyKpis
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
 
@@ -663,6 +664,15 @@
           durationMs: row.durationMs,
           ...(row.models?.length ? { models: row.models } : {})
         }))
+      })
+      .catch(() => {})
+  })
+
+  let storedEfficiencyKpis = $state<UsageEfficiencyKpis | undefined>(undefined)
+  $effect(() => {
+    void invoke('thread:efficiencyKpis', thread.projectId, thread.id)
+      .then((kpis) => {
+        storedEfficiencyKpis = kpis
       })
       .catch(() => {})
   })
@@ -7159,6 +7169,7 @@
                   onActionSelect={handleActionSelection}
                   onSlashCommand={executeHarnessCommand}
                   contextUsage={contextUsageDisplay}
+                  efficiencyKpis={storedEfficiencyKpis}
                   onRevealUsage={revealContextUsage}
                   onHideUsage={hideContextUsage}
                   usageRefreshing={refreshingAccountUsage}

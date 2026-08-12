@@ -123,6 +123,7 @@ import type {
   UserMessageSummary,
   ThreadSettings,
   ThreadStatus,
+  UsageEfficiencyKpis,
   TurnCheckpointFileDiff,
   TurnCheckpointSummary,
   UtilityCatalog,
@@ -1366,6 +1367,7 @@ export interface IpcInvokeContract {
     void
   >
   'thread:harnessUsage': Contract<[projectId: string, threadId: string], HarnessUsage[]>
+  'thread:efficiencyKpis': Contract<[projectId: string, threadId: string], UsageEfficiencyKpis>
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
   'thread:update': Contract<
     [

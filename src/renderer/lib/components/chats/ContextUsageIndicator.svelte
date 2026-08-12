@@ -15,7 +15,7 @@
   interface Props {
     usage?: AgentContextUsage
     /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
-    efficiency?: UsageEfficiencyKpis
+    efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
     harnessUsage?: AgentHarnessUsage[]
     canCompact?: boolean
@@ -31,7 +31,7 @@
 
   let {
     usage,
-    efficiency,
+    efficiencyKpis,
     harnessUsage = [],
     canCompact = false,
     compacting = false,
@@ -69,57 +69,64 @@
   )
   const multiHarness = $derived(harnessUsage.length > 1)
 
-  const hasEfficiency = $derived(efficiency !== undefined)
+  const hasEfficiency = $derived(efficiencyKpis !== undefined)
 
+  const successfulTurns = $derived(efficiencyKpis?.successfulTurns ?? 0)
+  /** Primary metric is uncached input + output (excludes reasoning) per completed user turn. */
   const primaryPerTurn = $derived(
-    efficiency?.perSuccessfulTurn.uncachedInputTokens != null &&
-      efficiency.perSuccessfulTurn.outputAndReasoningTokens != null
-      ? efficiency.perSuccessfulTurn.uncachedInputTokens +
-          efficiency.perSuccessfulTurn.outputAndReasoningTokens
+    efficiencyKpis && successfulTurns > 0
+      ? (efficiencyKpis.uncachedInputTokens + efficiencyKpis.outputTokens) / successfulTurns
       : null
   )
   const uncachedPerTurnLabel = $derived(
-    efficiency?.perSuccessfulTurn.uncachedInputTokens == null
+    efficiencyKpis == null || successfulTurns <= 0
       ? 'Unknown'
-      : compactNumber(efficiency.perSuccessfulTurn.uncachedInputTokens)
+      : compactNumber(efficiencyKpis.uncachedInputTokens / successfulTurns)
   )
   const outputPerTurnLabel = $derived(
-    efficiency?.perSuccessfulTurn.outputAndReasoningTokens == null
+    efficiencyKpis == null || successfulTurns <= 0
       ? 'Unknown'
-      : compactNumber(efficiency.perSuccessfulTurn.outputAndReasoningTokens)
+      : compactNumber(efficiencyKpis.outputTokens / successfulTurns)
+  )
+  const reasoningPerTurnLabel = $derived(
+    efficiencyKpis == null || successfulTurns <= 0
+      ? 'Unknown'
+      : compactNumber(efficiencyKpis.reasoningTokens / successfulTurns)
   )
   const cacheHitLabel = $derived(
-    efficiency?.cacheHitRatio == null ? 'Unknown' : `${Math.round(efficiency.cacheHitRatio * 100)}%`
+    efficiencyKpis?.cacheHitRatio == null
+      ? 'Unknown'
+      : `${Math.round(efficiencyKpis.cacheHitRatio * 100)}%`
   )
   const retryLabel = $derived(
-    efficiency?.retryAmplification == null
+    efficiencyKpis?.retryAmplification == null
       ? 'Unknown'
-      : `${efficiency.retryAmplification.toFixed(2)}×`
+      : `${efficiencyKpis.retryAmplification.toFixed(2)}×`
   )
   const auxShareLabel = $derived(
-    efficiency?.auxiliaryCostShare == null
+    efficiencyKpis?.auxiliaryCostShare == null
       ? 'Unknown'
-      : `${Math.round(efficiency.auxiliaryCostShare * 100)}%`
+      : `${Math.round(efficiencyKpis.auxiliaryCostShare * 100)}%`
   )
   const toolResultPerTurnLabel = $derived(
-    efficiency?.perSuccessfulTurn.toolResultTokens == null
+    efficiencyKpis?.perSuccessfulTurn.toolResultTokens == null
       ? 'Unknown'
-      : compactNumber(efficiency.perSuccessfulTurn.toolResultTokens)
+      : compactNumber(efficiencyKpis.perSuccessfulTurn.toolResultTokens)
   )
   const coverageLabel = $derived(
-    efficiency?.costCoverageRatio == null
+    efficiencyKpis?.costCoverageRatio == null
       ? 'No cost reported'
-      : `${Math.round(efficiency.costCoverageRatio * 100)}% of cost accounted`
+      : `${Math.round(efficiencyKpis.costCoverageRatio * 100)}% of cost accounted`
   )
-  const hasUnavailableCost = $derived((efficiency?.unavailableCostEvents ?? 0) > 0)
+  const hasUnavailableCost = $derived((efficiencyKpis?.unavailableCostEvents ?? 0) > 0)
 
   /** Known and estimated totals are only authoritative when at least one cost event is priced. */
-  const hasPricedCost = $derived((efficiency?.pricedCostEvents ?? 0) > 0)
+  const hasPricedCost = $derived((efficiencyKpis?.pricedCostEvents ?? 0) > 0)
   const knownCostLabel = $derived(
-    !hasPricedCost ? 'Unknown' : formatMoney(efficiency?.knownCostUsd ?? 0)
+    !hasPricedCost ? 'Unknown' : formatMoney(efficiencyKpis?.knownCostUsd ?? 0)
   )
   const estimatedCostLabel = $derived(
-    !hasPricedCost ? 'Unknown' : formatMoney(efficiency?.estimatedCostUsd ?? 0)
+    !hasPricedCost ? 'Unknown' : formatMoney(efficiencyKpis?.estimatedCostUsd ?? 0)
   )
 
   /** Collapsed harness sections — sections are open by default. */
@@ -446,12 +453,13 @@
               </span>
             </div>
             <p class="mt-0.5 text-[9px] text-dimmed">
-              per {efficiency?.successfulTurns ?? 0} completed turn
-              {(efficiency?.successfulTurns ?? 0) === 1 ? '' : 's'}
+              per {successfulTurns} completed turn
+              {successfulTurns === 1 ? '' : 's'}
             </p>
-            <div class="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
-              <span>Uncached input {uncachedPerTurnLabel}/turn</span>
+            <div class="mt-1.5 grid grid-cols-3 gap-x-3 gap-y-1 text-[9px] text-dimmed">
+              <span>Uncached {uncachedPerTurnLabel}/turn</span>
               <span>Output {outputPerTurnLabel}/turn</span>
+              <span>Reasoning {reasoningPerTurnLabel}/turn</span>
             </div>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
@@ -473,11 +481,11 @@
               </span>
               {#if hasUnavailableCost}
                 <span class="rounded bg-overlay px-1.5 py-0.5 text-[9px] text-dimmed">
-                  {efficiency?.unavailableCostEvents} unavailable
+                  {efficiencyKpis?.unavailableCostEvents} unavailable
                 </span>
               {/if}
             </div>
-            {#if hasPricedCost && efficiency?.knownCostUsd === 0 && efficiency?.estimatedCostUsd === 0}
+            {#if hasPricedCost && efficiencyKpis?.knownCostUsd === 0 && efficiencyKpis?.estimatedCostUsd === 0}
               <p class="mt-1.5 text-[9px] text-dimmed">
                 Priced events are zero — no known cost accrued.
               </p>

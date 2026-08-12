@@ -78,7 +78,8 @@
     PromptReference,
     AssignmentTask,
     AgentModelSelection,
-    AttachmentStorageScope
+    AttachmentStorageScope,
+    UsageEfficiencyKpis
   } from '$shared/types'
 
   interface Props {
@@ -171,6 +172,8 @@
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
+    efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
     harnessUsage?: AgentHarnessUsage[]
     /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
@@ -241,6 +244,7 @@
     recentModels = [],
     onModelUsed,
     contextUsage,
+    efficiencyKpis,
     harnessUsage = [],
     onRevealUsage,
     onHideUsage,
@@ -2064,6 +2068,7 @@
 
     <ContextUsageIndicator
       usage={contextUsage}
+      {efficiencyKpis}
       {harnessUsage}
       {canCompact}
       {compacting}
