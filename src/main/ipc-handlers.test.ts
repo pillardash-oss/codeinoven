@@ -843,26 +843,40 @@ describe('cloudDeploy IPC', () => {
     }
     await save?.(trustedEvent(), 'proj-a', mapped)
 
-    const fetchMock = vi.fn(
-      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
-        new Response(
-          JSON.stringify([
-            {
-              uuid: 'app-1',
-              name: 'Provider-Assigned Name',
-              status: 'running',
-              fqdn: 'https://app-1.example.dev'
-            },
-            {
-              uuid: 'unrelated-app',
-              name: 'Unrelated App',
-              status: 'running',
-              fqdn: 'https://unrelated.example.dev'
-            }
-          ]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        )
-    )
+    const fetchMock = vi.fn(async (url: string | URL): Promise<Response> => {
+      const path = String(url)
+      // The overview resolves project names by fetching /projects + environments.
+      if (path.includes('/environments')) {
+        return new Response(JSON.stringify([{ id: 7, name: 'production', project_id: 1 }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+      if (path.includes('/projects')) {
+        return new Response(JSON.stringify([{ id: 1, uuid: 'proj-milogs', name: 'Milogs' }]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      }
+      return new Response(
+        JSON.stringify([
+          {
+            uuid: 'app-1',
+            name: 'Provider-Assigned Name',
+            environment_id: 7,
+            status: 'running',
+            fqdn: 'https://app-1.example.dev'
+          },
+          {
+            uuid: 'unrelated-app',
+            name: 'Unrelated App',
+            status: 'running',
+            fqdn: 'https://unrelated.example.dev'
+          }
+        ]),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    })
     vi.stubGlobal('fetch', fetchMock)
     try {
       const result = (await overview?.(trustedEvent(), 'proj-a', 'coolify')) as {
@@ -876,6 +890,7 @@ describe('cloudDeploy IPC', () => {
       const live = result.containers.find((container) => container.id === 'app-1')
       expect(live?.label).toBe('My Custom API')
       expect(live?.status).toBe('success')
+      expect(live?.project).toBe('Milogs')
       const pending = result.containers.find((container) => container.id === 'app-not-yet')
       expect(pending?.label).toBe('Pending App')
       expect(pending?.status).toBe('unknown')
