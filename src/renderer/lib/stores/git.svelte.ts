@@ -220,12 +220,15 @@ export class GitState {
     if (!repo) return
     const key = `${repo.owner}/${repo.repo}`
     const now = Date.now()
+    // The cooldown is only recorded on a successful fetch, so a failed check
+    // (e.g. GitHub not connected yet right after launch) retries on the next
+    // refresh instead of being suppressed for the whole cooldown window.
     if (now - (this.prConflictFetchedAt[key] ?? 0) < GitState.PR_CONFLICT_COOLDOWN_MS) return
-    this.prConflictFetchedAt[key] = now
     try {
       const page = await invoke('pr:page', projectId, repo.owner, repo.repo, 'open', 1)
       const conflicts = page.items.filter((item) => item.mergeable === false).length
       this.prConflictIndicators = { ...this.prConflictIndicators, [key]: conflicts }
+      this.prConflictFetchedAt[key] = now
       try {
         window.localStorage.setItem(
           GitState.PR_CONFLICT_STORAGE_KEY,
