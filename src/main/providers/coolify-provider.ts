@@ -160,12 +160,16 @@ export class CoolifyProvider implements DeploymentProvider {
       }
       throw failure
     })
-    // Some Coolify versions wrap the list in a `{ data: [...] }` envelope.
+    // The endpoint returns `{ count, deployments: [...] }`; some versions also
+    // wrap in `{ data: [...] }` or return a bare array. Handle all shapes.
+    const record = Array.isArray(response) ? {} : (response as Record<string, unknown>)
     const items = Array.isArray(response)
       ? response
-      : Array.isArray((response as Record<string, unknown>)['data'])
-        ? ((response as Record<string, unknown>)['data'] as unknown[])
-        : []
+      : Array.isArray(record['deployments'])
+        ? (record['deployments'] as unknown[])
+        : Array.isArray(record['data'])
+          ? (record['data'] as unknown[])
+          : []
     const deployments: CloudDeploymentDeployment[] = []
     for (const item of items) {
       const deployment = this.toDeployment(item)

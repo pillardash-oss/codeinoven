@@ -380,10 +380,11 @@ describe('CoolifyProvider', () => {
       expect(deployments).toEqual([])
     })
 
-    it('parses a realistic ApplicationDeploymentQueue payload, including a data wrapper', async () => {
+    it('parses the real { count, deployments } response shape', async () => {
       fetchMock.mockResolvedValueOnce(
         jsonResponse({
-          data: [
+          count: 2,
+          deployments: [
             {
               id: 12,
               application_id: 'app-1',
@@ -420,6 +421,19 @@ describe('CoolifyProvider', () => {
       })
       expect(deployments[1]).toMatchObject({ id: 'dep-abc-2', status: 'failed' })
       expect(requestUrl()).toContain('/deployments/applications/app-1')
+    })
+
+    it('parses a data-wrapped payload for older Coolify versions', async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          data: [{ deployment_uuid: 'dep-1', status: 'finished' }]
+        })
+      )
+
+      const deployments = await makeProvider().listDeployments('app-1')
+
+      expect(deployments).toHaveLength(1)
+      expect(deployments[0]).toMatchObject({ id: 'dep-1', status: 'success' })
     })
   })
 
