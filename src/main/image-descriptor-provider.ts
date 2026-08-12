@@ -96,8 +96,15 @@ export function decideImageDescriptorBatch(
   return { mode: 'batch' }
 }
 
-/** One structured vision call that describes all supplied images at once. */
-export type ImageDescriptorBatchCall = (images: ResolvedImageEntry[]) => Promise<unknown>
+/**
+ * One structured vision call that describes all supplied images at once. The
+ * second argument is the stable call id for the whole batch so the executing
+ * session can attribute the single vision call to its parent turn.
+ */
+export type ImageDescriptorBatchCall = (
+  images: ResolvedImageEntry[],
+  featureCallId: string
+) => Promise<unknown>
 
 /** One vision call for a single image, used by the sequential fallback. */
 export type ImageDescriptorSingleCall = (
@@ -135,7 +142,7 @@ export async function runImageDescriptorBatch(
     }
     return { mode: 'sequential', featureCallId, results }
   }
-  const rawOutput = await batchCall(images)
+  const rawOutput = await batchCall(images, featureCallId)
   return {
     mode: 'batch',
     featureCallId,
