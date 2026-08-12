@@ -52,12 +52,16 @@ async function createCheckScope(inputPath: string): Promise<CheckScope> {
   }
 }
 
-async function runSvelteCheck(tsconfigPath: string, workspace = projectRoot): Promise<number> {
+async function runSvelteCheck(
+  tsconfigPath: string,
+  workspace = projectRoot,
+  useTsgo = true
+): Promise<number> {
   const child = Bun.spawn(
     [
       process.execPath,
       'node_modules/svelte-check/bin/svelte-check',
-      '--tsgo',
+      ...(useTsgo ? ['--tsgo'] : []),
       '--workspace',
       workspace,
       '--config',
@@ -113,7 +117,8 @@ try {
         2
       )}\n`
     )
-    exitCode ||= await runSvelteCheck(scopedTsconfigPath)
+    const containsSvelte = scope.files.some((file) => extname(file) === '.svelte')
+    exitCode ||= await runSvelteCheck(scopedTsconfigPath, projectRoot, !containsSvelte)
   }
 
   process.exitCode = exitCode
