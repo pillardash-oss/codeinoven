@@ -847,13 +847,20 @@ export interface ImageDescriptorErrorRequest {
   id: string
   sessionId: string
   projectId: string
+  /** Thread whose image tool call is blocked (worker thread for delegated work). */
   threadId: string
+  /** User-facing thread where the decision card must be shown. */
+  surfaceThreadId: string
+  /** Assignment task identity shown when a worker owns the blocked call. */
+  assignmentTaskId?: string
+  assignmentTaskTitle?: string
+  workerTitle?: string
   /** The actual error reported by the vision model / harness session. */
   error: string
   /** Provider-neutral failure category used to explain network/upload failures clearly. */
   kind: AgentProviderIssueKind
   /** Vision model that produced the failure. */
-  selection: AgentModelSelection
+  selection?: AgentModelSelection
   /** Partial description generated before the failure, if any. */
   partialOutput: string
   /** Number of images that failed in this descriptor call. */
@@ -2021,6 +2028,8 @@ export type AgentEvent =
   | {
       type: 'imageDescriptor.resolved'
       sessionId: string
+      projectId: string
+      threadId: string
       requestId: string
       action: ImageDescriptorReplyAction
     }
@@ -3424,6 +3433,8 @@ export interface CloudDeploymentProviderAccount {
   baseUrl?: string
   /** Whether this account currently holds a stored credential. */
   configured: boolean
+  /** Whether this account is enabled for use. Disabled accounts are skipped by monitoring. */
+  enabled: boolean
   /** Epoch ms the account was first created. */
   createdAt: number
   /** Epoch ms the account's credential was last stored or rotated. */

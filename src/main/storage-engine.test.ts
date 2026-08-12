@@ -129,6 +129,7 @@ describe('StorageEngine project boundary', () => {
           providerKind: 'coolify',
           secretRef: 'vault:account-1',
           configured: true,
+          enabled: true,
           createdAt: 1_700_000_000_000,
           updatedAt: 1_700_000_000_000
         }
