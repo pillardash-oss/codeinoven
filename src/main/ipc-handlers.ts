@@ -3901,6 +3901,25 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle(
+    'cloudDeploy:availableContainers',
+    async (_, projectId: unknown, providerKind: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      try {
+        const provider = resolveDeploymentProvider(
+          kind,
+          await resolveDeploymentContext(safeProjectId, kind)
+        )
+        return await provider.listContainers()
+      } catch (error) {
+        return {
+          accessError: error instanceof Error ? error.message : 'Provider request failed'
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
     'cloudDeploy:containerStatus',
     async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')

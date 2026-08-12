@@ -932,6 +932,15 @@ export interface IpcInvokeContract {
     import('./types').CloudDeploymentResult
   >
   /**
+   * List every container the account can see on the provider (not filtered to
+   * this project's mappings), so the add-container flow can offer a picker.
+   * Provider/credential failures are returned as `{ accessError }`.
+   */
+  'cloudDeploy:availableContainers': Contract<
+    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    import('./types').CloudDeploymentContainer[] | { accessError: string }
+  >
+  /**
    * Latest snapshot for one configured container, or null when the provider
    * cannot resolve it.
    */
