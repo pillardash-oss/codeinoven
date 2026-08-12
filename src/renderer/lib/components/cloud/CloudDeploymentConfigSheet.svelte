@@ -89,12 +89,12 @@
   )
 
   let filteredAvailable = $derived(
-    availableContainers.filter(
-      (container) =>
-        containerSearch.trim() === '' ||
-        container.label.toLowerCase().includes(containerSearch.toLowerCase()) ||
-        container.id.toLowerCase().includes(containerSearch.toLowerCase())
-    )
+    availableContainers.filter((container) => {
+      const query = containerSearch.trim().toLowerCase()
+      if (query === '') return true
+      const haystack = [container.label, container.id, container.url ?? ''].join(' ').toLowerCase()
+      return haystack.includes(query)
+    })
   )
 
   let baseUrlValidation = $derived(validateBaseUrl(baseUrl))
