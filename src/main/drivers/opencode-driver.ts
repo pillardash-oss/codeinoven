@@ -420,8 +420,11 @@ function mapOpenCodeUsage(raw: unknown): {
   // OpenCode reports `input` as the total input token count, which already
   // contains cached read and cached write tokens, so uncached input is the
   // remainder after the reported cache portions are removed. `reasoning` is a
-  // subset of `output` and stays separate.
-  const uncachedInput = input === undefined ? null : input - (cachedInput ?? 0) - (cacheWrite ?? 0)
+  // subset of `output` and stays separate. When an inconsistent payload reports
+  // cached read + cached write exceeding input, clamp to zero rather than emit
+  // a negative category.
+  const uncachedInput =
+    input === undefined ? null : Math.max(0, input - (cachedInput ?? 0) - (cacheWrite ?? 0))
   const normalizedUsage: NormalizedUsage = {
     uncachedInput,
     cachedInput: cachedInput ?? null,
