@@ -206,9 +206,9 @@ describe('AntigravityDriver', () => {
   })
 })
 
-describe('Antigravity token usage normalization', () => {
+describe('Antigravity token normalizedUsage normalization', () => {
   it('maps reported categories and preserves the verbatim provider total', () => {
-    const { legacy, usage } = mapAntigravityUsage({
+    const { aggregateTokens, normalizedUsage } = mapAntigravityUsage({
       input_tokens: 100,
       output_tokens: 30,
       thinking_tokens: 10,
@@ -216,7 +216,7 @@ describe('Antigravity token usage normalization', () => {
       cache_write_tokens: 5,
       total_tokens: 175
     })
-    expect(legacy).toEqual({
+    expect(aggregateTokens).toEqual({
       input: 100,
       output: 30,
       reasoning: 10,
@@ -224,7 +224,7 @@ describe('Antigravity token usage normalization', () => {
       cacheWrite: 5,
       total: 175
     })
-    expect(usage).toEqual({
+    expect(normalizedUsage).toEqual({
       uncachedInput: 60,
       cachedInput: 40,
       cacheWrite: 5,
@@ -244,14 +244,14 @@ describe('Antigravity token usage normalization', () => {
   })
 
   it('does not synthesize a comparable total when the provider reports none', () => {
-    const { legacy, usage } = mapAntigravityUsage({
+    const { aggregateTokens, normalizedUsage } = mapAntigravityUsage({
       input_tokens: 100,
       output_tokens: 30,
       thinking_tokens: 10,
       cache_read_tokens: 40
     })
-    expect(legacy).toBeUndefined()
-    expect(usage).toEqual({
+    expect(aggregateTokens).toBeUndefined()
+    expect(normalizedUsage).toEqual({
       uncachedInput: 60,
       cachedInput: 40,
       cacheWrite: null,
@@ -269,12 +269,12 @@ describe('Antigravity token usage normalization', () => {
   })
 
   it('clamps uncached input at zero when cached input exceeds total input', () => {
-    const { legacy, usage } = mapAntigravityUsage({
+    const { aggregateTokens, normalizedUsage } = mapAntigravityUsage({
       input_tokens: 10,
       cache_read_tokens: 40,
       total_tokens: 50
     })
-    expect(legacy).toEqual({
+    expect(aggregateTokens).toEqual({
       input: 10,
       output: 0,
       reasoning: 0,
@@ -282,7 +282,7 @@ describe('Antigravity token usage normalization', () => {
       cacheWrite: 0,
       total: 50
     })
-    expect(usage).toEqual({
+    expect(normalizedUsage).toEqual({
       uncachedInput: 0,
       cachedInput: 40,
       cacheWrite: null,
@@ -299,11 +299,11 @@ describe('Antigravity token usage normalization', () => {
   })
 
   it('keeps unreported categories null while preserving a reported total', () => {
-    const { legacy, usage } = mapAntigravityUsage({
+    const { aggregateTokens, normalizedUsage } = mapAntigravityUsage({
       inputTokens: 50,
       totalTokens: 50
     })
-    expect(legacy).toEqual({
+    expect(aggregateTokens).toEqual({
       input: 50,
       output: 0,
       reasoning: 0,
@@ -311,7 +311,7 @@ describe('Antigravity token usage normalization', () => {
       cacheWrite: 0,
       total: 50
     })
-    expect(usage).toEqual({
+    expect(normalizedUsage).toEqual({
       uncachedInput: 50,
       cachedInput: null,
       cacheWrite: null,
@@ -323,8 +323,14 @@ describe('Antigravity token usage normalization', () => {
     })
   })
 
-  it('attaches no usage metadata when the provider reports no tokens', () => {
-    expect(mapAntigravityUsage({})).toEqual({ legacy: undefined, usage: undefined })
-    expect(mapAntigravityUsage(null)).toEqual({ legacy: undefined, usage: undefined })
+  it('attaches no normalizedUsage metadata when the provider reports no tokens', () => {
+    expect(mapAntigravityUsage({})).toEqual({
+      aggregateTokens: undefined,
+      normalizedUsage: undefined
+    })
+    expect(mapAntigravityUsage(null)).toEqual({
+      aggregateTokens: undefined,
+      normalizedUsage: undefined
+    })
   })
 })

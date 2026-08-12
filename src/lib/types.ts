@@ -1331,6 +1331,13 @@ export interface NormalizedUsageTokens {
   reasoning: number | null
 }
 
+/** Canonical provider-neutral usage attached to messages and usage events. */
+export interface NormalizedUsage extends NormalizedUsageTokens {
+  rawProviderUsage: Record<string, unknown>
+  rawTotal: number | null
+  totalSemantics: UsageTotalSemantics
+}
+
 /** Cost fields preserve the difference between a true zero and missing pricing data. */
 export type UsageEventCost =
   | {
@@ -1732,6 +1739,7 @@ export type AgentPart =
       reason: string
       cost?: number
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
     }
   | {
       type: 'compaction'
@@ -1784,6 +1792,8 @@ export interface AgentMessage {
    *  reported verbatim by the provider (kept transient; not persisted). */
   costProvenance?: UsagePricingProvenance
   tokens?: AgentTokenUsage
+  /** Canonical accounting payload; raw provider evidence and semantics are preserved. */
+  normalizedUsage?: NormalizedUsage
   /** Effective model context window reported by the harness, when available. */
   contextWindow?: number
   /** Cumulative tokens currently occupying the model context, when available. */
@@ -1914,6 +1924,7 @@ export type AgentEvent =
       structuredOutput?: unknown
       /** Token accounting reported when the harness closes the turn. */
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
       /** Effective model context window reported when the harness closes the turn. */
       contextWindow?: number
       /** Cumulative tokens currently occupying the model context, when available. */
@@ -1930,6 +1941,7 @@ export type AgentEvent =
       sessionId: string
       messageId: string
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
       contextWindow?: number
       contextUsed?: number
       cost?: number

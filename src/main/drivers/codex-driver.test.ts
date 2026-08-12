@@ -270,7 +270,7 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: {
+      aggregateTokens: {
         input: 100,
         output: 30,
         reasoning: 10,
@@ -278,7 +278,7 @@ describe('Codex token usage normalization', () => {
         cacheWrite: 5,
         total: 130
       },
-      usage: {
+      normalizedUsage: {
         uncachedInput: 60,
         cachedInput: 40,
         cacheWrite: 5,
@@ -312,8 +312,8 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: undefined,
-      usage: {
+      aggregateTokens: undefined,
+      normalizedUsage: {
         uncachedInput: 60,
         cachedInput: 40,
         cacheWrite: null,
@@ -342,8 +342,15 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: { input: 50, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 50 },
-      usage: {
+      aggregateTokens: {
+        input: 50,
+        output: 0,
+        reasoning: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 50
+      },
+      normalizedUsage: {
         uncachedInput: 50,
         cachedInput: null,
         cacheWrite: null,
@@ -374,8 +381,15 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: { input: 100, output: 20, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 120 },
-      usage: {
+      aggregateTokens: {
+        input: 100,
+        output: 20,
+        reasoning: 0,
+        cacheRead: 40,
+        cacheWrite: 0,
+        total: 120
+      },
+      normalizedUsage: {
         uncachedInput: 60,
         cachedInput: 40,
         cacheWrite: null,
@@ -406,8 +420,15 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: { input: 30, output: 0, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 30 },
-      usage: {
+      aggregateTokens: {
+        input: 30,
+        output: 0,
+        reasoning: 0,
+        cacheRead: 40,
+        cacheWrite: 0,
+        total: 30
+      },
+      normalizedUsage: {
         uncachedInput: 0,
         cachedInput: 40,
         cacheWrite: null,
@@ -437,8 +458,15 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: { input: 0, output: 20, reasoning: 0, cacheRead: 40, cacheWrite: 0, total: 60 },
-      usage: {
+      aggregateTokens: {
+        input: 0,
+        output: 20,
+        reasoning: 0,
+        cacheRead: 40,
+        cacheWrite: 0,
+        total: 60
+      },
+      normalizedUsage: {
         uncachedInput: null,
         cachedInput: 40,
         cacheWrite: null,
@@ -470,8 +498,15 @@ describe('Codex token usage normalization', () => {
         }
       })
     ).toEqual({
-      legacy: { input: 100, output: 30, reasoning: 10, cacheRead: 40, cacheWrite: 0, total: 130 },
-      usage: {
+      aggregateTokens: {
+        input: 100,
+        output: 30,
+        reasoning: 10,
+        cacheRead: 40,
+        cacheWrite: 0,
+        total: 130
+      },
+      normalizedUsage: {
         uncachedInput: 60,
         cachedInput: 40,
         cacheWrite: null,

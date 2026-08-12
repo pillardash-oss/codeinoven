@@ -278,7 +278,7 @@ describe('OpenCode token usage normalization', () => {
         cacheWrite: 5,
         total: 130
       },
-      usage: {
+      normalizedUsage: {
         uncachedInput: 55,
         cachedInput: 40,
         cacheWrite: 5,
@@ -311,7 +311,7 @@ describe('OpenCode token usage normalization', () => {
       id: 'part-finish',
       messageID: 'message-1',
       reason: 'stop',
-      usage: {
+      normalizedUsage: {
         uncachedInput: 60,
         cachedInput: 40,
         cacheWrite: null,
@@ -339,7 +339,7 @@ describe('OpenCode token usage normalization', () => {
       messageID: 'message-1',
       reason: 'stop',
       tokens: { input: 50, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 50 },
-      usage: {
+      normalizedUsage: {
         uncachedInput: 50,
         cachedInput: null,
         cacheWrite: null,

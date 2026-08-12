@@ -13659,7 +13659,7 @@ export class ChatEngine {
         : thread?.assignmentRole === 'worker' || thread?.assignmentRole === 'coordinator'
           ? 'assignment'
           : 'main'
-    const tokens = message.tokens
+    const normalizedUsage = message.normalizedUsage
     const stepCosts = message.parts.filter(
       (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
         part.type === 'step-finish' && typeof part.cost === 'number'
@@ -13683,16 +13683,24 @@ export class ChatEngine {
       providerId: message.providerId ?? null,
       modelId: message.modelId ?? null,
       utilityId: null,
-      rawProviderUsage: tokens ? { ...tokens } : {},
-      tokens: {
-        uncachedInput: tokens?.input ?? null,
-        cachedInput: tokens?.cacheRead ?? null,
-        cacheWrite: tokens?.cacheWrite ?? null,
-        output: tokens?.output ?? null,
-        reasoning: tokens?.reasoning ?? null
-      },
-      rawTotal: tokens?.total ?? null,
-      totalSemantics: tokens ? 'provider_defined' : 'unavailable',
+      rawProviderUsage: normalizedUsage?.rawProviderUsage ?? {},
+      tokens: normalizedUsage
+        ? {
+            uncachedInput: normalizedUsage.uncachedInput,
+            cachedInput: normalizedUsage.cachedInput,
+            cacheWrite: normalizedUsage.cacheWrite,
+            output: normalizedUsage.output,
+            reasoning: normalizedUsage.reasoning
+          }
+        : {
+            uncachedInput: null,
+            cachedInput: null,
+            cacheWrite: null,
+            output: null,
+            reasoning: null
+          },
+      rawTotal: normalizedUsage?.rawTotal ?? null,
+      totalSemantics: normalizedUsage?.totalSemantics ?? 'unavailable',
       toolFeeUsd: null,
       success: !failure && !message.error,
       retryCause: failure ?? message.error ?? null,
@@ -13733,8 +13741,8 @@ export class ChatEngine {
     response?: AgentMessage
     failure: string | null
   }): void {
-    const reported = input.response?.tokens
-    const inputTokens = reported?.input ?? estimateTokens(input.inputText)
+    const reported = input.response?.normalizedUsage
+    const inputTokens = reported?.uncachedInput ?? estimateTokens(input.inputText)
     const outputTokens =
       reported?.output ?? estimateTokens(input.response ? assistantText(input.response) : '')
     const cost = input.response?.cost ?? null
@@ -13756,16 +13764,16 @@ export class ChatEngine {
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
       utilityId: null,
-      rawProviderUsage: reported ? { ...reported } : {},
+      rawProviderUsage: reported?.rawProviderUsage ?? {},
       tokens: {
         uncachedInput: inputTokens,
-        cachedInput: reported?.cacheRead ?? null,
+        cachedInput: reported?.cachedInput ?? null,
         cacheWrite: reported?.cacheWrite ?? null,
         output: outputTokens,
         reasoning: reported?.reasoning ?? null
       },
-      rawTotal: reported?.total ?? null,
-      totalSemantics: reported ? 'provider_defined' : 'unavailable',
+      rawTotal: reported?.rawTotal ?? null,
+      totalSemantics: reported?.totalSemantics ?? 'unavailable',
       toolFeeUsd: null,
       success: input.failure === null && !input.response?.error,
       retryCause: input.failure ?? input.response?.error ?? null,
@@ -13776,8 +13784,20 @@ export class ChatEngine {
         ? estimateTokenCostUsd(
             input.settings.modelId,
             input.settings.providerId,
-            reported ??
-              (inputTokens > 0 || outputTokens > 0
+            reported
+              ? {
+                  input: reported.uncachedInput ?? 0,
+                  output: reported.output ?? 0,
+                  reasoning: reported.reasoning ?? 0,
+                  cacheRead: reported.cachedInput ?? 0,
+                  cacheWrite: reported.cacheWrite ?? 0,
+                  total:
+                    (reported.uncachedInput ?? 0) +
+                    (reported.cachedInput ?? 0) +
+                    (reported.cacheWrite ?? 0) +
+                    (reported.output ?? 0)
+                }
+              : inputTokens > 0 || outputTokens > 0
                 ? {
                     input: inputTokens,
                     output: outputTokens,
@@ -13786,7 +13806,7 @@ export class ChatEngine {
                     cacheWrite: 0,
                     total: inputTokens + outputTokens
                   }
-                : undefined)
+                : undefined
           )
         : null
     if (cost !== null) {
