@@ -19,22 +19,13 @@
      *  the sheet only creates a global provider account and never attaches it. */
     projectId?: string
     onClose: () => void
-    /** Provider kinds already configured for this project, scoping container choices. */
-    configuredProviders?: CloudDeploymentProviderKind[]
     /** The flow the sheet opens in. */
     initialMode?: Mode
     /** Called after a successful save so the caller can refresh its view. */
     onSaved?: () => void
   }
 
-  let {
-    open,
-    projectId,
-    onClose,
-    configuredProviders = [],
-    initialMode = 'provider',
-    onSaved
-  }: Props = $props()
+  let { open, projectId, onClose, initialMode = 'provider', onSaved }: Props = $props()
 
   type Mode = 'provider' | 'container'
 
@@ -82,10 +73,24 @@
   /** The project's current config, loaded on open. */
   let config = $state<CloudDeploymentConfig | null>(null)
 
-  let canAddContainer = $derived(configuredProviders.length > 0)
+  /** Providers that have at least one account attached to this project — only
+   *  these can have containers monitored, since resolving needs an account. */
+  let attachedProviderKinds = $derived(
+    (
+      Object.entries(config?.project.providerAccounts ?? {}) as Array<
+        [CloudDeploymentProviderKind, { attachedAccountIds?: string[] }]
+      >
+    )
+      .filter(([, association]) => (association.attachedAccountIds?.length ?? 0) > 0)
+      .map(([kind]) => kind)
+  )
+
+  /** Only providers with an account attached to this project can host monitored
+   *  containers, since resolving a container requires an account credential. */
+  let canAddContainer = $derived(attachedProviderKinds.length > 0)
 
   let containerProviders = $derived(
-    PROVIDER_KINDS.filter((kind) => configuredProviders.includes(kind))
+    PROVIDER_KINDS.filter((kind) => attachedProviderKinds.includes(kind))
   )
 
   let filteredAvailable = $derived(
@@ -320,6 +325,10 @@
     const label = containerLabel.trim() || id
     if (id === '') {
       error = 'Choose a container to add.'
+      return
+    }
+    if (!attachedProviderKinds.includes(containerProviderKind)) {
+      error = `Attach a ${PROVIDER_DISPLAY_NAMES[containerProviderKind]} account to this project first.`
       return
     }
     saving = true

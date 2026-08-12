@@ -470,7 +470,6 @@
   open={configSheetOpen}
   {projectId}
   initialMode={configSheetMode}
-  configuredProviders={providers}
   onClose={() => (configSheetOpen = false)}
   onSaved={() => void handleConfigSaved()}
 />
