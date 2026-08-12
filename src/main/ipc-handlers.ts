@@ -3935,6 +3935,29 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'cloudDeploy:containerLog',
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      deploymentId?: unknown
+    ) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const safeDeploymentId =
+        deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      const log = await provider.getLogs(safeContainerId, safeDeploymentId)
+      return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:deployments',
     async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
@@ -3943,8 +3966,7 @@ export function registerIpcHandlers(
         kind,
         await resolveDeploymentContext(safeProjectId, kind)
       )
-      const log = await provider.getLogs(safeContainerId)
-      return { containerId: safeContainerId, log }
+      return provider.listDeployments(safeContainerId)
     }
   )
 

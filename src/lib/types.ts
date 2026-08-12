@@ -3426,6 +3426,24 @@ export const CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS: readonly CloudDeploymentPro
 /** Latest build/run state of a cloud deployment container. */
 export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'unknown'
 
+/**
+ * One deployment/build record for a cloud deployment container. The detail view
+ * shows the last several of these so the user can compare a passing vs failing
+ * run and open the build log for any of them.
+ */
+export interface CloudDeploymentDeployment {
+  /** Provider-side deployment id (e.g. a Coolify deployment_uuid). */
+  id: string
+  /** Latest known status of this deployment/build. */
+  status: CloudDeploymentStatus
+  /** Epoch ms this deployment was last updated. */
+  updatedAt?: number
+  /** Commit hash the deployment built, when the provider reports it. */
+  commit?: string
+  /** Capped raw build log for this deployment, when available. */
+  log?: string
+}
+
 /** One provider-agnostic cloud deployment container/application mapping. */
 export interface CloudDeploymentContainer {
   /** Stable container identity the provider adapter can query by. */

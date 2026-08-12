@@ -952,14 +952,27 @@ export interface IpcInvokeContract {
     ],
     import('./types').CloudDeploymentContainer | null
   >
-  /** Capped raw log text for a configured container's latest deployment. */
-  'cloudDeploy:containerLog': Contract<
+  /**
+   * List the most recent deployments/builds for a container, newest first
+   * (bounded to a UI window such as the last ten).
+   */
+  'cloudDeploy:deployments': Contract<
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
       containerId: string
     ],
-    { containerId: string; log: string }
+    import('./types').CloudDeploymentDeployment[]
+  >
+  /** Capped raw log text for a container's latest deployment. */
+  'cloudDeploy:containerLog': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string,
+      deploymentId?: string
+    ],
+    { containerId: string; deploymentId: string | null; log: string }
   >
   /** Everything the PR detail view needs, fetched in parallel in one round trip. */
   'pr:bundle': Contract<

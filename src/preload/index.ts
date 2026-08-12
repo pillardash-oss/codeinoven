@@ -208,6 +208,7 @@ const INVOKE_CHANNELS = [
   'cloudDeploy:setActiveAccount',
   'cloudDeploy:overview',
   'cloudDeploy:availableContainers',
+  'cloudDeploy:deployments',
   'cloudDeploy:containerStatus',
   'cloudDeploy:containerLog',
   'pr:bundle',

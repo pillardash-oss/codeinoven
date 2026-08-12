@@ -3,6 +3,7 @@ import { invoke } from '$lib/ipc.svelte'
 import {
   CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
   type CloudDeploymentContainer,
+  type CloudDeploymentDeployment,
   type CloudDeploymentProviderKind,
   type CloudDeploymentResult
 } from '$shared/types'
@@ -64,8 +65,14 @@ export class CloudDeployState {
   /** Cached per-container statuses, keyed by `${projectId}/${providerKind}/${containerId}`. */
   containerStatuses: Record<string, CacheEntry<CloudDeploymentContainer>> = $state({})
 
-  /** Cached per-container logs, keyed by `${projectId}/${providerKind}/${containerId}`. */
-  containerLogs: Record<string, CacheEntry<{ containerId: string; log: string }>> = $state({})
+  /** Cached per-container logs, keyed by `${projectId}/${providerKind}/${containerId}[/deploymentId]`. */
+  containerLogs: Record<
+    string,
+    CacheEntry<{ containerId: string; deploymentId: string | null; log: string }>
+  > = $state({})
+
+  /** Cached per-container deployment lists, keyed by `${projectId}/${providerKind}/${containerId}`. */
+  containerDeployments: Record<string, CacheEntry<CloudDeploymentDeployment[]>> = $state({})
 
   /** Epoch ms of the last failure per key. Deliberately plain (not `$state`) —
    *  it only gates fetching, and making it reactive would feed the very effects
@@ -265,33 +272,64 @@ export class CloudDeployState {
   }
 
   /**
-   * Load a container's latest deployment log, serving cache first. Logs hold a
-   * longer TTL than the other caches.
+   * Load a container's (optionally deployment-specific) build log, serving cache
+   * first. Logs hold a longer TTL than the other caches.
    */
   async ensureContainerLog(
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
+    deploymentId?: string,
     force = false
-  ): Promise<{ containerId: string; log: string } | null> {
+  ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
-    const cached = this.containerLogs[key]
+    const logKey = deploymentId ? `${key}/${deploymentId}` : key
+    const cached = this.containerLogs[logKey]
     if (!force && cached && Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) {
       return cached.value
     }
+    if (!force && this.coolingDown(logKey)) return cached?.value ?? null
+    return this.dedupe(logKey, () =>
+      this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId)
+    )
+  }
+
+  /**
+   * Load a container's recent deployment list (bounded window), serving cache
+   * first. Reuses the overview TTL since deployments change as builds run.
+   */
+  async ensureDeployments(
+    projectId: string,
+    providerKind: CloudDeploymentProviderKind,
+    containerId: string,
+    force = false
+  ): Promise<CloudDeploymentDeployment[] | null> {
+    if (this.handleNotImplemented(providerKind)) return null
+    const key = CloudDeployState.containerKey(projectId, providerKind, containerId)
+    const cached = this.containerDeployments[key]
+    if (!force && cached && Date.now() - cached.fetchedAt < STATUS_CACHE_TTL_MS) {
+      return cached.value
+    }
     if (!force && this.coolingDown(key)) return cached?.value ?? null
-    return this.dedupe(key, () => this.loadContainerLog(projectId, providerKind, containerId, key))
+    return this.dedupe(key, () => this.loadDeployments(projectId, providerKind, containerId, key))
   }
 
   private async loadContainerLog(
     projectId: string,
     providerKind: CloudDeploymentProviderKind,
     containerId: string,
-    key: string
-  ): Promise<{ containerId: string; log: string } | null> {
+    key: string,
+    deploymentId?: string
+  ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     try {
-      const result = await invoke('cloudDeploy:containerLog', projectId, providerKind, containerId)
+      const result = await invoke(
+        'cloudDeploy:containerLog',
+        projectId,
+        providerKind,
+        containerId,
+        deploymentId
+      )
       this.containerLogs = {
         ...this.containerLogs,
         [key]: { value: result, fetchedAt: Date.now() }
@@ -302,6 +340,28 @@ export class CloudDeployState {
     } catch (reason) {
       this.markFailure(key)
       this.error = errorMessage(reason, 'Container log could not be loaded')
+      throw reason
+    }
+  }
+
+  private async loadDeployments(
+    projectId: string,
+    providerKind: CloudDeploymentProviderKind,
+    containerId: string,
+    key: string
+  ): Promise<CloudDeploymentDeployment[] | null> {
+    try {
+      const result = await invoke('cloudDeploy:deployments', projectId, providerKind, containerId)
+      this.containerDeployments = {
+        ...this.containerDeployments,
+        [key]: { value: result, fetchedAt: Date.now() }
+      }
+      delete this.failures[key]
+      this.error = null
+      return result
+    } catch (reason) {
+      this.markFailure(key)
+      this.error = errorMessage(reason, 'Deployments could not be loaded')
       throw reason
     }
   }
@@ -354,6 +414,7 @@ export class CloudDeployState {
       this.overviews = {}
       this.containerStatuses = {}
       this.containerLogs = {}
+      this.containerDeployments = {}
       this.failures = {}
       this.requests = {}
       this.notifiedNotImplemented = {}
@@ -364,6 +425,10 @@ export class CloudDeployState {
     this.overviews = CloudDeployState.dropByProjectPrefix(this.overviews, projectId)
     this.containerStatuses = CloudDeployState.dropByProjectPrefix(this.containerStatuses, projectId)
     this.containerLogs = CloudDeployState.dropByProjectPrefix(this.containerLogs, projectId)
+    this.containerDeployments = CloudDeployState.dropByProjectPrefix(
+      this.containerDeployments,
+      projectId
+    )
     this.failures = CloudDeployState.dropByProjectPrefix(this.failures, projectId)
     this.requests = CloudDeployState.dropByProjectPrefix(this.requests, projectId)
     if (this.scopedProjectId === projectId) this.scopedProjectId = null
@@ -384,6 +449,10 @@ export class CloudDeployState {
     this.overviews = CloudDeployState.keepByProjectPrefix(this.overviews, projectId)
     this.containerStatuses = CloudDeployState.keepByProjectPrefix(this.containerStatuses, projectId)
     this.containerLogs = CloudDeployState.keepByProjectPrefix(this.containerLogs, projectId)
+    this.containerDeployments = CloudDeployState.keepByProjectPrefix(
+      this.containerDeployments,
+      projectId
+    )
     this.failures = CloudDeployState.keepByProjectPrefix(this.failures, projectId)
     this.requests = CloudDeployState.keepByProjectPrefix(this.requests, projectId)
     this.error = null

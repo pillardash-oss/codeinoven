@@ -1,4 +1,8 @@
-import type { CloudDeploymentContainer, CloudDeploymentProviderKind } from '../../lib/types'
+import type {
+  CloudDeploymentContainer,
+  CloudDeploymentDeployment,
+  CloudDeploymentProviderKind
+} from '../../lib/types'
 import type {
   CloudDeploymentProviderInfo,
   DeploymentProvider
@@ -40,6 +44,10 @@ export class NotImplementedProvider implements DeploymentProvider {
 
   async getStatus(): Promise<CloudDeploymentContainer | null> {
     return null
+  }
+
+  async listDeployments(): Promise<CloudDeploymentDeployment[]> {
+    return []
   }
 
   async getLogs(): Promise<string> {

@@ -1,4 +1,8 @@
-import type { CloudDeploymentContainer, CloudDeploymentProviderKind } from '../lib/types'
+import type {
+  CloudDeploymentContainer,
+  CloudDeploymentDeployment,
+  CloudDeploymentProviderKind
+} from '../lib/types'
 
 /** Static, provider-agnostic metadata about a deployment provider adapter. */
 export interface CloudDeploymentProviderInfo {
@@ -33,8 +37,13 @@ export interface DeploymentProvider {
   listContainers(): Promise<CloudDeploymentContainer[]>
   /** Latest snapshot for one container, or null when the provider cannot resolve it. */
   getStatus(containerId: string): Promise<CloudDeploymentContainer | null>
-  /** Capped raw log text for a container's latest deployment. */
-  getLogs(containerId: string): Promise<string>
+  /**
+   * List the most recent deployments/builds for a container, newest first.
+   * The UI shows a bounded window (e.g. the last ten).
+   */
+  listDeployments(containerId: string): Promise<CloudDeploymentDeployment[]>
+  /** Capped raw log text for a deployment, or the latest when no id is given. */
+  getLogs(containerId: string, deploymentId?: string): Promise<string>
   /** Static metadata about the adapter itself. */
   getProviderInfo(): CloudDeploymentProviderInfo
 }

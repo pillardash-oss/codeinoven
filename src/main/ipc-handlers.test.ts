@@ -42,6 +42,7 @@ import type {
   BrainstormDocument,
   CloudDeploymentConfig,
   CloudDeploymentContainer,
+  CloudDeploymentDeployment,
   CloudDeploymentProviderAccount,
   EngineeringSpec,
   EngineeringSpecContent
@@ -917,6 +918,50 @@ describe('cloudDeploy IPC', () => {
       expect(Array.isArray(result)).toBe(true)
       const ids = (result as CloudDeploymentContainer[]).map((container) => container.id)
       expect(ids).toEqual(['app-1', 'app-2'])
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('lists recent deployments for a container via deployments', async () => {
+    const storageRoot = await setupStorage()
+    const accountId = await createCoolifyAccount('Personal', 'personal-token')
+    const attach = handlers.get('cloudDeploy:attachAccount')
+    const deployments = handlers.get('cloudDeploy:deployments')
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', accountId)
+
+    const fetchMock = vi.fn(
+      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
+        new Response(
+          JSON.stringify([
+            {
+              deployment_uuid: 'dep-1',
+              status: 'finished',
+              updated_at: '2024-01-02T00:00:00.000Z',
+              commit: 'abc1234'
+            },
+            {
+              deployment_uuid: 'dep-2',
+              status: 'failed',
+              updated_at: '2024-01-01T00:00:00.000Z'
+            }
+          ]),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const result = (await deployments?.(
+        trustedEvent(),
+        'proj-a',
+        'coolify',
+        'app-1'
+      )) as CloudDeploymentDeployment[]
+      expect(result).toHaveLength(2)
+      expect(result[0]).toMatchObject({ id: 'dep-1', status: 'success', commit: 'abc1234' })
+      expect(result[1]).toMatchObject({ id: 'dep-2', status: 'failed' })
     } finally {
       vi.unstubAllGlobals()
     }
