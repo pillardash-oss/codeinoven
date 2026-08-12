@@ -844,56 +844,59 @@ export interface IpcInvokeContract {
   >
   /** Remove a project's cloud deployment config and clear its has-deployments flag. */
   'cloudDeploy:clearConfig': Contract<[projectId: string], void>
+  /** List every provider account in the global registry. */
+  'cloudDeploy:listAccounts': Contract<[], import('./types').CloudDeploymentAccountRegistry>
   /**
-   * Store or rotate an account-scoped provider credential for a project.
-   * `accountLabel` selects an existing account to rotate or names a new account
-   * to create. The plaintext token is vaulted by main via `safeStorage` under
-   * the project+account key and never crosses back to the renderer; only an
-   * opaque ref is recorded in the account. Returns the updated config.
+   * Create a new provider account in the GLOBAL registry and vault its token by
+   * account id. The account is reusable across every project that attaches it.
+   * The plaintext token is vaulted by main via `safeStorage` and never crosses
+   * back to the renderer. Returns the sanitized account (no secret).
    */
-  'cloudDeploy:setCredential': Contract<
+  'cloudDeploy:createAccount': Contract<
     [
-      projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,
       accountLabel: string,
       token: string,
       baseUrl?: string
     ],
-    import('./types').CloudDeploymentConfig
+    import('./types').CloudDeploymentProviderAccount
   >
-  /** Add an empty account (no credential yet) for a provider in a project. */
-  'cloudDeploy:addAccount': Contract<
-    [
-      projectId: string,
-      providerKind: import('./types').CloudDeploymentProviderKind,
-      accountLabel: string
-    ],
-    import('./types').CloudDeploymentConfig
-  >
-  /** Remove an account and drop its stored token for the project. */
-  'cloudDeploy:removeAccount': Contract<
-    [
-      projectId: string,
-      providerKind: import('./types').CloudDeploymentProviderKind,
-      accountId: string
-    ],
-    import('./types').CloudDeploymentConfig
-  >
-  /** Switch which account is active for a provider within a project. */
-  'cloudDeploy:switchAccount': Contract<
-    [
-      projectId: string,
-      providerKind: import('./types').CloudDeploymentProviderKind,
-      accountId: string
-    ],
-    import('./types').CloudDeploymentConfig
+  /** Rename a global provider account (label update only). */
+  'cloudDeploy:updateAccountLabel': Contract<
+    [accountId: string, label: string],
+    import('./types').CloudDeploymentProviderAccount
   >
   /**
-   * Remove only that project+account's stored token and drop its credential
-   * from that project's config. The account shell is retained but left
-   * unconfigured. Returns the updated config.
+   * Rotate a global provider account's secret. Update-only: the token is vaulted
+   * and the current secret is never returned to the renderer. Returns the
+   * sanitized account (secretRef cleared).
    */
-  'cloudDeploy:removeCredential': Contract<
+  'cloudDeploy:rotateAccountSecret': Contract<
+    [accountId: string, token: string],
+    import('./types').CloudDeploymentProviderAccount
+  >
+  /** Remove a global provider account and its vaulted token. */
+  'cloudDeploy:removeAccount': Contract<[accountId: string], void>
+  /** Attach a global provider account to a project for a provider kind. */
+  'cloudDeploy:attachAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Detach a global provider account from a project for a provider kind. */
+  'cloudDeploy:detachAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Set which attached account is active for a provider within a project. */
+  'cloudDeploy:setActiveAccount': Contract<
     [
       projectId: string,
       providerKind: import('./types').CloudDeploymentProviderKind,

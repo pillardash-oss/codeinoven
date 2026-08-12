@@ -3399,15 +3399,15 @@ export interface CloudDeploymentContainer {
 }
 
 /**
- * One account configured for a cloud deployment provider within a single
- * project. A project may hold several accounts per provider (e.g. a personal
- * and a company Coolify account) and switch between them via the parent
- * `CloudDeploymentProviderCredentials.activeAccountId`.
+ * A cloud deployment provider account in the global registry. Accounts are
+ * created once, labelled by the user, and can be attached to any project.
+ * They are NOT scoped to a project: the same account (e.g. one Coolify
+ * instance, or one Vercel team) is reused across every project that uses it.
  */
-export interface CloudDeploymentCredentialAccount {
-  /** Stable account identity, unique within this provider for the project. */
+export interface CloudDeploymentProviderAccount {
+  /** Stable account identity, unique across the whole registry. */
   id: string
-  /** User-supplied label shown in the panel (e.g. 'Personal' or 'Company'). */
+  /** User-supplied label shown in the panel (e.g. 'Coolify — Personal'). */
   label: string
   /** Provider this account authenticates. */
   providerKind: CloudDeploymentProviderKind
@@ -3415,19 +3415,30 @@ export interface CloudDeploymentCredentialAccount {
   secretRef: string
   /** Verified base URL the provider is reached at (e.g. the Coolify host), when known. */
   baseUrl?: string
-  /** Whether this account is currently configured with a stored credential. */
+  /** Whether this account currently holds a stored credential. */
   configured: boolean
   /** Epoch ms the account was first created. */
   createdAt: number
-  /** Epoch ms the account credential was last stored or rotated. */
+  /** Epoch ms the account's credential was last stored or rotated. */
   updatedAt: number
 }
 
-/** All accounts for one provider within a project, plus the active selection. */
-export interface CloudDeploymentProviderCredentials {
-  /** Accounts configured for this provider in this project. */
-  accounts: CloudDeploymentCredentialAccount[]
-  /** Id of the active account, or null when none is selected. */
+/**
+ * The global cloud deployment provider account registry. Persisted by main,
+ * independent of any project. Keyed by account id.
+ */
+export interface CloudDeploymentAccountRegistry {
+  accounts: CloudDeploymentProviderAccount[]
+}
+
+/**
+ * A project's attachment to a provider's accounts. A project can attach
+ * several accounts of the same provider and pick one active for monitoring.
+ */
+export interface CloudDeploymentProjectProviderAccounts {
+  /** Ids of the global accounts attached to this project for this provider. */
+  attachedAccountIds: string[]
+  /** Id of the active attached account for this provider, or null when none. */
   activeAccountId: string | null
 }
 
@@ -3437,20 +3448,22 @@ export interface CloudDeploymentProjectConfig {
   providers: CloudDeploymentProviderKind[]
   /** Container mappings configured for this project, with user labels. */
   containers: CloudDeploymentContainer[]
+  /** Per-provider account attachments (which global accounts this project uses). */
+  providerAccounts?: Partial<
+    Record<CloudDeploymentProviderKind, CloudDeploymentProjectProviderAccounts>
+  >
 }
 
 /**
  * Per-project cloud deployment configuration, persisted by main, never in the
- * repo. Credentials are isolated per project and support multiple accounts per
- * provider with an active, switchable account. Empty or missing accounts
- * default to no active account (`activeAccountId: null`).
+ * repo. Accounts themselves live in the global `CloudDeploymentAccountRegistry`
+ * (see `cloudDeploy:listAccounts`); this config only records which accounts the
+ * project attaches and which is active per provider.
  */
 export interface CloudDeploymentConfig {
-  version: 2
+  version: 3
   projectId: string
-  /** Per-provider accounts for this project, keyed by provider kind. */
-  credentials: Partial<Record<CloudDeploymentProviderKind, CloudDeploymentProviderCredentials>>
-  /** Selected providers plus labelled container mappings for this project. */
+  /** Selected providers plus labelled container mappings and account attachments. */
   project: CloudDeploymentProjectConfig
   /** Epoch ms of the last configuration change. */
   updatedAt: number

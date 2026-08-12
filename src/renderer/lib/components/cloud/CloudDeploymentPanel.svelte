@@ -14,6 +14,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
+  import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -205,10 +206,11 @@
   function selectedProviderContext(): string {
     const container = selectedContainer
     if (!container) return ''
-    const providerCredentials = config?.credentials?.[container.providerKind]
-    const activeAccount = providerCredentials?.accounts.find(
-      (account) => account.id === providerCredentials.activeAccountId
-    )
+    const providerAccounts = config?.project.providerAccounts?.[container.providerKind]
+    const activeAccountId = providerAccounts?.activeAccountId ?? null
+    const activeAccount = activeAccountId
+      ? cloudAccountsState.accountById(activeAccountId)
+      : undefined
     return [
       `Container: ${container.label}`,
       `Container ID: ${container.id}`,

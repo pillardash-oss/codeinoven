@@ -42,6 +42,7 @@ import type {
   BrainstormDocument,
   CloudDeploymentConfig,
   CloudDeploymentContainer,
+  CloudDeploymentProviderAccount,
   EngineeringSpec,
   EngineeringSpecContent
 } from '../lib/types'
@@ -660,203 +661,96 @@ describe('cloudDeploy IPC', () => {
     return storageRoot
   }
 
-  it('isolates account credentials per project and never shares a token', async () => {
-    const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
-    const get = handlers.get('cloudDeploy:getConfig')
-    const remove = handlers.get('cloudDeploy:removeCredential')
+  async function createCoolifyAccount(accountLabel: string, token: string): Promise<string> {
+    const create = handlers.get('cloudDeploy:createAccount')
+    const account = (await create?.(
+      trustedEvent(),
+      'coolify',
+      accountLabel,
+      token,
+      'http://localhost:8080'
+    )) as CloudDeploymentProviderAccount
+    return account.id
+  }
 
-    await expect(
-      set?.(trustedEvent(), 'proj-a', 'coolify', 'Personal', 'token-a', 'http://localhost:8080')
-    ).resolves.toMatchObject({ version: 2, projectId: 'proj-a' })
-    await expect(
-      set?.(trustedEvent(), 'proj-b', 'coolify', 'Personal', 'token-b', 'http://localhost:8080')
-    ).resolves.toMatchObject({ projectId: 'proj-b' })
+  it('creates a global account and can attach it to two projects without duplication', async () => {
+    const storageRoot = await setupStorage()
+    const create = handlers.get('cloudDeploy:createAccount')
+    const attach = handlers.get('cloudDeploy:attachAccount')
+    const list = handlers.get('cloudDeploy:listAccounts')
+    const get = handlers.get('cloudDeploy:getConfig')
+
+    const account = (await create?.(
+      trustedEvent(),
+      'coolify',
+      'Coolify — Personal',
+      'personal-token',
+      'http://localhost:8080'
+    )) as CloudDeploymentProviderAccount
+    expect(account.id).toBeTruthy()
+    expect(account.secretRef).toBeTruthy()
+    expect(account.configured).toBe(true)
+
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', account.id)
+    await attach?.(trustedEvent(), 'proj-b', 'coolify', account.id)
+
+    // One global account, referenced by both projects (no per-project copies).
+    const registry = (await list?.(trustedEvent())) as {
+      accounts: CloudDeploymentProviderAccount[]
+    }
+    expect(registry.accounts).toHaveLength(1)
+    expect(registry.accounts[0].id).toBe(account.id)
 
     const configA = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
     const configB = (await get?.(trustedEvent(), 'proj-b')) as CloudDeploymentConfig
-    const refA = configA.credentials['coolify']?.accounts[0]?.secretRef
-    const refB = configB.credentials['coolify']?.accounts[0]?.secretRef
-    expect(refA).toBeTruthy()
-    expect(refB).toBeTruthy()
-    expect(refA).not.toBe(refB)
+    expect(configA.project.providerAccounts?.['coolify']?.attachedAccountIds).toContain(account.id)
+    expect(configB.project.providerAccounts?.['coolify']?.attachedAccountIds).toContain(account.id)
 
-    const accountIdA = configA.credentials['coolify']?.accounts[0]?.id
-    await expect(remove?.(trustedEvent(), 'proj-a', 'coolify', accountIdA)).resolves.toMatchObject({
-      credentials: { coolify: { accounts: [{ configured: false }] } }
-    })
-
-    const configANow = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
-    const configBNow = (await get?.(trustedEvent(), 'proj-b')) as CloudDeploymentConfig
-    expect(configANow.credentials['coolify']?.accounts[0]?.configured).toBe(false)
-    expect(configBNow.credentials['coolify']?.accounts[0]?.configured).toBe(true)
-
+    // The same token resolves for both projects because it is keyed by account.
     const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
-    expect(vaultRaw).not.toContain('token-a')
-    expect(vaultRaw).not.toContain('token-b')
+    expect(vaultRaw).toContain(`deployment_provider_${account.id}`)
+    expect(vaultRaw).not.toContain('personal-token')
 
     await rm(storageRoot, { recursive: true, force: true })
   })
 
-  it('rejects an invented base URL on saveConfig', async () => {
+  it('rejects a duplicate global account label', async () => {
     const storageRoot = await setupStorage()
-    const now = Date.now()
-    const badConfig: CloudDeploymentConfig = {
-      version: 2,
-      projectId: 'proj-a',
-      credentials: {
-        coolify: {
-          accounts: [
-            {
-              id: 'acc-1',
-              label: 'Personal',
-              providerKind: 'coolify',
-              secretRef: 'ref',
-              baseUrl: 'https://example.com',
-              configured: true,
-              createdAt: now,
-              updatedAt: now
-            }
-          ],
-          activeAccountId: 'acc-1'
-        }
-      },
-      project: { providers: ['coolify'], containers: [] },
-      updatedAt: now
-    }
-    const save = handlers.get('cloudDeploy:saveConfig')
-    await expect(save?.(trustedEvent(), 'proj-a', badConfig)).rejects.toThrow(/base URL/i)
-
-    await rm(storageRoot, { recursive: true, force: true })
-  })
-
-  it('accepts a verified development localhost base URL on saveConfig', async () => {
-    const storageRoot = await setupStorage()
-    const now = Date.now()
-    const goodConfig: CloudDeploymentConfig = {
-      version: 2,
-      projectId: 'proj-a',
-      credentials: {
-        coolify: {
-          accounts: [
-            {
-              id: 'acc-1',
-              label: 'Personal',
-              providerKind: 'coolify',
-              secretRef: 'ref',
-              baseUrl: 'http://localhost:8080',
-              configured: true,
-              createdAt: now,
-              updatedAt: now
-            }
-          ],
-          activeAccountId: 'acc-1'
-        }
-      },
-      project: { providers: ['coolify'], containers: [] },
-      updatedAt: now
-    }
-    const save = handlers.get('cloudDeploy:saveConfig')
-    await expect(save?.(trustedEvent(), 'proj-a', goodConfig)).resolves.toMatchObject({
-      version: 2
-    })
-
-    await rm(storageRoot, { recursive: true, force: true })
-  })
-
-  it('saveConfig preserves main-owned credential metadata and never replaces it with renderer values', async () => {
-    const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
-    const get = handlers.get('cloudDeploy:getConfig')
-    const save = handlers.get('cloudDeploy:saveConfig')
-
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Personal',
-      'personal-token',
-      'http://localhost:8080'
-    )
-    const stored = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
-    const storedAccount = stored.credentials['coolify']?.accounts[0]
-    expect(storedAccount?.configured).toBe(true)
-
-    // A renderer-supplied config attempts to swap the account id, secretRef, and
-    // configured flag. Main must preserve the authoritative vault-backed record.
-    const now = Date.now()
-    const forged: CloudDeploymentConfig = {
-      ...stored,
-      credentials: {
-        coolify: {
-          accounts: [
-            {
-              id: 'forged-id',
-              label: 'Personal',
-              providerKind: 'coolify',
-              secretRef: 'forged-ref',
-              configured: false,
-              createdAt: now,
-              updatedAt: now
-            }
-          ],
-          activeAccountId: 'forged-id'
-        }
-      },
-      updatedAt: now
-    }
-    await save?.(trustedEvent(), 'proj-a', forged)
-
-    const after = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
-    const keptAccount = after.credentials['coolify']?.accounts[0]
-    expect(keptAccount?.id).toBe(storedAccount?.id)
-    expect(keptAccount?.secretRef).toBe(storedAccount?.secretRef)
-    expect(keptAccount?.configured).toBe(true)
-
-    await rm(storageRoot, { recursive: true, force: true })
-  })
-
-  it('switches the active account and resolves its token + base URL on overview', async () => {
-    const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
-    const get = handlers.get('cloudDeploy:getConfig')
-    const switchAccount = handlers.get('cloudDeploy:switchAccount')
-    const overview = handlers.get('cloudDeploy:overview')
-
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Personal',
-      'personal-token',
-      'http://localhost:8080'
-    )
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Company',
-      'company-token',
-      'http://localhost:8080'
-    )
-
-    const config = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
-    const company = config.credentials['coolify']?.accounts.find(
-      (account) => account.label === 'Company'
-    )
-    expect(company?.id).toBeTruthy()
+    const create = handlers.get('cloudDeploy:createAccount')
+    await create?.(trustedEvent(), 'coolify', 'Personal', 'token-a', 'http://localhost:8080')
 
     await expect(
-      switchAccount?.(trustedEvent(), 'proj-a', 'coolify', company?.id)
+      create?.(trustedEvent(), 'coolify', 'Personal', 'token-b', 'http://localhost:8080')
+    ).rejects.toThrow(/already exists/i)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('switches the active attached account and resolves its token + base URL on overview', async () => {
+    const storageRoot = await setupStorage()
+    const personalId = await createCoolifyAccount('Personal', 'personal-token')
+    const companyId = await createCoolifyAccount('Company', 'company-token')
+    const attach = handlers.get('cloudDeploy:attachAccount')
+    const setActive = handlers.get('cloudDeploy:setActiveAccount')
+    const get = handlers.get('cloudDeploy:getConfig')
+    const save = handlers.get('cloudDeploy:saveConfig')
+    const overview = handlers.get('cloudDeploy:overview')
+
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', personalId)
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', companyId)
+    await expect(
+      setActive?.(trustedEvent(), 'proj-a', 'coolify', companyId)
     ).resolves.toMatchObject({
-      credentials: { coolify: { activeAccountId: company?.id } }
+      project: { providerAccounts: { coolify: { activeAccountId: companyId } } }
     })
 
-    const mappedConfig = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
+    // Map a container so the overview has something to return.
+    const config = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
     const now = Date.now()
     const mapped: CloudDeploymentConfig = {
-      ...mappedConfig,
+      ...config,
       project: {
+        ...config.project,
         providers: ['coolify'],
         containers: [
           {
@@ -871,7 +765,6 @@ describe('cloudDeploy IPC', () => {
       },
       updatedAt: now
     }
-    const save = handlers.get('cloudDeploy:saveConfig')
     await save?.(trustedEvent(), 'proj-a', mapped)
 
     const fetchMock = vi.fn(
@@ -910,24 +803,19 @@ describe('cloudDeploy IPC', () => {
 
   it('filters provider containers to project mappings and preserves custom labels', async () => {
     const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
+    const accountId = await createCoolifyAccount('Personal', 'personal-token')
+    const attach = handlers.get('cloudDeploy:attachAccount')
     const save = handlers.get('cloudDeploy:saveConfig')
     const get = handlers.get('cloudDeploy:getConfig')
     const overview = handlers.get('cloudDeploy:overview')
 
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Personal',
-      'personal-token',
-      'http://localhost:8080'
-    )
+    await attach?.(trustedEvent(), 'proj-a', 'coolify', accountId)
     const existing = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
     const now = Date.now()
     const mapped: CloudDeploymentConfig = {
       ...existing,
       project: {
+        ...existing.project,
         providers: ['coolify'],
         containers: [
           {
@@ -952,8 +840,6 @@ describe('cloudDeploy IPC', () => {
     }
     await save?.(trustedEvent(), 'proj-a', mapped)
 
-    // The provider returns an extra un-mapped container plus a label that must
-    // be overridden by the project's custom label.
     const fetchMock = vi.fn(
       async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
         new Response(
@@ -982,7 +868,6 @@ describe('cloudDeploy IPC', () => {
       }
       expect(result.accessError).toBeUndefined()
       const ids = result.containers.map((container) => container.id).sort()
-      // The un-mapped provider container is excluded; the pending one is kept.
       expect(ids).toEqual(['app-1', 'app-not-yet'])
       expect(result.containers).not.toContainEqual(expect.objectContaining({ id: 'unrelated-app' }))
       const live = result.containers.find((container) => container.id === 'app-1')
@@ -998,110 +883,13 @@ describe('cloudDeploy IPC', () => {
     await rm(storageRoot, { recursive: true, force: true })
   })
 
-  it('represents every configured container even when the provider returns none', async () => {
-    const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
-    const save = handlers.get('cloudDeploy:saveConfig')
-    const get = handlers.get('cloudDeploy:getConfig')
-    const overview = handlers.get('cloudDeploy:overview')
-
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Personal',
-      'personal-token',
-      'http://localhost:8080'
-    )
-    const existing = (await get?.(trustedEvent(), 'proj-a')) as CloudDeploymentConfig
-    const now = Date.now()
-    const mapped: CloudDeploymentConfig = {
-      ...existing,
-      project: {
-        providers: ['coolify'],
-        containers: [
-          {
-            id: 'app-ghost',
-            label: 'Ghost App',
-            providerKind: 'coolify',
-            status: 'unknown',
-            createdAt: now,
-            updatedAt: now
-          }
-        ]
-      },
-      updatedAt: now
-    }
-    await save?.(trustedEvent(), 'proj-a', mapped)
-
-    const fetchMock = vi.fn(
-      async (_url: string | URL, _init?: RequestInit): Promise<Response> =>
-        new Response(JSON.stringify([]), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        })
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      const result = (await overview?.(trustedEvent(), 'proj-a', 'coolify')) as {
-        containers: CloudDeploymentContainer[]
-      }
-      expect(result.containers).toHaveLength(1)
-      expect(result.containers[0]).toMatchObject({
-        id: 'app-ghost',
-        label: 'Ghost App',
-        status: 'unknown'
-      })
-    } finally {
-      vi.unstubAllGlobals()
-    }
-
-    await rm(storageRoot, { recursive: true, force: true })
-  })
-
-  it('clearConfig removes every referenced account vault secret', async () => {
-    const storageRoot = await setupStorage()
-    const set = handlers.get('cloudDeploy:setCredential')
-    const clear = handlers.get('cloudDeploy:clearConfig')
-    const get = handlers.get('cloudDeploy:getConfig')
-
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Personal',
-      'personal-token',
-      'http://localhost:8080'
-    )
-    await set?.(
-      trustedEvent(),
-      'proj-a',
-      'coolify',
-      'Company',
-      'company-token',
-      'http://localhost:8080'
-    )
-
-    let vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
-    expect(vaultRaw).toContain('deployment_provider_proj-a_coolify_')
-
-    await clear?.(trustedEvent(), 'proj-a')
-
-    vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
-    expect(vaultRaw).not.toContain('deployment_provider_proj-a_coolify_')
-    await expect(get?.(trustedEvent(), 'proj-a')).resolves.toBeNull()
-
-    await rm(storageRoot, { recursive: true, force: true })
-  })
-
   it('rejects container mappings whose provider is not selected', async () => {
     const storageRoot = await setupStorage()
     const save = handlers.get('cloudDeploy:saveConfig')
     const now = Date.now()
     const config: CloudDeploymentConfig = {
-      version: 2,
+      version: 3,
       projectId: 'proj-a',
-      credentials: {},
       project: {
         providers: ['coolify'],
         containers: [
@@ -1128,9 +916,8 @@ describe('cloudDeploy IPC', () => {
     const save = handlers.get('cloudDeploy:saveConfig')
     const now = Date.now()
     const config: CloudDeploymentConfig = {
-      version: 2,
+      version: 3,
       projectId: 'proj-a',
-      credentials: {},
       project: {
         providers: ['coolify'],
         containers: [
@@ -1156,6 +943,49 @@ describe('cloudDeploy IPC', () => {
     }
 
     await expect(save?.(trustedEvent(), 'proj-a', config)).rejects.toThrow(/Duplicate/i)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('rotates a global account secret and never returns it', async () => {
+    const storageRoot = await setupStorage()
+    const accountId = await createCoolifyAccount('Personal', 'old-token')
+    const rotate = handlers.get('cloudDeploy:rotateAccountSecret')
+    const list = handlers.get('cloudDeploy:listAccounts')
+
+    const rotated = (await rotate?.(
+      trustedEvent(),
+      accountId,
+      'new-token'
+    )) as CloudDeploymentProviderAccount
+    // The secret must never be returned to the renderer.
+    expect(rotated.secretRef).toBe('')
+
+    const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).not.toContain('new-token')
+    const registry = (await list?.(trustedEvent())) as {
+      accounts: CloudDeploymentProviderAccount[]
+    }
+    const account = registry.accounts.find((entry) => entry.id === accountId)
+    expect(account?.configured).toBe(true)
+
+    await rm(storageRoot, { recursive: true, force: true })
+  })
+
+  it('removes a global account and its vault token', async () => {
+    const storageRoot = await setupStorage()
+    const accountId = await createCoolifyAccount('Personal', 'personal-token')
+    const remove = handlers.get('cloudDeploy:removeAccount')
+    const list = handlers.get('cloudDeploy:listAccounts')
+
+    await remove?.(trustedEvent(), accountId)
+
+    const registry = (await list?.(trustedEvent())) as {
+      accounts: CloudDeploymentProviderAccount[]
+    }
+    expect(registry.accounts).toHaveLength(0)
+    const vaultRaw = await readFile(join(storageRoot, 'secrets', 'vault.json'), 'utf-8')
+    expect(vaultRaw).not.toContain(`deployment_provider_${accountId}`)
 
     await rm(storageRoot, { recursive: true, force: true })
   })

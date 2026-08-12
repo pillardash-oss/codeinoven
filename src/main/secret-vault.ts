@@ -1,6 +1,5 @@
 import { safeStorage } from 'electron'
 import { uuidv7 } from '../lib/id'
-import type { CloudDeploymentProviderKind } from '../lib/types'
 import type { StorageEngine } from './storage-engine'
 
 interface EncryptedSecretRecord {
@@ -12,17 +11,13 @@ interface EncryptedSecretRecord {
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 
 /**
- * Deterministic SecretVault ref under which a deployment provider's token is
- * stored. The ref is scoped by both the owning project and the account within
- * that project so one project (or account) storing, rotating, or removing its
- * credential never touches another's.
+ * Deterministic SecretVault ref under which a provider account's token is
+ * stored. The ref is keyed by the global account id only, so one account's
+ * token is shared by every project that attaches it — a provider account is
+ * created once and reused across projects, not duplicated per project.
  */
-function providerTokenRef(
-  projectId: string,
-  kind: CloudDeploymentProviderKind,
-  accountId: string
-): string {
-  return `deployment_provider_${projectId}_${kind}_${accountId}`
+function providerTokenRef(accountId: string): string {
+  return `deployment_provider_${accountId}`
 }
 
 /**
@@ -60,63 +55,46 @@ export class SecretVault {
   }
 
   /**
-   * Store (or rotate) a deployment provider token, encrypted via `safeStorage`.
+   * Store (or rotate) a provider account's token, encrypted via `safeStorage`.
    *
    * This mirrors the GitHub token storage mechanism: the token is stored under a
-   * deterministic, provider-keyed ref inside the secure vault and only ciphertext
+   * deterministic, account-keyed ref inside the secure vault and only ciphertext
    * is persisted beneath the CodeInOven config root. The plaintext token is never
    * written to a repo or project file.
    *
    * Keychain-unavailable fallback: when the OS keychain (`safeStorage`) is
-   * unavailable, this throws and the provider is left unconfigured. The vault
+   * unavailable, this throws and the account is left unconfigured. The vault
    * deliberately does not degrade to plaintext storage, so a provider token can
    * never be persisted outside the secure store.
    *
-   * The ref is scoped to `projectId` + `accountId`, so credentials stored for
-   * one project (or one account within a project) never collide with another's.
+   * The ref is keyed by the global `accountId`, so one account's token is shared
+   * across every project that attaches it.
    *
    * @returns the opaque ref under which the encrypted token was persisted.
    */
-  async saveProviderToken(
-    projectId: string,
-    kind: CloudDeploymentProviderKind,
-    accountId: string,
-    token: string
-  ): Promise<string> {
-    return this.save(token, providerTokenRef(projectId, kind, accountId))
+  async saveProviderToken(accountId: string, token: string): Promise<string> {
+    return this.save(token, providerTokenRef(accountId))
   }
 
   /**
-   * Resolve a deployment provider token from the secure vault.
+   * Resolve a provider account's token from the secure vault.
    *
    * Keychain-unavailable fallback: when the OS keychain is unavailable this
    * throws rather than exposing stored ciphertext, keeping token access bound to
    * a working secure store.
    */
-  async resolveProviderToken(
-    projectId: string,
-    kind: CloudDeploymentProviderKind,
-    accountId: string
-  ): Promise<string> {
-    return this.resolve(providerTokenRef(projectId, kind, accountId))
+  async resolveProviderToken(accountId: string): Promise<string> {
+    return this.resolve(providerTokenRef(accountId))
   }
 
-  /** Whether a deployment provider token is stored for the project/account. */
-  async hasProviderToken(
-    projectId: string,
-    kind: CloudDeploymentProviderKind,
-    accountId: string
-  ): Promise<boolean> {
-    return this.exists(providerTokenRef(projectId, kind, accountId))
+  /** Whether a provider account token is stored in the vault. */
+  async hasProviderToken(accountId: string): Promise<boolean> {
+    return this.exists(providerTokenRef(accountId))
   }
 
-  /** Remove the stored deployment provider token for the project/account. */
-  async removeProviderToken(
-    projectId: string,
-    kind: CloudDeploymentProviderKind,
-    accountId: string
-  ): Promise<void> {
-    await this.remove(providerTokenRef(projectId, kind, accountId))
+  /** Remove the stored provider account token from the vault. */
+  async removeProviderToken(accountId: string): Promise<void> {
+    await this.remove(providerTokenRef(accountId))
   }
 
   async resolve(ref: string): Promise<string> {

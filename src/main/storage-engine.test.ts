@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, readFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
-import type { CloudDeploymentConfig } from '../lib/types'
+import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../lib/types'
 import { StorageEngine } from './storage-engine'
 
 async function setup(): Promise<{
@@ -78,27 +78,14 @@ describe('StorageEngine project boundary', () => {
   it('persists and reads a per-project cloud deployment config under the config dir', async () => {
     const { storage, configRoot, projectRoot } = await setup()
     const config: CloudDeploymentConfig = {
-      version: 2,
+      version: 3,
       projectId: 'project-1',
-      credentials: {
-        vercel: {
-          accounts: [
-            {
-              id: 'account-vercel',
-              label: 'Default',
-              providerKind: 'vercel',
-              secretRef: 'vault:vercel-token',
-              configured: true,
-              createdAt: 1_700_000_000_000,
-              updatedAt: 1_700_000_000_000
-            }
-          ],
-          activeAccountId: 'account-vercel'
-        }
-      },
       project: {
         providers: ['vercel'],
-        containers: [{ id: 'app-1', label: 'My App', providerKind: 'vercel', status: 'success' }]
+        containers: [{ id: 'app-1', label: 'My App', providerKind: 'vercel', status: 'success' }],
+        providerAccounts: {
+          vercel: { attachedAccountIds: ['account-vercel'], activeAccountId: 'account-vercel' }
+        }
       },
       updatedAt: 1_700_000_000_000
     }
@@ -120,9 +107,8 @@ describe('StorageEngine project boundary', () => {
     await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
 
     await storage.saveCloudDeploymentConfig('project-1', {
-      version: 2,
+      version: 3,
       projectId: 'project-1',
-      credentials: {},
       project: { providers: [], containers: [] },
       updatedAt: 1_700_000_000_000
     })
@@ -131,5 +117,33 @@ describe('StorageEngine project boundary', () => {
     await storage.clearCloudDeploymentConfig('project-1')
     await expect(storage.getCloudDeploymentConfig('project-1')).resolves.toBeNull()
     await expect(storage.hasCloudDeployments('project-1')).resolves.toBe(false)
+  })
+
+  it('persists a global cloud deployment account registry under the config dir', async () => {
+    const { storage, configRoot, projectRoot } = await setup()
+    const registry: CloudDeploymentAccountRegistry = {
+      accounts: [
+        {
+          id: 'account-1',
+          label: 'Coolify — Personal',
+          providerKind: 'coolify',
+          secretRef: 'vault:account-1',
+          configured: true,
+          createdAt: 1_700_000_000_000,
+          updatedAt: 1_700_000_000_000
+        }
+      ]
+    }
+
+    await storage.saveCloudDeploymentAccounts(registry)
+    await expect(storage.getCloudDeploymentAccounts()).resolves.toEqual(registry)
+
+    // The registry is global — never inside a project directory.
+    await expect(
+      access(join(configRoot, 'cloud-deployments', 'accounts.json'))
+    ).resolves.toBeUndefined()
+    await expect(access(join(projectRoot, 'cloud-deployments'))).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
   })
 })
