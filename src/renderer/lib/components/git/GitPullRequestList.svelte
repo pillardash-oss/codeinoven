@@ -8,7 +8,8 @@
     GitPullRequestDraft,
     Loader2,
     MessageSquare,
-    RefreshCw
+    RefreshCw,
+    TriangleAlert
   } from '@lucide/svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -85,7 +86,13 @@
   function stateClass(pr: PullRequestSummary): string {
     if (pr.state === 'merged') return 'text-primary'
     if (pr.state === 'closed') return 'text-danger'
+    if (needsResolution(pr)) return 'text-danger'
     return pr.draft ? 'text-dimmed' : 'text-success'
+  }
+
+  /** Open PRs that can't be merged as-is because the branches conflict. */
+  function needsResolution(pr: PullRequestSummary): boolean {
+    return pr.mergeable === false || pr.mergeableState === 'dirty'
   }
 
   $effect(() => {
@@ -204,7 +211,15 @@
                 {pr.headRef} → {pr.baseRef}
               </p>
             </div>
-            {#if pr.comments > 0}
+            {#if needsResolution(pr)}
+              <span
+                class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/10 px-1.5 py-0.5 text-[9px] font-semibold text-danger"
+                title="This pull request has merge conflicts and needs resolution"
+              >
+                <TriangleAlert size={9} />
+                Conflicts
+              </span>
+            {:else if pr.comments > 0}
               <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums text-dimmed">
                 <MessageSquare size={10} />
                 {pr.comments}

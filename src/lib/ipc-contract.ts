@@ -83,6 +83,7 @@ import type {
   PullRequestBundle,
   PullRequestComment,
   PullRequestCompare,
+  PullRequestDetail,
   PullRequestFile,
   PullRequestPage,
   PullRequestReference,
@@ -807,6 +808,15 @@ export interface IpcInvokeContract {
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage
+  >
+  /**
+   * Read one pull request's detail. Hitting the detail endpoint forces GitHub
+   * to compute mergeability, so it is used as the authoritative mergeability
+   * probe when a list payload reported `mergeable`/`mergeable_state` as null.
+   */
+  'pr:detail': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestDetail
   >
   'deployment:overview': Contract<
     [projectId: string, owner: string, repo: string],

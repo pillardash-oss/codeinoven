@@ -3051,6 +3051,13 @@ export interface PullRequestSummary {
    * summaries (e.g. a just-created PR). Null when not yet computed.
    */
   mergeable?: boolean | null
+  /**
+   * GitHub's `mergeable_state` from list payloads — `dirty` means the PR has
+   * conflicts even when `mergeable` hasn't been computed yet (it is frequently
+   * null in list responses). `clean` | `dirty` | `behind` | `unstable` |
+   * `draft` | `unknown`.
+   */
+  mergeableState?: string | null
 }
 
 /** One page of pull requests, with a cursor the UI can advance. */
