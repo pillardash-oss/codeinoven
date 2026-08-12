@@ -452,7 +452,11 @@
     thinkingMenuOpen = false
   }
 
-  let modelWasOpen = $state(false)
+  // Prior-open tracking for the focus-on-close edge detection below. This is a
+  // non-reactive scratch value read/written only inside the effect — the effect
+  // re-runs because it also reads the reactive menu state, so keeping the
+  // previous value in a plain variable (rather than $state) is correct.
+  let modelWasOpen = false
   $effect(() => {
     if (modelWasOpen && !modelMenuOpen) {
       focusComposerAtEnd()
@@ -460,7 +464,7 @@
     modelWasOpen = modelMenuOpen
   })
 
-  let thinkingWasOpen = $state(false)
+  let thinkingWasOpen = false
   $effect(() => {
     if (thinkingWasOpen && !thinkingMenuOpen && !modelMenuOpen) {
       focusComposerAtEnd()
@@ -1123,9 +1127,14 @@
     }
   }
 
-  $effect(() => {
-    if (readOnlyMode && !allowAttachments) return
+  // Register the document-level drag listeners once on mount and gate each
+  // handler on the current mode flags. The previous $effect re-subscribed on
+  // every change of readOnlyMode/allowAttachments; with the handlers gating on
+  // those values at event time the behavior is identical while keeping the
+  // listener lifecycle (and the isDragging mutations) out of a reactive effect.
+  onMount(() => {
     function onDragOver(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (overFileTree(e)) {
         // The file tree owns the drop in its region; hide the composer overlay.
         if (isDragging) isDragging = false
@@ -1138,6 +1147,7 @@
     }
 
     function onDragLeave(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (
         e.clientX <= 0 ||
         e.clientY <= 0 ||
@@ -1149,6 +1159,7 @@
     }
 
     function onDrop(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false

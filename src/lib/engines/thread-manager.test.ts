@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
@@ -8,6 +11,13 @@ import { ensureFeatureSlug } from '../project-artifacts'
 import { AgentMessageRepo } from '../../main/database/repositories/agent-message-repo'
 
 const temporaryDatabases: Database[] = []
+const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
+let temporaryConfigRoot = ''
+
+beforeEach(() => {
+  temporaryConfigRoot = mkdtempSync(join(tmpdir(), 'codeinoven-thread-manager-'))
+  process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
+})
 
 async function createManager(threadLimit = 70): Promise<{
   manager: ThreadManager
@@ -33,6 +43,10 @@ async function createManager(threadLimit = 70): Promise<{
 afterEach(async () => {
   vi.useRealTimers()
   temporaryDatabases.splice(0).forEach(destroyTestDb)
+  rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  temporaryConfigRoot = ''
+  if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
+  else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot
 })
 
 describe('ThreadManager', () => {
