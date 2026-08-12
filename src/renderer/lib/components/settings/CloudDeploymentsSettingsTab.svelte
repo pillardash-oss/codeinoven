@@ -3,9 +3,8 @@
   import { toast } from 'svelte-sonner'
   import { CheckCircle2, Loader2, Plus, RotateCcw, Trash2 } from '@lucide/svelte'
   import CloudProviderIcon from '../cloud/icons/CloudProviderIcon.svelte'
+  import CloudDeploymentConfigSheet from '../cloud/CloudDeploymentConfigSheet.svelte'
   import {
-    CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS,
-    CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES,
     type CloudDeploymentProviderAccount,
     type CloudDeploymentProviderKind
   } from '$shared/types'
@@ -19,51 +18,8 @@
     custom: 'Custom'
   }
 
-  interface CreateDraft {
-    kind: CloudDeploymentProviderKind
-    label: string
-    baseUrl: string
-    token: string
-  }
-
-  let createOpen = $state(false)
-  let create = $state<CreateDraft>({ kind: 'coolify', label: '', baseUrl: '', token: '' })
-  let saving = $state(false)
-  let error = $state('')
+  let sheetOpen = $state(false)
   let rotatingId = $state<string | null>(null)
-
-  function openCreate(): void {
-    create = { kind: 'coolify', label: '', baseUrl: '', token: '' }
-    error = ''
-    createOpen = true
-  }
-
-  async function createAccount(): Promise<void> {
-    if (create.label.trim() === '' || create.token.trim() === '') {
-      error = 'Enter a label and a token for this account.'
-      return
-    }
-    if (create.kind === 'coolify' && create.baseUrl.trim() === '') {
-      error = 'Enter the Coolify base URL.'
-      return
-    }
-    saving = true
-    error = ''
-    try {
-      await cloudAccountsState.createAccount(
-        create.kind,
-        create.label.trim(),
-        create.token.trim(),
-        create.baseUrl.trim() === '' ? undefined : create.baseUrl.trim()
-      )
-      toast.success('Provider account created.')
-      createOpen = false
-    } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The account could not be created.'
-    } finally {
-      saving = false
-    }
-  }
 
   async function rotateSecret(account: CloudDeploymentProviderAccount): Promise<void> {
     const token = window.prompt(`Enter the new API token for "${account.label}".`)
@@ -109,89 +65,12 @@
     <button
       type="button"
       class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover"
-      onclick={openCreate}
+      onclick={() => (sheetOpen = true)}
     >
       <Plus size={14} />
       New account
     </button>
   </div>
-
-  {#if createOpen}
-    <div class="mb-6 space-y-3 rounded-xl border bg-elevated p-4">
-      <p class="text-sm font-medium">Create a provider account</p>
-      <label class="block space-y-1 text-xs font-medium">
-        <span>Provider</span>
-        <select
-          class="h-9 w-full rounded-lg border bg-elevated px-2.5 text-sm outline-none focus:border-primary"
-          bind:value={create.kind}
-        >
-          {#each CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES as kind (kind)}
-            <option value={kind} disabled={CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(kind)}>
-              {PROVIDER_DISPLAY_NAMES[kind]}{CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS.includes(kind)
-                ? ' (not yet available)'
-                : ''}
-            </option>
-          {/each}
-        </select>
-      </label>
-      <label class="block space-y-1 text-xs font-medium">
-        <span>Account name</span>
-        <input
-          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-          placeholder="e.g. Coolify — Personal or Coolify — Company"
-          autocomplete="off"
-          spellcheck="false"
-          bind:value={create.label}
-        />
-      </label>
-      {#if create.kind === 'coolify'}
-        <label class="block space-y-1 text-xs font-medium">
-          <span>Base URL</span>
-          <input
-            class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
-            placeholder="https://coolify.internal"
-            autocomplete="off"
-            spellcheck="false"
-            bind:value={create.baseUrl}
-          />
-        </label>
-      {/if}
-      <label class="block space-y-1 text-xs font-medium">
-        <span>API token</span>
-        <input
-          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm font-mono outline-none focus:border-primary"
-          type="password"
-          placeholder="Provider API token"
-          autocomplete="off"
-          spellcheck="false"
-          bind:value={create.token}
-        />
-      </label>
-      {#if error !== ''}
-        <p class="text-xs text-error">{error}</p>
-      {/if}
-      <div class="flex justify-end gap-2">
-        <button
-          type="button"
-          class="flex h-9 items-center justify-center rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
-          onclick={() => (createOpen = false)}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          disabled={saving}
-          onclick={() => void createAccount()}
-        >
-          {#if saving}
-            <Loader2 size={13} class="animate-spin" />
-          {/if}
-          Create account
-        </button>
-      </div>
-    </div>
-  {/if}
 
   {#if cloudAccountsState.accounts.length === 0}
     <div class="rounded-xl border bg-elevated px-4 py-10 text-center">
@@ -253,4 +132,14 @@
       {/each}
     </div>
   {/if}
+
+  <CloudDeploymentConfigSheet
+    open={sheetOpen}
+    initialMode="provider"
+    onClose={() => (sheetOpen = false)}
+    onSaved={() => {
+      sheetOpen = false
+      void cloudAccountsState.load()
+    }}
+  />
 </div>
