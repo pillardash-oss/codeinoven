@@ -4273,12 +4273,22 @@ export class ChatEngine {
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
     }
-    // Other harnesses can title immediately. Claude title generation is queued
-    // only after its main child starts below; the driver's OAuth gate then holds
-    // it until the provider begins the main assistant response.
+    let titleParentSessionId: string | undefined
+    // Other harnesses can title immediately. Claude receives the parent session
+    // identity after dispatch so only its auxiliary title process waits for that
+    // turn to prove authentication; unrelated Claude turns remain concurrent.
     const scheduleAutoTitle = createAutoTitleLauncher(
       shouldAutoTitle && settings.titleMode !== 'deterministic',
-      () => this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
+      () =>
+        this.autoTitleThread(
+          projectId,
+          threadId,
+          driverId,
+          settings,
+          text,
+          messageId,
+          titleParentSessionId
+        )
     )
     if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
@@ -4337,6 +4347,7 @@ export class ChatEngine {
     let sessionId: string
     try {
       sessionId = await this.ensureSession(projectId, threadId, driverId)
+      titleParentSessionId = sessionId
     } catch (error) {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
@@ -5875,7 +5886,8 @@ export class ChatEngine {
     driverId: string,
     settings: ThreadSettings,
     text: string,
-    parentTurnId: string
+    parentTurnId: string,
+    parentSessionId?: string
   ): Promise<void> {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual') return
@@ -5889,7 +5901,8 @@ export class ChatEngine {
         driverId,
         settings,
         text,
-        parentTurnId
+        parentTurnId,
+        parentSessionId
       )
     } catch (error) {
       // The fallback is already applied in sendPrompt(); silently keep it.
@@ -5928,13 +5941,18 @@ export class ChatEngine {
     driverId: string,
     settings: ThreadSettings,
     text: string,
-    parentTurnId: string
+    parentTurnId: string,
+    parentSessionId?: string
   ): Promise<string | null> {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     let generated: string | null = null
     let failure: string | null = null
     try {
-      generated = await driver.generateTitle(projectPath, { settings, message: text })
+      generated = await driver.generateTitle(projectPath, {
+        settings,
+        message: text,
+        ...(parentSessionId ? { parentSessionId } : {})
+      })
       return generated
     } catch (error) {
       failure = rawErrorMessage(error)

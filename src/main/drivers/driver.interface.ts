@@ -189,6 +189,8 @@ export interface SendPromptOptions {
 export interface GenerateTitleOptions {
   settings: ThreadSettings
   message: string
+  /** Parent turn whose authenticated transport permits a safe auxiliary title process. */
+  parentSessionId?: string
 }
 
 /** Provider-neutral input appended to an already active harness turn. */

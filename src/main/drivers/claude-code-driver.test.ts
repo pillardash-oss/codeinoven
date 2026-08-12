@@ -128,7 +128,7 @@ describe('ClaudeCodeDriver', () => {
     next.emit('exit', 0, null)
   })
 
-  it('releases OAuth startup only after authenticated assistant activity', async () => {
+  it('does not serialize unrelated Claude process startup', async () => {
     const mainChild = new FakeChild()
     const titleChild = new FakeChild()
     spawnMock
@@ -159,22 +159,6 @@ describe('ClaudeCodeDriver', () => {
       settings
     })
 
-    await Promise.resolve()
-    expect(spawnMock).toHaveBeenCalledTimes(1)
-
-    mainChild.stdout.emit(
-      'data',
-      Buffer.from('{"type":"system","subtype":"init","session_id":"native-main"}\n')
-    )
-    await Promise.resolve()
-    expect(spawnMock).toHaveBeenCalledTimes(1)
-
-    mainChild.stdout.emit(
-      'data',
-      Buffer.from(
-        '{"type":"stream_event","event":{"type":"message_start","message":{"id":"assistant-main","content":[]}}}\n'
-      )
-    )
     await titleStart
     expect(spawnMock).toHaveBeenCalledTimes(2)
     expect(mainChild.killed).toBe(false)

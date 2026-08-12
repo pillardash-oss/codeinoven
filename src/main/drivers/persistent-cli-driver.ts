@@ -581,6 +581,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return [...this.activeProcesses.keys()]
   }
 
+  /** True for the disposable sessions owned by automatic title generation. */
+  protected isTitleSession(sessionId: string): boolean {
+    return this.titleSessions.has(sessionId)
+  }
+
   protected observeHarnessProcess(
     sessionId: string,
     child: ChildProcess,

@@ -87,6 +87,12 @@ interface ClaudeUsageProbe {
   promise: Promise<Record<string, unknown> | null>
   resolve: (value: Record<string, unknown> | null) => void
 }
+
+interface ClaudeAuthenticationReadiness {
+  promise: Promise<boolean>
+  resolve: (authenticated: boolean) => void
+  settled: boolean
+}
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
   | {
@@ -114,6 +120,19 @@ function fallbackClaudeModel(): ProviderModel {
     toolcall: true,
     fastSupported: false
   }
+}
+
+function claudeAuthenticationResult(value: unknown): boolean | undefined {
+  const entry = record(value)
+  const type = string(entry?.['type'])
+  if (type === 'assistant') {
+    return entry?.['error'] === 'authentication_failed' ||
+      entry?.['error'] === 'oauth_org_not_allowed'
+      ? false
+      : true
+  }
+  if (type !== 'stream_event') return undefined
+  return string(record(entry?.['event'])?.['type']) === 'message_start' ? true : undefined
 }
 
 function claudeModelName(model: ModelInfo): string {
@@ -988,6 +1007,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
   private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
+  private readonly authenticationReadiness = new Map<string, ClaudeAuthenticationReadiness>()
   private usageProbeSequence = 0
 
   constructor(
@@ -1048,6 +1068,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (
+      firstParty &&
+      (!options.parentSessionId ||
+        !(await this.waitForParentAuthentication(options.parentSessionId)))
+    ) {
+      return null
+    }
     const anthropic = (await this.listProviders(projectPath)).find(
       (catalog) => catalog.id === 'anthropic'
     )
@@ -1182,14 +1210,56 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     else args.push('--permission-mode', 'dontAsk')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
+    const trackAuthentication =
+      !this.isTitleSession(session.id) &&
+      (!options.settings.providerId || options.settings.providerId === 'anthropic')
+    if (trackAuthentication) this.beginAuthenticationReadiness(session.id)
     return {
       command: 'claude',
       args,
       input,
       keepInputOpen: true,
       env,
-      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal')
+      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
+      ...(trackAuthentication
+        ? {
+            onJsonRecord: (value: unknown) => {
+              const result = claudeAuthenticationResult(value)
+              if (result !== undefined) this.settleAuthenticationReadiness(session.id, result)
+            },
+            onProcessExit: () => this.settleAuthenticationReadiness(session.id, false)
+          }
+        : {})
     }
+  }
+
+  private beginAuthenticationReadiness(sessionId: string): void {
+    let resolveReadiness: (authenticated: boolean) => void = () => undefined
+    const promise = new Promise<boolean>((resolve) => {
+      resolveReadiness = resolve
+    })
+    this.authenticationReadiness.set(sessionId, {
+      promise,
+      resolve: resolveReadiness,
+      settled: false
+    })
+  }
+
+  private settleAuthenticationReadiness(sessionId: string, authenticated: boolean): void {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness || readiness.settled) return
+    readiness.settled = true
+    readiness.resolve(authenticated)
+  }
+
+  private async waitForParentAuthentication(sessionId: string): Promise<boolean> {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness) return false
+    const authenticated = await readiness.promise
+    if (this.authenticationReadiness.get(sessionId) === readiness) {
+      this.authenticationReadiness.delete(sessionId)
+    }
+    return authenticated
   }
 
   /**
@@ -1437,6 +1507,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   override dispose(): void {
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
+    }
+    for (const [sessionId, readiness] of this.authenticationReadiness) {
+      if (!readiness.settled) readiness.resolve(false)
+      this.authenticationReadiness.delete(sessionId)
     }
     super.dispose()
   }
