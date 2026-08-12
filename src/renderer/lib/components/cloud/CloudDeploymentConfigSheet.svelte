@@ -22,11 +22,20 @@
     onClose: () => void
     /** The flow the sheet opens in. */
     initialMode?: Mode
+    /** Container being edited (pre-filled), or null to add new. */
+    editingContainer?: CloudDeploymentContainer | null
     /** Called after a successful save so the caller can refresh its view. */
     onSaved?: () => void
   }
 
-  let { open, projectId, onClose, initialMode = 'provider', onSaved }: Props = $props()
+  let {
+    open,
+    projectId,
+    onClose,
+    initialMode = 'provider',
+    editingContainer = null,
+    onSaved
+  }: Props = $props()
 
   type Mode = 'provider' | 'container'
 
@@ -152,9 +161,15 @@
     baseUrl = ''
     token = ''
     selectedExistingAccountId = ''
-    containerProviderKind = ''
-    containerId = ''
-    containerLabel = ''
+    if (editingContainer) {
+      containerProviderKind = editingContainer.providerKind
+      containerId = editingContainer.id
+      containerLabel = editingContainer.label
+    } else {
+      containerProviderKind = ''
+      containerId = ''
+      containerLabel = ''
+    }
     containerSearch = ''
     availableContainers = []
     availableLoading = false
@@ -332,6 +347,38 @@
   async function saveContainer(): Promise<void> {
     if (containerProviderKind === '') return
     if (!projectId) return
+    if (editingContainer) {
+      const newId = containerId.trim()
+      const newLabel = containerLabel.trim() || newId
+      if (newId === '') {
+        error = 'Enter the container ID.'
+        return
+      }
+      saving = true
+      error = ''
+      try {
+        config = await invoke(
+          'cloudDeploy:updateContainer',
+          projectId,
+          editingContainer.providerKind,
+          editingContainer.id,
+          {
+            ...(newLabel !== editingContainer.label ? { label: newLabel } : {}),
+            ...(newId !== editingContainer.id ? { id: newId } : {})
+          }
+        )
+        toast.success('Container updated.')
+        resetForm()
+        onClose()
+        onSaved?.()
+      } catch (saveError) {
+        error =
+          saveError instanceof Error ? saveError.message : 'The container could not be updated.'
+      } finally {
+        saving = false
+      }
+      return
+    }
     if (!attachedProviderKinds.includes(containerProviderKind)) {
       error = `Attach a ${PROVIDER_DISPLAY_NAMES[containerProviderKind]} account to this project first.`
       return

@@ -854,6 +854,25 @@ export interface IpcInvokeContract {
   >
   /** Remove a project's cloud deployment config and clear its has-deployments flag. */
   'cloudDeploy:clearConfig': Contract<[projectId: string], void>
+  /** Update a container's label/id in a project's config. Returns the stored config. */
+  'cloudDeploy:updateContainer': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string,
+      patch: { label?: string; id?: string }
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove a container from a project's config. Returns the stored config. */
+  'cloudDeploy:removeContainer': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
   /** List every provider account in the global registry. */
   'cloudDeploy:listAccounts': Contract<[], import('./types').CloudDeploymentAccountRegistry>
   /**

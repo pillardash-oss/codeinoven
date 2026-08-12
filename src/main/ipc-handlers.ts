@@ -3643,6 +3643,67 @@ export function registerIpcHandlers(
     await syncCloudDeploymentsFlag(safeProjectId)
   })
 
+  ipcMain.handle(
+    'cloudDeploy:updateContainer',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown, patch: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID', true)
+      if (!isRecord(patch)) throw new TypeError('Container update must be an object')
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const index = config.project.containers.findIndex(
+        (mapping) => mapping.providerKind === kind && mapping.id === safeContainerId
+      )
+      if (index === -1) throw new TypeError('Container not found')
+
+      const current = config.project.containers[index]
+      const next: CloudDeploymentContainer = { ...current }
+      if (patch.label !== undefined) {
+        next.label = requireString(patch.label, 'Container label')
+      }
+      if (patch.id !== undefined) {
+        const newId = requireString(patch.id, 'Container ID')
+        if (
+          config.project.containers.some(
+            (mapping) => mapping.id === newId && mapping.id !== current.id
+          )
+        ) {
+          throw new TypeError(`A container with id ${newId} is already configured`)
+        }
+        next.id = newId
+      }
+      config.project.containers = [...config.project.containers]
+      config.project.containers[index] = next
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:removeContainer',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID', true)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const remaining = config.project.containers.filter(
+        (mapping) => !(mapping.providerKind === kind && mapping.id === safeContainerId)
+      )
+      if (remaining.length === config.project.containers.length) {
+        throw new TypeError('Container not found')
+      }
+      config.project.containers = remaining
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
   ipcMain.handle('cloudDeploy:listAccounts', async () => storage.getCloudDeploymentAccounts())
 
   ipcMain.handle(
