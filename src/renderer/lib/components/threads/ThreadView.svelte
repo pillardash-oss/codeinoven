@@ -2021,14 +2021,27 @@
    *  streaming turn even when the message count is stable. */
   const streamVersion = $derived(messages.reduce((sum, message) => sum + message.parts.length, 0))
 
-  const SCROLL_AT_BOTTOM_THRESHOLD = 60
+  /** Height of the blank tail zone kept below the newest message (mirrors
+   *  `pb-40` on the scroll container). While that space is at least partially
+   *  revealed the view counts as "at the latest" and keeps following the
+   *  agent's output; scrolling up past it into the messages releases the lock. */
+  const TAIL_ZONE_PADDING = 160
+  const SCROLL_AT_BOTTOM_THRESHOLD = TAIL_ZONE_PADDING + 32
 
   function isAtBottom(el: HTMLDivElement): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
   }
 
+  /** Scroll position at the last scroll event (or programmatic snap). Used to
+   *  tell "the tail outgrew the view" (position unchanged, content grew) from
+   *  "the user scrolled up mid-gesture" (position moved up before the scroll
+   *  event fired), so a large arrival never kills the follow lock and a
+   *  scroll-away is never fought. */
+  let lastScrollTop = 0
+
   function onScroll(): void {
     if (!scrollEl) return
+    lastScrollTop = scrollEl.scrollTop
     userScrolledAway = !isAtBottom(scrollEl)
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
@@ -2117,6 +2130,7 @@
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
     }
+    lastScrollTop = scrollEl.scrollTop
     scrollRestored = true
   })
 
@@ -2137,22 +2151,39 @@
     void streamVersion
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
-      // The scroll event lags the wheel gesture by a frame, so userScrolledAway
-      // can still be false here right after the user scrolled up. Re-check the
-      // live position before snapping, otherwise this queued callback races the
-      // input and drags the view back to the tail mid-gesture.
-      if (!isAtBottom(scrollEl)) {
+      // The scroll event lags the input gesture by a frame, so the lock can
+      // still read as engaged right after the user scrolled up. If the view
+      // actually moved up since the last recorded position the user is
+      // scrolling away — release the lock instead of fighting the input.
+      // An unchanged position means the tail simply outgrew the view in one
+      // update (a large message or card landed at once): snap to the live
+      // bottom so the stream keeps following.
+      if (!isAtBottom(scrollEl) && scrollEl.scrollTop < lastScrollTop) {
         userScrolledAway = true
         return
       }
       scrollEl.scrollTop = scrollEl.scrollHeight
+      lastScrollTop = scrollEl.scrollTop
     })
   })
 
   function scrollToLatest(): void {
     if (!scrollEl) return
-    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
+    // Snap instantly — a smooth scroll races the agent's stream: its target
+    // is captured once, so while it animates the bottom keeps growing and the
+    // scroll lands short, re-locking the user as "away". Arming the follow
+    // lock synchronously and re-anchoring a tick later keeps the tail engaged
+    // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
+    lastScrollTop = scrollEl.scrollHeight
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
+    void tick().then(() => {
+      if (!scrollEl || userScrolledAway) return
+      if (!isAtBottom(scrollEl)) {
+        scrollEl.scrollTop = scrollEl.scrollHeight
+        lastScrollTop = scrollEl.scrollTop
+      }
+    })
   }
 
   // The render window must always cover the live tail of the conversation.
@@ -6214,7 +6245,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-4"
+      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-40"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
