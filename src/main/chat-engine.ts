@@ -2119,6 +2119,7 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
+    modelNeedsImageDescriptor: boolean,
     skipRuntime = false,
     directGateway = false
   ): Promise<string> {
@@ -2148,6 +2149,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        modelNeedsImageDescriptor,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -4556,6 +4558,7 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
+      modelNeedsImageDescriptor,
       // Web-only chat deliberately has no app gateway.
       isChatThread && !chatFileSystemEnabled,
       // OpenCode sessions use the shared project server. The app gateway is
@@ -10602,6 +10605,7 @@ export class ChatEngine {
             projectPath,
             auditorSettings,
             auditUtilityBudgetContext,
+            await this.modelLacksVision(projectId, auditorSettings),
             false,
             driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
           )
