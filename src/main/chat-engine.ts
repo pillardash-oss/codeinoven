@@ -50,6 +50,8 @@ import { BaseUrlProviderService } from './base-url-provider-service'
 import { AgentProcessService } from './agent-process-service'
 import {
   UtilityOrchestrationService,
+  type UtilityResultAttribution,
+  type UtilityTurnBudgetContext,
   type UtilityTurnGateway
 } from './utility-orchestration-service'
 import {
@@ -2052,6 +2054,7 @@ export class ChatEngine {
     sessionId: string,
     projectPath: string,
     settings: ThreadSettings,
+    budgetContext: UtilityTurnBudgetContext,
     skipRuntime = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
@@ -2079,7 +2082,10 @@ export class ChatEngine {
         sessionId,
         projectPath,
         nativeCapabilities,
-        permissionLevel: settings.permissionLevel
+        permissionLevel: settings.permissionLevel,
+        budgetContext,
+        attributeReinjectedResult: (attribution) =>
+          this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
       })
       const resolvedUtilities = gateway.resolvedUtilities
       const request = {
@@ -4359,6 +4365,11 @@ export class ChatEngine {
             )
             return undefined
           })
+    const utilityBudgetContext: UtilityTurnBudgetContext = {
+      selectedModelInputTokens: inputBudget,
+      composedTurnTokens: earlyLayers.totalTokens,
+      parentTurnId: messageId
+    }
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -4366,6 +4377,7 @@ export class ChatEngine {
       sessionId,
       projectPath,
       settings,
+      utilityBudgetContext,
       // Assignment workers must stay on the pooled project server. Spawning a
       // per-session isolated opencode server for every worker (because of the
       // utility gateway) makes N+1 opencode processes all write to the single
@@ -4437,6 +4449,7 @@ export class ChatEngine {
       recapText: rawRecap,
       systemReserveTokens: SYSTEM_LAYER_RESERVE_TOKENS
     })
+    utilityBudgetContext.composedTurnTokens = composition.totalTokens
     if (composition.driverText !== driverText) {
       driverText = composition.driverText
       const transportPart = userMessage.transportParts?.[0]
@@ -9812,6 +9825,15 @@ export class ChatEngine {
       const messageId = createMessageId()
       const repairing = repairManifest !== null
       const prompt = repairManifest ? this.assignmentAuditRepairPrompt(repairManifest) : basePrompt
+      const auditUtilityBudgetContext: UtilityTurnBudgetContext = {
+        selectedModelInputTokens: this.selectedModelInputBudget(
+          auditorSettings.providerId,
+          auditorSettings.modelId,
+          projectId
+        ),
+        composedTurnTokens: estimateTextTokens(prompt),
+        parentTurnId: messageId
+      }
       let utilityInstructions = ''
       let utilityRuntimeAvailable = false
       if (!repairing) {
@@ -9822,7 +9844,8 @@ export class ChatEngine {
             auditorThread.id,
             sessionId,
             projectPath,
-            auditorSettings
+            auditorSettings,
+            auditUtilityBudgetContext
           )
           utilityRuntimeAvailable = Boolean(utilityInstructions)
         } catch (error) {
@@ -9858,20 +9881,23 @@ export class ChatEngine {
         'Assignment audit'
       )
       try {
+        const auditSystemPrompt = repairing
+          ? AUDIT_REPAIR_SYSTEM_PROMPT
+          : [
+              AUDIT_GENERATION_SYSTEM_PROMPT,
+              ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
+              utilityInstructions
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+        auditUtilityBudgetContext.composedTurnTokens =
+          estimateTextTokens(prompt) + estimateTextTokens(auditSystemPrompt)
         await driver.sendPrompt(projectPath, {
           sessionId,
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: repairing
-            ? AUDIT_REPAIR_SYSTEM_PROMPT
-            : [
-                AUDIT_GENERATION_SYSTEM_PROMPT,
-                ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
-                utilityInstructions
-              ]
-                .filter(Boolean)
-                .join('\n\n'),
+          systemPrompt: auditSystemPrompt,
           allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId,
           ...(useStructuredOutput
@@ -13302,6 +13328,50 @@ export class ChatEngine {
         pricingProvenance: null
       })
     }
+  }
+
+  private recordReinjectedUtilityResult(
+    threadId: string,
+    settings: ThreadSettings,
+    budgetContext: UtilityTurnBudgetContext,
+    attribution: UtilityResultAttribution
+  ): void {
+    const reinjectedTokens = Math.max(0, Math.floor(attribution.reinjectedTokens))
+    const truncatedTokens = Math.max(0, Math.floor(attribution.truncatedTokens))
+    this.usageRepo.recordEvent({
+      id: `utility-result:${budgetContext.parentTurnId}:${attribution.featureCallId}`,
+      threadId,
+      parentTurnId: budgetContext.parentTurnId,
+      featureCallId: attribution.featureCallId,
+      attempt: 1,
+      feature: 'web',
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      utilityId: attribution.utilityId,
+      rawProviderUsage: {
+        reinjectedTokens,
+        truncatedTokens,
+        selectedModelInputTokens: budgetContext.selectedModelInputTokens,
+        composedTurnTokens: budgetContext.composedTurnTokens
+      },
+      tokens: {
+        uncachedInput: reinjectedTokens,
+        cachedInput: null,
+        cacheWrite: null,
+        output: null,
+        reasoning: null
+      },
+      rawTotal: null,
+      totalSemantics: 'unavailable',
+      toolFeeUsd: null,
+      success: attribution.success,
+      retryCause: attribution.retryCause,
+      createdAt: Date.now(),
+      costStatus: 'unavailable',
+      costUsd: null,
+      pricingProvenance: null
+    })
   }
 
   /** Apply in-memory reasoning time stamps to loaded messages (populated during streaming). */

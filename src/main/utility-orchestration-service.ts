@@ -70,6 +70,26 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  budgetContext: UtilityTurnBudgetContext
+  attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
+}
+
+export interface UtilityTurnBudgetContext {
+  /** Selected model input allowance after output and tool headroom reserves. */
+  selectedModelInputTokens: number
+  /** Updated by chat-engine as soon as the final turn composition is known. */
+  composedTurnTokens: number
+  /** Persisted user message that owns utility work for this turn. */
+  parentTurnId: string
+}
+
+export interface UtilityResultAttribution {
+  featureCallId: string
+  utilityId: string
+  reinjectedTokens: number
+  truncatedTokens: number
+  success: boolean
+  retryCause: string | null
 }
 
 export interface UtilityTurnGateway {
