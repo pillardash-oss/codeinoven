@@ -1118,6 +1118,9 @@ export class ChatEngine {
   private pendingMemoryDecisions = new Map<string, PendingMemoryDecision>()
   /** Number of automatic Mermaid correction prompts already issued for the active turn. */
   private mermaidRepairAttempts = new Map<string, number>()
+  /** One provider-backed repair attempt per incomplete persisted session per app run. */
+  private historyRecoveryAttempts = new Set<string>()
+  private historyRecoveryTasks = new Map<string, Promise<void>>()
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
@@ -3395,6 +3398,7 @@ export class ChatEngine {
     if (pendingSpec?.state === 'failed') return null
     const live = this.sessionStatuses.get(thread.sessionId)
     if (live) return live
+    void this.recoverIncompleteHistory(thread)
     // After an app restart the in-memory status is gone, but a persisted
     // auto-resume record is authoritative: reconstruct the warning card so the
     // thread still shows its reset countdown and proves it will auto-run.
@@ -3412,6 +3416,71 @@ export class ChatEngine {
         ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
       }
     }
+  }
+
+  /**
+   * A crash or failed post-processing step can leave a completed provider
+   * session ahead of CodeInOven's durable mirror. Keep normal task mounts cold,
+   * but repair the narrow, locally detectable case where the last persisted
+   * assistant record contains no terminal answer at all.
+   */
+  private recoverIncompleteHistory(thread: Thread): Promise<void> {
+    const sessionId = thread.sessionId
+    if (!sessionId || !['completed', 'failed', 'interrupted'].includes(thread.status)) {
+      return Promise.resolve()
+    }
+    if (isDedicatedAssignmentAuditorThread(thread)) return Promise.resolve()
+
+    const recoveryKey = `${thread.projectId}:${thread.id}:${sessionId}`
+    const active = this.historyRecoveryTasks.get(recoveryKey)
+    if (active) return active
+    if (this.historyRecoveryAttempts.has(recoveryKey)) return Promise.resolve()
+
+    const recovery = (async () => {
+      const mirror = await this.threadManager.loadMessageRecords(thread.projectId, thread.id)
+      const latestUserIndex = mirror.findLastIndex(
+        (message) => message.role === 'user' && message.visibility !== 'hidden'
+      )
+      if (latestUserIndex < 0) return
+      const lastAssistant = [...mirror.slice(latestUserIndex + 1)]
+        .reverse()
+        .find((message) => message.role === 'assistant')
+      const hasTerminalPayload =
+        lastAssistant !== undefined &&
+        (assistantText(lastAssistant).trim().length > 0 ||
+          lastAssistant.structuredOutput !== undefined ||
+          Boolean(lastAssistant.error))
+      if (hasTerminalPayload) return
+
+      this.historyRecoveryAttempts.add(recoveryKey)
+      Logger.info('Recovering incomplete conversation history from persisted harness session', {
+        projectId: thread.projectId,
+        threadId: thread.id,
+        sessionId
+      })
+      const recovered = await this.loadMessages(thread.projectId, thread.id)
+      Logger.info('Recovered conversation history from persisted harness session', {
+        projectId: thread.projectId,
+        threadId: thread.id,
+        sessionId,
+        messageCount: recovered.length
+      })
+      this.broadcast({ type: 'session.idle', sessionId })
+    })()
+      .catch((error) => {
+        Logger.error('Incomplete conversation history recovery failed', {
+          projectId: thread.projectId,
+          threadId: thread.id,
+          sessionId,
+          error: rawErrorMessage(error)
+        })
+      })
+      .finally(() => {
+        this.historyRecoveryTasks.delete(recoveryKey)
+      })
+
+    this.historyRecoveryTasks.set(recoveryKey, recovery)
+    return recovery
   }
 
   /**
@@ -13383,6 +13452,12 @@ export class ChatEngine {
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
+      // The provider transcript is the irreplaceable user data. Persist it
+      // before Mermaid validation, usage accounting, specification parsing, or
+      // any other optional end-of-turn work can throw. Later upserts may refine
+      // visibility or attach validation notices, but can never be the first
+      // durable write of a completed response.
+      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
       let failure = lastAssistant?.error
       // A deliberate user stop is not a failure: keep the thread on
       // `interrupted` and never surface the abort error as a session failure.
@@ -13440,7 +13515,7 @@ export class ChatEngine {
           }
         }
       }
-      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged)
+      await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
       const parentTurnId = messages[latestUserIndex]?.id
       memoryParentTurnId = parentTurnId ?? null
       if (parentTurnId && turnAssistant) {
