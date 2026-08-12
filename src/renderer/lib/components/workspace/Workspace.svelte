@@ -65,6 +65,7 @@
   } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import {
     contextSidebarState,
     type ContextSidebarTab,
@@ -1252,6 +1253,9 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
+      // App-start git check: async — the store ensures the GitHub connection
+      // before the PR indicator check runs, with or without a restored thread.
+      gitState.notifyAppStarted(workspaceState.activeProject)
     } catch {
       projects = []
       allThreads = []
