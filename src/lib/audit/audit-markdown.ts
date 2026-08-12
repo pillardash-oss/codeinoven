@@ -1,6 +1,20 @@
 import type { AuditReport } from '../types'
 
-export function exportAuditReportMarkdown(report: AuditReport): string {
+interface AuditMarkdownOptions {
+  /** Link prefix from the emitted Markdown file to its feature artifact root. */
+  evidenceLinkPrefix?: string
+}
+
+function evidenceLinkTarget(path: string, prefix: string | undefined): string {
+  if (prefix === undefined) return path
+  const featureRelativePath = path.replace(/^\.cio\/specs\/[^/]+\//u, '')
+  return `${prefix}${featureRelativePath}`
+}
+
+export function exportAuditReportMarkdown(
+  report: AuditReport,
+  options: AuditMarkdownOptions = {}
+): string {
   const findings =
     report.content.findings.length > 0
       ? report.content.findings
@@ -26,7 +40,10 @@ export function exportAuditReportMarkdown(report: AuditReport): string {
           const findingIds = check.findingIds.length
             ? `\n  - Findings: ${check.findingIds.join(', ')}`
             : ''
-          return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}`
+          const evidencePath = check.evidencePath
+            ? `\n  - Full output: [\`${check.evidencePath}\`](${evidenceLinkTarget(check.evidencePath, options.evidenceLinkPrefix)})`
+            : ''
+          return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}${evidencePath}`
         })
         .join('\n\n')
     : 'Not recorded for this legacy report.'
