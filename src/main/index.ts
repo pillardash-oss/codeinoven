@@ -623,7 +623,7 @@ async function bootPostPaintServices(): Promise<void> {
     }
 
     try {
-      await modelPricingService?.start()
+      modelPricingService?.start()
     } catch (error) {
       Logger.error('Model pricing startup failed (non-fatal):', error)
     }

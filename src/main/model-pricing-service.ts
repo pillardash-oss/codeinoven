@@ -1,4 +1,3 @@
-import { readFileSync } from 'fs'
 import { Logger } from './logger'
 import type { ModelPriceEntry } from './pricing'
 import { registerModelPricing } from './pricing'
@@ -40,9 +39,10 @@ const asFinite = (value: unknown): number | null =>
 
 /**
  * Convert an llmpricing.dev `/api/models.json` payload into registry entries,
- * using each model's `reference` (official/list) price. cache-write and
- * reasoning rates are derived because the source does not publish them.
- * Guarded so a malformed entry is skipped instead of poisoning the cache.
+ * keeping ONLY each model's official maker price (`reference.official === true`).
+ * cache-write and reasoning rates are derived because the source does not
+ * publish them. Guarded so a malformed entry is skipped instead of poisoning
+ * the cache.
  */
 export function normalizePricingEntries(payload: unknown): ModelPriceEntry[] {
   const root = asRecord(payload)
@@ -51,7 +51,7 @@ export function normalizePricingEntries(payload: unknown): ModelPriceEntry[] {
   for (const model of models) {
     const record = asRecord(model)
     const reference = asRecord(record?.['reference']) as RawReference | null
-    if (!record || !reference) continue
+    if (!record || !reference || reference['official'] !== true) continue
     const id = typeof record['id'] === 'string' ? record['id'] : ''
     const input = asFinite(reference['input'])
     const output = asFinite(reference['output'])
@@ -63,7 +63,7 @@ export function normalizePricingEntries(payload: unknown): ModelPriceEntry[] {
       cacheReadUsdPer1M: asFinite(reference['cacheRead']) ?? 0,
       cacheWriteUsdPer1M: input * CACHE_WRITE_MULTIPLIER,
       reasoningUsdPer1M: output,
-      official: reference['official'] === true
+      official: true
     })
   }
   return entries
@@ -83,21 +83,26 @@ async function fetchJson(url: string): Promise<unknown> {
 
 /**
  * Fetches current model pricing from llmpricing.dev, persists a cache file, and
- * populates the synchronous pricing registry used by drivers. On startup it
- * loads the on-disk cache immediately so estimates work offline; a background
+ * populates the synchronous pricing registry used by drivers. All I/O is async
+ * and kicked off without blocking boot; the on-disk cache is loaded in the
+ * background (so estimates still work offline once loaded), and a background
  * refresh keeps prices current on a 24h TTL.
  */
 export class ModelPricingService {
   private timer: ReturnType<typeof setInterval> | null = null
   private refreshing = false
+  private started = false
   private lastFetchedAt = 0
 
   constructor(private readonly storage: StorageEngine) {}
 
-  /** Load any cached prices now, then refresh in the background if stale. */
-  async start(): Promise<void> {
-    this.loadCache()
-    void this.refreshIfStale().catch((error) => Logger.dev('Pricing refresh failed:', error))
+  /** Schedule cache load + refresh in the background. Never blocks boot. */
+  start(): void {
+    if (this.started) return
+    this.started = true
+    void this.loadCache()
+      .then(() => this.refreshIfStale())
+      .catch((error) => Logger.dev('Pricing load/refresh failed:', error))
     if (!this.timer) {
       this.timer = setInterval(() => {
         void this.refreshIfStale().catch((error) => Logger.dev('Pricing refresh failed:', error))
@@ -113,11 +118,10 @@ export class ModelPricingService {
     }
   }
 
-  private loadCache(): void {
+  private async loadCache(): Promise<void> {
     try {
-      const raw = readFileSync(this.storage.resolve(CACHE_FILE), 'utf-8')
-      const cache = JSON.parse(raw) as PricingCache
-      if (cache.version === CACHE_VERSION && Array.isArray(cache.entries)) {
+      const cache = await this.storage.read<PricingCache>(CACHE_FILE)
+      if (cache && cache.version === CACHE_VERSION && Array.isArray(cache.entries)) {
         registerModelPricing(cache.entries)
         this.lastFetchedAt = typeof cache.fetchedAt === 'number' ? cache.fetchedAt : 0
         Logger.dev('Loaded model pricing cache', { count: cache.entries.length })
