@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import { ArrowUpRight, ChevronUp, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { AssignmentPlan, AssignmentTask, AssignmentTaskStatus, Thread } from '$shared/types'
@@ -47,8 +47,11 @@
   }: Props = $props()
 
   const WIDTH_STORAGE_KEY = 'codeinoven:assignment-coordinator-width'
+  const COLLAPSED_STORAGE_KEY = 'codeinoven:assignment-coordinator-collapsed'
   const MIN_WIDTH = 280
   const MAX_WIDTH = 560
+
+  let collapsed = $state(() => localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1')
 
   let resizing = $state(false)
   let resizePointerId = 0
@@ -106,6 +109,11 @@
   function restoreWidth(): void {
     const stored = Number.parseInt(localStorage.getItem(WIDTH_STORAGE_KEY) ?? '', 10)
     if (Number.isFinite(stored)) onWidthChange(clampWidth(stored))
+  }
+
+  function toggleCollapsed(): void {
+    collapsed = !collapsed
+    localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
   }
 
   function startResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
@@ -218,231 +226,250 @@
   style:width={`${width}px`}
   aria-label="Assignment coordinator"
 >
-  <button
-    type="button"
-    class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
-    title="Resize Assignment coordinator"
-    aria-label="Resize Assignment coordinator"
-    onpointerdown={startResize}
-    onpointermove={resize}
-    onpointerup={finishResize}
-    onpointercancel={finishResize}
-    onkeydown={resizeWithKeyboard}
-  ></button>
+  {#if !collapsed}
+    <button
+      type="button"
+      class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+      title="Resize Assignment coordinator"
+      aria-label="Resize Assignment coordinator"
+      onpointerdown={startResize}
+      onpointermove={resize}
+      onpointerup={finishResize}
+      onpointercancel={finishResize}
+      onkeydown={resizeWithKeyboard}
+    ></button>
+  {/if}
   <header class="shrink-0 border-b border-border p-4">
-    <div class="flex items-center gap-2 text-primary">
-      <Network size={15} />
-      <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
-    </div>
-    <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
-    <p class="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
-      {assignment.content.summary}
-    </p>
-    <div class="mt-3 flex gap-2">
+    <div class="flex items-center justify-between gap-2">
+      <div class="flex min-w-0 items-center gap-2 text-primary">
+        <Network size={15} class="shrink-0" />
+        <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
+      </div>
       <button
         type="button"
-        class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-        title="Open the complete Assignment in Spec Studio"
-        onclick={onOpenAssignment}
+        class="flex shrink-0 items-center justify-center rounded-md p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class:rotate-180={collapsed}
+        title={collapsed ? 'Expand Assignment coordinator' : 'Collapse Assignment coordinator'}
+        aria-label={collapsed ? 'Expand Assignment coordinator' : 'Collapse Assignment coordinator'}
+        aria-expanded={!collapsed}
+        onclick={toggleCollapsed}
       >
-        {#if finalComplete}
-          View Assignment
-        {:else}
-          <span class="assignment-label-full">Review Assignment</span>
-          <span class="assignment-label-short">Assignment</span>
-        {/if}
-        <ArrowUpRight size={13} />
+        <ChevronUp size={15} />
       </button>
-      {#if assignment.status === 'stopped'}
-        <button
-          type="button"
-          class="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
-          title="Resume this Assignment"
-          disabled={resumeBusy}
-          onclick={() => void resumeStoppedAssignment()}
-        >
-          {#if resumeBusy}
-            <Loader2 size={13} class="animate-spin" />
-          {:else}
-            <Play size={12} fill="currentColor" />
-          {/if}
-          {resumeBusy ? 'Resuming…' : 'Resume'}
-        </button>
-      {:else if !finalComplete}
-        <button
-          type="button"
-          class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
-          title="Stop the Sr. Engineer, workers, and auditor"
-          aria-label="Stop the Sr. Engineer, workers, and auditor"
-          onclick={() => (showStopConfirmation = true)}
-        >
-          <Square size={12} fill="currentColor" />
-          Stop
-        </button>
-      {/if}
-      {#if auditWorkAvailable && onOpenAuditWork}
-        <button
-          type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Open the Assignment audit work"
-          onclick={onOpenAuditWork}
-        >
-          {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
-        </button>
-      {/if}
-      {#if reportAvailable && !finalComplete && onViewReport}
-        <button
-          type="button"
-          class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Open the latest audit report in Audit Studio"
-          onclick={onViewReport}
-        >
-          View Report
-        </button>
-      {/if}
     </div>
-    {#if resumeError}
-      <p class="mt-2 text-xs text-danger" role="alert">{resumeError}</p>
+    {#if !collapsed}
+      <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
+      <p class="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
+        {assignment.content.summary}
+      </p>
+      <div class="mt-3 flex gap-2">
+        <button
+          type="button"
+          class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+          title="Open the complete Assignment in Spec Studio"
+          onclick={onOpenAssignment}
+        >
+          {#if finalComplete}
+            View Assignment
+          {:else}
+            <span class="assignment-label-full">Review Assignment</span>
+            <span class="assignment-label-short">Assignment</span>
+          {/if}
+          <ArrowUpRight size={13} />
+        </button>
+        {#if assignment.status === 'stopped'}
+          <button
+            type="button"
+            class="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+            title="Resume this Assignment"
+            disabled={resumeBusy}
+            onclick={() => void resumeStoppedAssignment()}
+          >
+            {#if resumeBusy}
+              <Loader2 size={13} class="animate-spin" />
+            {:else}
+              <Play size={12} fill="currentColor" />
+            {/if}
+            {resumeBusy ? 'Resuming…' : 'Resume'}
+          </button>
+        {:else if !finalComplete}
+          <button
+            type="button"
+            class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
+            title="Stop the Sr. Engineer, workers, and auditor"
+            aria-label="Stop the Sr. Engineer, workers, and auditor"
+            onclick={() => (showStopConfirmation = true)}
+          >
+            <Square size={12} fill="currentColor" />
+            Stop
+          </button>
+        {/if}
+        {#if auditWorkAvailable && onOpenAuditWork}
+          <button
+            type="button"
+            class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Open the Assignment audit work"
+            onclick={onOpenAuditWork}
+          >
+            {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
+          </button>
+        {/if}
+        {#if reportAvailable && !finalComplete && onViewReport}
+          <button
+            type="button"
+            class="rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Open the latest audit report in Audit Studio"
+            onclick={onViewReport}
+          >
+            View Report
+          </button>
+        {/if}
+      </div>
+      {#if resumeError}
+        <p class="mt-2 text-xs text-danger" role="alert">{resumeError}</p>
+      {/if}
     {/if}
   </header>
 
-  <div class="min-h-0 flex-1 overflow-y-auto">
-    <section class="border-b border-border p-4" aria-label="Assignment progress">
-      <div class="flex items-end justify-between gap-3">
-        <div>
-          <p class="text-2xl font-semibold tabular-nums text-foreground">
-            {completed}/{assignment.content.tasks.length}
-          </p>
-          <p class="text-[10px] uppercase tracking-wide text-dimmed">tasks complete</p>
-        </div>
-        <p class="text-xs font-medium tabular-nums text-muted">{progress}%</p>
-      </div>
-      <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-elevated">
-        <div
-          class="h-full rounded-full bg-primary transition-[width]"
-          style:width={`${progress}%`}
-        ></div>
-      </div>
-      <div class="mt-3 grid grid-cols-5 gap-1 text-center">
-        <div>
-          <p class="text-sm font-semibold tabular-nums text-success">{completed}</p>
-          <p class="text-[9px] uppercase text-dimmed">Done</p>
-        </div>
-        <div>
-          <p class="text-sm font-semibold tabular-nums text-info">{running}</p>
-          <p class="text-[9px] uppercase text-dimmed">Active</p>
-        </div>
-        <div>
-          <p class="text-sm font-semibold tabular-nums text-warning">{blocked}</p>
-          <p class="text-[9px] uppercase text-dimmed">Blocked</p>
-        </div>
-        <div>
-          <p class="text-sm font-semibold tabular-nums text-muted">{pending}</p>
-          <p class="text-[9px] uppercase text-dimmed">Pending</p>
-        </div>
-        <div>
-          <p class="text-sm font-semibold tabular-nums text-danger">{attention}</p>
-          <p class="text-[9px] uppercase text-dimmed">Attention</p>
-        </div>
-      </div>
-    </section>
-
-    {#if stalled}
-      <section class="border-b border-border p-4" aria-label="Assignment needs direction">
-        <div class="flex items-start gap-2">
-          <Rows3 size={14} class="mt-0.5 shrink-0 text-warning" />
-          <div class="min-w-0">
-            <h3 class="text-xs font-semibold text-foreground">Coordination paused</h3>
-            <p class="mt-1 text-xs leading-relaxed text-muted">
-              Work remains, but no Sr. Engineer or worker is running. Resume coordination to review
-              blockers and request any missing input.
+  {#if !collapsed}
+    <div class="min-h-0 flex-1 overflow-y-auto">
+      <section class="border-b border-border p-4" aria-label="Assignment progress">
+        <div class="flex items-end justify-between gap-3">
+          <div>
+            <p class="text-2xl font-semibold tabular-nums text-foreground">
+              {completed}/{assignment.content.tasks.length}
             </p>
+            <p class="text-[10px] uppercase tracking-wide text-dimmed">tasks complete</p>
+          </div>
+          <p class="text-xs font-medium tabular-nums text-muted">{progress}%</p>
+        </div>
+        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-elevated">
+          <div
+            class="h-full rounded-full bg-primary transition-[width]"
+            style:width={`${progress}%`}
+          ></div>
+        </div>
+        <div class="mt-3 grid grid-cols-5 gap-1 text-center">
+          <div>
+            <p class="text-sm font-semibold tabular-nums text-success">{completed}</p>
+            <p class="text-[9px] uppercase text-dimmed">Done</p>
+          </div>
+          <div>
+            <p class="text-sm font-semibold tabular-nums text-info">{running}</p>
+            <p class="text-[9px] uppercase text-dimmed">Active</p>
+          </div>
+          <div>
+            <p class="text-sm font-semibold tabular-nums text-warning">{blocked}</p>
+            <p class="text-[9px] uppercase text-dimmed">Blocked</p>
+          </div>
+          <div>
+            <p class="text-sm font-semibold tabular-nums text-muted">{pending}</p>
+            <p class="text-[9px] uppercase text-dimmed">Pending</p>
+          </div>
+          <div>
+            <p class="text-sm font-semibold tabular-nums text-danger">{attention}</p>
+            <p class="text-[9px] uppercase text-dimmed">Attention</p>
           </div>
         </div>
-        <button
-          type="button"
-          class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Ask the Sr. Engineer to review blockers and continue coordination"
-          onclick={onResume}
-        >
-          <Play size={12} />
-          Resume coordination
-        </button>
       </section>
-    {/if}
 
-    {#if auditThread && !finalComplete}
-      <section class="border-b border-border py-3" aria-label="Audit thread">
-        <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-          Audit
-        </h3>
-        <div class="px-2">
-          <ThreadRow
-            thread={auditThread}
-            compact
-            selected={auditThread.id === selectedThreadId}
-            showChangeScope={false}
-            onOpen={onOpenThread}
-          />
-        </div>
-      </section>
-    {/if}
-
-    <section class="p-4" aria-label="Assignment tasks">
-      <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
-      <div class="space-y-1">
-        {#each assignment.content.tasks as task, taskIndex (task.id)}
-          {@const linkedWorker = linkedThread(task.threadId)}
-          {@const active = task.threadId === selectedThreadId}
-          {@const reworkCycle = taskReworkCycle(task)}
-          {@const taskNumber = taskIndex + 1}
+      {#if stalled}
+        <section class="border-b border-border p-4" aria-label="Assignment needs direction">
+          <div class="flex items-start gap-2">
+            <Rows3 size={14} class="mt-0.5 shrink-0 text-warning" />
+            <div class="min-w-0">
+              <h3 class="text-xs font-semibold text-foreground">Coordination paused</h3>
+              <p class="mt-1 text-xs leading-relaxed text-muted">
+                Work remains, but no Sr. Engineer or worker is running. Resume coordination to
+                review blockers and request any missing input.
+              </p>
+            </div>
+          </div>
           <button
             type="button"
-            class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
-              ? 'border-primary bg-elevated'
-              : ['attention', 'failed', 'stopped'].includes(task.status)
-                ? 'border-danger bg-danger/5'
-                : 'border-transparent'}"
-            title={taskTooltip(task, linkedWorker)}
-            aria-label={taskTooltip(task, linkedWorker)}
-            aria-current={active ? 'true' : undefined}
-            onclick={() => onOpenTask(task)}
+            class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Ask the Sr. Engineer to review blockers and continue coordination"
+            onclick={onResume}
           >
-            <span class="min-w-0 flex-1">
-              <span class="flex min-w-0 items-center gap-1.5">
-                <span class="min-w-0 truncate text-xs font-medium text-foreground"
-                  >{task.title}</span
-                >
-                {#if reworkCycle}
-                  <span
-                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+            <Play size={12} />
+            Resume coordination
+          </button>
+        </section>
+      {/if}
+
+      {#if auditThread && !finalComplete}
+        <section class="border-b border-border py-3" aria-label="Audit thread">
+          <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+            Audit
+          </h3>
+          <div class="px-2">
+            <ThreadRow
+              thread={auditThread}
+              compact
+              selected={auditThread.id === selectedThreadId}
+              showChangeScope={false}
+              onOpen={onOpenThread}
+            />
+          </div>
+        </section>
+      {/if}
+
+      <section class="p-4" aria-label="Assignment tasks">
+        <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+        <div class="space-y-1">
+          {#each assignment.content.tasks as task, taskIndex (task.id)}
+            {@const linkedWorker = linkedThread(task.threadId)}
+            {@const active = task.threadId === selectedThreadId}
+            {@const reworkCycle = taskReworkCycle(task)}
+            {@const taskNumber = taskIndex + 1}
+            <button
+              type="button"
+              class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
+                ? 'border-primary bg-elevated'
+                : ['attention', 'failed', 'stopped'].includes(task.status)
+                  ? 'border-danger bg-danger/5'
+                  : 'border-transparent'}"
+              title={taskTooltip(task, linkedWorker)}
+              aria-label={taskTooltip(task, linkedWorker)}
+              aria-current={active ? 'true' : undefined}
+              onclick={() => onOpenTask(task)}
+            >
+              <span class="min-w-0 flex-1">
+                <span class="flex min-w-0 items-center gap-1.5">
+                  <span class="min-w-0 truncate text-xs font-medium text-foreground"
+                    >{task.title}</span
                   >
-                    Rework {reworkCycle}
+                  {#if reworkCycle}
+                    <span
+                      class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+                    >
+                      Rework {reworkCycle}
+                    </span>
+                  {/if}
+                </span>
+                <span class="mt-0.5 flex items-center gap-1.5">
+                  <span
+                    class="shrink-0 text-[10px] font-medium tabular-nums text-dimmed"
+                    aria-hidden="true">{taskNumber}.</span
+                  >
+                  <span class="min-w-0 truncate text-[10px] text-dimmed">
+                    {workerLabel(task)}
                   </span>
-                {/if}
-              </span>
-              <span class="mt-0.5 flex items-center gap-1.5">
-                <span
-                  class="shrink-0 text-[10px] font-medium tabular-nums text-dimmed"
-                  aria-hidden="true">{taskNumber}.</span
-                >
-                <span class="min-w-0 truncate text-[10px] text-dimmed">
-                  {workerLabel(task)}
                 </span>
               </span>
-            </span>
-            <span
-              class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium capitalize {statusClass(
-                task.status
-              )}"
-            >
-              {statusLabel(task.status)}
-            </span>
-          </button>
-        {/each}
-      </div>
-    </section>
-  </div>
+              <span
+                class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium capitalize {statusClass(
+                  task.status
+                )}"
+              >
+                {statusLabel(task.status)}
+              </span>
+            </button>
+          {/each}
+        </div>
+      </section>
+    </div>
+  {/if}
 </aside>
 
 <Modal
