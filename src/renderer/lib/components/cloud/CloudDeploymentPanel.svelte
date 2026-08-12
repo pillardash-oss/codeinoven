@@ -22,6 +22,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
+  import Modal from '../ui/Modal.svelte'
   import { DEFAULT_THREAD_TITLE } from '$shared/types'
   import EmptyState from '../ui/EmptyState.svelte'
   import StatusPill, { type StatusTone } from '../ui/StatusPill.svelte'
@@ -67,6 +68,8 @@
   let configSheetMode = $state<'provider' | 'container'>('provider')
   /** Container being edited (pre-filled into the config sheet), or null to add. */
   let editingContainer = $state<CloudDeploymentContainer | null>(null)
+  /** Container awaiting delete confirmation (destructive action). */
+  let deleteTarget = $state<CloudDeploymentContainer | null>(null)
 
   const providers = $derived(config?.project.providers ?? [])
 
@@ -136,6 +139,15 @@
 
   const hasContainers = $derived(containers.length > 0)
 
+  /** True while a configured provider's overview hasn't loaded into the cache yet. */
+  const containersLoading = $derived(
+    configured &&
+      providers.some(
+        (kind) =>
+          cloudDeployState.overviews[CloudDeployState.overviewKey(projectId, kind)] === undefined
+      )
+  )
+
   /** Per-provider load errors surfaced from the overview result. */
   const accessErrors = $derived.by(() => {
     const result: Record<string, string> = {}
@@ -185,8 +197,15 @@
     openConfigSheet('container')
   }
 
-  /** Remove a container from the project's monitoring. */
-  async function removeContainer(container: CloudDeploymentContainer): Promise<void> {
+  /** Ask for confirmation before removing a container (destructive). */
+  function requestRemoveContainer(container: CloudDeploymentContainer): void {
+    deleteTarget = container
+  }
+
+  /** Remove a container from the project's monitoring after confirmation. */
+  async function confirmRemoveContainer(): Promise<void> {
+    const container = deleteTarget
+    if (!container) return
     try {
       config = await invoke(
         'cloudDeploy:removeContainer',
@@ -195,6 +214,7 @@
         container.id
       )
       cloudDeployState.setContainerStatus(projectId, { ...container, status: 'unknown' })
+      deleteTarget = null
       await loadConfig()
       if (configured) await refreshAll()
     } catch (reason) {
@@ -388,6 +408,11 @@
       </EmptyState>
     {:else if error && !hasContainers}
       <EmptyState icon={CircleX} title="Deployments unavailable" description={error} />
+    {:else if containersLoading}
+      <div class="flex min-h-0 flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
+        <Loader2 size={13} class="animate-spin" />
+        Loading containers
+      </div>
     {:else if containers.length === 0 && !anyAccessError}
       <EmptyState
         icon={Cloud}
@@ -513,7 +538,7 @@
                         class="mr-1 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
                         title="Remove {container.label}"
                         aria-label="Remove {container.label}"
-                        onclick={() => void removeContainer(container)}
+                        onclick={() => requestRemoveContainer(container)}
                       >
                         <Trash2 size={11} />
                       </button>
@@ -550,3 +575,33 @@
   }}
   onSaved={() => void handleConfigSaved()}
 />
+
+{#if deleteTarget}
+  <Modal open title="Remove container" onClose={() => (deleteTarget = null)}>
+    <p class="text-sm text-muted">
+      Remove <span class="font-medium text-foreground">{deleteTarget.label}</span> from this
+      project's monitoring? The container itself is untouched on {PROVIDER_LABELS[
+        deleteTarget.providerKind
+      ]}; it is only no longer tracked here.
+    </p>
+    {#snippet footer()}
+      <div class="flex items-center justify-end gap-2">
+        <button
+          type="button"
+          class="flex h-9 items-center justify-center rounded-lg border bg-elevated px-4 text-xs font-medium hover:bg-overlay"
+          onclick={() => (deleteTarget = null)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-danger px-4 text-xs font-medium text-on-danger hover:bg-danger-hover"
+          onclick={() => void confirmRemoveContainer()}
+        >
+          <Trash2 size={13} />
+          Remove
+        </button>
+      </div>
+    {/snippet}
+  </Modal>
+{/if}
