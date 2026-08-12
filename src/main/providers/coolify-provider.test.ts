@@ -335,6 +335,48 @@ describe('CoolifyProvider', () => {
 
       expect(deployments).toEqual([])
     })
+
+    it('parses a realistic ApplicationDeploymentQueue payload, including a data wrapper', async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({
+          data: [
+            {
+              id: 12,
+              application_id: 'app-1',
+              deployment_uuid: 'dep-abc-1',
+              commit: 'a1b2c3d4e5f6',
+              status: 'finished',
+              created_at: '2024-01-02T10:00:00.000Z',
+              updated_at: '2024-01-02T10:05:00.000Z',
+              logs: 'build ok',
+              commit_message: 'fix: ship it'
+            },
+            {
+              id: 11,
+              application_id: 'app-1',
+              deployment_uuid: 'dep-abc-2',
+              commit: 'f6e5d4c3b2a1',
+              status: 'failed',
+              created_at: '2024-01-01T09:00:00.000Z',
+              updated_at: '2024-01-01T09:10:00.000Z',
+              logs: 'build exploded'
+            }
+          ]
+        })
+      )
+
+      const deployments = await makeProvider().listDeployments('app-1')
+
+      expect(deployments).toHaveLength(2)
+      expect(deployments[0]).toMatchObject({
+        id: 'dep-abc-1',
+        status: 'success',
+        commit: 'a1b2c3d4e5f6',
+        updatedAt: Date.parse('2024-01-02T10:05:00.000Z')
+      })
+      expect(deployments[1]).toMatchObject({ id: 'dep-abc-2', status: 'failed' })
+      expect(requestUrl()).toContain('/deployments/applications/app-1')
+    })
   })
 
   describe('errors', () => {
