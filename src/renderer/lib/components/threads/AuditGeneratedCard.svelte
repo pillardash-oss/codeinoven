@@ -50,6 +50,9 @@
   }: Props = $props()
 
   let failed = $derived(state === 'failed')
+  let invalidShapeRecovery = $derived(
+    failed && error?.includes('Assignment audit made no progress after incremental correction')
+  )
   let interrupted = $derived(state === 'offered')
   let reworking = $derived(state === 'reworking')
   let elapsed = $derived(
@@ -97,7 +100,9 @@
     <div class="min-w-0 flex-1">
       <h3 class="text-sm font-semibold text-foreground">
         {failed
-          ? 'Audit failed'
+          ? invalidShapeRecovery
+            ? 'Auditor model needs recovery'
+            : 'Audit failed'
           : interrupted
             ? 'Audit interrupted'
             : reworking
@@ -113,7 +118,9 @@
         role={failed ? 'alert' : undefined}
       >
         {failed
-          ? error || 'The auditor failed without returning a usable error.'
+          ? invalidShapeRecovery
+            ? 'The auditor model returned an invalid audit shape multiple times. Change the model and retry, or retry once more with the same model.'
+            : error || 'The auditor failed without returning a usable error.'
           : interrupted
             ? error ||
               'The auditor could not finish. Choose another harness or model, then retry the audit.'
@@ -128,6 +135,13 @@
       {#if failed && elapsed}
         <p class="mt-2 text-[11px] tabular-nums text-dimmed">Auditor runtime: {elapsed}</p>
       {/if}
+      {#if invalidShapeRecovery && error}
+        <details class="mt-3 text-xs text-muted">
+          <summary class="cursor-pointer font-medium text-foreground">Validation details</summary>
+          <pre
+            class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-3 font-mono text-[11px] leading-relaxed text-muted">{error}</pre>
+        </details>
+      {/if}
     </div>
   </div>
   {#if failed || interrupted}
@@ -141,7 +155,7 @@
         {favoriteModels}
         {recentModels}
         side="top"
-        label="Change auditor"
+        label={invalidShapeRecovery ? 'Change model' : 'Change auditor'}
         variant="action"
         onSelect={chooseModel}
         {onToggleFavorite}
