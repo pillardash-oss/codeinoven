@@ -72,8 +72,6 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
-  /** Whether the selected model needs the app-owned image descriptor tool. */
-  modelNeedsImageDescriptor: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -215,8 +213,8 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter((tool) =>
-      tool.name === IMAGE_DESCRIPTOR_TOOL_NAME ? request.modelNeedsImageDescriptor : hasOnDemand
+    const gatewayTools = GATEWAY_TOOLS.filter(
+      (tool) => tool.name === IMAGE_DESCRIPTOR_TOOL_NAME || hasOnDemand
     )
     if (gatewayTools.length === 0) {
       return {
