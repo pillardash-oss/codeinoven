@@ -309,6 +309,32 @@ describe('CoolifyProvider', () => {
     })
   })
 
+  describe('listDeployments', () => {
+    it('returns the most recent deployments newest first, bounded to the window', async () => {
+      const records = Array.from({ length: 15 }, (_, index) => ({
+        deployment_uuid: `dep-${index}`,
+        status: index % 2 === 0 ? 'finished' : 'failed',
+        updated_at: `2024-01-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+        commit: `abc${index}`
+      }))
+      fetchMock.mockResolvedValueOnce(jsonResponse(records))
+
+      const deployments = await makeProvider().listDeployments('app-1')
+
+      expect(deployments.length).toBeLessThanOrEqual(10)
+      expect(deployments[0]).toMatchObject({ id: 'dep-0', status: 'success', commit: 'abc0' })
+      expect(deployments[1]).toMatchObject({ id: 'dep-1', status: 'failed' })
+    })
+
+    it('returns an empty list when the deployment endpoint is missing (404)', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'not found' }, 404))
+
+      const deployments = await makeProvider().listDeployments('app-1')
+
+      expect(deployments).toEqual([])
+    })
+  })
+
   describe('errors', () => {
     it('throws a typed provider error carrying the HTTP status', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'unauthorized' }, 401))

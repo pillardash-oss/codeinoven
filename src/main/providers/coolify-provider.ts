@@ -1,5 +1,6 @@
 import type {
   CloudDeploymentContainer,
+  CloudDeploymentDeployment,
   CloudDeploymentProviderKind,
   CloudDeploymentStatus
 } from '../../lib/types'
@@ -24,6 +25,9 @@ const MAX_CONTAINER_LOG_BYTES = 200_000
 
 /** Runtime log lines requested when no deployment log is available. */
 const DEFAULT_LOG_LINES = 200
+
+/** How many recent deployments the detail view surfaces at once. */
+const CloudDeploymentDeploymentLimit = 10
 
 /** Sanitized provider failure that preserves the HTTP status for IPC handling. */
 export class CoolifyProviderError extends Error {
@@ -97,20 +101,24 @@ export class CoolifyProvider implements DeploymentProvider {
     if (application === null) return null
     const container = this.toApplicationContainer(application)
     if (!container) return null
-    const deployment = await this.fetchLatestDeployment(containerId)
-    if (!deployment) return container
+    const [latest] = await this.fetchDeployments(containerId)
+    if (!latest) return container
     return {
       ...container,
-      status: deployment.status,
-      ...(deployment.updatedAt !== undefined ? { updatedAt: deployment.updatedAt } : {}),
-      ...(deployment.log !== undefined ? { log: deployment.log } : {})
+      status: latest.status,
+      ...(latest.updatedAt !== undefined ? { updatedAt: latest.updatedAt } : {}),
+      ...(latest.log !== undefined ? { log: latest.log } : {})
     }
   }
 
-  /** Capped raw log text for a container's latest deployment, falling back to runtime output. */
-  async getLogs(containerId: string): Promise<string> {
-    const deployment = await this.fetchLatestDeployment(containerId)
-    if (deployment?.log) return deployment.log
+  /** Capped raw log text for a deployment, or the latest deployment when no id is given. */
+  async getLogs(containerId: string, deploymentId?: string): Promise<string> {
+    const deployments = await this.fetchDeployments(containerId)
+    const target = deploymentId
+      ? deployments.find((deployment) => deployment.id === deploymentId)
+      : deployments[0]
+    if (target?.log) return target.log
+    // No deployment log available — fall back to the runtime container output.
     const response = await this.request(
       `/applications/${encodeURIComponent(containerId)}/logs?lines=${DEFAULT_LOG_LINES}`,
       { method: 'GET' }
@@ -118,6 +126,12 @@ export class CoolifyProvider implements DeploymentProvider {
     const record = this.asRecord(response)
     const logs = typeof record['logs'] === 'string' ? record['logs'] : ''
     return this.capLog(logs)
+  }
+
+  /** List the most recent deployments/builds for an application, newest first. */
+  async listDeployments(containerId: string): Promise<CloudDeploymentDeployment[]> {
+    const deployments = await this.fetchDeployments(containerId)
+    return deployments.slice(0, CloudDeploymentDeploymentLimit)
   }
 
   getProviderInfo(): CloudDeploymentProviderInfo {
@@ -129,10 +143,10 @@ export class CoolifyProvider implements DeploymentProvider {
     }
   }
 
-  /** Latest deployment record for an application, when any exists. */
-  private async fetchLatestDeployment(containerId: string): Promise<DeploymentSnapshot | null> {
+  /** Fetch deployment records for an application, newest first, or [] when absent. */
+  private async fetchDeployments(containerId: string): Promise<CloudDeploymentDeployment[]> {
     const response = await this.request(
-      `/deployments/applications/${encodeURIComponent(containerId)}?take=1&skip=0`,
+      `/deployments/applications/${encodeURIComponent(containerId)}?take=${CloudDeploymentDeploymentLimit}&skip=0`,
       { method: 'GET' }
     ).catch((failure: unknown) => {
       // The per-application deployment list is not present on every Coolify
@@ -141,16 +155,17 @@ export class CoolifyProvider implements DeploymentProvider {
         failure instanceof CoolifyProviderError &&
         (failure.status === 404 || failure.status === 405)
       ) {
-        return null
+        return []
       }
       throw failure
     })
     const items = Array.isArray(response) ? response : []
+    const deployments: CloudDeploymentDeployment[] = []
     for (const item of items) {
-      const snapshot = this.toDeploymentSnapshot(item)
-      if (snapshot) return snapshot
+      const deployment = this.toDeployment(item)
+      if (deployment) deployments.push(deployment)
     }
-    return null
+    return deployments
   }
 
   /** Map an `Application` payload to the normalized container model. */
@@ -173,15 +188,16 @@ export class CoolifyProvider implements DeploymentProvider {
   }
 
   /**
-   * Map a deployment-queue payload to the normalized status/log snapshot, or null
+   * Map a deployment-queue payload to the normalized deployment model, or null
    * when the record is not deployment-shaped (the published spec mislabels this
    * endpoint's response as `Application`, so defensive identity checks apply).
    */
-  private toDeploymentSnapshot(payload: unknown): DeploymentSnapshot | null {
+  private toDeployment(payload: unknown): CloudDeploymentDeployment | null {
     if (typeof payload !== 'object' || payload === null) return null
     const record = payload as Record<string, unknown>
+    const id = this.readString(record, 'deployment_uuid')
     const isDeploymentShaped =
-      typeof record['deployment_uuid'] === 'string' ||
+      id !== null ||
       typeof record['application_name'] === 'string' ||
       typeof record['logs'] === 'string' ||
       typeof record['commit'] === 'string' ||
@@ -189,12 +205,17 @@ export class CoolifyProvider implements DeploymentProvider {
     if (!isDeploymentShaped) return null
     const rawStatus = this.readString(record, 'status')
     if (!rawStatus) return null
-    const snapshot: DeploymentSnapshot = { status: mapDeploymentStatus(rawStatus) }
+    const deployment: CloudDeploymentDeployment = {
+      id: id ?? rawStatus,
+      status: mapDeploymentStatus(rawStatus)
+    }
     const log = typeof record['logs'] === 'string' ? record['logs'] : undefined
-    if (log) snapshot.log = this.capLog(log)
+    if (log) deployment.log = this.capLog(log)
     const updatedAt = this.parseEpochMs(this.readString(record, 'updated_at'))
-    if (updatedAt !== undefined) snapshot.updatedAt = updatedAt
-    return snapshot
+    if (updatedAt !== undefined) deployment.updatedAt = updatedAt
+    const commit = this.readString(record, 'commit')
+    if (commit) deployment.commit = commit
+    return deployment
   }
 
   /** Perform a JSON fetch against the Coolify API, sanitizing errors. */
@@ -293,13 +314,6 @@ function toApiBaseUrl(baseUrl: string): string {
   const normalized = baseUrl.replace(/\/+$/u, '')
   if (/\/api\/v1$/u.test(normalized)) return normalized
   return `${normalized}${COOLIFY_API_PREFIX}`
-}
-
-/** Normalized status/log snapshot derived from a Coolify deployment record. */
-interface DeploymentSnapshot {
-  status: CloudDeploymentStatus
-  log?: string
-  updatedAt?: number
 }
 
 /** Application runtime states Coolify reports while the container is up. */
