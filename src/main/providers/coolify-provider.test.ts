@@ -45,19 +45,21 @@ describe('CoolifyProvider', () => {
 
   describe('listContainers', () => {
     it('parses application payloads into the normalized container model', async () => {
-      fetchMock.mockResolvedValueOnce(
-        jsonResponse([
-          {
-            uuid: 'app-1',
-            name: 'My App',
-            project_name: 'Marketing',
-            status: 'running',
-            fqdn: 'https://app.example.dev',
-            created_at: '2024-01-01T00:00:00.000Z',
-            updated_at: '2024-01-02T00:00:00.000Z'
-          }
-        ])
-      )
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse([
+            {
+              uuid: 'app-1',
+              name: 'My App',
+              project_name: 'Marketing',
+              status: 'running',
+              fqdn: 'https://app.example.dev',
+              created_at: '2024-01-01T00:00:00.000Z',
+              updated_at: '2024-01-02T00:00:00.000Z'
+            }
+          ])
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
 
       const provider = makeProvider()
       const containers = await provider.listContainers()
@@ -79,6 +81,25 @@ describe('CoolifyProvider', () => {
           updatedAt: Date.parse('2024-01-02T00:00:00.000Z')
         }
       ])
+    })
+
+    it('resolves the project name from the projects endpoint when the app only carries a project_uuid', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse([
+            { uuid: 'app-1', name: 'marketing website', project_uuid: 'proj-1', status: 'running' }
+          ])
+        )
+        .mockResolvedValueOnce(
+          jsonResponse([
+            { uuid: 'proj-1', name: 'Milogs' },
+            { uuid: 'proj-2', name: 'Other' }
+          ])
+        )
+
+      const containers = await makeProvider().listContainers()
+
+      expect(containers[0]).toMatchObject({ id: 'app-1', project: 'Milogs' })
     })
 
     it('skips records without a uuid instead of failing the list', async () => {

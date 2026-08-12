@@ -80,8 +80,9 @@ export class CoolifyProvider implements DeploymentProvider {
   async listContainers(): Promise<CloudDeploymentContainer[]> {
     const response = await this.request('/applications', { method: 'GET' })
     const items = Array.isArray(response) ? response : []
+    const projectsByName = await this.projectNamesByUuid()
     return items.flatMap((item): CloudDeploymentContainer[] => {
-      const mapped = this.toApplicationContainer(item)
+      const mapped = this.toApplicationContainer(item, projectsByName)
       return mapped ? [mapped] : []
     })
   }
@@ -174,15 +175,20 @@ export class CoolifyProvider implements DeploymentProvider {
   }
 
   /** Map an `Application` payload to the normalized container model. */
-  private toApplicationContainer(payload: unknown): CloudDeploymentContainer | null {
+  private toApplicationContainer(
+    payload: unknown,
+    projectsByName?: Map<string, string>
+  ): CloudDeploymentContainer | null {
     if (typeof payload !== 'object' || payload === null) return null
     const record = payload as Record<string, unknown>
     const uuid = this.readString(record, 'uuid')
     if (!uuid) return null
     const fqdn = this.readString(record, 'fqdn')
     const rawStatus = this.readString(record, 'status')
+    const projectUuid = this.readString(record, 'project_uuid')
     const project =
-      this.readString(record, 'project_name') ?? this.readString(record, 'project') ?? undefined
+      this.readString(record, 'project_name') ??
+      (projectUuid ? (projectsByName?.get(projectUuid) ?? undefined) : undefined)
     return {
       id: uuid,
       label: this.readString(record, 'name') ?? fqdn ?? uuid,
@@ -192,6 +198,27 @@ export class CoolifyProvider implements DeploymentProvider {
       ...(project ? { project } : {}),
       createdAt: this.parseEpochMs(this.readString(record, 'created_at')),
       updatedAt: this.parseEpochMs(this.readString(record, 'updated_at'))
+    }
+  }
+
+  /** Build a `project_uuid -> name` map from the projects endpoint. */
+  private async projectNamesByUuid(): Promise<Map<string, string>> {
+    try {
+      const response = await this.request('/projects', { method: 'GET' })
+      const items = Array.isArray(response) ? response : []
+      const map = new Map<string, string>()
+      for (const item of items) {
+        if (typeof item !== 'object' || item === null) continue
+        const record = item as Record<string, unknown>
+        const uuid = this.readString(record, 'uuid')
+        const name = this.readString(record, 'name')
+        if (uuid && name) map.set(uuid, name)
+      }
+      return map
+    } catch {
+      // The project list is an enrichment only — never fail the container list
+      // because of it.
+      return new Map()
     }
   }
 

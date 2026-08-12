@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
   import { CheckCircle2, Cloud, Loader2, Search } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
@@ -72,6 +73,8 @@
   let error = $state('')
   /** The project's current config, loaded on open. */
   let config = $state<CloudDeploymentConfig | null>(null)
+  /** Container ids selected in the picker for a batch add. */
+  let selectedContainerIds = new SvelteSet<string>()
 
   /** Providers that have at least one account attached to this project — only
    *  these can have containers monitored, since resolving needs an account. */
@@ -130,7 +133,7 @@
               baseUrlValidation.ok &&
               token.trim() !== ''
             : selectedExistingAccountId !== '')
-      : containerProviderKind !== '' && containerId.trim() !== '' && containerLabel.trim() !== ''
+      : containerProviderKind !== '' && (selectedContainerIds.size > 0 || containerId.trim() !== '')
   )
 
   /** Accounts this project has attached for the currently selected provider. */
@@ -156,6 +159,7 @@
     availableContainers = []
     availableLoading = false
     availableError = ''
+    selectedContainerIds.clear()
     config = null
     error = ''
     saving = false
@@ -213,6 +217,7 @@
     containerSearch = ''
     availableContainers = []
     availableError = ''
+    selectedContainerIds.clear()
     error = ''
   }
 
@@ -297,6 +302,7 @@
     availableContainers = []
     containerId = ''
     containerLabel = ''
+    selectedContainerIds.clear()
     try {
       const result = await invoke(
         'cloudDeploy:availableContainers',
@@ -316,25 +322,27 @@
     }
   }
 
-  /** Pick an available container, filling its id and defaulting the label. */
-  function pickContainer(container: CloudDeploymentContainer): void {
-    containerId = container.id
-    containerLabel = container.label
-    containerSearch = ''
+  /** Toggle a container's selection for a batch add. */
+  function toggleContainer(container: CloudDeploymentContainer): void {
+    if (selectedContainerIds.has(container.id)) selectedContainerIds.delete(container.id)
+    else selectedContainerIds.add(container.id)
     error = ''
   }
 
   async function saveContainer(): Promise<void> {
     if (containerProviderKind === '') return
     if (!projectId) return
-    const id = containerId.trim()
-    const label = containerLabel.trim() || id
-    if (id === '') {
-      error = 'Choose a container to add.'
-      return
-    }
     if (!attachedProviderKinds.includes(containerProviderKind)) {
       error = `Attach a ${PROVIDER_DISPLAY_NAMES[containerProviderKind]} account to this project first.`
+      return
+    }
+    const manualId = containerId.trim()
+    const manualLabel = containerLabel.trim() || manualId
+    const selected = availableContainers.filter((container) =>
+      selectedContainerIds.has(container.id)
+    )
+    if (selected.length === 0 && manualId === '') {
+      error = 'Select one or more containers to add.'
       return
     }
     saving = true
@@ -354,29 +362,49 @@
           }
         }
       }
-      const alreadyConfigured = current.project.containers.some(
-        (mapping) => mapping.providerKind === containerProviderKind && mapping.id === id
-      )
-      if (alreadyConfigured) {
-        error = 'A container with this provider and ID is already configured.'
-        return
-      }
       const now = Date.now()
-      const container: CloudDeploymentContainer = {
-        id,
-        label,
-        providerKind: containerProviderKind,
-        status: 'unknown',
-        createdAt: now,
-        updatedAt: now
+      const existingIds = new Set(
+        current.project.containers
+          .filter((mapping) => mapping.providerKind === containerProviderKind)
+          .map((mapping) => mapping.id)
+      )
+      const additions: CloudDeploymentContainer[] = []
+      for (const container of selected) {
+        if (existingIds.has(container.id)) continue
+        additions.push({
+          id: container.id,
+          label: container.label,
+          providerKind: containerProviderKind,
+          status: 'unknown',
+          ...(container.project ? { project: container.project } : {}),
+          createdAt: now,
+          updatedAt: now
+        })
+      }
+      if (manualId !== '' && !existingIds.has(manualId)) {
+        additions.push({
+          id: manualId,
+          label: manualLabel,
+          providerKind: containerProviderKind,
+          status: 'unknown',
+          createdAt: now,
+          updatedAt: now
+        })
+      }
+      if (additions.length === 0) {
+        error = 'The selected containers are already configured for this provider.'
+        return
       }
       const updated: CloudDeploymentConfig = {
         ...current,
-        project: { ...current.project, containers: [...current.project.containers, container] },
+        project: {
+          ...current.project,
+          containers: [...current.project.containers, ...additions]
+        },
         updatedAt: now
       }
       config = await invoke('cloudDeploy:saveConfig', projectId, updated)
-      toast.success(`Added container “${label}”.`)
+      toast.success(`Added ${additions.length} container${additions.length === 1 ? '' : 's'}.`)
       resetForm()
       onClose()
       onSaved?.()
@@ -515,7 +543,11 @@
           {#if saving}
             <Loader2 size={13} class="animate-spin" />
           {/if}
-          {mode === 'provider' ? 'Save provider' : 'Add container'}
+          {mode === 'provider'
+            ? 'Save provider'
+            : selectedContainerIds.size > 1
+              ? `Add ${selectedContainerIds.size} containers`
+              : 'Add container'}
         </button>
       </div>
     </div>
@@ -787,12 +819,38 @@
                   No containers match your search.
                 </p>
               {:else}
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-[11px] text-dimmed">
+                    {selectedContainerIds.size} selected · click to choose multiple
+                  </p>
+                  <button
+                    type="button"
+                    class="rounded px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
+                    onclick={() => {
+                      if (selectedContainerIds.size === filteredAvailable.length) {
+                        selectedContainerIds.clear()
+                      } else {
+                        for (const container of filteredAvailable) {
+                          selectedContainerIds.add(container.id)
+                        }
+                      }
+                    }}
+                  >
+                    {selectedContainerIds.size === filteredAvailable.length
+                      ? 'Clear'
+                      : 'Select all'}
+                  </button>
+                </div>
                 <div class="max-h-52 space-y-1 overflow-y-auto pr-0.5">
                   {#each filteredAvailable as container (container.id)}
+                    {@const selected = selectedContainerIds.has(container.id)}
                     <button
                       type="button"
-                      class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors hover:bg-overlay"
-                      onclick={() => pickContainer(container)}
+                      class="flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-left transition-colors {selected
+                        ? 'border-primary bg-raised'
+                        : 'hover:bg-overlay'}"
+                      aria-pressed={selected}
+                      onclick={() => toggleContainer(container)}
                     >
                       <span class="min-w-0">
                         <span class="flex items-center gap-1.5">
@@ -809,7 +867,9 @@
                           {container.id}
                         </span>
                       </span>
-                      <span class="shrink-0 text-[10px] text-dimmed">{container.status}</span>
+                      {#if selected}
+                        <CheckCircle2 size={14} class="shrink-0 text-primary" />
+                      {/if}
                     </button>
                   {/each}
                 </div>
