@@ -553,28 +553,18 @@ describe('AssignmentEngine', () => {
       active.id,
       active.version
     )
-    const planning = await engine.beginAuditRework('project-1', coordinatorId)
-    expect(planning.version).toBe(1)
-    expect(planning.auditCycle?.status).toBe('planning_rework')
-
-    const proposed = await engine.proposeAuditReworkDraft(
-      'project-1',
-      coordinatorId,
-      { ...content(), title: 'Audit corrections' },
-      { source: 'agent', actor: 'Sr. Engineer' }
-    )
-    expect(proposed.version).toBe(2)
-    expect(proposed.status).toBe('draft')
-    expect(proposed.auditCycle).toMatchObject({
-      status: 'awaiting_rework_approval',
-      reworkAssignmentVersion: 2
-    })
-    expect(engine.listVersions(proposed.id)).toHaveLength(2)
-
-    const reworking = await engine.activate('project-1', coordinatorId)
-    expect(reworking.version).toBe(2)
-    expect(reworking.status).toBe('approved')
+    const reworking = await engine.beginAuditRework('project-1', coordinatorId)
+    expect(reworking.version).toBe(1)
+    expect(reworking.status).toBe('completed')
     expect(reworking.auditCycle?.status).toBe('reworking')
+
+    const reopened = await engine.reopenCompletedTask('project-1', coordinatorId, 'design')
+    expect(reopened.status).toBe('running')
+    expect(reopened.content.tasks.find((task) => task.id === 'design')).toMatchObject({
+      status: 'rework',
+      workKind: 'rework',
+      reworkCycle: 1
+    })
   })
 
   it('re-dispatches a failed worker task to a fresh worker thread', async () => {
