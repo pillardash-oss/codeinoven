@@ -1048,6 +1048,7 @@ interface AssignmentAuditRepairManifest {
   attempt: number
   attemptPath: string
   errors: string[]
+  previousErrors?: string[]
   updatedAt: number
 }
 
@@ -1130,6 +1131,10 @@ export class ChatEngine {
     string,
     Promise<{ report: AuditReport; auditorThread: Thread }>
   >()
+  /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
+  private stoppedAssignmentAuditRuns = new Set<string>()
+  /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
+  private stoppedAssignmentSessions = new Set<string>()
   /** Concurrent late-Assignment requests for one coordinator share one model run. */
   private activeAssignmentDraftRuns = new Map<string, Promise<AssignmentPlan>>()
   private activeAchievementAuditorEnsures = new Map<string, Promise<Thread>>()
@@ -6197,6 +6202,8 @@ export class ChatEngine {
     // Remember this is a deliberate user stop so the session's idle/error
     // finalization never rewrites the thread to `failed`.
     this.userAbortedSessions.add(thread.sessionId)
+    this.activeCompactions.delete(thread.sessionId)
+    this.rejectCompletionWaiter(thread.sessionId, 'Agent run stopped by user')
     const driverId = thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     await driver.abort(projectPath, thread.sessionId)
@@ -6588,17 +6595,25 @@ export class ChatEngine {
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
     const current = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
     if (!current) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    const auditRunKey = `${projectId}:${current.id}`
+    this.stoppedAssignmentAuditRuns.add(auditRunKey)
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
 
-    const assignment = await this.withAssignmentApiLock(current.id, () =>
-      this.assignmentEngine.stop(
-        projectId,
-        coordinatorThreadId,
-        coordinator?.settings?.loopMode === true
+    let assignment: AssignmentPlan
+    try {
+      assignment = await this.withAssignmentApiLock(current.id, () =>
+        this.assignmentEngine.stop(
+          projectId,
+          coordinatorThreadId,
+          coordinator?.settings?.loopMode === true
+        )
       )
-    )
+    } catch (error) {
+      this.stoppedAssignmentAuditRuns.delete(auditRunKey)
+      throw error
+    }
     this.revokeAssignmentCapabilities(assignment.id)
-    this.activeAssignmentAuditRuns.delete(`${projectId}:${assignment.id}`)
+    this.activeAssignmentAuditRuns.delete(auditRunKey)
 
     if (coordinator?.settings) {
       await this.threadManager.updateSettings(projectId, coordinatorThreadId, {
@@ -6644,6 +6659,22 @@ export class ChatEngine {
     )
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator?.settings) throw new Error('Sr. Engineer settings are missing')
+    const resumedThreadIds = new Set<string>([
+      coordinatorThreadId,
+      ...assignment.content.tasks.flatMap((task) => (task.threadId ? [task.threadId] : [])),
+      ...(assignment.auditorThreadId ? [assignment.auditorThreadId] : [])
+    ])
+    const resumedThreads = await Promise.all(
+      [...resumedThreadIds].map((threadId) => this.threadManager.getThread(projectId, threadId))
+    )
+    resumedThreads.forEach((thread) => {
+      if (thread?.sessionId) this.stoppedAssignmentSessions.delete(thread.sessionId)
+    })
+    for (const [sessionId, owner] of this.childSessionOwners) {
+      if (owner.projectId === projectId && resumedThreadIds.has(owner.threadId)) {
+        this.stoppedAssignmentSessions.delete(sessionId)
+      }
+    }
     const settings: ThreadSettings = {
       ...coordinator.settings,
       engineeringMode: false,
@@ -6696,7 +6727,10 @@ export class ChatEngine {
     )
     const childResults = await Promise.allSettled(
       childSessions.map(async ([sessionId, owner]) => {
+        this.stoppedAssignmentSessions.add(sessionId)
         this.userAbortedSessions.add(sessionId)
+        this.activeCompactions.delete(sessionId)
+        this.rejectCompletionWaiter(sessionId, 'Assignment stopped by user')
         const driver = this.drivers.get(owner.driverId)
         try {
           if (driver && this.sessionStatuses.get(sessionId)?.state === 'working') {
@@ -6718,6 +6752,8 @@ export class ChatEngine {
     )
 
     try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (thread?.sessionId) this.stoppedAssignmentSessions.add(thread.sessionId)
       await this.abort(projectId, threadId)
     } finally {
       await this.agentProcesses.releaseThread(projectId, threadId)
@@ -9487,6 +9523,7 @@ export class ChatEngine {
     const key = `${projectId}:${assignment.id}`
     const existing = this.activeAssignmentAuditRuns.get(key)
     if (existing) return existing
+    this.stoppedAssignmentAuditRuns.delete(key)
     const run = this.runAssignmentAudit(projectId, coordinatorThreadId, settings)
     this.activeAssignmentAuditRuns.set(key, run)
     try {
@@ -9861,6 +9898,9 @@ export class ChatEngine {
       typeof value['attemptPath'] !== 'string' ||
       !Array.isArray(value['errors']) ||
       !value['errors'].every((error) => typeof error === 'string') ||
+      (value['previousErrors'] !== undefined &&
+        (!Array.isArray(value['previousErrors']) ||
+          !value['previousErrors'].every((error) => typeof error === 'string'))) ||
       typeof value['updatedAt'] !== 'number'
     ) {
       return null
@@ -9877,27 +9917,42 @@ export class ChatEngine {
       attempt: value['attempt'],
       attemptPath: value['attemptPath'],
       errors: value['errors'],
+      ...(value['previousErrors'] !== undefined ? { previousErrors: value['previousErrors'] } : {}),
       updatedAt: value['updatedAt']
     }
   }
 
   private assignmentAuditRepairPrompt(manifest: AssignmentAuditRepairManifest): string {
+    const previousErrors = new Set(manifest.previousErrors ?? [])
+    const resolvedErrors = [...previousErrors].filter((error) => !manifest.errors.includes(error))
     return [
       `The persisted audit report at ${manifest.attemptPath} failed deterministic validation.`,
+      `This is incremental correction attempt ${manifest.attempt}. Continue from that persisted report; do not restart the audit.`,
       'Correct only these validation errors:',
       ...manifest.errors.map((error) => `- ${error}`),
+      ...(resolvedErrors.length > 0
+        ? [
+            'The previous correction resolved these errors; do not reintroduce them:',
+            ...resolvedErrors.map((error) => `- ${error}`)
+          ]
+        : []),
       'Read that file, preserve its audit findings and evidence, and return exactly one complete corrected audit-report JSON object with no Markdown fences or commentary.',
-      'Preserve the auditedFiles and verification manifest. Never invent a command, exit code, utility invocation, or result that was not present in the persisted attempt; use not_applicable with the concrete limitation when execution evidence is unavailable.',
+      'For a missing auditedFiles entry, add the exact named file and retain the existing inventory. For an unmatched verification claim, correct it to match an observed command or utility; when no matching invocation exists, use not_applicable with the concrete limitation. Never invent execution evidence.',
       'Do not repeat the audit, specification, Assignment, or project inspection.'
     ].join('\n')
   }
 
-  private assignmentAuditNeedsFreshEvidence(errors: string[]): boolean {
-    return errors.some(
-      (error) =>
-        error.startsWith('auditedFiles') ||
-        error.startsWith('verification') ||
-        error.includes('verification scope')
+  private assignmentAuditErrorsUnchanged(
+    previous: AssignmentAuditRepairManifest | null,
+    errors: string[]
+  ): boolean {
+    if (!previous || previous.status !== 'invalid') return false
+    const normalize = (values: string[]): string[] =>
+      [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort()
+    const prior = normalize(previous.errors)
+    const current = normalize(errors)
+    return (
+      prior.length === current.length && prior.every((error, index) => error === current[index])
     )
   }
 
@@ -10190,6 +10245,7 @@ export class ChatEngine {
     if (!assignment || assignment.status !== 'completed') {
       throw new Error('A completed Assignment is required before its durable audit can start.')
     }
+    const auditRunKey = `${projectId}:${assignment.id}`
     const auditorThread = await this.ensureAssignmentAuditorThread(
       projectId,
       coordinatorThreadId,
@@ -10254,8 +10310,7 @@ export class ChatEngine {
       priorRepair?.status === 'invalid' &&
       priorRepair.assignmentId === assignment.id &&
       priorRepair.specId === spec.id &&
-      priorRepair.specVersion === spec.version &&
-      !this.assignmentAuditNeedsFreshEvidence(priorRepair.errors)
+      priorRepair.specVersion === spec.version
         ? priorRepair
         : null
     let recoveredContent: AuditReportContent | null = null
@@ -10328,7 +10383,7 @@ export class ChatEngine {
             updatedAt: Date.now()
           }
           await this.writeAssignmentAuditRepairManifest(invalidManifest)
-          repairManifest = this.assignmentAuditNeedsFreshEvidence(errors) ? null : invalidManifest
+          repairManifest = invalidManifest
         }
       }
     }
@@ -10352,6 +10407,10 @@ export class ChatEngine {
       })
     }
     for (let attemptIndex = 0; ; attemptIndex += 1) {
+      if (this.stoppedAssignmentAuditRuns.has(auditRunKey)) {
+        terminalFailure = new Error('Assignment audit stopped by user')
+        break
+      }
       await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
       this.handledIdleSessions.delete(sessionId)
       this.markSessionWorking(sessionId)
@@ -10439,6 +10498,9 @@ export class ChatEngine {
         })
         this.startSessionWatchdog(sessionId)
         const streamed = await completion
+        if (this.stoppedAssignmentAuditRuns.has(auditRunKey)) {
+          throw new Error('Assignment audit stopped by user')
+        }
         let rawOutput: string
         if (streamed !== undefined) {
           rawOutput =
@@ -10490,6 +10552,8 @@ export class ChatEngine {
         } catch (error) {
           const errors =
             error instanceof AuditReportValidationError ? error.issues : [rawErrorMessage(error)]
+          const previousManifest = repairManifest
+          const unchanged = this.assignmentAuditErrorsUnchanged(previousManifest, errors)
           const invalidManifest: AssignmentAuditRepairManifest = {
             schemaVersion: 1,
             status: 'invalid',
@@ -10502,10 +10566,17 @@ export class ChatEngine {
             attempt: attemptIndex + 1,
             attemptPath: persistedAttempt.artifactPath,
             errors,
+            ...(previousManifest ? { previousErrors: previousManifest.errors } : {}),
             updatedAt: Date.now()
           }
           await this.writeAssignmentAuditRepairManifest(invalidManifest)
-          repairManifest = this.assignmentAuditNeedsFreshEvidence(errors) ? null : invalidManifest
+          if (unchanged) {
+            throw new Error(
+              `Assignment audit made no progress after incremental correction. Remaining validation errors:\n${errors.map((issue) => `- ${issue}`).join('\n')}`,
+              { cause: error }
+            )
+          }
+          repairManifest = invalidManifest
           continue
         }
         await this.writeAssignmentAuditRepairManifest({
@@ -10549,6 +10620,18 @@ export class ChatEngine {
     }
 
     const failure = terminalFailure
+    const stoppedAssignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (
+      this.stoppedAssignmentAuditRuns.has(auditRunKey) ||
+      stoppedAssignment?.status === 'stopped'
+    ) {
+      Logger.info('Assignment audit stopped', {
+        projectId,
+        threadId: coordinatorThreadId,
+        auditorThreadId: auditorThread.id
+      })
+      throw failure
+    }
     Logger.error('Assignment audit failed', {
       projectId,
       threadId: coordinatorThreadId,
@@ -12377,6 +12460,14 @@ export class ChatEngine {
       this.broadcast({ type: 'session.status', sessionId: event.sessionId, status })
       return
     }
+    const stoppedSessionEvent =
+      this.userAbortedSessions.has(event.sessionId) ||
+      this.stoppedAssignmentSessions.has(event.sessionId)
+    const stoppedSessionTerminalEvent =
+      event.type === 'session.idle' ||
+      event.type === 'session.error' ||
+      (event.type === 'session.status' && event.status.state === 'idle')
+    if (stoppedSessionEvent && !stoppedSessionTerminalEvent) return
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
     this.updateOwningParentWatchdog(event)
@@ -14464,6 +14555,13 @@ export class ChatEngine {
     if (!waiter) return
     clearTimeout(waiter.timer)
     this.completionWaiters.delete(sessionId)
+  }
+
+  private rejectCompletionWaiter(sessionId: string, reason: string): void {
+    const waiter = this.completionWaiters.get(sessionId)
+    if (!waiter) return
+    this.clearCompletionWaiter(sessionId)
+    waiter.reject(new Error(reason))
   }
 
   private async proposeMemoryFromCompletedTurn(
