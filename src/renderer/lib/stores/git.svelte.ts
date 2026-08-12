@@ -232,6 +232,22 @@ export class GitState {
   }
 
   /**
+   * App-start hook: when the application launches it checks the active project
+   * asynchronously — connection first (the store guarantees it), then the PR
+   * indicator — even if no thread is restored yet (fresh start, or the last
+   * session ended on a chat). No-ops when a thread already opened, since
+   * `notifyThreadOpened` already refreshed that project.
+   */
+  notifyAppStarted(project: Project | null): void {
+    if (this.activeProjectId) return
+    if (!project || project.id === INBOX_PROJECT_ID) return
+    if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
+    if (!project.path.trim()) return
+    this.activate(project.id)
+    queueMicrotask(() => void this.refresh(project.id))
+  }
+
+  /**
    * Guarantee the GitHub connection before any online git operation. Offline
    * operations (status, stage, commit, stash…) never touch this — only online
    * ones (pull requests, deployments) await it. A negative probe is always
