@@ -759,16 +759,19 @@ export class AssignmentEngine {
     if (active.status !== 'completed' || !active.auditCycle) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit report is not ready')
     }
-    if (active.auditCycle.status === 'planning_rework') return active
-    if (active.auditCycle.status !== 'report_ready') {
+    if (active.auditCycle.status === 'reworking') return active
+    if (!['report_ready', 'planning_rework'].includes(active.auditCycle.status)) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit report is not ready')
     }
     const now = this.now()
     return this.saveAuditCycle(active, {
       ...active.auditCycle,
-      status: 'planning_rework',
-      reworkStartedAt: now,
-      reworkCycle: (active.auditCycle.reworkCycle ?? 0) + 1
+      status: 'reworking',
+      reworkStartedAt: active.auditCycle.reworkStartedAt ?? now,
+      reworkCycle:
+        active.auditCycle.status === 'planning_rework'
+          ? (active.auditCycle.reworkCycle ?? 1)
+          : (active.auditCycle.reworkCycle ?? 0) + 1
     })
   }
 
@@ -942,9 +945,8 @@ export class AssignmentEngine {
     coordinatorThreadId: string,
     taskId: string
   ): Promise<AssignmentPlan> {
-    const active = this.requireActive(projectId, coordinatorThreadId)
+    const active = await this.requireAuditRework(this.requireActive(projectId, coordinatorThreadId))
     const task = this.requireTask(active, taskId)
-    this.requireAuditRework(active)
     if (task.status !== 'completed') {
       throw new AssignmentEngineError(
         'invalid_transition',
@@ -981,8 +983,7 @@ export class AssignmentEngine {
     coordinatorThreadId: string,
     input: AssignmentFollowUpTaskInput
   ): Promise<AssignmentPlan> {
-    const active = this.requireActive(projectId, coordinatorThreadId)
-    this.requireAuditRework(active)
+    const active = await this.requireAuditRework(this.requireActive(projectId, coordinatorThreadId))
     const task: AssignmentTask = {
       ...structuredClone(input),
       workKind: 'rework',
@@ -1460,13 +1461,20 @@ export class AssignmentEngine {
     return task
   }
 
-  private requireAuditRework(plan: AssignmentPlan): void {
-    if (
-      !['completed', 'running'].includes(plan.status) ||
-      plan.auditCycle?.status !== 'reworking'
-    ) {
+  private async requireAuditRework(plan: AssignmentPlan): Promise<AssignmentPlan> {
+    if (!['completed', 'running'].includes(plan.status) || !plan.auditCycle) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not reworking')
     }
+    if (plan.auditCycle.status === 'reworking') return plan
+    if (plan.auditCycle.status !== 'planning_rework') {
+      throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not reworking')
+    }
+    return this.saveAuditCycle(plan, {
+      ...plan.auditCycle,
+      status: 'reworking',
+      reworkStartedAt: plan.auditCycle.reworkStartedAt ?? this.now(),
+      reworkCycle: plan.auditCycle.reworkCycle ?? 1
+    })
   }
 
   private async saveAuditCycle(
