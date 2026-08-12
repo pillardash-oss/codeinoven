@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
@@ -12,7 +12,8 @@
     GitFileChange,
     GitHubUser,
     GitResetMode,
-    GitStashEntry
+    GitStashEntry,
+    ThreadStatus
   } from '$shared/types'
   import {
     Archive,
@@ -860,24 +861,17 @@
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
-    // Git refreshes are event-driven (thread opens, git mutations, agent
-    // checkpoints) — this timer only keeps the agent-turn view fresh.
-    // Recursive setTimeout, not setInterval: the run is async, so the next
-    // tick is scheduled after the previous one completes — runs can never
-    // overlap and the 8s cadence is measured completion-to-completion.
-    let disposed = false
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const scheduleNext = (): void => {
-      if (disposed) return
-      timer = setTimeout(() => {
-        void refreshAgentTurnState().then(scheduleNext)
-      }, 8_000)
-    }
-    scheduleNext()
-    return () => {
-      disposed = true
-      if (timer !== null) clearTimeout(timer)
-    }
+    // Agent-turn state is event-driven: main broadcasts `thread:updated` on
+    // every status transition (planning/executing/completed/failed), so the
+    // panel reacts to those instead of polling. The one-shot fetch of the
+    // current status lives in the `refreshAgentTurnState` $effect above.
+    return subscribe('thread:updated', (...args: unknown[]) => {
+      const thread = args[0] as
+        { projectId?: string; id?: string; status?: ThreadStatus } | undefined
+      if (thread && thread.projectId === projectId && thread.id === threadId) {
+        agentTurnActive = thread.status === 'executing' || thread.status === 'planning'
+      }
+    })
   })
 
   const identityNeeded = $derived(
