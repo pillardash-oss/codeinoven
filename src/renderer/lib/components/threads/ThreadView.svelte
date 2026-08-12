@@ -1440,6 +1440,13 @@
   let achievementAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
   let assignmentPanelWidth = $state(320)
+  let coordinatorCollapsed = $state(
+    localStorage.getItem('codeinoven:coordinator-collapsed') === '1'
+  )
+  function toggleCoordinatorCollapsed(): void {
+    coordinatorCollapsed = !coordinatorCollapsed
+    localStorage.setItem('codeinoven:coordinator-collapsed', coordinatorCollapsed ? '1' : '0')
+  }
   let assignmentBusy = $state(false)
   let assignmentError = $state('')
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
@@ -6007,8 +6014,13 @@
   class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col {(assignment &&
     assignment.status !== 'draft' &&
     !showSpecStudio &&
-    !isAssignmentAuditorThread) ||
-  (achievementOnly && spec && !showSpecStudio && !isAssignmentAuditorThread)
+    !isAssignmentAuditorThread &&
+    !coordinatorCollapsed) ||
+  (achievementOnly &&
+    spec &&
+    !showSpecStudio &&
+    !isAssignmentAuditorThread &&
+    !coordinatorCollapsed)
     ? 'assignment-panel-open'
     : ''}"
   style:--assignment-panel-width={`${assignmentPanelWidth}px`}
@@ -7274,7 +7286,9 @@
         threads={assignmentThreads}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
+        collapsed={coordinatorCollapsed}
         coordinatorWorking={busy || delegatedWorkBusy}
+        onToggleCollapsed={toggleCoordinatorCollapsed}
         onOpenAssignment={openAssignmentStudio}
         onOpenAuditWork={openAssignmentAuditWork}
         onViewReport={openAuditStudio}
@@ -7294,12 +7308,14 @@
         reportAvailable={auditReport !== null}
         selectedThreadId={thread.id}
         width={assignmentPanelWidth}
+        collapsed={coordinatorCollapsed}
         auditorSettings={auditSettings}
         {providers}
         projectId={thread.projectId}
         favoriteModels={rendererRecovery.favoriteModels}
         recentModels={rendererRecovery.recentModels}
         coordinatorWorking={busy || delegatedWorkBusy}
+        onToggleCollapsed={toggleCoordinatorCollapsed}
         onOpenAudit={() => void generateAudit(auditSettings)}
         onViewReport={openAuditStudio}
         onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}

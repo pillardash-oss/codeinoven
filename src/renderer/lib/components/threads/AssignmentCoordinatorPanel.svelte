@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { ArrowUpRight, ChevronUp, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import {
+    ArrowUpRight,
+    ChevronLeft,
+    ChevronUp,
+    Loader2,
+    Network,
+    Play,
+    Rows3,
+    Square
+  } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { AssignmentPlan, AssignmentTask, AssignmentTaskStatus, Thread } from '$shared/types'
@@ -13,7 +22,9 @@
     reportAvailable?: boolean
     selectedThreadId: string
     width: number
+    collapsed: boolean
     coordinatorWorking: boolean
+    onToggleCollapsed: () => void
     onOpenAssignment: () => void
     onOpenAuditWork?: () => void
     onViewReport?: () => void
@@ -34,7 +45,9 @@
     reportAvailable = false,
     selectedThreadId,
     width,
+    collapsed,
     coordinatorWorking,
+    onToggleCollapsed,
     onOpenAssignment,
     onOpenAuditWork,
     onViewReport,
@@ -47,11 +60,8 @@
   }: Props = $props()
 
   const WIDTH_STORAGE_KEY = 'codeinoven:assignment-coordinator-width'
-  const COLLAPSED_STORAGE_KEY = 'codeinoven:assignment-coordinator-collapsed'
   const MIN_WIDTH = 280
   const MAX_WIDTH = 560
-
-  let collapsed = $state(() => localStorage.getItem(COLLAPSED_STORAGE_KEY) === '1')
 
   let resizing = $state(false)
   let resizePointerId = 0
@@ -109,11 +119,6 @@
   function restoreWidth(): void {
     const stored = Number.parseInt(localStorage.getItem(WIDTH_STORAGE_KEY) ?? '', 10)
     if (Number.isFinite(stored)) onWidthChange(clampWidth(stored))
-  }
-
-  function toggleCollapsed(): void {
-    collapsed = !collapsed
-    localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0')
   }
 
   function startResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
@@ -219,14 +224,24 @@
   }
 </script>
 
-<aside
-  {@attach restoreWidth}
-  class="assignment-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
-  class:select-none={resizing}
-  style:width={`${width}px`}
-  aria-label="Assignment coordinator"
->
-  {#if !collapsed}
+{#if collapsed}
+  <button
+    type="button"
+    class="absolute inset-y-0 right-0 z-20 flex w-7 flex-col items-center justify-center border-l border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated focus:outline-none"
+    title="Expand Assignment coordinator"
+    aria-label="Expand Assignment coordinator"
+    onclick={onToggleCollapsed}
+  >
+    <ChevronLeft size={15} />
+  </button>
+{:else}
+  <aside
+    {@attach restoreWidth}
+    class="assignment-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
+    class:select-none={resizing}
+    style:width={`${width}px`}
+    aria-label="Assignment coordinator"
+  >
     <button
       type="button"
       class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
@@ -238,26 +253,23 @@
       onpointercancel={finishResize}
       onkeydown={resizeWithKeyboard}
     ></button>
-  {/if}
-  <header class="shrink-0 border-b border-border p-4">
-    <div class="flex items-center justify-between gap-2">
-      <div class="flex min-w-0 items-center gap-2 text-primary">
-        <Network size={15} class="shrink-0" />
-        <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
+    <header class="shrink-0 border-b border-border p-4">
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-2 text-primary">
+          <Network size={15} class="shrink-0" />
+          <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
+        </div>
+        <button
+          type="button"
+          class="flex shrink-0 items-center justify-center rounded-md p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Collapse Assignment coordinator"
+          aria-label="Collapse Assignment coordinator"
+          aria-expanded="true"
+          onclick={onToggleCollapsed}
+        >
+          <ChevronUp size={15} />
+        </button>
       </div>
-      <button
-        type="button"
-        class="flex shrink-0 items-center justify-center rounded-md p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        class:rotate-180={collapsed}
-        title={collapsed ? 'Expand Assignment coordinator' : 'Collapse Assignment coordinator'}
-        aria-label={collapsed ? 'Expand Assignment coordinator' : 'Collapse Assignment coordinator'}
-        aria-expanded={!collapsed}
-        onclick={toggleCollapsed}
-      >
-        <ChevronUp size={15} />
-      </button>
-    </div>
-    {#if !collapsed}
       <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
       <p class="mt-1 line-clamp-3 text-xs leading-relaxed text-muted">
         {assignment.content.summary}
@@ -328,10 +340,8 @@
       {#if resumeError}
         <p class="mt-2 text-xs text-danger" role="alert">{resumeError}</p>
       {/if}
-    {/if}
-  </header>
+    </header>
 
-  {#if !collapsed}
     <div class="min-h-0 flex-1 overflow-y-auto">
       <section class="border-b border-border p-4" aria-label="Assignment progress">
         <div class="flex items-end justify-between gap-3">
@@ -469,8 +479,8 @@
         </div>
       </section>
     </div>
-  {/if}
-</aside>
+  </aside>
+{/if}
 
 <Modal
   open={showStopConfirmation}
