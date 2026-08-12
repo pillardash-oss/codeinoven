@@ -373,6 +373,31 @@ class ScopeState {
     return bucket
   }
 
+  /** Create a scope bucket on a specific project's board (used when the
+   *  targeted project is not the active one, e.g. the change-scope modal). */
+  async createBucketForProject(projectId: string, name: string): Promise<ScopeBucket | null> {
+    const trimmedName = name.trim()
+    if (!trimmedName) return null
+
+    await this.ensureBoardLoaded(projectId)
+    const current = this.boards.get(projectId) ?? cloneBoard(EMPTY_BOARD)
+    const bucket: ScopeBucket = {
+      id: crypto.randomUUID(),
+      name: trimmedName,
+      sortOrder: current.buckets.length,
+      collapsed: false,
+      collapsedSlices: []
+    }
+    const nextBoard: ScopeBoard = { version: 1, buckets: [...current.buckets, bucket] }
+    const saved = await invoke('scope:save', projectId, cloneBoard(nextBoard))
+    const cloned = cloneBoard(saved)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) {
+      this.board = cloned
+    }
+    return cloned.buckets.find((candidate) => candidate.id === bucket.id) ?? bucket
+  }
+
   async editBucket(bucketId: string, edit: ScopeBucketEdit): Promise<void> {
     const trimmedName = edit.name.trim()
     if (!trimmedName) return
