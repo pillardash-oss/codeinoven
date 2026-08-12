@@ -1244,6 +1244,7 @@ function mergeCloudDeploymentContainers(
       providerKind: kind,
       status: live.status,
       ...(live.url === undefined ? {} : { url: live.url }),
+      ...(live.project === undefined ? {} : { project: live.project }),
       ...(live.createdAt === undefined
         ? mapping.createdAt === undefined
           ? {}

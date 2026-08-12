@@ -497,6 +497,14 @@
                         {/if}
                         <div class="min-w-0 flex-1">
                           <div class="flex items-center gap-2">
+                            {#if container.project}
+                              <span
+                                class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[9px] text-muted"
+                                title={container.project}
+                              >
+                                {container.project}
+                              </span>
+                            {/if}
                             <p class="truncate text-[11px] font-medium text-foreground">
                               {container.label}
                             </p>
