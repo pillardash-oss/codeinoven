@@ -329,6 +329,25 @@ function museToolName(value: unknown, strip: 'task_kind' | 'operation'): string 
 }
 
 /**
+ * Muse treats `@path` in the prompt as a native file mention and strictly
+ * resolves it; a glued or unresolvable mention aborts the whole run (exit 1,
+ * "file mention @src/app.htmland rejected: file does not exist"). CodeInOven
+ * already conveys attached paths to the model through a separate JSON context
+ * block, so the literal `@path` token the composer leaves in the message is
+ * redundant for Muse. Escape path-like `@` mentions so Muse reads them as plain
+ * text instead of attempting (and failing) native attachment resolution.
+ * Emails (`user@example.com`) and non-path tokens (`@task:…`, plain words) are
+ * left untouched.
+ */
+function escapeMuseMentions(text: string): string {
+  return text.replace(/(^|[\s([{>`])@([^\s()\]}\],;:!?]+)/gu, (match, prefix, token) => {
+    const isPath = token.includes('/') || /^[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8}$/u.test(token)
+    if (!isPath) return match
+    return `${prefix}\\@${token}`
+  })
+}
+
+/**
  * Map one `muse exec --json` envelope into CodeInOven's stable shapes.
  *
  * Every line is `{ record_type, payload_type, payload }`; the meaningful
@@ -584,7 +603,11 @@ export class MuseDriver extends PersistentCliDriver {
       args.push('--disable-approval')
     }
 
-    const prompt = [options.systemPrompt, this.buildHistoryBlock(session), options.text]
+    const prompt = [
+      options.systemPrompt,
+      this.buildHistoryBlock(session),
+      escapeMuseMentions(options.text)
+    ]
       .filter(Boolean)
       .join('\n\n')
     args.push(prompt)
@@ -617,7 +640,7 @@ export class MuseDriver extends PersistentCliDriver {
           .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
           .map((part) => part.text)
           .join('\n')
-        return `[${message.role}]\n${text}`
+        return `[${message.role}]\n${escapeMuseMentions(text)}`
       })
       .join('\n\n')
     return `Previous conversation:\n${transcript}`
