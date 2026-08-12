@@ -248,4 +248,51 @@ describe('RendererRecoveryStore', () => {
       removeRendererRecoveryState(new UnavailableStorage())
     }).not.toThrow()
   })
+
+  it('removes a legacy favorite even when the toggle key is re-serialized', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    // A legacy 2-segment key (no harness) persisted before harness-scoping.
+    store.favoriteModels = ['openai:gpt-5.6']
+
+    // The unavailable-favorite remove button reconstructs the key with an empty
+    // harness, producing ":openai:gpt-5.6". This must still remove the favorite.
+    store.toggleFavorite(':openai:gpt-5.6')
+
+    expect(store.favoriteModels).toEqual([])
+    expect(store.isFavorite('openai:gpt-5.6')).toBe(false)
+  })
+
+  it('adds a legacy favorite when toggling a re-serialized key that is absent', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+
+    store.toggleFavorite(':openai:gpt-5.6')
+
+    expect(store.favoriteModels).toContain(':openai:gpt-5.6')
+  })
+
+  it('removes a chat legacy favorite when the toggle key is re-serialized', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.chatFavoriteModels = ['anthropic:claude-3']
+
+    store.toggleChatFavorite(':anthropic:claude-3')
+
+    expect(store.chatFavoriteModels).toEqual([])
+  })
+
+  it('treats distinct harness-scoped favorites as separate', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.favoriteModels = ['opencode:openai:gpt-5.6']
+
+    // A different harness with the same provider+model is a distinct favorite.
+    store.toggleFavorite('codex:openai:gpt-5.6')
+
+    expect(store.favoriteModels).toEqual([
+      'opencode:openai:gpt-5.6',
+      'codex:openai:gpt-5.6'
+    ])
+  })
 })

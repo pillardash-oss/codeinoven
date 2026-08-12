@@ -40,6 +40,25 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
+/**
+ * Whether two persisted model keys reference the same underlying model, ignoring
+ * how a key was re-serialized. A legacy 2-segment key (`providerId:modelId`) and
+ * its harness-scoped reconstruction (`:providerId:modelId`, produced when an
+ * empty harness is re-encoded) both identify the same model, so toggling must
+ * treat them as equal — otherwise "remove favorite" re-adds instead of removing.
+ *
+ * Harness is compared too so distinct harnesses stay distinct; only an absent
+ * (undefined) harness and an explicitly empty one are considered equivalent,
+ * which is the exact mismatch the picker's remove button can produce.
+ */
+function sameModelIdentity(left: string, right: string): boolean {
+  const a = parseModelKey(left)
+  const b = parseModelKey(right)
+  if (a.providerId !== b.providerId || a.modelId !== b.modelId) return false
+  const harnessA = a.harnessId ?? ''
+  const harnessB = b.harnessId ?? ''
+  return harnessA === harnessB
+}
 
 /**
  * Restart-safe renderer navigation and composer state.
@@ -383,11 +402,13 @@ export class RendererRecoveryStore {
   }
 
   toggleFavorite(modelKey: string): void {
-    const idx = this.favoriteModels.indexOf(modelKey)
+    const idx = this.favoriteModels.findIndex(
+      (k) => k === modelKey || sameModelIdentity(k, modelKey)
+    )
     if (idx === -1) {
       this.favoriteModels = [...this.favoriteModels, modelKey]
     } else {
-      this.favoriteModels = this.favoriteModels.filter((k) => k !== modelKey)
+      this.favoriteModels = this.favoriteModels.filter((k) => k !== this.favoriteModels[idx])
     }
     this.persist()
   }
@@ -420,11 +441,15 @@ export class RendererRecoveryStore {
   }
 
   toggleChatFavorite(modelKey: string): void {
-    const idx = this.chatFavoriteModels.indexOf(modelKey)
+    const idx = this.chatFavoriteModels.findIndex(
+      (k) => k === modelKey || sameModelIdentity(k, modelKey)
+    )
     if (idx === -1) {
       this.chatFavoriteModels = [...this.chatFavoriteModels, modelKey]
     } else {
-      this.chatFavoriteModels = this.chatFavoriteModels.filter((k) => k !== modelKey)
+      this.chatFavoriteModels = this.chatFavoriteModels.filter(
+        (k) => k !== this.chatFavoriteModels[idx]
+      )
     }
     this.persist()
   }
