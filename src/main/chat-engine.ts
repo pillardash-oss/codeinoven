@@ -1297,7 +1297,7 @@ export class ChatEngine {
     {
       driver: HarnessDriver
       projectPath: string
-      runtime: PreparedUtilityRuntime
+      runtime?: PreparedUtilityRuntime
       gateway: UtilityTurnGateway
       threadId: string
     }
@@ -2088,7 +2088,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     modelNeedsImageDescriptor: boolean,
-    skipRuntime = false
+    skipRuntime = false,
+    directGateway = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -2122,12 +2123,6 @@ export class ChatEngine {
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
       })
       const resolvedUtilities = gateway.resolvedUtilities
-      const request = {
-        projectPath,
-        providerId: settings.providerId,
-        resolvedUtilities
-      }
-      const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
       const skillInstructions = resolvedUtilities.flatMap(({ utility }) =>
         utility.kind === 'skill'
           ? [
@@ -2135,6 +2130,16 @@ export class ChatEngine {
             ]
           : []
       )
+      if (directGateway) {
+        this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
+        return [gateway.directInstructions, ...skillInstructions].filter(Boolean).join('\n\n')
+      }
+      const request = {
+        projectPath,
+        providerId: settings.providerId,
+        resolvedUtilities
+      }
+      const overlay = (await driver.prepareUtilityRuntime?.(request)) ?? {}
       if (overlay.gatewayAvailable === false) {
         // Also clear any overlay left by an interrupted prior turn before the
         // harness launches against its normal authenticated profile.
@@ -2189,7 +2194,7 @@ export class ChatEngine {
     try {
       await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
     } catch (error) {
-      await turn.runtime.cleanup()
+      await turn.runtime?.cleanup()
       Logger.error('Harness utility runtime cleanup failed:', error)
     } finally {
       await turn.gateway.cleanup()
@@ -4413,13 +4418,12 @@ export class ChatEngine {
       settings,
       utilityBudgetContext,
       modelNeedsImageDescriptor,
-      // Assignment workers must stay on the pooled project server. Spawning a
-      // per-session isolated opencode server for every worker (because of the
-      // utility gateway) makes N+1 opencode processes all write to the single
-      // global opencode.db, which is exactly the `database is locked` cascade
-      // that crashed six of seven workers in the milogs assignment. Workers
-      // talk to the Assignment API over HTTP, so they do not need the gateway.
-      (isChatThread && !chatFileSystemEnabled) || targetThread?.assignmentRole === 'worker'
+      // Web-only chat deliberately has no app gateway.
+      isChatThread && !chatFileSystemEnabled,
+      // OpenCode workers use the same gateway through scoped loopback calls
+      // while remaining on the pooled project server. This preserves utilities
+      // without recreating the N+1 opencode.db locking cascade.
+      targetThread?.assignmentRole === 'worker' && driver instanceof OpenCodeDriver
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -5166,20 +5170,29 @@ export class ChatEngine {
   ): Promise<ImageDescriptorResult[]> {
     const thread = await this.threadManager.getThread(request.projectId, request.threadId)
     const config = await this.storage.getConfig()
-    const selection =
+    let selection =
       request.pinnedSelection ??
       thread?.settings?.imageDescriptor ??
       config.agentDefaults.imageDescriptor ??
       this.firstVisionModelFromCache(request.projectId)
     if (!selection) {
-      return request.images.map((entry) => ({
-        id: entry.id,
-        source: entry.source,
-        type: entry.type,
-        description: '',
-        error:
-          'No vision model is configured for image description. Choose a vision model on the Agents settings page, or pick one when sending an image.'
-      }))
+      const decision = await this.requestImageDescriptorDecision(
+        request,
+        undefined,
+        'A vision model is required to describe the image for this text-only model.',
+        'unknown'
+      )
+      if (decision.action !== 'retry' || !decision.selection) {
+        return request.images.map((entry) => ({
+          id: entry.id,
+          source: entry.source,
+          type: entry.type,
+          description: '',
+          error: 'No vision model was selected. Continue without an image description.'
+        }))
+      }
+      selection = decision.selection
+      await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
     }
     this.clearSessionWatchdog(request.sessionId)
     try {
@@ -5455,21 +5468,37 @@ export class ChatEngine {
    * text-only model's tool call blocks exactly like a permission prompt. On
    * timeout the decision auto-resolves as `ignore` so the turn never hangs.
    */
-  private requestImageDescriptorDecision(
+  private async requestImageDescriptorDecision(
     request: ImageDescriptorExecutorRequest,
-    selection: AgentModelSelection,
+    selection: AgentModelSelection | undefined,
     error: string,
     kind: AgentProviderIssueKind
   ): Promise<ImageDescriptorUserDecision> {
     const id = generateId()
     this.clearSessionWatchdog(request.sessionId)
     this.markProjectActive(request.projectId)
+    const owningThread = await this.threadManager.getThread(request.projectId, request.threadId)
+    const surfaceThreadId =
+      owningThread?.assignmentRole === 'worker' && owningThread.coordinatorThreadId
+        ? owningThread.coordinatorThreadId
+        : request.threadId
+    const assignment =
+      owningThread?.assignmentRole === 'worker' && owningThread.coordinatorThreadId
+        ? this.assignmentEngine.getActive(request.projectId, owningThread.coordinatorThreadId)
+        : null
+    const task = assignment?.content.tasks.find(
+      (candidate) =>
+        candidate.threadId === request.threadId || candidate.id === owningThread?.assignmentTaskId
+    )
     return new Promise<ImageDescriptorUserDecision>((resolve) => {
       const requestForCard: ImageDescriptorErrorRequest = {
         id,
         sessionId: request.sessionId,
         projectId: request.projectId,
         threadId: request.threadId,
+        surfaceThreadId,
+        ...(task ? { assignmentTaskId: task.id, assignmentTaskTitle: task.title } : {}),
+        ...(owningThread?.assignmentRole === 'worker' ? { workerTitle: owningThread.title } : {}),
         error,
         kind,
         selection,
@@ -5494,7 +5523,7 @@ export class ChatEngine {
         type: 'imageDescriptor.error',
         sessionId: request.sessionId,
         projectId: request.projectId,
-        threadId: request.threadId,
+        threadId: surfaceThreadId,
         request: requestForCard
       })
     })
@@ -6391,7 +6420,9 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     return [...this.pendingImageDescriptorDecisions.values()]
-      .filter((pending) => pending.projectId === projectId && pending.threadId === threadId)
+      .filter(
+        (pending) => pending.projectId === projectId && pending.request.surfaceThreadId === threadId
+      )
       .map((pending) => pending.request)
   }
 
@@ -6433,7 +6464,11 @@ export class ChatEngine {
       }
     }
     const pending = this.pendingImageDescriptorDecisions.get(requestId)
-    if (!pending || pending.projectId !== projectId || pending.threadId !== threadId) {
+    if (
+      !pending ||
+      pending.projectId !== projectId ||
+      pending.request.surfaceThreadId !== threadId
+    ) {
       throw new Error(`Image descriptor request is no longer pending: ${requestId}`)
     }
     if (pending.timer !== undefined) {
@@ -6444,6 +6479,8 @@ export class ChatEngine {
     this.broadcast({
       type: 'imageDescriptor.resolved',
       sessionId: pending.sessionId,
+      projectId,
+      threadId: pending.request.surfaceThreadId,
       requestId,
       action
     })
