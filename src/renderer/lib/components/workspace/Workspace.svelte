@@ -640,7 +640,7 @@
   }
 
   function openCloudDeploymentsTab(): void {
-    if (!selectedThread || !activeProject?.hasDeployments) return
+    if (!selectedThread) return
     contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
   }
 
@@ -669,16 +669,12 @@
             }
           ]
         : []),
-      ...(activeProject?.hasDeployments
-        ? [
-            {
-              id: 'cloud-deployments',
-              label: 'Cloud Deployments',
-              description: 'Monitor your cloud deployments',
-              onSelect: openCloudDeploymentsTab
-            }
-          ]
-        : []),
+      {
+        id: 'cloud-deployments',
+        label: 'Cloud Deployments',
+        description: 'Monitor your cloud deployments',
+        onSelect: openCloudDeploymentsTab
+      },
       {
         id: 'terminal',
         label: 'Terminal',
