@@ -352,6 +352,34 @@ describe('OpenCode token usage normalization', () => {
     })
   })
 
+  it('clamps uncached input to zero when cached read plus write exceed input', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 10, output: 5, total: 15, cache: { read: 8, write: 9 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 8, cacheWrite: 9, total: 15 },
+      normalizedUsage: {
+        uncachedInput: 0,
+        cachedInput: 8,
+        cacheWrite: 9,
+        output: 5,
+        reasoning: null,
+        rawProviderUsage: { input: 10, output: 5, total: 15, cache: { read: 8, write: 9 } },
+        rawTotal: 15,
+        totalSemantics: 'includes_cache'
+      }
+    })
+  })
+
   it('attaches no usage metadata when the provider reports no tokens', () => {
     expect(
       mapOpenCodePart({
