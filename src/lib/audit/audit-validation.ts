@@ -133,6 +133,10 @@ function collectVerificationCheck(
   const files = collectStringArray(input.files, `${label}.files`, issues)
   const findingIds = collectStringArray(input.findingIds, `${label}.findingIds`, issues)
   const exitCode = typeof input.exitCode === 'number' ? input.exitCode : undefined
+  const evidencePath =
+    input.evidencePath === undefined
+      ? undefined
+      : collectText(input.evidencePath, `${label}.evidencePath`, issues)
   if (status === 'passed' || status === 'failed') {
     if (!command) issues.push(`${label}.command is required when the check ran`)
     if (files.length === 0) issues.push(`${label}.files must identify the scoped check targets`)
@@ -155,6 +159,7 @@ function collectVerificationCheck(
     status,
     ...(exitCode === undefined ? {} : { exitCode }),
     evidence: collectMarkdownText(input.evidence, `${label}.evidence`, issues),
+    ...(evidencePath === undefined ? {} : { evidencePath }),
     findingIds
   }
 }

@@ -2593,6 +2593,8 @@ export interface AuditVerificationCheck {
   status: AuditVerificationStatus
   exitCode?: number
   evidence: string
+  /** Project-relative, platform-written full command output for this check. */
+  evidencePath?: string
   findingIds: string[]
 }
 

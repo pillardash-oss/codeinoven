@@ -163,20 +163,21 @@ export class AuditEngine {
         } catch {
           continue
         }
-        const markdown = exportAuditReportMarkdown(report)
+        const currentMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '' })
+        const versionMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '../' })
         await Promise.all([
           this.storage.writeProjectSpecRaw(
             report.projectId,
             featureSlug,
             'audit.md',
-            markdown,
+            currentMarkdown,
             project
           ),
           this.storage.writeProjectSpecRaw(
             report.projectId,
             featureSlug,
             relativePath,
-            markdown,
+            versionMarkdown,
             project
           )
         ])
@@ -293,20 +294,21 @@ export class AuditEngine {
       return
     }
     const featureSlug = await ensureFeatureSlug(this.db, report.projectId, report.threadId)
-    const markdown = exportAuditReportMarkdown(report)
+    const currentMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '' })
+    const versionMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '../' })
     await Promise.all([
       this.storage.writeProjectSpecRaw(
         report.projectId,
         featureSlug,
         'audit.md',
-        markdown,
+        currentMarkdown,
         project
       ),
       this.storage.writeProjectSpecRaw(
         report.projectId,
         featureSlug,
         join('versions', `${report.id}-audit-v${report.version}.md`),
-        markdown,
+        versionMarkdown,
         project
       )
     ])

@@ -100,6 +100,8 @@ import type {
   AuditGenerationRequest,
   AuditReport,
   AuditReportContent,
+  AuditVerificationCheck,
+  AuditVerificationCheckKind,
   BrainstormContent,
   BrainstormDocument,
   BrainstormEntryChoice,
@@ -243,10 +245,11 @@ const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
   'Run only focused tests related to the changed files and feature. Never run the entire application test suite unless the audited feature is itself repository-wide and the Assignment explicitly requires it.',
   'When the code uses a framework or technology with an installed MCP, skill, or other app utility, call utility_search, activate the relevant result, and invoke its validation/autofix analysis in non-writing mode. For Svelte, use the Svelte documentation and autofixer utility when available.',
   'A check that cannot safely be scoped must be recorded as not_applicable with the concrete reason; do not replace it with a whole-repository command.',
-  'Record the exact repository revision, audited-file inventory, commands, target files, exit codes, concise output evidence, utilities used or unavailable, and limitations.',
+  'Record the exact repository revision, audited-file inventory, commands, target files, exit codes, concise factual evidence, utilities used or unavailable, and limitations.',
+  'Never paste command, formatter, lint, typecheck, test, or build output into the report. The platform persists each matched command output as a versioned file under the current audit run and attaches its evidencePath after validation. Keep each evidence field to one short result sentence and do not return evidencePath yourself.',
   'Every failed check must link to at least one actionable finding. Never claim a check passed unless you executed it and observed exit code 0.',
   'Include exitCode only for checks that ran; omit it for not_applicable checks.',
-  'In addition to the normal audit fields, return auditedFiles and verification using exactly this shape: "auditedFiles":[{"path":"project/relative/path","reason":"why this file is in scope"}],"verification":{"repositoryRevision":"git revision plus dirty-state description","scope":"how the audited scope was derived","checks":[{"id":"check-id","kind":"format|lint|typecheck|test|build|other","command":"exact command or empty when not applicable","files":["project/relative/path"],"status":"passed|failed|not_applicable","exitCode":0,"evidence":"concise factual output or reason","findingIds":[]}],"utilities":[{"name":"utility or MCP name","status":"used|unavailable|not_applicable","evidence":"operation and result or concrete reason"}],"limitations":["remaining verification limitation"]}.',
+  'In addition to the normal audit fields, return auditedFiles and verification using exactly this shape: "auditedFiles":[{"path":"project/relative/path","reason":"why this file is in scope"}],"verification":{"repositoryRevision":"git revision plus dirty-state description","scope":"how the audited scope was derived","checks":[{"id":"check-id","kind":"format|lint|typecheck|test|build|other","command":"exact command or empty when not applicable","files":["project/relative/path"],"status":"passed|failed|not_applicable","exitCode":0,"evidence":"concise factual result or reason","findingIds":[]}],"utilities":[{"name":"utility or MCP name","status":"used|unavailable|not_applicable","evidence":"operation and result or concrete reason"}],"limitations":["remaining verification limitation"]}.',
   'The checks array must include format, lint, typecheck, and test results. Every audited file must appear in the files list of a format result and a lint result, including an explicit not_applicable result where that check truly does not apply.'
 ].join(' ')
 
@@ -9796,8 +9799,9 @@ export class ChatEngine {
     messages: AgentMessage[]
     auditStartedAt: number
     utilitySearchRequired: boolean
-  }): void {
+  }): Map<string, Extract<AgentPart, { type: 'tool' }>> {
     const issues: string[] = []
+    const checkInvocations = new Map<string, Extract<AgentPart, { type: 'tool' }>>()
     const auditedFiles = new Set(input.content.auditedFiles?.map((file) => file.path) ?? [])
     for (const expectedFile of new Set(
       input.assignment.content.tasks.flatMap((task) => task.expectedFiles)
@@ -9847,7 +9851,8 @@ export class ChatEngine {
         ({ part }) =>
           part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
       )
-      .map(({ invocation }) => ({
+      .map(({ part, invocation }) => ({
+        part,
         invocation,
         normalizedInvocation: normalizeCommandEvidence(invocation)
       }))
@@ -9867,6 +9872,7 @@ export class ChatEngine {
         )
         continue
       }
+      checkInvocations.set(check.id, observedCommand.part)
       if (check.kind === 'format' || check.kind === 'lint') {
         for (const file of check.files) {
           if (
@@ -9907,6 +9913,88 @@ export class ChatEngine {
       }
     }
     if (issues.length > 0) throw new AuditReportValidationError(issues)
+    return checkInvocations
+  }
+
+  private async persistAssignmentAuditCheckEvidence(input: {
+    projectId: string
+    threadId: string
+    runId: string
+    content: AuditReportContent
+    checkInvocations: Map<string, Extract<AgentPart, { type: 'tool' }>>
+  }): Promise<AuditReportContent> {
+    const verification = input.content.verification
+    if (!verification) return input.content
+    const featureSlug = await ensureFeatureSlug(this.database, input.projectId, input.threadId)
+    const project = requireLocalProject(this.database, input.projectId)
+    const versions = new Map<AuditVerificationCheckKind, number>()
+    const checks: AuditVerificationCheck[] = []
+    for (const check of verification.checks) {
+      if (check.status === 'not_applicable') {
+        checks.push({
+          ...check,
+          evidence: check.evidence.replace(/\s+/gu, ' ').trim().slice(0, 320)
+        })
+        continue
+      }
+      const invocation = input.checkInvocations.get(check.id)
+      if (!invocation) {
+        throw new AuditReportValidationError([
+          `verification.checks ${check.id} has no matched invocation to persist`
+        ])
+      }
+      const version = (versions.get(check.kind) ?? 0) + 1
+      versions.set(check.kind, version)
+      const relativePath = join(
+        'audit',
+        'runs',
+        input.runId,
+        'evidence',
+        `${check.kind}-${version}.txt`
+      )
+      const evidencePath = join(featureArtifactDirectory(featureSlug), relativePath).replace(
+        /\\/gu,
+        '/'
+      )
+      const output = invocation.state.output?.trimEnd() || '(No textual output was returned.)'
+      const error = invocation.state.error?.trimEnd()
+      await this.storage.writeProjectSpecRaw(
+        input.projectId,
+        featureSlug,
+        relativePath,
+        [
+          `Check: ${check.id}`,
+          `Kind: ${check.kind}`,
+          `Status: ${check.status}`,
+          `Exit code: ${check.exitCode ?? 'not reported'}`,
+          `Files: ${check.files.join(', ')}`,
+          '',
+          'Command:',
+          check.command,
+          '',
+          'Output:',
+          output,
+          ...(error ? ['', 'Tool error:', error] : []),
+          ''
+        ].join('\n'),
+        project
+      )
+      checks.push({
+        ...check,
+        evidence:
+          check.status === 'passed'
+            ? `Passed with exit code ${check.exitCode}.`
+            : `Failed with exit code ${check.exitCode}; see linked findings.`,
+        evidencePath
+      })
+    }
+    return {
+      ...input.content,
+      verification: {
+        ...verification,
+        checks
+      }
+    }
   }
 
   private latestAssignmentAuditOutput(messages: AgentMessage[]): string | null {
@@ -10081,12 +10169,19 @@ export class ChatEngine {
             coordinatorThreadId,
             recoveredAttempt.relativePath
           )
-          this.validateAssignmentAuditExecutionEvidence({
+          const checkInvocations = this.validateAssignmentAuditExecutionEvidence({
             content: recoveredContent,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: false
+          })
+          recoveredContent = await this.persistAssignmentAuditCheckEvidence({
+            projectId,
+            threadId: coordinatorThreadId,
+            runId,
+            content: recoveredContent,
+            checkInvocations
           })
           await this.writeAssignmentAuditRepairManifest({
             schemaVersion: 1,
@@ -10264,12 +10359,19 @@ export class ChatEngine {
             coordinatorThreadId,
             persistedAttempt.relativePath
           )
-          this.validateAssignmentAuditExecutionEvidence({
+          const checkInvocations = this.validateAssignmentAuditExecutionEvidence({
             content,
             assignment,
             messages: await driver.loadMessages(projectPath, sessionId),
             auditStartedAt,
             utilitySearchRequired: utilityRuntimeAvailable
+          })
+          content = await this.persistAssignmentAuditCheckEvidence({
+            projectId,
+            threadId: coordinatorThreadId,
+            runId,
+            content,
+            checkInvocations
           })
         } catch (error) {
           const errors =
