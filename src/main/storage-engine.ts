@@ -13,7 +13,7 @@ import {
   resolveWithinRoot
 } from '../lib/utils'
 import type { AppConfig } from '../lib/types'
-import type { CloudDeploymentConfig } from '../lib/types'
+import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../lib/types'
 import type { Project } from '../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../lib/project-artifacts'
 import {
@@ -313,5 +313,28 @@ export class StorageEngine {
   /** Remove a project's cloud deployment config, flagging it as having none. */
   async clearCloudDeploymentConfig(projectId: string): Promise<void> {
     await this.remove(this.cloudDeploymentConfigPath(projectId))
+  }
+
+  /**
+   * Resolve the global cloud deployment account registry path, always under the
+   * CodeInOven config directory — never inside the user's repository, and
+   * independent of any single project.
+   */
+  private cloudDeploymentAccountsPath(): string {
+    return join('cloud-deployments', 'accounts.json')
+  }
+
+  /** Read the global provider account registry, or an empty one when absent. */
+  async getCloudDeploymentAccounts(): Promise<CloudDeploymentAccountRegistry> {
+    return (
+      (await this.read<CloudDeploymentAccountRegistry>(this.cloudDeploymentAccountsPath())) ?? {
+        accounts: []
+      }
+    )
+  }
+
+  /** Persist the global provider account registry atomically under the config dir. */
+  async saveCloudDeploymentAccounts(registry: CloudDeploymentAccountRegistry): Promise<void> {
+    await this.write(this.cloudDeploymentAccountsPath(), registry)
   }
 }

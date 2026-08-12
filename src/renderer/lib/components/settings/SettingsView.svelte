@@ -15,6 +15,7 @@
     BrainCircuit,
     CheckCircle2,
     Clock,
+    Cloud,
     Download,
     Globe,
     Info,
@@ -38,6 +39,7 @@
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
+  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -92,6 +94,7 @@
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
     { id: 'remote', label: 'Remote', icon: Globe },
+    { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
     { id: 'profile', label: 'Profile', icon: UserRound },
     { id: 'about', label: 'About', icon: Info }
   ]
@@ -553,6 +556,8 @@
       <UtilitiesView />
     {:else if section === 'remote'}
       <RemoteSettingsTab />
+    {:else if section === 'cloud-deployments'}
+      <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
       <div class="mx-auto max-w-2xl p-6 pb-24">
         <div class="mb-6">

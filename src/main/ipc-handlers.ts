@@ -151,8 +151,8 @@ import type {
   ThreadMessageCursor,
   CloudDeploymentConfig,
   CloudDeploymentContainer,
-  CloudDeploymentCredentialAccount,
-  CloudDeploymentProviderCredentials,
+  CloudDeploymentProjectProviderAccounts,
+  CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind,
   CloudDeploymentStatus
 } from '../lib/types'
@@ -1084,98 +1084,44 @@ function validateCloudDeploymentContainer(value: unknown, index: number): CloudD
 }
 
 /**
- * Validate a single account-scoped credential at the IPC boundary. The base
- * URL, when present, is re-validated with `validateBaseUrl` so empty,
- * unverified, and invented hosts are rejected on every config path.
+ * Validate a project's per-provider account association. The active account id,
+ * when set, must reference one of the attached account ids.
  */
-function validateCloudDeploymentCredentialAccount(
-  value: unknown,
-  label: string
-): CloudDeploymentCredentialAccount {
-  if (!isRecord(value)) throw new TypeError(`Credential account for ${label} must be an object`)
-  if (typeof value.configured !== 'boolean') {
-    throw new TypeError(`Credential account for ${label} configured flag must be a boolean`)
-  }
-  const secretRef = requireString(
-    value.secretRef,
-    `Credential account for ${label} secret ref`,
-    true
-  )
-  const providerKind = validateCloudDeploymentProviderKind(
-    value.providerKind,
-    'Credential account provider kind'
-  )
-  const baseUrl =
-    value.baseUrl === undefined ? undefined : validateProviderBaseUrl(value.baseUrl, providerKind)
-  return {
-    id: requireString(value.id, `Credential account for ${label} ID`, true),
-    label: requireString(value.label, `Credential account for ${label} label`),
-    providerKind,
-    secretRef,
-    ...(baseUrl === undefined ? {} : { baseUrl }),
-    configured: value.configured,
-    createdAt: requireTimestamp(value.createdAt, `Credential account for ${label} creation`),
-    updatedAt: requireTimestamp(value.updatedAt, `Credential account for ${label} update`)
-  }
-}
-
-/**
- * Validate the multi-account credentials block for one provider kind. The
- * active account id, when set, must reference an existing account; ids and
- * labels must be unique within the provider so lookups stay unambiguous.
- */
-function validateCloudDeploymentProviderCredentials(
+function validateCloudDeploymentProjectProviderAccounts(
   value: unknown,
   kind: CloudDeploymentProviderKind
-): CloudDeploymentProviderCredentials {
-  if (!isRecord(value))
-    throw new TypeError(`Cloud deployment credentials for ${kind} must be an object`)
-  if (!Array.isArray(value.accounts)) {
-    throw new TypeError(`Cloud deployment credentials for ${kind} must have an accounts array`)
+): CloudDeploymentProjectProviderAccounts {
+  if (!isRecord(value)) {
+    throw new TypeError(`Cloud deployment account association for ${kind} must be an object`)
   }
-  const accounts = value.accounts.map((account, index) =>
-    validateCloudDeploymentCredentialAccount(account, `${kind} account ${index}`)
+  if (!Array.isArray(value.attachedAccountIds)) {
+    throw new TypeError(`Cloud deployment account association for ${kind} must have attached ids`)
+  }
+  const attachedAccountIds = value.attachedAccountIds.map((id, index) =>
+    requireString(id, `${kind} attached account ID ${index}`, true)
   )
-  for (const account of accounts) {
-    if (account.providerKind !== kind) {
-      throw new TypeError(`Account ${account.label} provider kind does not match ${kind}`)
-    }
-  }
-  const ids = new Set<string>()
-  const labels = new Set<string>()
-  for (const account of accounts) {
-    if (ids.has(account.id))
-      throw new TypeError(`Duplicate cloud deployment account id: ${account.id}`)
-    if (labels.has(account.label)) {
-      throw new TypeError(`Duplicate cloud deployment account label: ${account.label}`)
-    }
-    ids.add(account.id)
-    labels.add(account.label)
-  }
   const activeAccountId =
     value.activeAccountId === null
       ? null
       : requireString(value.activeAccountId, `${kind} active account ID`, true)
-  if (activeAccountId !== null && !ids.has(activeAccountId)) {
-    throw new TypeError(`Active account ${activeAccountId} does not exist for ${kind}`)
+  if (activeAccountId !== null && !attachedAccountIds.includes(activeAccountId)) {
+    throw new TypeError(`Active account ${activeAccountId} is not attached for ${kind}`)
   }
-  return { accounts, activeAccountId }
+  return { attachedAccountIds, activeAccountId }
 }
 
 /**
  * Validate a renderer-supplied cloud deployment config at the IPC boundary.
  * `projectId` is pinned to the channel argument so the renderer cannot persist
- * a config for a different project by passing a mismatched body. Every account
- * base URL is re-validated with `validateBaseUrl`.
+ * a config for a different project by passing a mismatched body. Accounts
+ * themselves live in the global registry; this only validates the project's
+ * provider/container selection and account association.
  */
 function validateCloudDeploymentConfig(value: unknown, projectId: string): CloudDeploymentConfig {
   if (!isRecord(value)) throw new TypeError('Cloud deployment config must be an object')
-  if (value.version !== 2) throw new TypeError('Unsupported cloud deployment config schema')
+  if (value.version !== 3) throw new TypeError('Unsupported cloud deployment config schema')
   if (validateEntityId(value.projectId, 'Config project ID') !== projectId) {
     throw new TypeError('Config project ID does not match the requested project')
-  }
-  if (!isRecord(value.credentials)) {
-    throw new TypeError('Cloud deployment credentials must be an object')
   }
   if (!isRecord(value.project)) {
     throw new TypeError('Cloud deployment project config must be an object')
@@ -1185,12 +1131,6 @@ function validateCloudDeploymentConfig(value: unknown, projectId: string): Cloud
   }
   if (!Array.isArray(value.project.containers)) {
     throw new TypeError('Cloud deployment containers must be an array')
-  }
-
-  const credentials: CloudDeploymentConfig['credentials'] = {}
-  for (const key of Object.keys(value.credentials)) {
-    const kind = validateCloudDeploymentProviderKind(key)
-    credentials[kind] = validateCloudDeploymentProviderCredentials(value.credentials[key], kind)
   }
 
   const providers: CloudDeploymentProviderKind[] = value.project.providers.map((provider, index) =>
@@ -1219,13 +1159,29 @@ function validateCloudDeploymentConfig(value: unknown, projectId: string): Cloud
     containerKeys.add(key)
   }
 
+  let providerAccounts: CloudDeploymentConfig['project']['providerAccounts']
+  if (value.project.providerAccounts === undefined) {
+    providerAccounts = undefined
+  } else if (!isRecord(value.project.providerAccounts)) {
+    throw new TypeError('Cloud deployment account association must be an object')
+  } else {
+    providerAccounts = {}
+    for (const key of Object.keys(value.project.providerAccounts)) {
+      const kind = validateCloudDeploymentProviderKind(key)
+      providerAccounts[kind] = validateCloudDeploymentProjectProviderAccounts(
+        value.project.providerAccounts[key],
+        kind
+      )
+    }
+  }
+
   return {
-    version: 2,
+    version: 3,
     projectId,
-    credentials,
     project: {
       providers,
-      containers
+      containers,
+      ...(providerAccounts === undefined ? {} : { providerAccounts })
     },
     updatedAt: requireTimestamp(value.updatedAt, 'Cloud deployment config update')
   }
@@ -3637,9 +3593,14 @@ export function registerIpcHandlers(
 
   // ─── Cloud deployment config & credentials ────────────────────────────
   // The provider token is vaulted by main via `safeStorage` and never crosses
-  // IPC; only an opaque ref is recorded in the per-project config. The
-  // project's has-deployments flag is refreshed so the Cloud Deployments panel
-  // only appears for projects that actually have a configured provider.
+  // ─── Cloud deployment accounts & monitoring ────────────────────────────
+  // Provider accounts live in a GLOBAL registry (task: reusable across
+  // projects) and their tokens are vaulted by account id. A project's config
+  // only records which accounts it attaches and which is active per provider.
+  // The provider adapter is resolved by kind through the registry, and its
+  // credential context (verified base URL + vaulted token) is assembled here
+  // in main so plaintext tokens never cross the IPC boundary. A provider with
+  // no attached configured account is rejected up front.
   const syncCloudDeploymentsFlag = async (projectId: string): Promise<void> => {
     const hasDeployments = await storage.hasCloudDeployments(projectId)
     await projectManager.setHasDeployments(projectId, hasDeployments).catch(() => undefined)
@@ -3651,9 +3612,8 @@ export function registerIpcHandlers(
     const existing = await storage.getCloudDeploymentConfig(projectId)
     if (existing) return existing
     return {
-      version: 2,
+      version: 3,
       projectId,
-      credentials: {},
       project: { providers: [], containers: [] },
       updatedAt: Date.now()
     }
@@ -3666,131 +3626,140 @@ export function registerIpcHandlers(
   ipcMain.handle('cloudDeploy:saveConfig', async (_, projectId: unknown, rawConfig: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeConfig = validateCloudDeploymentConfig(rawConfig, safeProjectId)
-    // Credential metadata (account ids, secretRefs, configured flags, active
-    // account, base URLs) is main-owned and reconciled against the vault. Never
-    // trust renderer-supplied credential records here: preserve the stored
-    // authoritative credentials and only apply the renderer's project mapping
-    // (providers + containers) and timestamp. Container updates must not be able
-    // to replace or orphan vaulted credentials.
-    const existing = await storage.getCloudDeploymentConfig(safeProjectId)
-    const merged: CloudDeploymentConfig = {
-      version: 2,
-      projectId: safeProjectId,
-      credentials: existing?.credentials ?? {},
-      project: safeConfig.project,
-      updatedAt: safeConfig.updatedAt
-    }
-    await storage.saveCloudDeploymentConfig(safeProjectId, merged)
+    // Accounts live in the global registry; saveConfig only persists the
+    // project's provider/container selection and account association. It can
+    // never create or mutate account/credential state.
+    await storage.saveCloudDeploymentConfig(safeProjectId, safeConfig)
     await syncCloudDeploymentsFlag(safeProjectId)
-    return merged
+    return safeConfig
   })
 
   ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const config = await storage.getCloudDeploymentConfig(safeProjectId)
-    if (config) {
-      for (const [kind, credentials] of Object.entries(config.credentials)) {
-        const providerKind = validateCloudDeploymentProviderKind(kind)
-        for (const account of credentials.accounts) {
-          if (!account.secretRef) continue
-          await vault.removeProviderToken(safeProjectId, providerKind, account.id)
-        }
-      }
-    }
     await storage.clearCloudDeploymentConfig(safeProjectId)
     await syncCloudDeploymentsFlag(safeProjectId)
   })
 
+  ipcMain.handle('cloudDeploy:listAccounts', async () => storage.getCloudDeploymentAccounts())
+
   ipcMain.handle(
-    'cloudDeploy:setCredential',
+    'cloudDeploy:createAccount',
     async (
       _,
-      projectId: unknown,
       providerKind: unknown,
       accountLabel: unknown,
       token: unknown,
       rawBaseUrl?: unknown
     ) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeLabel = validateAccountLabel(accountLabel)
       const safeToken = validateProviderToken(token)
       const baseUrl =
         rawBaseUrl === undefined ? undefined : validateProviderBaseUrl(rawBaseUrl, kind)
 
-      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
-      const credentials = config.credentials[kind] ?? { accounts: [], activeAccountId: null }
-      const existing = credentials.accounts.find((account) => account.label === safeLabel)
-      const now = Date.now()
-      if (existing) {
-        // Rotate: keep the account id so the deterministic vault key is stable.
-        const secretRef = await vault.saveProviderToken(safeProjectId, kind, existing.id, safeToken)
-        existing.secretRef = secretRef
-        if (baseUrl !== undefined) existing.baseUrl = baseUrl
-        existing.configured = true
-        existing.updatedAt = now
-      } else {
-        const accountId = randomUUID()
-        const secretRef = await vault.saveProviderToken(safeProjectId, kind, accountId, safeToken)
-        const account: CloudDeploymentCredentialAccount = {
-          id: accountId,
-          label: safeLabel,
-          providerKind: kind,
-          secretRef,
-          ...(baseUrl === undefined ? {} : { baseUrl }),
-          configured: true,
-          createdAt: now,
-          updatedAt: now
-        }
-        credentials.accounts.push(account)
-      }
-      if (credentials.activeAccountId === null) {
-        credentials.activeAccountId =
-          credentials.accounts[credentials.accounts.length - 1]?.id ?? null
-      }
-      config.credentials[kind] = credentials
-      if (!config.project.providers.includes(kind)) {
-        config.project.providers = [...config.project.providers, kind]
-      }
-      config.updatedAt = now
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
-    }
-  )
-
-  ipcMain.handle(
-    'cloudDeploy:addAccount',
-    async (_, projectId: unknown, providerKind: unknown, accountLabel: unknown) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const kind = validateCloudDeploymentProviderKind(providerKind)
-      const safeLabel = validateAccountLabel(accountLabel)
-
-      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
-      const credentials = config.credentials[kind] ?? { accounts: [], activeAccountId: null }
-      if (credentials.accounts.some((account) => account.label === safeLabel)) {
-        throw new TypeError(`Account "${safeLabel}" already exists for ${kind}`)
+      const registry = await storage.getCloudDeploymentAccounts()
+      if (registry.accounts.some((account) => account.label === safeLabel)) {
+        throw new TypeError(`A provider account named "${safeLabel}" already exists`)
       }
       const accountId = randomUUID()
+      const secretRef = await vault.saveProviderToken(accountId, safeToken)
       const now = Date.now()
-      const account: CloudDeploymentCredentialAccount = {
+      const account: CloudDeploymentProviderAccount = {
         id: accountId,
         label: safeLabel,
         providerKind: kind,
-        secretRef: '',
-        configured: false,
+        secretRef,
+        ...(baseUrl === undefined ? {} : { baseUrl }),
+        configured: true,
         createdAt: now,
         updatedAt: now
       }
-      credentials.accounts.push(account)
-      if (credentials.activeAccountId === null) {
-        credentials.activeAccountId = accountId
+      registry.accounts.push(account)
+      await storage.saveCloudDeploymentAccounts(registry)
+      return account
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:updateAccountLabel',
+    async (_, accountId: unknown, label: unknown) => {
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+      const safeLabel = validateAccountLabel(label)
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      if (
+        registry.accounts.some((entry) => entry.id !== safeAccountId && entry.label === safeLabel)
+      ) {
+        throw new TypeError(`A provider account named "${safeLabel}" already exists`)
       }
-      config.credentials[kind] = credentials
+      account.label = safeLabel
+      account.updatedAt = Date.now()
+      await storage.saveCloudDeploymentAccounts(registry)
+      return account
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:rotateAccountSecret',
+    async (_, accountId: unknown, token: unknown) => {
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+      const safeToken = validateProviderToken(token)
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      account.secretRef = await vault.saveProviderToken(safeAccountId, safeToken)
+      account.configured = true
+      account.updatedAt = Date.now()
+      await storage.saveCloudDeploymentAccounts(registry)
+      // The secret is update-only; never return it. Return the sanitized account.
+      return { ...account, secretRef: '' }
+    }
+  )
+
+  ipcMain.handle('cloudDeploy:removeAccount', async (_, accountId: unknown) => {
+    const safeAccountId = requireString(accountId, 'Account ID', true)
+    const registry = await storage.getCloudDeploymentAccounts()
+    if (!registry.accounts.some((entry) => entry.id === safeAccountId)) {
+      throw new TypeError('Provider account not found')
+    }
+    registry.accounts = registry.accounts.filter((entry) => entry.id !== safeAccountId)
+    await storage.saveCloudDeploymentAccounts(registry)
+    await vault.removeProviderToken(safeAccountId)
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:attachAccount',
+    async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      if (account.providerKind !== kind) {
+        throw new TypeError(`Account "${account.label}" is not a ${kind} account`)
+      }
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind] ?? {
+        attachedAccountIds: [],
+        activeAccountId: null
+      }
+      if (association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is already attached for ${kind}`)
+      }
+      association.attachedAccountIds.push(safeAccountId)
+      if (association.activeAccountId === null) {
+        association.activeAccountId = safeAccountId
+      }
+      config.project.providerAccounts = { ...providerAccounts, [kind]: association }
       if (!config.project.providers.includes(kind)) {
         config.project.providers = [...config.project.providers, kind]
       }
-      config.updatedAt = now
+      config.updatedAt = Date.now()
       await storage.saveCloudDeploymentConfig(safeProjectId, config)
       await syncCloudDeploymentsFlag(safeProjectId)
       return config
@@ -3798,31 +3767,32 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
-    'cloudDeploy:removeAccount',
+    'cloudDeploy:detachAccount',
     async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeAccountId = requireString(accountId, 'Account ID', true)
 
       const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
-      const credentials = config.credentials[kind]
-      if (!credentials) throw new TypeError(`No ${kind} account configured for this project`)
-      if (!credentials.accounts.some((account) => account.id === safeAccountId)) {
-        throw new TypeError(`Account not found for ${kind}`)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind]
+      if (!association || !association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is not attached for ${kind}`)
       }
-      await vault.removeProviderToken(safeProjectId, kind, safeAccountId)
-      const remaining = credentials.accounts.filter((account) => account.id !== safeAccountId)
+      const remaining = association.attachedAccountIds.filter((id) => id !== safeAccountId)
       if (remaining.length === 0) {
-        delete config.credentials[kind]
+        delete providerAccounts[kind]
+        config.project.providerAccounts = providerAccounts
         config.project.providers = config.project.providers.filter((provider) => provider !== kind)
       } else {
-        config.credentials[kind] = {
-          accounts: remaining,
+        providerAccounts[kind] = {
+          attachedAccountIds: remaining,
           activeAccountId:
-            credentials.activeAccountId === safeAccountId
-              ? (remaining[0]?.id ?? null)
-              : credentials.activeAccountId
+            association.activeAccountId === safeAccountId
+              ? (remaining[0] ?? null)
+              : association.activeAccountId
         }
+        config.project.providerAccounts = providerAccounts
       }
       config.updatedAt = Date.now()
       await storage.saveCloudDeploymentConfig(safeProjectId, config)
@@ -3832,18 +3802,20 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
-    'cloudDeploy:switchAccount',
+    'cloudDeploy:setActiveAccount',
     async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
       const safeAccountId = requireString(accountId, 'Account ID', true)
 
       const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
-      const credentials = config.credentials[kind]
-      if (!credentials || !credentials.accounts.some((account) => account.id === safeAccountId)) {
-        throw new TypeError(`Account not found for ${kind}`)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind]
+      if (!association || !association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is not attached for ${kind}`)
       }
-      config.credentials[kind] = { ...credentials, activeAccountId: safeAccountId }
+      providerAccounts[kind] = { ...association, activeAccountId: safeAccountId }
+      config.project.providerAccounts = providerAccounts
       config.updatedAt = Date.now()
       await storage.saveCloudDeploymentConfig(safeProjectId, config)
       await syncCloudDeploymentsFlag(safeProjectId)
@@ -3851,51 +3823,22 @@ export function registerIpcHandlers(
     }
   )
 
-  ipcMain.handle(
-    'cloudDeploy:removeCredential',
-    async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
-      const safeProjectId = validateEntityId(projectId, 'Project ID')
-      const kind = validateCloudDeploymentProviderKind(providerKind)
-      const safeAccountId = requireString(accountId, 'Account ID', true)
-
-      await vault.removeProviderToken(safeProjectId, kind, safeAccountId)
-      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
-      const credentials = config.credentials[kind]
-      if (credentials) {
-        const account = credentials.accounts.find((entry) => entry.id === safeAccountId)
-        if (account) {
-          account.secretRef = ''
-          account.configured = false
-          account.updatedAt = Date.now()
-        }
-        config.credentials[kind] = credentials
-      }
-      config.updatedAt = Date.now()
-      await storage.saveCloudDeploymentConfig(safeProjectId, config)
-      await syncCloudDeploymentsFlag(safeProjectId)
-      return config
-    }
-  )
-
-  // ─── Cloud deployment monitoring ──────────────────────────────────────
-  // The provider adapter is resolved by kind through the registry, and its
-  // credential context (verified base URL + vaulted token) is assembled here
-  // in main so plaintext tokens never cross the IPC boundary. A provider with
-  // no configured credential is rejected up front rather than silently
-  // resolving to the not-implemented stub.
   const resolveDeploymentContext = async (
     projectId: string,
     kind: CloudDeploymentProviderKind
   ): Promise<DeploymentProviderContext> => {
     const config = await storage.getCloudDeploymentConfig(projectId)
-    const credentials = config?.credentials[kind]
-    const activeAccount = credentials?.accounts.find(
-      (account) => account.id === credentials.activeAccountId
-    )
+    const association = config?.project.providerAccounts?.[kind]
+    const activeAccountId = association?.activeAccountId ?? null
+    const registry = activeAccountId === null ? null : await storage.getCloudDeploymentAccounts()
+    const activeAccount =
+      activeAccountId === null
+        ? undefined
+        : registry?.accounts.find((account) => account.id === activeAccountId)
     if (!activeAccount?.configured || !activeAccount.secretRef) {
       throw new TypeError(`Cloud deployment provider ${kind} is not configured for this project`)
     }
-    const token = await vault.resolveProviderToken(projectId, kind, activeAccount.id)
+    const token = await vault.resolveProviderToken(activeAccount.id)
     return {
       ...(activeAccount.baseUrl === undefined ? {} : { baseUrl: activeAccount.baseUrl }),
       token
