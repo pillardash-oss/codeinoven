@@ -551,13 +551,13 @@
   })
   const contextUsage = $derived.by((): AgentContextUsage | undefined => {
     let latestMessage: AgentMessage | undefined
-    let latestTokens: AgentContextUsage['tokens'] | undefined
+    let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
     let latestContextUsed: number | undefined
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
 
-    const emptyTokens: AgentContextUsage['tokens'] = {
+    const emptyTokens: NonNullable<AgentContextUsage['tokens']> = {
       input: 0,
       output: 0,
       reasoning: 0,
@@ -573,6 +573,7 @@
       // unknown provenance are intentionally excluded from the live meter.
       if (message.harnessId !== settings.harnessId || message.providerId !== settings.providerId)
         continue
+      latestMessage = message
       const stepCost = message.parts.reduce(
         (total, part) => total + (part.type === 'step-finish' ? (part.cost ?? 0) : 0),
         0
@@ -582,17 +583,20 @@
       // a turn is still streaming, sum every completed step so the indicator
       // grows monotonically instead of bouncing between per-step token counts
       // on each tool call.
-      const cumulativeSteps = message.parts.reduce((total, part): AgentContextUsage['tokens'] => {
-        if (part.type !== 'step-finish' || !part.tokens) return total
-        return {
-          input: total.input + part.tokens.input,
-          output: total.output + part.tokens.output,
-          reasoning: total.reasoning + part.tokens.reasoning,
-          cacheRead: total.cacheRead + part.tokens.cacheRead,
-          cacheWrite: total.cacheWrite + part.tokens.cacheWrite,
-          total: total.total + part.tokens.total
-        }
-      }, emptyTokens)
+      const cumulativeSteps = message.parts.reduce(
+        (total, part): NonNullable<AgentContextUsage['tokens']> => {
+          if (part.type !== 'step-finish' || !part.tokens) return total
+          return {
+            input: total.input + part.tokens.input,
+            output: total.output + part.tokens.output,
+            reasoning: total.reasoning + part.tokens.reasoning,
+            cacheRead: total.cacheRead + part.tokens.cacheRead,
+            cacheWrite: total.cacheWrite + part.tokens.cacheWrite,
+            total: total.total + part.tokens.total
+          }
+        },
+        emptyTokens
+      )
       const tokens =
         message.tokens && message.tokens.total > 0
           ? message.tokens
@@ -605,7 +609,6 @@
         (message.rateLimits?.length ?? 0) > 0 ||
         message.credits !== undefined
       if (hasUsageSnapshot) {
-        latestMessage = message
         // Token, context, and account quota telemetry arrive independently.
         // Preserve each latest snapshot so a token-only update cannot erase a
         // previously reported quota status when the user reveals live usage.
@@ -617,7 +620,6 @@
     }
 
     if (!latestMessage) return undefined
-    const displayTokens = latestTokens ?? emptyTokens
     const providerId = latestMessage?.providerId ?? settings.providerId
     const modelId = latestMessage?.modelId ?? settings.modelId
     const harnessId = latestMessage?.harnessId ?? settings.harnessId
@@ -627,14 +629,25 @@
       ) ?? providers.find((provider) => provider.id === providerId)
     )?.models.find((candidate) => candidate.id === modelId)
     const contextWindow = latestMessage?.contextWindow ?? model?.contextWindow
+    const contextUsed = latestContextUsed ?? latestTokens?.total
+    if (
+      contextWindow === undefined &&
+      contextUsed === undefined &&
+      latestTokens === undefined &&
+      latestRateLimits === undefined &&
+      latestCredits === undefined &&
+      costUsd <= 0
+    ) {
+      return undefined
+    }
     return {
-      contextWindow,
-      contextUsed: latestContextUsed ?? displayTokens.total,
-      contextPercent: contextWindow
-        ? Math.min(100, ((latestContextUsed ?? displayTokens.total) / contextWindow) * 100)
-        : undefined,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed }),
+      ...(contextWindow !== undefined && contextUsed !== undefined
+        ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
+        : {}),
       costUsd,
-      tokens: displayTokens,
+      ...(latestTokens ? { tokens: latestTokens } : {}),
       rateLimits: latestRateLimits ?? [],
       ...(latestCredits ? { credits: latestCredits } : {})
     }
@@ -777,7 +790,13 @@
       }
     }
     return Object.values(byHarness).filter(
-      (entry) => entry.rateLimits.length > 0 || entry.credits || entry.costUsd > 0
+      (entry) =>
+        entry.rateLimits.length > 0 ||
+        entry.credits ||
+        entry.costUsd > 0 ||
+        (entry.tokens?.total ?? 0) > 0 ||
+        (entry.messageCount ?? 0) > 0 ||
+        (entry.models?.length ?? 0) > 0
     )
   })
   /** Minimum quiet time before the rendered battery settles mid-turn. */
@@ -906,16 +925,7 @@
         // viewing — it can only replace them with newer, richer data.
         const merged = mergeContextUsage(contextUsageDisplay, {
           ...(contextUsageDisplay ?? {
-            contextUsed: 0,
             costUsd: 0,
-            tokens: {
-              input: 0,
-              output: 0,
-              reasoning: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              total: 0
-            },
             rateLimits: []
           }),
           rateLimits: currentUsage.rateLimits,
