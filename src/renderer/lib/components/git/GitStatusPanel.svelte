@@ -860,8 +860,8 @@
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
-    // Git state is polled by the store itself (see GitState.startPolling) —
-    // this timer only keeps the agent-turn view fresh.
+    // Git refreshes are event-driven (thread opens, git mutations, agent
+    // checkpoints) — this timer only keeps the agent-turn view fresh.
     const timer = setInterval(() => {
       void refreshAgentTurnState()
     }, 8_000)

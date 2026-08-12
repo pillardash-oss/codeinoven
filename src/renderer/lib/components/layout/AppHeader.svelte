@@ -481,13 +481,10 @@
       gitState.deactivate()
       return
     }
+    // Activation + refresh are event-driven by the workspace store
+    // (`notifyThreadOpened` on every thread open) — this effect only subscribes
+    // to agent checkpoints for the active project.
     gitState.ensureProjectEvents(thread.projectId)
-    const projectId = thread.projectId
-    // Claim this project first so the shared state is cleared of the previous
-    // project's data before a fresh load — never show one project's status
-    // while another is active.
-    gitState.activate(projectId)
-    queueMicrotask(() => void gitState.refresh(projectId))
   })
 
   function openGitPanel(): void {
