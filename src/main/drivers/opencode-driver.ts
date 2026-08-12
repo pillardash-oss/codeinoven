@@ -964,6 +964,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private server: ServerHandle | null = null
   private starting: Promise<ServerHandle> | null = null
   private projectSubscriptions = new Map<string, AbortController>()
+  private activeSessions = new Map<string, string>()
   private turnServers = new Map<string, ServerHandle>()
   private turnStarting = new Map<string, Promise<ServerHandle>>()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
@@ -1331,13 +1332,19 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
 
-    const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
-      method: 'POST',
-      headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify(body)
-    })
-    if (!res.ok) {
-      throw await errorFromResponse(res, 'Failed to send prompt')
+    this.activeSessions.set(opts.sessionId, projectPath)
+    try {
+      const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
+        method: 'POST',
+        headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body)
+      })
+      if (!res.ok) {
+        throw await errorFromResponse(res, 'Failed to send prompt')
+      }
+    } catch (error) {
+      this.activeSessions.delete(opts.sessionId)
+      throw error
     }
   }
 
@@ -1439,16 +1446,19 @@ export class OpenCodeDriver implements HarnessDriver {
    * rehydrate on next use. An already-missing session counts as deleted.
    */
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
+    this.activeSessions.delete(sessionId)
     const turnHandle = this.turnServers.get(sessionId)
     const handle = turnHandle ?? (this.server ? this.scopedHandle(this.server, projectPath) : null)
     if (!handle) {
       await this.deleteSessionViaTransientServer(projectPath, sessionId)
+      this.stopSharedServerIfIdle()
       return
     }
     try {
       await this.deleteSessionOnHandle(handle, sessionId)
     } finally {
       if (turnHandle) await this.stopTurnServer(sessionId)
+      this.stopSharedServerIfIdle()
     }
   }
 
@@ -1701,6 +1711,7 @@ export class OpenCodeDriver implements HarnessDriver {
     this.server?.process.kill()
     this.server = null
     this.starting = null
+    this.activeSessions.clear()
     for (const handle of this.turnServers.values()) {
       handle.abortController.abort()
       handle.process.kill()
@@ -2039,12 +2050,27 @@ export class OpenCodeDriver implements HarnessDriver {
     })
   }
 
-  /**
-   * Release project-scoped streams and exceptional isolated work. The shared
-   * host stays resident for other projects and is closed only by `dispose`.
-   */
+  /** Release project resources after the app's genuine-inactivity watchdog fires. */
   async releaseProjectResources(projectPath: string): Promise<void> {
     await this.stopProjectServers(projectPath)
+    this.stopSharedServerIfIdle()
+  }
+
+  private stopSharedServerIfIdle(): void {
+    if (
+      this.activeSessions.size > 0 ||
+      this.turnServers.size > 0 ||
+      this.isolatedServers.size > 0
+    ) {
+      return
+    }
+    const server = this.server
+    if (!server) return
+    for (const controller of this.projectSubscriptions.values()) controller.abort()
+    this.projectSubscriptions.clear()
+    server.abortController.abort()
+    if (!server.process.killed) server.process.kill()
+    this.server = null
   }
 
   private async stopProjectServers(projectPath: string): Promise<void> {
@@ -2130,6 +2156,14 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
     for (const event of mapOpenCodeEvent(type, props)) {
+      if (
+        event.type === 'session.idle' ||
+        (event.type === 'session.status' &&
+          (event.status.state === 'idle' || event.status.state === 'error')) ||
+        event.type === 'session.error'
+      ) {
+        this.activeSessions.delete(event.sessionId)
+      }
       const messageId =
         event.type === 'message.part.updated'
           ? event.part.messageID
