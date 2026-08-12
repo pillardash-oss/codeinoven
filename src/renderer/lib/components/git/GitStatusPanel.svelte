@@ -862,10 +862,22 @@
     gitState.ensureProjectEvents(projectId)
     // Git refreshes are event-driven (thread opens, git mutations, agent
     // checkpoints) — this timer only keeps the agent-turn view fresh.
-    const timer = setInterval(() => {
-      void refreshAgentTurnState()
-    }, 8_000)
-    return () => clearInterval(timer)
+    // Recursive setTimeout, not setInterval: the run is async, so the next
+    // tick is scheduled after the previous one completes — runs can never
+    // overlap and the 8s cadence is measured completion-to-completion.
+    let disposed = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const scheduleNext = (): void => {
+      if (disposed) return
+      timer = setTimeout(() => {
+        void refreshAgentTurnState().then(scheduleNext)
+      }, 8_000)
+    }
+    scheduleNext()
+    return () => {
+      disposed = true
+      if (timer !== null) clearTimeout(timer)
+    }
   })
 
   const identityNeeded = $derived(
