@@ -3,6 +3,7 @@
 import { readFile, stat, readdir } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { generateId } from '../lib/utils'
 import type { PromptAttachment } from '../lib/types'
 import {
   IMAGE_DESCRIPTOR_MAX_IMAGES,
@@ -56,6 +57,145 @@ export interface ImageDescriptorExecutorRequest {
 export type ImageDescriptorExecutor = (
   request: ImageDescriptorExecutorRequest
 ) => Promise<ImageDescriptorResult[]>
+
+/** Gates a harness must clear for a multi-image request to run as one call. */
+export interface ImageDescriptorBatchCapability {
+  /** Whether the harness can attach multiple images to a single vision request. */
+  supportsBatch: boolean
+  /** Maximum images the harness/provider accepts in one call. */
+  maxImages: number
+}
+
+/** Whether a request runs as one structured call or falls back per image. */
+export type ImageDescriptorBatchMode = 'batch' | 'sequential'
+
+/** Why a request fell back to per-image vision calls. */
+export type ImageDescriptorBatchFallbackReason = 'harness_does_not_batch' | 'too_many_images'
+
+export interface ImageDescriptorBatchDecision {
+  mode: ImageDescriptorBatchMode
+  reason?: ImageDescriptorBatchFallbackReason
+}
+
+/**
+ * Decide whether a multi-image request may be sent as one structured vision
+ * call. Only harnesses that batch, and requests within the supported image
+ * count, use the batched path; everything else keeps a safe sequential
+ * fallback so no image is ever dropped.
+ */
+export function decideImageDescriptorBatch(
+  images: readonly ImageDescriptorEntry[],
+  capability: ImageDescriptorBatchCapability
+): ImageDescriptorBatchDecision {
+  if (!capability.supportsBatch) {
+    return { mode: 'sequential', reason: 'harness_does_not_batch' }
+  }
+  if (images.length > capability.maxImages) {
+    return { mode: 'sequential', reason: 'too_many_images' }
+  }
+  return { mode: 'batch' }
+}
+
+/** One structured vision call that describes all supplied images at once. */
+export type ImageDescriptorBatchCall = (images: ResolvedImageEntry[]) => Promise<unknown>
+
+/** One vision call for a single image, used by the sequential fallback. */
+export type ImageDescriptorSingleCall = (
+  image: ResolvedImageEntry
+) => Promise<ImageDescriptorResult>
+
+export interface ImageDescriptorBatchRun {
+  mode: ImageDescriptorBatchMode
+  /**
+   * One stable call id for the whole batch so the ledger attributes a single
+   * batched call to its parent turn instead of one event per image.
+   */
+  featureCallId: string
+  results: ImageDescriptorResult[]
+}
+
+/**
+ * Run a multi-image request. Compatible requests make exactly one structured
+ * vision call and return an ordered result per input image; incompatible or
+ * oversized requests fall back to one call per image. The result always has one
+ * `featureCallId` so the invoking session can attribute the whole run once.
+ */
+export async function runImageDescriptorBatch(
+  images: ResolvedImageEntry[],
+  capability: ImageDescriptorBatchCapability,
+  batchCall: ImageDescriptorBatchCall,
+  singleCall: ImageDescriptorSingleCall
+): Promise<ImageDescriptorBatchRun> {
+  const decision = decideImageDescriptorBatch(images, capability)
+  const featureCallId = generateId()
+  if (decision.mode === 'sequential') {
+    const results: ImageDescriptorResult[] = []
+    for (const image of images) {
+      results.push(await singleCall(image))
+    }
+    return { mode: 'sequential', featureCallId, results }
+  }
+  const rawOutput = await batchCall(images)
+  return {
+    mode: 'batch',
+    featureCallId,
+    results: assembleBatchedImageDescriptorResults(images, rawOutput)
+  }
+}
+
+/**
+ * Map a single structured vision response into ordered per-image results, one
+ * per input entry in input order. Outputs are matched to inputs strictly by id,
+ * so a missing, partial, or malformed entry can never be mislabeled as another
+ * image: anything the model did not describe reports an error on that image's
+ * own entry instead.
+ */
+export function assembleBatchedImageDescriptorResults(
+  images: ResolvedImageEntry[],
+  rawOutput: unknown
+): ImageDescriptorResult[] {
+  const outputs = new Map<string, { description: string; error?: string }>()
+  for (const item of collectRawBatchedOutputs(rawOutput)) {
+    const id = item['id']
+    if (typeof id !== 'string' || id.length === 0) continue
+    const description = typeof item['description'] === 'string' ? item['description'].trim() : ''
+    const error = typeof item['error'] === 'string' ? item['error'].trim() : undefined
+    const existing = outputs.get(id)
+    if (!existing || (existing.description === '' && description !== '')) {
+      outputs.set(id, {
+        description: description || existing?.description || '',
+        ...(error !== undefined ? { error } : {})
+      })
+    }
+  }
+  return images.map((image) => {
+    const output = outputs.get(image.id)
+    if (!output || (output.description === '' && output.error === undefined)) {
+      return {
+        id: image.id,
+        source: image.source,
+        type: image.type,
+        description: '',
+        error: 'The vision model returned no description for this image.'
+      }
+    }
+    const result: ImageDescriptorResult = {
+      id: image.id,
+      source: image.source,
+      type: image.type,
+      description: output.description
+    }
+    if (output.error !== undefined) result.error = output.error
+    return result
+  })
+}
+
+function collectRawBatchedOutputs(rawOutput: unknown): Array<Record<string, unknown>> {
+  const candidate =
+    isRecord(rawOutput) && Array.isArray(rawOutput['results']) ? rawOutput['results'] : rawOutput
+  if (!Array.isArray(candidate)) return []
+  return candidate.filter(isRecord)
+}
 
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024
 /** Baseline inactivity window for image upload plus the first provider response. */
