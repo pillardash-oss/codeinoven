@@ -95,8 +95,8 @@ export interface CliTurnCommand {
   env?: NodeJS.ProcessEnv
   /** Display model that produced the turn when it differs from the selected base model. */
   provenanceModelId?: string
-  /** Called on the first stdout activity, before provider-specific parsing. */
-  onStdoutActivity?: () => void
+  /** Called for each parsed provider record before provider-specific mapping. */
+  onJsonRecord?: (value: unknown) => void
   /** Called when spawning fails or the child exits. Must be safe to call more than once. */
   onProcessExit?: () => void
 }
@@ -409,16 +409,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
-      invocation.onStdoutActivity?.()
       stdoutBuffer += chunk.toString()
-      stdoutBuffer = this.consumeJsonLines(stdoutBuffer, session, projectPath)
+      stdoutBuffer = this.consumeJsonLines(stdoutBuffer, session, projectPath, invocation)
     })
     child.stderr?.on('data', (chunk: Buffer) => {
       stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-4_000)
     })
     child.on('error', (error) => void finish(error.message))
     child.on('exit', (code, signal) => {
-      if (stdoutBuffer.trim()) this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath)
+      if (stdoutBuffer.trim())
+        this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
       const failure =
         code === 0 || signal === 'SIGTERM'
           ? undefined
@@ -639,15 +639,21 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private consumeJsonLines(
     buffer: string,
     session: PersistentCliSession,
-    projectPath: string
+    projectPath: string,
+    invocation: CliTurnCommand
   ): string {
     const lines = buffer.split(/\r?\n/u)
     const remainder = lines.pop() ?? ''
-    for (const line of lines) this.consumeJsonLine(line, session, projectPath)
+    for (const line of lines) this.consumeJsonLine(line, session, projectPath, invocation)
     return remainder
   }
 
-  private consumeJsonLine(line: string, session: PersistentCliSession, projectPath: string): void {
+  private consumeJsonLine(
+    line: string,
+    session: PersistentCliSession,
+    projectPath: string,
+    invocation: CliTurnCommand
+  ): void {
     // Some CLIs interleave a progress redraw (`\r`) on the same line as a real
     // event. Normalize the raw line, then fall back to extracting the bracketed
     // JSON object so a genuine event is never dropped because of that noise.
@@ -664,6 +670,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
       value = recovered
     }
+    invocation.onJsonRecord?.(value)
     const result = this.parseJsonLine(value, {
       session,
       sessionId: session.id,

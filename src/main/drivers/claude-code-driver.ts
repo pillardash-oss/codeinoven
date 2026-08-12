@@ -87,11 +87,10 @@ type ClaudeInputBlock =
 
 /**
  * Claude Code persists one rotating OAuth credential for the whole OS account.
- * Serialize app-owned Claude processes for the lifetime of each child. Claude's
- * rotating OAuth credential is shared across every process in the OS account,
- * and first stdout is not proof that token rotation has finished. Releasing at
- * first output allowed another process to race the active child and corrupt the
- * shared credential.
+ * Serialize app-owned Claude process startup until the provider begins an
+ * assistant response. At that point authentication and any startup refresh have
+ * succeeded, so another process can safely read the current shared credential
+ * while the first turn continues working.
  */
 class ClaudeOAuthStartupGate {
   private tail: Promise<void> = Promise.resolve()
@@ -113,6 +112,14 @@ class ClaudeOAuthStartupGate {
 }
 
 const claudeOAuthStartupGate = new ClaudeOAuthStartupGate()
+
+function isClaudeProviderReadyRecord(value: unknown): boolean {
+  const entry = record(value)
+  const type = string(entry?.['type'])
+  if (type === 'assistant') return entry?.['error'] !== 'authentication_failed'
+  if (type !== 'stream_event') return false
+  return string(record(entry?.['event'])?.['type']) === 'message_start'
+}
 
 function fallbackClaudeModel(): ProviderModel {
   return {
@@ -1206,7 +1213,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       keepInputOpen: true,
       env,
       provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
-      ...(releaseStartup ? { onProcessExit: releaseStartup } : {})
+      ...(releaseStartup
+        ? {
+            onJsonRecord: (value: unknown) => {
+              if (isClaudeProviderReadyRecord(value)) releaseStartup()
+            },
+            onProcessExit: releaseStartup
+          }
+        : {})
     }
   }
 

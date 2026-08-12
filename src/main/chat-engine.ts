@@ -4268,15 +4268,14 @@ export class ChatEngine {
     if (project.id === INBOX_PROJECT_ID) {
       settings = { ...settings, engineeringMode: false }
     }
-    // Claude Code stores one rotating OAuth credential for the whole OS
-    // account. Never start a disposable Claude title process beside the user's
-    // turn; the deterministic fallback above is already a useful title. Other
-    // harnesses have isolated authentication and can generate a model title.
+    // Other harnesses can title immediately. Claude title generation is queued
+    // only after its main child starts below; the driver's OAuth gate then holds
+    // it until the provider begins the main assistant response.
     const scheduleAutoTitle = createAutoTitleLauncher(
-      shouldAutoTitle && settings.titleMode !== 'deterministic' && driverId !== 'claude-code',
+      shouldAutoTitle && settings.titleMode !== 'deterministic',
       () => this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
     )
-    void scheduleAutoTitle()
+    if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
     const planningSpecTurn = settings.engineeringMode && specAction !== 'implement'
@@ -4542,6 +4541,7 @@ export class ChatEngine {
           // engineering_spec/StructuredOutput contract in a disposable session.
           promptDispatched = true
           const generated = await this.runPendingInitialSpec(projectId, threadId)
+          void scheduleAutoTitle()
           this.sessionStatuses.set(sessionId, { state: 'idle' })
           this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
           await this.cleanupTurnUtilities(sessionId)
@@ -4617,6 +4617,7 @@ export class ChatEngine {
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
+        void scheduleAutoTitle()
         promptDispatched = true
         this.startSessionWatchdog(sessionId)
       } catch (error) {
@@ -4689,6 +4690,7 @@ export class ChatEngine {
             : undefined,
         userMessageId: messageId
       })
+      void scheduleAutoTitle()
       if (origin === 'internal' && this.isCoordinatorThread(targetThread)) {
         try {
           await this.completeCoordinatorHandoff(projectId, threadId, messageId)
