@@ -688,8 +688,10 @@ describe('cloudDeploy IPC', () => {
       'http://localhost:8080'
     )) as CloudDeploymentProviderAccount
     expect(account.id).toBeTruthy()
-    expect(account.secretRef).toBeTruthy()
+    // The secret is never returned to the renderer — only the opaque ref exists in main.
+    expect(account.secretRef).toBe('')
     expect(account.configured).toBe(true)
+    expect(account.enabled).toBe(true)
 
     await attach?.(trustedEvent(), 'proj-a', 'coolify', account.id)
     await attach?.(trustedEvent(), 'proj-b', 'coolify', account.id)

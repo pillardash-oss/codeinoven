@@ -3674,32 +3674,52 @@ export function registerIpcHandlers(
         secretRef,
         ...(baseUrl === undefined ? {} : { baseUrl }),
         configured: true,
+        enabled: true,
         createdAt: now,
         updatedAt: now
       }
       registry.accounts.push(account)
       await storage.saveCloudDeploymentAccounts(registry)
-      return account
+      // The secret is never returned to the renderer.
+      return { ...account, secretRef: '' }
     }
   )
 
+  /**
+   * Update a global provider account's metadata: label, base URL, and enabled
+   * state. The secret is handled by `cloudDeploy:rotateAccountSecret` and is
+   * never touched here.
+   */
   ipcMain.handle(
-    'cloudDeploy:updateAccountLabel',
-    async (_, accountId: unknown, label: unknown) => {
+    'cloudDeploy:updateAccount',
+    async (_, accountId: unknown, patch: unknown): Promise<CloudDeploymentProviderAccount> => {
       const safeAccountId = requireString(accountId, 'Account ID', true)
-      const safeLabel = validateAccountLabel(label)
+      if (!isRecord(patch)) throw new TypeError('Provider account update must be an object')
       const registry = await storage.getCloudDeploymentAccounts()
       const account = registry.accounts.find((entry) => entry.id === safeAccountId)
       if (!account) throw new TypeError('Provider account not found')
-      if (
-        registry.accounts.some((entry) => entry.id !== safeAccountId && entry.label === safeLabel)
-      ) {
-        throw new TypeError(`A provider account named "${safeLabel}" already exists`)
+
+      if (patch.label !== undefined) {
+        const safeLabel = validateAccountLabel(patch.label)
+        if (
+          registry.accounts.some((entry) => entry.id !== safeAccountId && entry.label === safeLabel)
+        ) {
+          throw new TypeError(`A provider account named "${safeLabel}" already exists`)
+        }
+        account.label = safeLabel
       }
-      account.label = safeLabel
+      if (patch.baseUrl !== undefined) {
+        account.baseUrl = validateProviderBaseUrl(patch.baseUrl, account.providerKind)
+      }
+      if (patch.enabled !== undefined) {
+        if (typeof patch.enabled !== 'boolean') {
+          throw new TypeError('Provider account enabled flag must be a boolean')
+        }
+        account.enabled = patch.enabled
+      }
       account.updatedAt = Date.now()
       await storage.saveCloudDeploymentAccounts(registry)
-      return account
+      return { ...account, secretRef: '' }
     }
   )
 
@@ -3840,6 +3860,9 @@ export function registerIpcHandlers(
         : registry?.accounts.find((account) => account.id === activeAccountId)
     if (!activeAccount?.configured || !activeAccount.secretRef) {
       throw new TypeError(`Cloud deployment provider ${kind} is not configured for this project`)
+    }
+    if (!activeAccount.enabled) {
+      throw new TypeError(`Cloud deployment account "${activeAccount.label}" is disabled`)
     }
     const token = await vault.resolveProviderToken(activeAccount.id)
     return {

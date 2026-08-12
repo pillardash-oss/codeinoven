@@ -200,7 +200,7 @@ const INVOKE_CHANNELS = [
   'cloudDeploy:clearConfig',
   'cloudDeploy:listAccounts',
   'cloudDeploy:createAccount',
-  'cloudDeploy:updateAccountLabel',
+  'cloudDeploy:updateAccount',
   'cloudDeploy:rotateAccountSecret',
   'cloudDeploy:removeAccount',
   'cloudDeploy:attachAccount',

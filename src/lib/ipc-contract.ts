@@ -871,9 +871,16 @@ export interface IpcInvokeContract {
     ],
     import('./types').CloudDeploymentProviderAccount
   >
-  /** Rename a global provider account (label update only). */
-  'cloudDeploy:updateAccountLabel': Contract<
-    [accountId: string, label: string],
+  /** Update a global provider account's metadata (label, base URL, enabled). */
+  'cloudDeploy:updateAccount': Contract<
+    [
+      accountId: string,
+      patch: {
+        label?: string
+        baseUrl?: string
+        enabled?: boolean
+      }
+    ],
     import('./types').CloudDeploymentProviderAccount
   >
   /**
