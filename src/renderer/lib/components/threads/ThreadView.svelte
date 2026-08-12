@@ -7083,7 +7083,7 @@
                 error={assignmentAuditFailure}
                 startedAt={assignmentAuditStartedAt}
                 finishedAt={assignmentAuditFinishedAt}
-                retryLabel="Open auditor & retry"
+                retryLabel="Retry audit"
                 reworkCycle={assignmentReworkCycle}
                 settings={auditSettings}
                 {providers}
@@ -7091,7 +7091,7 @@
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
                 busy={auditBusy}
-                onRetry={() => void openAssignmentAuditWork()}
+                onRetry={generateDurableAssignmentAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
