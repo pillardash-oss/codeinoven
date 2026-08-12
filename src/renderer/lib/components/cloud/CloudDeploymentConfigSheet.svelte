@@ -92,7 +92,14 @@
     availableContainers.filter((container) => {
       const query = containerSearch.trim().toLowerCase()
       if (query === '') return true
-      const haystack = [container.label, container.id, container.url ?? ''].join(' ').toLowerCase()
+      // Match against the provider label, id, url, and any custom label this
+      // project has already assigned to the same container id.
+      const known = config?.project.containers.find(
+        (mapping) => mapping.id === container.id && mapping.providerKind === container.providerKind
+      )
+      const haystack = [container.label, container.id, container.url ?? '', known?.label ?? '']
+        .join(' ')
+        .toLowerCase()
       return haystack.includes(query)
     })
   )
