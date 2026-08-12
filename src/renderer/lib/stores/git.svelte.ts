@@ -26,6 +26,7 @@ import type {
   PrMergeMethod,
   PrReviewEvent,
   PrState,
+  Project,
   PullRequestBundle,
   PullRequestComment,
   PullRequestCompare,
@@ -91,9 +92,6 @@ const DEPLOYMENT_LOG_CACHE_TTL_MS = 5 * 60_000
  */
 const PR_ERROR_COOLDOWN_MS = 120_000
 
-/** Store-owned poll cadence while a project is active. */
-const GIT_POLL_INTERVAL_MS = 15_000
-
 /** How long a positive GitHub connection probe is trusted without re-probing. */
 const GITHUB_PROBE_TTL_MS = 30_000
 
@@ -158,9 +156,6 @@ export class GitState {
   private githubProbe: Promise<boolean> | null = null
   private lastGithubProbeAt = 0
 
-  /** Store-owned poll timer for the active project. */
-  private pollTimer: ReturnType<typeof setInterval> | null = null
-
   /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
   get reviewPermission(): GitHubPermissionRequired | null {
     return this.githubPermission
@@ -213,7 +208,6 @@ export class GitState {
     if (this.activeProjectId === projectId) return
     this.activeProjectId = projectId
     this.clearProjectState()
-    this.startPolling()
   }
 
   /** Clear Git state when the active thread has no Git-capable project. */
@@ -221,27 +215,20 @@ export class GitState {
     if (this.activeProjectId === null) return
     this.activeProjectId = null
     this.clearProjectState()
-    this.stopPolling()
   }
 
   /**
-   * The store owns git polling: as long as a project is active, local git
-   * state and the connection-gated online indicators are refreshed on a fixed
-   * cadence regardless of which panel is open. No subscriber manages timers.
+   * Event-driven entry point: called by the workspace store whenever a thread
+   * is opened in a project (new project added, new thread created, thread
+   * switched, app-restore). The store decides whether git tracking applies and
+   * refreshes deterministically — no polling anywhere.
    */
-  private startPolling(): void {
-    this.stopPolling()
-    this.pollTimer = setInterval(() => {
-      const projectId = this.activeProjectId
-      if (projectId) void this.refresh(projectId)
-    }, GIT_POLL_INTERVAL_MS)
-  }
-
-  private stopPolling(): void {
-    if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer)
-      this.pollTimer = null
-    }
+  notifyThreadOpened(project: Project | null): void {
+    if (!project || project.id === INBOX_PROJECT_ID) return
+    if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
+    if (!project.path.trim()) return
+    this.activate(project.id)
+    queueMicrotask(() => void this.refresh(project.id))
   }
 
   /**
@@ -330,13 +317,17 @@ export class GitState {
    * the GitHub connection — the store guarantees the connection before any
    * online operation, so this never runs (or records anything) before GitHub
    * is reachable. A fresh successful result is served without a round trip; a
-   * failed check records nothing, so the next poll simply tries again.
+   * failed check records nothing, so the next event simply tries again.
+   *
+   * `force` bypasses the freshness window for explicit user mutations (push,
+   * PR create/merge/reopen/close) that directly change mergeability — those
+   * must always re-check immediately.
    */
-  async refreshPrConflictIndicators(projectId: string): Promise<void> {
+  async refreshPrConflictIndicators(projectId: string, force = false): Promise<void> {
     const repo = this.originRepo
     if (!repo || projectId !== this.activeProjectId) return
     const key = `${repo.owner}/${repo.repo}`
-    if (Date.now() - (this.prIssueFetchedAt[key] ?? 0) < PR_ISSUE_FRESHNESS_MS) return
+    if (!force && Date.now() - (this.prIssueFetchedAt[key] ?? 0) < PR_ISSUE_FRESHNESS_MS) return
     const inflight = this.prIssueChecks.get(projectId)
     if (inflight) return inflight
     const check = this.runPrConflictCheck(projectId, repo.owner, repo.repo, key)
@@ -687,6 +678,10 @@ export class GitState {
     this.error = null
     try {
       this.status = await invoke('git:push', projectId, { setUpstream, remote, branch })
+      await this.refresh(projectId)
+      // Pushing changes what GitHub computes for the branch — force a fresh
+      // conflict check instead of waiting for the next thread open.
+      void this.refreshPrConflictIndicators(projectId, true)
       return 'pushed'
     } catch (reason) {
       const message = errorMessage(reason, 'Push failed')
@@ -905,7 +900,10 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      return this.resolveGitHubMutation(await invoke('pr:create', projectId, input))
+      const reference = this.resolveGitHubMutation(await invoke('pr:create', projectId, input))
+      // A new PR can already have conflicts — refresh the indicator immediately.
+      void this.refreshPrConflictIndicators(projectId, true)
+      return reference
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be created')
       return null
@@ -927,7 +925,7 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      return this.resolveGitHubMutation(
+      const reference = this.resolveGitHubMutation(
         await invoke(
           'pr:merge',
           projectId,
@@ -939,6 +937,9 @@ export class GitState {
           commitMessage
         )
       )
+      // Merging removes the PR from the open set — refresh the indicator.
+      void this.refreshPrConflictIndicators(projectId, true)
+      return reference
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be merged')
       return null
@@ -989,9 +990,12 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      return this.resolveGitHubMutation(
+      const reference = this.resolveGitHubMutation(
         await invoke('pr:reopen', projectId, owner, repo, pullNumber)
       )
+      // A reopened PR may conflict again — refresh the indicator.
+      void this.refreshPrConflictIndicators(projectId, true)
+      return reference
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be reopened')
       return null
@@ -1011,9 +1015,12 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      return this.resolveGitHubMutation(
+      const reference = this.resolveGitHubMutation(
         await invoke('pr:close', projectId, owner, repo, pullNumber)
       )
+      // Closing removes the PR from the open set — refresh the indicator.
+      void this.refreshPrConflictIndicators(projectId, true)
+      return reference
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull request could not be closed')
       return null
