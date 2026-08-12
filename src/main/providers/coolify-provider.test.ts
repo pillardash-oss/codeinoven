@@ -102,6 +102,29 @@ describe('CoolifyProvider', () => {
       expect(containers[0]).toMatchObject({ id: 'app-1', project: 'Milogs' })
     })
 
+    it('resolves the project name via environment_id when the app only carries an environment id', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse([
+            { uuid: 'app-1', name: 'CodeInOven Mobile', environment_id: 7, status: 'running' },
+            { uuid: 'app-2', name: 'Admin Dashboard', environment_id: 8, status: 'running' }
+          ])
+        )
+        .mockResolvedValueOnce(
+          jsonResponse([
+            { id: 1, uuid: 'proj-milogs', name: 'Milogs' },
+            { id: 2, uuid: 'proj-other', name: 'Marketing' }
+          ])
+        )
+        .mockResolvedValueOnce(jsonResponse([{ id: 7, name: 'production', project_id: 1 }]))
+        .mockResolvedValueOnce(jsonResponse([{ id: 8, name: 'production', project_id: 2 }]))
+
+      const containers = await makeProvider().listContainers()
+
+      expect(containers[0]).toMatchObject({ id: 'app-1', project: 'Milogs' })
+      expect(containers[1]).toMatchObject({ id: 'app-2', project: 'Marketing' })
+    })
+
     it('skips records without a uuid instead of failing the list', async () => {
       fetchMock.mockResolvedValueOnce(
         jsonResponse([

@@ -80,9 +80,9 @@ export class CoolifyProvider implements DeploymentProvider {
   async listContainers(): Promise<CloudDeploymentContainer[]> {
     const response = await this.request('/applications', { method: 'GET' })
     const items = Array.isArray(response) ? response : []
-    const projectsByName = await this.projectNamesByUuid()
+    const projectResolver = await this.projectResolver()
     return items.flatMap((item): CloudDeploymentContainer[] => {
-      const mapped = this.toApplicationContainer(item, projectsByName)
+      const mapped = this.toApplicationContainer(item, projectResolver)
       return mapped ? [mapped] : []
     })
   }
@@ -177,7 +177,7 @@ export class CoolifyProvider implements DeploymentProvider {
   /** Map an `Application` payload to the normalized container model. */
   private toApplicationContainer(
     payload: unknown,
-    projectsByName?: Map<string, string>
+    projectResolver?: CloudDeploymentProjectResolver
   ): CloudDeploymentContainer | null {
     if (typeof payload !== 'object' || payload === null) return null
     const record = payload as Record<string, unknown>
@@ -186,9 +186,11 @@ export class CoolifyProvider implements DeploymentProvider {
     const fqdn = this.readString(record, 'fqdn')
     const rawStatus = this.readString(record, 'status')
     const projectUuid = this.readString(record, 'project_uuid')
+    const environmentId =
+      typeof record['environment_id'] === 'number' ? record['environment_id'] : undefined
     const project =
       this.readString(record, 'project_name') ??
-      (projectUuid ? (projectsByName?.get(projectUuid) ?? undefined) : undefined)
+      projectResolver?.resolveProject(projectUuid ?? null, environmentId)
     return {
       id: uuid,
       label: this.readString(record, 'name') ?? fqdn ?? uuid,
@@ -201,25 +203,47 @@ export class CoolifyProvider implements DeploymentProvider {
     }
   }
 
-  /** Build a `project_uuid -> name` map from the projects endpoint. */
-  private async projectNamesByUuid(): Promise<Map<string, string>> {
+  /**
+   * Build a resolver that maps an application to its Coolify project name.
+   *
+   * Coolify's `/applications` list returns each application's `environment_id`
+   * but not the project name or `project_uuid`. To recover the project we load
+   * `/projects` (project uuid + name) and, for each project, its environments
+   * (`/projects/{uuid}/environments` → environment `id` + `project_id`). The
+   * resolver then maps an application by its `environment_id` (via project_id)
+   * or directly by `project_uuid` when a version exposes it.
+   */
+  private async projectResolver(): Promise<CloudDeploymentProjectResolver> {
+    const resolver = new CloudDeploymentProjectResolver()
     try {
-      const response = await this.request('/projects', { method: 'GET' })
-      const items = Array.isArray(response) ? response : []
-      const map = new Map<string, string>()
-      for (const item of items) {
-        if (typeof item !== 'object' || item === null) continue
-        const record = item as Record<string, unknown>
-        const uuid = this.readString(record, 'uuid')
-        const name = this.readString(record, 'name')
-        if (uuid && name) map.set(uuid, name)
-      }
-      return map
+      const projectsResponse = await this.request('/projects', { method: 'GET' })
+      const projects = Array.isArray(projectsResponse) ? projectsResponse : []
+      await Promise.all(
+        projects.map(async (projectItem) => {
+          if (typeof projectItem !== 'object' || projectItem === null) return
+          const project = projectItem as Record<string, unknown>
+          const projectUuid = this.readString(project, 'uuid')
+          const projectId = typeof project['id'] === 'number' ? project['id'] : undefined
+          const projectName = this.readString(project, 'name')
+          if (projectUuid && projectName) resolver.addProjectUuid(projectUuid, projectName)
+          if (projectId === undefined || !projectUuid || !projectName) return
+          const envsResponse = await this.request(
+            `/projects/${encodeURIComponent(projectUuid)}/environments`,
+            { method: 'GET' }
+          ).catch(() => [])
+          const environments = Array.isArray(envsResponse) ? envsResponse : []
+          for (const envItem of environments) {
+            if (typeof envItem !== 'object' || envItem === null) continue
+            const env = envItem as Record<string, unknown>
+            const environmentId = typeof env['id'] === 'number' ? env['id'] : undefined
+            if (environmentId !== undefined) resolver.addEnvironment(environmentId, projectName)
+          }
+        })
+      )
     } catch {
-      // The project list is an enrichment only — never fail the container list
-      // because of it.
-      return new Map()
+      // Project resolution is an enrichment only — never fail the container list.
     }
+    return resolver
   }
 
   /**
@@ -422,4 +446,38 @@ function mapDeploymentStatus(raw: string | null): CloudDeploymentStatus {
   if (SUCCESS_DEPLOYMENT_STATUSES.has(value)) return 'success'
   if (FAILED_DEPLOYMENT_STATUSES.has(value)) return 'failed'
   return 'unknown'
+}
+
+/**
+ * Resolves an application to its Coolify project name. Coolify's application
+ * list carries only `environment_id`; project names are recovered by mapping
+ * `environment_id -> project_id -> project name` via `/projects` and each
+ * project's `/environments`.
+ */
+class CloudDeploymentProjectResolver {
+  private readonly byProjectUuid = new Map<string, string>()
+  private readonly byEnvironmentId = new Map<number, string>()
+
+  addProjectUuid(projectUuid: string, name: string): void {
+    this.byProjectUuid.set(projectUuid, name)
+  }
+
+  addEnvironment(environmentId: number, projectName: string): void {
+    this.byEnvironmentId.set(environmentId, projectName)
+  }
+
+  resolveProject(
+    projectUuid: string | null,
+    environmentId: number | undefined
+  ): string | undefined {
+    if (projectUuid) {
+      const byUuid = this.byProjectUuid.get(projectUuid)
+      if (byUuid) return byUuid
+    }
+    if (environmentId !== undefined) {
+      const byEnvironment = this.byEnvironmentId.get(environmentId)
+      if (byEnvironment) return byEnvironment
+    }
+    return undefined
+  }
 }
