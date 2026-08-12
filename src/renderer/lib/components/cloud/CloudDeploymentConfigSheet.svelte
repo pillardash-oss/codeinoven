@@ -15,7 +15,9 @@
 
   interface Props {
     open: boolean
-    projectId: string
+    /** Project to attach accounts to. Optional: when absent (settings context)
+     *  the sheet only creates a global provider account and never attaches it. */
+    projectId?: string
     onClose: () => void
     /** Provider kinds already configured for this project, scoping container choices. */
     configuredProviders?: CloudDeploymentProviderKind[]
@@ -35,6 +37,9 @@
   }: Props = $props()
 
   type Mode = 'provider' | 'container'
+
+  /** True when a project context is present (settings page has none). */
+  const hasProject = $derived(projectId !== undefined)
 
   /** Provider kinds this sheet can configure: Coolify (working) plus the stubs. */
   const PROVIDER_KINDS: CloudDeploymentProviderKind[] = [
@@ -125,11 +130,13 @@
     if (!open) return
     resetSheet()
     void cloudAccountsState.load()
-    void invoke('cloudDeploy:getConfig', projectId)
-      .then((loaded) => {
-        config = loaded
-      })
-      .catch(() => undefined)
+    if (projectId) {
+      void invoke('cloudDeploy:getConfig', projectId)
+        .then((loaded) => {
+          config = loaded
+        })
+        .catch(() => undefined)
+    }
   })
 
   function selectProvider(kind: CloudDeploymentProviderKind): void {
@@ -173,6 +180,7 @@
 
   /** Set which attached account is active for a provider within the project. */
   async function setActive(kind: CloudDeploymentProviderKind, accountId: string): Promise<void> {
+    if (!projectId) return
     saving = true
     error = ''
     try {
@@ -204,16 +212,23 @@
           error = 'Enter a name for this account.'
           return
         }
-        // Create the global account (token vaulted by account id), then attach.
+        // Create the global account (token vaulted by account id), then attach
+        // it to the project when a project context is present.
         const account = await cloudAccountsState.createAccount(
           selectedKind,
           accountLabel.trim(),
           token.trim(),
           validation.baseUrl ?? undefined
         )
-        config = await cloudAccountsState.attachAccount(projectId, selectedKind, account.id)
-        toast.success(`Created and attached “${account.label}”.`)
+        if (projectId) {
+          config = await cloudAccountsState.attachAccount(projectId, selectedKind, account.id)
+        }
+        toast.success(`Created “${account.label}”.`)
       } else {
+        if (!projectId) {
+          error = 'This flow requires a project context.'
+          return
+        }
         if (selectedExistingAccountId === '') {
           error = 'Choose an existing provider account to attach.'
           return
@@ -239,6 +254,7 @@
 
   async function saveContainer(): Promise<void> {
     if (containerProviderKind === '') return
+    if (!projectId) return
     const id = containerId.trim()
     const label = containerLabel.trim()
     if (id === '') {
@@ -444,14 +460,16 @@
           : 'Attach a container to a configured provider.'}
       </p>
     </div>
-    <Switch
-      checked={mode === 'container'}
-      onchange={(v) => {
-        mode = v ? 'container' : 'provider'
-        error = ''
-      }}
-      aria-label="Toggle between adding a provider and adding a container"
-    />
+    {#if hasProject}
+      <Switch
+        checked={mode === 'container'}
+        onchange={(v) => {
+          mode = v ? 'container' : 'provider'
+          error = ''
+        }}
+        aria-label="Toggle between adding a provider and adding a container"
+      />
+    {/if}
   </div>
 
   {#if mode === 'provider'}
@@ -496,28 +514,30 @@
 
       {#if selectedKind === WORKING_KIND}
         <div class="space-y-3">
-          <div class="flex items-center gap-2 rounded-lg border bg-elevated px-1 py-1">
-            <button
-              type="button"
-              class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'create' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
-              onclick={() => {
-                createMode = 'create'
-                error = ''
-              }}
-            >
-              New account
-            </button>
-            <button
-              type="button"
-              class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'reuse' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
-              onclick={() => {
-                createMode = 'reuse'
-                error = ''
-              }}
-            >
-              Use existing
-            </button>
-          </div>
+          {#if hasProject}
+            <div class="flex items-center gap-2 rounded-lg border bg-elevated px-1 py-1">
+              <button
+                type="button"
+                class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'create' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
+                onclick={() => {
+                  createMode = 'create'
+                  error = ''
+                }}
+              >
+                New account
+              </button>
+              <button
+                type="button"
+                class={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium ${createMode === 'reuse' ? 'bg-primary text-on-primary' : 'text-muted hover:bg-overlay'}`}
+                onclick={() => {
+                  createMode = 'reuse'
+                  error = ''
+                }}
+              >
+                Use existing
+              </button>
+            </div>
+          {/if}
 
           {#if createMode === 'create'}
             <label class="block space-y-1 text-xs font-medium">
