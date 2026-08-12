@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { ArrowUpRight, ChevronLeft, ChevronUp, Play, ShieldCheck, Target } from '@lucide/svelte'
+  import {
+    ArrowUpRight,
+    ChevronLeft,
+    ChevronRight,
+    Play,
+    ShieldCheck,
+    Target
+  } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
@@ -217,7 +224,7 @@
           aria-expanded="true"
           onclick={onToggleCollapsed}
         >
-          <ChevronUp size={15} />
+          <ChevronRight size={15} />
         </button>
       </div>
       <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
