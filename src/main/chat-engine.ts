@@ -62,6 +62,14 @@ import {
   type ImageDescriptorResult,
   type ResolvedImageEntry
 } from './image-descriptor-provider'
+import {
+  IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA,
+  IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES,
+  imageDescriptorBatchCapability,
+  imageDescriptorBatchPrompt,
+  runImageDescriptorBatch,
+  type ImageDescriptorBatchCapability
+} from './services/image-descriptor'
 import type {
   AgentAccountUsage,
   AgentEvent,
@@ -317,6 +325,26 @@ function rawErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message.trim() || fallback
   if (typeof error === 'string') return error.trim() || fallback
   return fallback
+}
+
+/** Parse the assistant's text into the batched descriptor object, tolerating a
+ *  surrounding JSON code fence. Throws a clear error when the output is not a
+ *  JSON object so the caller can safely fall back to per-image calls instead of
+ *  mislabeling any image. */
+function parseBatchedDescriptorJson(text: string): unknown {
+  const cleaned = text
+    .replace(/^```(?:json)?\s*/u, '')
+    .replace(/```\s*$/u, '')
+    .trim()
+  try {
+    const parsed: unknown = JSON.parse(cleaned)
+    if (parsed !== null && typeof parsed === 'object') return parsed
+  } catch {
+    // Fall through to the explicit error below.
+  }
+  throw new Error(
+    'The vision model returned output that could not be read as the batched image description result.'
+  )
 }
 
 function normalizedToolName(tool: string): string {
@@ -5119,8 +5147,11 @@ export class ChatEngine {
 
   /**
    * Run the image descriptor agent: resolve the thread's (or global) vision
-   * model selection and describe every requested image through a disposable
-   * harness session, tagging each description with the entry's id.
+   * model selection and describe every requested image. Compatible multi-image
+   * requests run as one structured vision call attributed to the parent turn
+   * through a single feature call id; incompatible or oversized requests fall
+   * back to one safe per-image call, and a failed batch vision call degrades to
+   * the per-image path so no image is ever dropped or mislabeled.
    */
   private async executeImageDescriptor(
     request: ImageDescriptorExecutorRequest
@@ -5150,19 +5181,173 @@ export class ChatEngine {
          ORDER BY created_at DESC, id DESC LIMIT 1`,
         request.threadId
       )?.id
-      const results: ImageDescriptorResult[] = []
-      for (const image of request.images) {
-        const outcome = await this.describeWithImageDescriptorRecovery(
-          request,
-          selection,
-          image,
-          parentTurnId
+      const capability = await this.imageDescriptorBatchCapability(request, selection)
+      try {
+        const run = await runImageDescriptorBatch(
+          request.images,
+          capability,
+          (images, featureCallId) =>
+            this.describeImagesOnVisionModelBatch(
+              request,
+              selection,
+              images,
+              parentTurnId,
+              featureCallId
+            ),
+          (image) =>
+            this.describeWithImageDescriptorRecovery(request, selection, image, parentTurnId)
         )
-        results.push(outcome)
+        return run.results
+      } catch (error) {
+        Logger.dev('Image descriptor batch failed; falling back to per-image calls:', error)
+        const results: ImageDescriptorResult[] = []
+        for (const image of request.images) {
+          results.push(
+            await this.describeWithImageDescriptorRecovery(request, selection, image, parentTurnId)
+          )
+        }
+        return results
       }
-      return results
     } finally {
       this.startSessionWatchdog(request.sessionId)
+    }
+  }
+
+  /** Whether the pinned harness can batch several images into one vision call. */
+  private async imageDescriptorBatchCapability(
+    request: ImageDescriptorExecutorRequest,
+    selection: AgentModelSelection
+  ): Promise<ImageDescriptorBatchCapability> {
+    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    if (!driver.capabilities) {
+      return { supportsBatch: false, maxImages: IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES }
+    }
+    return imageDescriptorBatchCapability(driver.capabilities, IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES)
+  }
+
+  /**
+   * Describe all supplied images in one disposable harness session on the
+   * vision model, requesting a single structured `{ results }` object. Returns
+   * the parsed structured output (or, when structured output is unsupported,
+   * the JSON parsed from the assistant's text) so the batch orchestration can
+   * map it back to per-image results strictly by id. The whole batch is
+   * attributed to its parent turn through the single `featureCallId`.
+   */
+  private async describeImagesOnVisionModelBatch(
+    request: ImageDescriptorExecutorRequest,
+    selection: AgentModelSelection,
+    images: ResolvedImageEntry[],
+    parentTurnId: string | undefined,
+    featureCallId: string
+  ): Promise<unknown> {
+    const { driver } = await this.resolve(request.projectId, selection.harnessId, request.threadId)
+    const settings: ThreadSettings = {
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      thinkingLevel: 'low',
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    }
+    const isolated =
+      driver instanceof OpenCodeDriver
+        ? await driver.createIsolatedSession(request.projectPath, 'Image description')
+        : undefined
+    const sessionId =
+      isolated?.sessionId ?? (await driver.createSession(request.projectPath, 'Image description'))
+    this.registerSession(
+      sessionId,
+      request.projectId,
+      request.threadId,
+      request.projectPath,
+      'auto_review',
+      selection.harnessId,
+      undefined,
+      true
+    )
+    let response: AgentMessage | undefined
+    let failure: string | null = null
+    try {
+      const attachments: PromptAttachment[] = []
+      for (const image of images) {
+        attachments.push(await resolveSelfContainedAttachment(image))
+      }
+      const firstAttachment = attachments[0] ?? { mime: 'image/*' as const, url: '' }
+      const timeoutMs = imageDescriptorInactivityTimeoutMs(firstAttachment, 0)
+      const nextTimeoutMs = imageDescriptorInactivityTimeoutMs(firstAttachment, 1)
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        timeoutMs,
+        'Image upload or vision-model response',
+        () => new ImageDescriptorInactivityError(timeoutMs, 0, nextTimeoutMs)
+      )
+      const prompt = imageDescriptorBatchPrompt(images)
+      const requestOptions: SendPromptOptions = {
+        sessionId,
+        settings,
+        text: prompt,
+        attachments,
+        readOnly: true,
+        allowedTools: [],
+        userMessageId: createMessageId(),
+        structuredOutput: { schema: IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA }
+      }
+      if (isolated && driver instanceof OpenCodeDriver) {
+        await driver.sendPrompt(request.projectPath, requestOptions, isolated)
+      } else {
+        await driver.sendPrompt(request.projectPath, requestOptions)
+      }
+      await completion
+      const messages =
+        isolated && driver instanceof OpenCodeDriver
+          ? await driver.loadMessages(request.projectPath, sessionId, isolated)
+          : await driver.loadMessages(request.projectPath, sessionId)
+      response = [...messages].reverse().find((message) => message.role === 'assistant')
+      if (!response) throw new Error('The vision model returned no description')
+      if (response.error) throw new Error(response.error)
+      if (response.structuredOutput !== undefined) return response.structuredOutput
+      const text = response.parts
+        .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n')
+        .trim()
+      if (!text) throw new Error('The vision model returned an empty description')
+      return parseBatchedDescriptorJson(text)
+    } catch (error) {
+      failure = rawErrorMessage(error)
+      throw error
+    } finally {
+      if (parentTurnId) {
+        this.recordAuxiliaryUsageEvent({
+          feature: 'image_descriptor',
+          threadId: request.threadId,
+          parentTurnId,
+          featureCallId,
+          attempt: 1,
+          harnessId: selection.harnessId,
+          settings,
+          inputText: imageDescriptorBatchPrompt(images),
+          response,
+          failure
+        })
+      }
+      this.clearCompletionWaiter(sessionId)
+      this.clearSessionWatchdog(sessionId)
+      this.sessionRegistry.delete(sessionId)
+      this.sessionStatuses.delete(sessionId)
+      this.reasoningTimes.delete(sessionId)
+      this.toolTimes.delete(sessionId)
+      if (isolated && driver instanceof OpenCodeDriver) {
+        driver.disposeIsolatedSession(isolated)
+      } else {
+        try {
+          await driver.deleteSession?.(request.projectPath, sessionId)
+        } catch (error) {
+          Logger.dev('Image descriptor session deletion was incomplete:', error)
+        }
+      }
     }
   }
 
