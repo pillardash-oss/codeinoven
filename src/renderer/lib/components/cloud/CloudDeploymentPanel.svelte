@@ -24,7 +24,6 @@
   import Switch from '../ui/Switch.svelte'
   import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
-  import CloudProviderIcon from './icons/CloudProviderIcon.svelte'
   import {
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
@@ -108,6 +107,18 @@
       }
     }
     return Object.values(byKey)
+  })
+
+  /** Containers grouped by project name, so same-project apps stay together. */
+  const containersByProject = $derived.by(() => {
+    const groups: Record<string, CloudDeploymentContainer[]> = {}
+    for (const container of containers) {
+      const key = container.project ?? 'Other'
+      const list = groups[key]
+      if (list) list.push(container)
+      else groups[key] = [container]
+    }
+    return Object.entries(groups)
   })
 
   const hasContainers = $derived(containers.length > 0)
@@ -372,91 +383,71 @@
             <Plus size={11} />
           </button>
         </div>
-        {#each providers as kind (kind)}
-          {@const kindContainers = containers.filter((c) => c.providerKind === kind)}
+        {#each containersByProject as [project, projectContainers] (project)}
           <section class="border-b border-border">
             <div class="flex items-center gap-1.5 bg-surface px-3 py-1.5">
-              <CloudProviderIcon
-                providerKind={kind}
-                size={10}
-                class="shrink-0 text-dimmed"
-                title={PROVIDER_LABELS[kind]}
-              />
-              <span class="text-[10px] font-medium text-muted">{PROVIDER_LABELS[kind]}</span>
-              {#if kindContainers.length > 0}
-                <span class="text-[9px] tabular-nums text-dimmed">{kindContainers.length}</span>
-              {/if}
+              <Cloud size={11} class="shrink-0 text-dimmed" />
+              <span class="text-[10px] font-medium text-muted">{project}</span>
+              <span class="text-[9px] tabular-nums text-dimmed">{projectContainers.length}</span>
             </div>
-            {#if accessErrors[kind]}
+            {#if accessErrors[projectContainers[0]?.providerKind ?? 'coolify']}
               <p
                 class="border-t border-border bg-danger/10 px-3 py-1.5 text-[9px] leading-relaxed text-danger"
               >
-                {accessErrors[kind]}
+                {accessErrors[projectContainers[0]?.providerKind ?? 'coolify']}
               </p>
             {/if}
-            {#if kindContainers.length === 0}
-              <p class="px-3 py-4 text-center text-[10px] text-dimmed">No containers.</p>
-            {:else}
-              <div class="divide-y divide-border">
-                {#each kindContainers as container (container.id)}
-                  <div class="flex w-full items-center gap-1 transition-colors hover:bg-elevated">
+            <div class="divide-y divide-border">
+              {#each projectContainers as container (container.id)}
+                <div class="flex w-full items-center gap-1 transition-colors hover:bg-elevated">
+                  <button
+                    type="button"
+                    class="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2 text-left"
+                    title="View {container.label}"
+                    aria-label="View {container.label}"
+                    onclick={() => openContainer(container)}
+                  >
+                    {#if container.status === 'building'}
+                      <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
+                    {:else if container.status === 'success'}
+                      <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
+                    {:else if container.status === 'failed'}
+                      <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
+                    {:else}
+                      <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
+                    {/if}
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2">
+                        <p class="truncate text-[11px] font-medium text-foreground">
+                          {container.label}
+                        </p>
+                        <StatusPill tone={statusTone(container.status)}>
+                          {statusLabel(container.status)}
+                        </StatusPill>
+                      </div>
+                      <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                        <span class="font-mono">{container.id}</span>
+                        {#if container.updatedAt}
+                          <span>·</span>
+                          <span class="shrink-0">{relativeTime(container.updatedAt)}</span>
+                        {/if}
+                      </div>
+                    </div>
+                  </button>
+                  {#if container.url}
                     <button
                       type="button"
-                      class="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2 text-left"
-                      title="View {container.label}"
-                      aria-label="View {container.label}"
-                      onclick={() => openContainer(container)}
+                      class="mr-2 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Open deployed site"
+                      aria-label="Open deployed site"
+                      onclick={() => void openInBrowser(container.url ?? '')}
                     >
-                      {#if container.status === 'building'}
-                        <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
-                      {:else if container.status === 'success'}
-                        <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
-                      {:else if container.status === 'failed'}
-                        <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
-                      {:else}
-                        <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
-                      {/if}
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2">
-                          {#if container.project}
-                            <span
-                              class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[9px] text-muted"
-                              title={container.project}
-                            >
-                              {container.project}
-                            </span>
-                          {/if}
-                          <p class="truncate text-[11px] font-medium text-foreground">
-                            {container.label}
-                          </p>
-                          <StatusPill tone={statusTone(container.status)}>
-                            {statusLabel(container.status)}
-                          </StatusPill>
-                        </div>
-                        <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
-                          <span class="font-mono">{container.id}</span>
-                          {#if container.updatedAt}
-                            <span>·</span>
-                            <span class="shrink-0">{relativeTime(container.updatedAt)}</span>
-                          {/if}
-                        </div>
-                      </div>
+                      <ExternalLink size={11} />
                     </button>
-                    {#if container.url}
-                      <button
-                        type="button"
-                        class="mr-2 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                        title="Open deployed site"
-                        aria-label="Open deployed site"
-                        onclick={() => void openInBrowser(container.url ?? '')}
-                      >
-                        <ExternalLink size={11} />
-                      </button>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
+                  {/if}
+                </div>
+              {/each}
+            </div>
           </section>
         {/each}
       </div>
