@@ -417,14 +417,10 @@ function mapOpenCodeUsage(raw: unknown): {
     cacheWrite !== undefined ||
     rawTotal !== undefined
   if (!reported) return { aggregateTokens: undefined, normalizedUsage: undefined }
-  // OpenCode reports `input` as the total input token count, which already
-  // contains cached read and cached write tokens, so uncached input is the
-  // remainder after the reported cache portions are removed. `reasoning` is a
-  // subset of `output` and stays separate. When an inconsistent payload reports
-  // cached read + cached write exceeding input, clamp to zero rather than emit
-  // a negative category.
-  const uncachedInput =
-    input === undefined ? null : Math.max(0, input - (cachedInput ?? 0) - (cacheWrite ?? 0))
+  // OpenCode exposes uncached input and cache reads/writes as separate token
+  // categories. Cache reads can legitimately exceed input on a well-cached
+  // turn, so subtracting them would erase the actual uncached input.
+  const uncachedInput = input ?? null
   const normalizedUsage: NormalizedUsage = {
     uncachedInput,
     cachedInput: cachedInput ?? null,
@@ -433,9 +429,9 @@ function mapOpenCodeUsage(raw: unknown): {
     reasoning: reasoning ?? null,
     rawProviderUsage: { ...tokens },
     rawTotal: rawTotal ?? null,
-    // OpenCode totals its cache-inclusive input, so a reported total includes
-    // cached tokens. When no total is reported its semantics are unavailable.
-    totalSemantics: rawTotal === undefined ? 'unavailable' : 'includes_cache'
+    // OpenCode's current SDK does not define a total. Preserve one when an older
+    // or provider-specific payload supplies it without assuming its semantics.
+    totalSemantics: rawTotal === undefined ? 'unavailable' : 'provider_defined'
   }
   const aggregateTokens: AgentTokenUsage | undefined =
     rawTotal === undefined

@@ -11,6 +11,7 @@ import type {
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
   LocalProfileUsageBreakdown,
+  UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
   UsageEvent
 } from '../../../lib/types'
@@ -242,6 +243,12 @@ export class HarnessUsageRepo {
       successful_turns: number
       uncached_input: number
       cached_input: number
+      main_uncached_input: number
+      main_cached_input: number
+      cache_reported_events: number
+      auxiliary_uncached_input: number
+      auxiliary_cached_input: number
+      auxiliary_cache_reported_events: number
       output: number
       reasoning: number
       main_attempts: number
@@ -254,7 +261,7 @@ export class HarnessUsageRepo {
       tool_result_tokens: number
     }>(
       `WITH successful_turns AS (
-         SELECT DISTINCT parent_turn_id
+         SELECT DISTINCT thread_id, parent_turn_id
          FROM usage_events
          WHERE feature IN ('main', 'audit', 'assignment') AND success = 1
            AND (? IS NULL OR created_at >= ?)
@@ -263,16 +270,36 @@ export class HarnessUsageRepo {
        ), scoped AS (
          SELECT event.*
          FROM usage_events event
-         JOIN successful_turns turn ON turn.parent_turn_id = event.parent_turn_id
+         JOIN successful_turns turn
+           ON turn.thread_id = event.thread_id AND turn.parent_turn_id = event.parent_turn_id
        )
        SELECT
          (SELECT COUNT(*) FROM successful_turns) AS successful_turns,
          COALESCE(SUM(tokens_uncached_input), 0) AS uncached_input,
          COALESCE(SUM(tokens_cached_input), 0) AS cached_input,
+         COALESCE(SUM(CASE WHEN feature IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN tokens_uncached_input ELSE 0 END), 0) AS main_uncached_input,
+         COALESCE(SUM(CASE WHEN feature IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN tokens_cached_input ELSE 0 END), 0) AS main_cached_input,
+         COALESCE(SUM(CASE WHEN feature IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN 1 ELSE 0 END), 0) AS cache_reported_events,
+         COALESCE(SUM(CASE WHEN feature NOT IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN tokens_uncached_input ELSE 0 END), 0) AS auxiliary_uncached_input,
+         COALESCE(SUM(CASE WHEN feature NOT IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN tokens_cached_input ELSE 0 END), 0) AS auxiliary_cached_input,
+         COALESCE(SUM(CASE WHEN feature NOT IN ('main', 'audit', 'assignment')
+                            AND tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                           THEN 1 ELSE 0 END), 0) AS auxiliary_cache_reported_events,
          COALESCE(SUM(tokens_output), 0) AS output,
          COALESCE(SUM(tokens_reasoning), 0) AS reasoning,
          COALESCE(SUM(CASE WHEN feature IN ('main', 'audit', 'assignment') THEN 1 ELSE 0 END), 0) AS main_attempts,
-         COALESCE(SUM(CASE WHEN feature <> 'main' AND cost_status <> 'unavailable'
+         COALESCE(SUM(CASE WHEN feature NOT IN ('main', 'audit', 'assignment')
+                            AND cost_status <> 'unavailable'
                            THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS auxiliary_cost,
          COALESCE(SUM(CASE WHEN cost_status = 'known' THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS known_cost,
          COALESCE(SUM(CASE WHEN cost_status = 'estimated' THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS estimated_cost,
@@ -293,6 +320,11 @@ export class HarnessUsageRepo {
     const successfulTurns = row?.successful_turns ?? 0
     const uncachedInputTokens = row?.uncached_input ?? 0
     const cachedInputTokens = row?.cached_input ?? 0
+    const mainUncachedInputTokens = row?.main_uncached_input ?? 0
+    const mainCachedInputTokens = row?.main_cached_input ?? 0
+    const cacheReportedEvents = row?.cache_reported_events ?? 0
+    const auxiliaryUncachedInputTokens = row?.auxiliary_uncached_input ?? 0
+    const auxiliaryCachedInputTokens = row?.auxiliary_cached_input ?? 0
     const outputTokens = row?.output ?? 0
     const reasoningTokens = row?.reasoning ?? 0
     const mainAttempts = row?.main_attempts ?? 0
@@ -302,6 +334,62 @@ export class HarnessUsageRepo {
     const pricedCostEvents = row?.priced_cost_events ?? 0
     const totalCostEvents = row?.total_cost_events ?? 0
     const toolResultTokens = row?.tool_result_tokens ?? 0
+    const cacheBreakdownRows = this.db.all<{
+      harness_id: string | null
+      provider_id: string | null
+      model_id: string | null
+      main_attempts: number
+      reported_attempts: number
+      uncached_input: number
+      cached_input: number
+    }>(
+      `WITH successful_turns AS (
+         SELECT DISTINCT thread_id, parent_turn_id
+         FROM usage_events
+         WHERE feature IN ('main', 'audit', 'assignment') AND success = 1
+           AND (? IS NULL OR created_at >= ?)
+           AND (? IS NULL OR created_at < ?)
+           AND (? IS NULL OR thread_id = ?)
+       ), scoped AS (
+         SELECT event.*
+         FROM usage_events event
+         JOIN successful_turns turn
+           ON turn.thread_id = event.thread_id AND turn.parent_turn_id = event.parent_turn_id
+       )
+       SELECT harness_id, provider_id, model_id,
+              COUNT(*) AS main_attempts,
+              SUM(CASE WHEN tokens_uncached_input IS NOT NULL AND tokens_cached_input IS NOT NULL
+                       THEN 1 ELSE 0 END) AS reported_attempts,
+              COALESCE(SUM(CASE WHEN tokens_uncached_input IS NOT NULL
+                                  AND tokens_cached_input IS NOT NULL
+                                THEN tokens_uncached_input ELSE 0 END), 0) AS uncached_input,
+              COALESCE(SUM(CASE WHEN tokens_uncached_input IS NOT NULL
+                                  AND tokens_cached_input IS NOT NULL
+                                THEN tokens_cached_input ELSE 0 END), 0) AS cached_input
+       FROM scoped
+       WHERE feature IN ('main', 'audit', 'assignment')
+       GROUP BY harness_id, provider_id, model_id
+       ORDER BY main_attempts DESC, harness_id ASC, provider_id ASC, model_id ASC`,
+      range?.startAt ?? null,
+      range?.startAt ?? null,
+      range?.endAt ?? null,
+      range?.endAt ?? null,
+      threadId ?? null,
+      threadId ?? null
+    )
+    const cacheBreakdown: UsageCacheHitBreakdown[] = cacheBreakdownRows.map((entry) => ({
+      harnessId: entry.harness_id,
+      providerId: entry.provider_id,
+      modelId: entry.model_id,
+      mainAttempts: entry.main_attempts,
+      reportedAttempts: entry.reported_attempts,
+      uncachedInputTokens: entry.uncached_input,
+      cachedInputTokens: entry.cached_input,
+      cacheHitRatio:
+        entry.uncached_input + entry.cached_input > 0
+          ? entry.cached_input / (entry.uncached_input + entry.cached_input)
+          : null
+    }))
     return {
       successfulTurns,
       uncachedInputTokens,
@@ -309,8 +397,19 @@ export class HarnessUsageRepo {
       reasoningTokens,
       cachedInputTokens,
       cacheHitRatio:
-        uncachedInputTokens + cachedInputTokens > 0
-          ? cachedInputTokens / (uncachedInputTokens + cachedInputTokens)
+        mainUncachedInputTokens + mainCachedInputTokens > 0
+          ? mainCachedInputTokens / (mainUncachedInputTokens + mainCachedInputTokens)
+          : null,
+      cacheEligibleEvents: mainAttempts,
+      cacheReportedEvents,
+      cacheCoverageRatio: mainAttempts > 0 ? cacheReportedEvents / mainAttempts : null,
+      cacheBreakdown,
+      auxiliaryUncachedInputTokens,
+      auxiliaryCachedInputTokens,
+      auxiliaryCacheHitRatio:
+        (row?.auxiliary_cache_reported_events ?? 0) > 0 &&
+        auxiliaryUncachedInputTokens + auxiliaryCachedInputTokens > 0
+          ? auxiliaryCachedInputTokens / (auxiliaryUncachedInputTokens + auxiliaryCachedInputTokens)
           : null,
       mainAttempts,
       retryAmplification: successfulTurns > 0 ? mainAttempts / successfulTurns : null,

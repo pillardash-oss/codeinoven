@@ -669,13 +669,27 @@
   })
 
   let storedEfficiencyKpis = $state<UsageEfficiencyKpis | undefined>(undefined)
-  $effect(() => {
-    void invoke('thread:efficiencyKpis', thread.projectId, thread.id)
-      .then((kpis) => {
-        storedEfficiencyKpis = kpis
-      })
-      .catch(() => {})
-  })
+  let efficiencyKpiRequestVersion = 0
+
+  async function refreshEfficiencyKpis(
+    projectId = thread.projectId,
+    threadId = thread.id
+  ): Promise<void> {
+    const requestVersion = ++efficiencyKpiRequestVersion
+    try {
+      const kpis = await invoke('thread:efficiencyKpis', projectId, threadId)
+      if (
+        requestVersion !== efficiencyKpiRequestVersion ||
+        projectId !== thread.projectId ||
+        threadId !== thread.id
+      ) {
+        return
+      }
+      storedEfficiencyKpis = kpis
+    } catch {
+      // Efficiency telemetry is best-effort and must never disrupt the thread.
+    }
+  }
 
   const harnessUsage = $derived.by((): AgentHarnessUsage[] => {
     const byHarness: Record<string, AgentHarnessUsage> = {}
@@ -851,6 +865,7 @@
 
   function revealContextUsage(): void {
     if (contextUsage) commitContextUsage(contextUsage)
+    void refreshEfficiencyKpis()
     // Fetch live quota only when the battery is revealed (hover), and only if
     // the cached copy is stale — never on thread open.
     const stale =
@@ -2277,6 +2292,7 @@
 
   onMount(() => {
     workspaceState.jumpToMessage = jumpToMessage
+    void refreshEfficiencyKpis()
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
@@ -2784,6 +2800,7 @@
         if (providerStatus?.state !== 'error') providerStatus = null
         void refreshMessages()
         void refreshCheckpoints()
+        setTimeout(() => void refreshEfficiencyKpis(), 100)
         setTimeout(() => void reconcileReadySpec(), 100)
         scheduleIdleAttention()
         break
