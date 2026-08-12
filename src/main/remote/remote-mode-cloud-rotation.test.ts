@@ -83,9 +83,10 @@ describe('RemoteModeController — cloud enrollment rotates the pairing bootstra
       rpc: null
     })
 
-    // Start the gateway so syncPairingState registers the current secret as a
-    // five-minute account enrollment bootstrap.
-    await controller.ensureGateway()
+    // Explicitly enable Remote mode so syncPairingState registers the current
+    // secret. Merely viewing Remote settings is deliberately status-only.
+    controller.toggleRemoteMode(true)
+    await vi.waitFor(() => expect(controller.status.gateway.listening).toBe(true))
 
     const secretFile = join(userData, 'remote-gateway', 'peer-secret')
     const originalSecret = (await readFile(secretFile, 'utf8')).trim()
