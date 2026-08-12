@@ -24,6 +24,7 @@
   import type { EditorId, Project, Thread } from '$shared/types'
   import {
     AppWindow,
+    Archive,
     Bell,
     Bug,
     Check,
@@ -1284,6 +1285,15 @@
           >
             <GitPullRequest size={9} class="shrink-0" />
             {gitState.activePrConflictCount}
+          </span>
+        {/if}
+        {#if gitState.stashes.length > 0}
+          <span
+            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-info ring-1 ring-info/30"
+            title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
+          >
+            <Archive size={8} class="shrink-0" />
+            {gitState.stashes.length}
           </span>
         {/if}
       </button>
