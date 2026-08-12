@@ -30,7 +30,8 @@ import {
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
-  executeWebTool
+  executeWebTool,
+  webSourceIndex
 } from './web-tool-providers'
 import {
   IMAGE_DESCRIPTOR_INPUT_SCHEMA,
@@ -38,6 +39,7 @@ import {
   resolveImageEntries,
   type ImageDescriptorExecutor
 } from './image-descriptor-provider'
+import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../lib/prompt-budget'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const MAX_REQUEST_BYTES = 1_000_000
@@ -105,6 +107,7 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
+  attributionSequence: number
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -205,7 +208,8 @@ export class UtilityOrchestrationService {
       request,
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
-      clients: new Map()
+      clients: new Map(),
+      attributionSequence: 0
     }
     const token = randomBytes(32).toString('hex')
     const server = createServer((incoming, response) => {
@@ -394,7 +398,7 @@ export class UtilityOrchestrationService {
         if (pid > 0) this.cuaActivityListener?.(pid, state.request.threadId)
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
-      result = await this.invokeWeb(resolved.utility, operationInput)
+      result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
     } else if (resolved.utility.kind === 'image_descriptor') {
       if (operation !== 'describe') {
         throw new Error(`Image descriptor does not expose the operation "${operation}"`)
@@ -468,13 +472,58 @@ export class UtilityOrchestrationService {
   }
 
   private async invokeWeb(
+    state: TurnState,
     utility: UtilityDefinitionFor<'web_search'> | UtilityDefinitionFor<'web_fetch'>,
+    operation: string,
     input: Record<string, unknown>
   ): Promise<unknown> {
-    const environment = await this.credentialEnvironment(utility)
-    const provider = utility.config.provider ?? 'custom'
-    const text = await executeWebTool(utility.kind, provider, input, utility.config, environment)
-    return { content: [{ type: 'text', text }] }
+    state.attributionSequence += 1
+    const featureCallId = `${state.id}:${utility.id}:${operation}:${state.attributionSequence}`
+    try {
+      const environment = await this.credentialEnvironment(utility)
+      const provider = utility.config.provider ?? 'custom'
+      const text = await executeWebTool(utility.kind, provider, input, utility.config, environment)
+      let budgeted = budgetToolResult({
+        content: text,
+        turnTokens: state.request.budgetContext.composedTurnTokens,
+        contextWindow:
+          state.request.budgetContext.selectedModelInputTokens +
+          DEFAULT_PROMPT_BUDGET.outputReserveTokens +
+          DEFAULT_PROMPT_BUDGET.toolHeadroomTokens
+      })
+      if (budgeted.truncated) {
+        const sourceIndex = webSourceIndex(text)
+        if (sourceIndex) {
+          budgeted = budgetToolResult({
+            content: `${sourceIndex}\n\n${text}`,
+            turnTokens: state.request.budgetContext.composedTurnTokens,
+            contextWindow:
+              state.request.budgetContext.selectedModelInputTokens +
+              DEFAULT_PROMPT_BUDGET.outputReserveTokens +
+              DEFAULT_PROMPT_BUDGET.toolHeadroomTokens
+          })
+        }
+      }
+      state.request.attributeReinjectedResult({
+        featureCallId,
+        utilityId: utility.id,
+        reinjectedTokens: budgeted.reinjectedTokens,
+        truncatedTokens: budgeted.truncatedTokens,
+        success: true,
+        retryCause: null
+      })
+      return { content: [{ type: 'text', text: budgeted.content }] }
+    } catch (error) {
+      state.request.attributeReinjectedResult({
+        featureCallId,
+        utilityId: utility.id,
+        reinjectedTokens: 0,
+        truncatedTokens: 0,
+        success: false,
+        retryCause: error instanceof Error ? error.message : String(error)
+      })
+      throw error
+    }
   }
 
   private async mcpClient(

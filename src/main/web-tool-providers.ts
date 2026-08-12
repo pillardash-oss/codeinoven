@@ -199,7 +199,76 @@ export async function executeWebTool(
   const adapter = BUILT_IN_ADAPTERS[provider]
   if (!adapter) throw new Error(`Unsupported web tool provider: ${provider}`)
   const output = await adapter.execute(kind, normalized, environment)
-  return JSON.stringify(output, null, 2)
+  return serializeBoundedWebOutput(output)
+}
+
+export function webSourceIndex(text: string): string {
+  const parsed = parseJsonObject(text)
+  if (!parsed) return ''
+  const results = asRecordArray(parsed['results'])
+  const pages = asRecordArray(parsed['pages'])
+  const sources = (results.length > 0 ? results : pages)
+    .map((entry, index) => {
+      const url = asString(entry['url'])
+      if (!url) return ''
+      const title = asString(entry['title'])
+      return `${index + 1}. ${title ? `${title} — ` : ''}${url}`
+    })
+    .filter(Boolean)
+  return sources.length > 0 ? `Sources:\n${sources.join('\n')}` : ''
+}
+
+function serializeBoundedWebOutput(output: WebSearchOutput | WebFetchOutput): string {
+  const serialized = JSON.stringify(output, null, 2)
+  if (serialized.length <= WEB_MAX_RESULT_TEXT) return serialized
+  let lower = 0
+  let upper = WEB_MAX_RESULT_TEXT
+  let bounded = serializeWebOutputWithPerSourceLimit(output, lower)
+  while (lower <= upper) {
+    const candidateLimit = Math.floor((lower + upper) / 2)
+    const candidate = serializeWebOutputWithPerSourceLimit(output, candidateLimit)
+    if (candidate.length <= WEB_MAX_RESULT_TEXT) {
+      bounded = candidate
+      lower = candidateLimit + 1
+    } else {
+      upper = candidateLimit - 1
+    }
+  }
+  return bounded
+}
+
+function serializeWebOutputWithPerSourceLimit(
+  output: WebSearchOutput | WebFetchOutput,
+  perSourceLimit: number
+): string {
+  if ('results' in output) {
+    return JSON.stringify(
+      {
+        query: output.query,
+        results: output.results.map((result) => {
+          const description = result.description.slice(0, perSourceLimit)
+          const contentAllowance = Math.max(0, perSourceLimit - description.length)
+          return {
+            ...result,
+            description,
+            ...(result.content ? { content: result.content.slice(0, contentAllowance) } : {})
+          }
+        })
+      },
+      null,
+      2
+    )
+  }
+  return JSON.stringify(
+    {
+      pages: output.pages.map((page) => ({
+        ...page,
+        content: page.content.slice(0, perSourceLimit)
+      }))
+    },
+    null,
+    2
+  )
 }
 
 function customWebToolRequest(
