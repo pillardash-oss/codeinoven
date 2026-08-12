@@ -72,6 +72,8 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** Whether the selected primary model is text-only and needs image description. */
+  modelNeedsImageDescriptor: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -213,8 +215,8 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter(
-      (tool) => tool.name === IMAGE_DESCRIPTOR_TOOL_NAME || hasOnDemand
+    const gatewayTools = GATEWAY_TOOLS.filter((tool) =>
+      tool.name === IMAGE_DESCRIPTOR_TOOL_NAME ? request.modelNeedsImageDescriptor : hasOnDemand
     )
     if (gatewayTools.length === 0) {
       return {
