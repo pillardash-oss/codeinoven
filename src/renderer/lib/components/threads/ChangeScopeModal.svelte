@@ -102,7 +102,8 @@
             <input
               bind:this={searchInput}
               bind:value={query}
-              type="search"
+              type="text"
+              inputmode="search"
               class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
               placeholder="Search scopes..."
               aria-label="Search scopes"
@@ -177,9 +178,7 @@
               </button>
             {:else}
               <p class="py-8 text-center text-xs text-dimmed">
-                {query.trim()
-                  ? 'No scopes match. Use + to create "{query.trim()}".'
-                  : 'No scopes found'}
+                {noMatch ? 'No scopes match — press + to create one' : 'No scopes found'}
               </p>
             {/each}
           </div>
