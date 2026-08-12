@@ -33,17 +33,36 @@ describe('normalizePricingEntries', () => {
     })
   })
 
-  it('skips entries without a valid id or reference price', () => {
+  it('skips entries without an official reference price or a valid id', () => {
     const entries = normalizePricingEntries({
       models: [
+        { id: 'openai/gpt-5', reference: { input: 1.25, output: 10, official: true } },
         { id: 'openai/gpt-5', reference: { input: 1.25, output: 10 } },
-        { id: 'no-lab-model', reference: { input: 1, output: 2 } },
-        { id: 'bad/gpt-x', reference: { input: 'nope', output: 2 } },
-        { reference: { input: 1, output: 2 } }
+        { id: 'no-lab-model', reference: { input: 1, output: 2, official: true } },
+        { id: 'bad/gpt-x', reference: { input: 'nope', output: 2, official: true } },
+        { reference: { input: 1, output: 2, official: true } }
       ]
     })
     expect(entries).toHaveLength(1)
     expect(entries[0].id).toBe('openai/gpt-5')
+  })
+
+  it('drops reseller (non-official) reference prices entirely', () => {
+    const entries = normalizePricingEntries({
+      models: [
+        {
+          id: 'openai/gpt-5',
+          reference: { provider: 'nano-gpt', input: 1.1, output: 9, official: false }
+        },
+        {
+          id: 'openai/gpt-5-2',
+          reference: { provider: 'openai', input: 1.75, output: 14, official: true }
+        }
+      ]
+    })
+    expect(entries).toHaveLength(1)
+    expect(entries[0].id).toBe('openai/gpt-5-2')
+    expect(entries[0].inputUsdPer1M).toBe(1.75)
   })
 
   it('returns an empty array for a malformed payload', () => {
