@@ -349,7 +349,7 @@
       <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
         <span class="font-medium text-muted">Context (latest request)</span>
         <span class="tabular-nums text-dimmed">
-          {usage ? compactNumber(usage.contextUsed) : 'Unavailable'}
+          {usage?.contextUsed !== undefined ? compactNumber(usage.contextUsed) : 'Unavailable'}
           {#if usage?.contextWindow}
             / {compactNumber(usage.contextWindow)}
           {/if}
@@ -365,7 +365,7 @@
       >
         <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
       </div>
-      {#if usage?.contextWindow}
+      {#if usage?.contextWindow && usage.contextUsed !== undefined}
         <div class="mt-2 grid grid-cols-3 gap-2 text-[9px] text-dimmed">
           <span>Used {compactNumber(usage.contextUsed)}</span>
           <span
@@ -375,11 +375,13 @@
         </div>
       {/if}
       <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
-        <span>Input {usage ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
-        <span>Output {usage ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
-        <span>Reasoning {usage ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span>
+        <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
+        <span>Output {usage?.tokens ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
         <span
-          >Cache {usage
+          >Reasoning {usage?.tokens ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span
+        >
+        <span
+          >Cache {usage?.tokens
             ? compactNumber(usage.tokens.cacheRead + usage.tokens.cacheWrite)
             : 'Unavailable'}{#if cacheHitLabel}
             · {cacheHitLabel}{/if}</span

@@ -1458,10 +1458,12 @@ export interface AgentUsageCredits {
 /** Display-ready provider-neutral usage for the active conversation. */
 export interface AgentContextUsage {
   contextWindow?: number
-  contextUsed: number
+  /** Tokens occupying the context when the harness reports that value. */
+  contextUsed?: number
   contextPercent?: number
   costUsd: number
-  tokens: AgentTokenUsage
+  /** Per-turn token categories when the harness exposes token accounting. */
+  tokens?: AgentTokenUsage
   rateLimits: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
   credits?: AgentUsageCredits

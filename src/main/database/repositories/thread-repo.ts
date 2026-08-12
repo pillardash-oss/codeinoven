@@ -66,9 +66,10 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   if (!value || typeof value !== 'object') return null
   const record = value as Record<string, unknown>
   if (typeof record.harnessId !== 'string' || typeof record.providerId !== 'string') return null
-  if (typeof record.contextUsed !== 'number' || typeof record.costUsd !== 'number') return null
+  if (typeof record.costUsd !== 'number') return null
+  const contextUsed = typeof record.contextUsed === 'number' ? record.contextUsed : undefined
   const tokenRecord = record.tokens
-  if (!tokenRecord || typeof tokenRecord !== 'object') return null
+  if (tokenRecord !== undefined && (!tokenRecord || typeof tokenRecord !== 'object')) return null
   const tokenFields: Array<keyof AgentTokenUsage> = [
     'input',
     'output',
@@ -77,9 +78,11 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
     'cacheWrite',
     'total'
   ]
-  const tokens = tokenRecord as Record<string, unknown>
-  for (const field of tokenFields) {
-    if (typeof tokens[field] !== 'number') return null
+  const tokens = tokenRecord as Record<string, unknown> | undefined
+  if (tokens) {
+    for (const field of tokenFields) {
+      if (typeof tokens[field] !== 'number') return null
+    }
   }
   const rateLimits = Array.isArray(record.rateLimits)
     ? (record.rateLimits as AgentRateLimitWindow[])
@@ -100,11 +103,11 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   return {
     harnessId: record.harnessId,
     providerId: record.providerId,
-    contextUsed: record.contextUsed,
+    ...(contextUsed === undefined ? {} : { contextUsed }),
     contextPercent: typeof record.contextPercent === 'number' ? record.contextPercent : undefined,
     contextWindow: typeof record.contextWindow === 'number' ? record.contextWindow : undefined,
     costUsd: record.costUsd,
-    tokens: tokens as unknown as AgentTokenUsage,
+    ...(tokens ? { tokens: tokens as unknown as AgentTokenUsage } : {}),
     rateLimits,
     ...(credits && Object.keys(credits).length > 0 ? { credits } : {})
   }
