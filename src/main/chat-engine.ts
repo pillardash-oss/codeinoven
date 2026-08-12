@@ -37,6 +37,7 @@ import { PermissionPolicy, type PermissionDecisionResult } from './permissions/p
 import { validateBoundedString, validateEntityId, validateThreadSettings } from './ipc-validation'
 import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { HarnessDriver, SendPromptOptions } from './drivers/driver.interface'
+import type { TitleAttemptAccounting } from './drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from './drivers/driver.interface'
 import type { Database } from './database/database'
 import { HarnessUsageRepo } from './database/repositories/harness-usage-repo'
@@ -2083,6 +2084,7 @@ export class ChatEngine {
     projectPath: string,
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
+    modelNeedsImageDescriptor: boolean,
     skipRuntime = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
@@ -2111,6 +2113,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        modelNeedsImageDescriptor,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -4267,8 +4270,9 @@ export class ChatEngine {
     // ID is sufficient for the later database/UI update. Provider-specific
     // startup serialization belongs inside its driver; ClaudeCodeDriver gates
     // only OAuth startup and releases that gate on the process's first output.
-    const scheduleAutoTitle = createAutoTitleLauncher(shouldAutoTitle, () =>
-      this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
+    const scheduleAutoTitle = createAutoTitleLauncher(
+      shouldAutoTitle && settings.titleMode !== 'deterministic',
+      () => this.autoTitleThread(projectId, threadId, driverId, settings, text, messageId)
     )
     void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
@@ -4398,6 +4402,7 @@ export class ChatEngine {
       composedTurnTokens: earlyLayers.totalTokens,
       parentTurnId: messageId
     }
+    const modelNeedsImageDescriptor = await this.modelLacksVision(projectId, settings)
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -4406,6 +4411,7 @@ export class ChatEngine {
       projectPath,
       settings,
       utilityBudgetContext,
+      modelNeedsImageDescriptor,
       // Assignment workers must stay on the pooled project server. Spawning a
       // per-session isolated opencode server for every worker (because of the
       // utility gateway) makes N+1 opencode processes all write to the single
@@ -4422,15 +4428,13 @@ export class ChatEngine {
     // them once before the history recap budget is derived.
     const behaviorMode =
       specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
-    const [checkpointId, utilityInstructions, behaviorPrompt, modelNeedsImageDescriptor, rawRecap] =
-      await Promise.all([
-        checkpointPromise,
-        utilityInstructionsPromise,
-        this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode),
-        this.modelLacksVision(projectId, settings),
-        this.buildHistoryRecap(projectId, threadId, driverId),
-        transportPromise
-      ])
+    const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
+      checkpointPromise,
+      utilityInstructionsPromise,
+      this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode),
+      this.buildHistoryRecap(projectId, threadId, driverId),
+      transportPromise
+    ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
     // One aggregate selected-model input budget across user text + the final
     // system/behavior/tool prompt + hidden orchestration context + history
@@ -5910,35 +5914,82 @@ export class ChatEngine {
         costUsd: null,
         costStatus: 'unavailable'
       })
-      this.usageRepo.recordEvent({
-        id: `title:${parentTurnId}`,
-        threadId,
-        parentTurnId,
-        featureCallId: 'auto-title',
-        attempt: 1,
-        feature: 'title',
-        harnessId: driverId,
-        providerId: settings.providerId,
-        modelId: settings.modelId,
-        utilityId: null,
-        rawProviderUsage: {},
-        tokens: {
-          uncachedInput: inputTokens,
-          cachedInput: null,
-          cacheWrite: null,
-          output: outputTokens,
-          reasoning: null
-        },
-        rawTotal: null,
-        totalSemantics: 'unavailable',
-        toolFeeUsd: null,
-        success: generated !== null && failure === null,
-        retryCause: failure,
-        createdAt: Date.now(),
-        costStatus: 'unavailable',
-        costUsd: null,
-        pricingProvenance: null
-      })
+      const attempts = titleAttemptsFromDriver(driver)
+      if (attempts.length > 0) {
+        for (const attempt of attempts) {
+          const tokens = attempt.usage?.tokens
+          const reportedCost = attempt.usage?.cost
+          const pricingProvenance = attempt.usage?.costProvenance
+          const hasKnownCost = reportedCost !== undefined && pricingProvenance !== undefined
+          this.usageRepo.recordEvent({
+            id: `title:${parentTurnId}:${attempt.attempt}`,
+            threadId,
+            parentTurnId,
+            featureCallId: `auto-title:${attempt.providerId}:${attempt.modelId}`,
+            attempt: attempt.attempt,
+            feature: 'title',
+            harnessId: driverId,
+            providerId: attempt.providerId,
+            modelId: attempt.modelId,
+            utilityId: null,
+            rawProviderUsage: tokens ? { ...tokens } : {},
+            tokens: {
+              uncachedInput: tokens?.input ?? null,
+              cachedInput: tokens?.cacheRead ?? null,
+              cacheWrite: tokens?.cacheWrite ?? null,
+              output: tokens?.output ?? null,
+              reasoning: tokens?.reasoning ?? null
+            },
+            rawTotal: tokens?.total ?? null,
+            totalSemantics: tokens ? 'provider_defined' : 'unavailable',
+            toolFeeUsd: null,
+            success: attempt.success,
+            retryCause: attempt.fallbackReason,
+            createdAt: Date.now(),
+            ...(hasKnownCost
+              ? {
+                  costStatus: 'known' as const,
+                  costUsd: reportedCost,
+                  pricingProvenance
+                }
+              : {
+                  costStatus: 'unavailable' as const,
+                  costUsd: null,
+                  pricingProvenance: null
+                })
+          })
+        }
+      } else {
+        this.usageRepo.recordEvent({
+          id: `title:${parentTurnId}`,
+          threadId,
+          parentTurnId,
+          featureCallId: 'auto-title',
+          attempt: 1,
+          feature: 'title',
+          harnessId: driverId,
+          providerId: settings.providerId,
+          modelId: settings.modelId,
+          utilityId: null,
+          rawProviderUsage: {},
+          tokens: {
+            uncachedInput: inputTokens,
+            cachedInput: null,
+            cacheWrite: null,
+            output: outputTokens,
+            reasoning: null
+          },
+          rawTotal: null,
+          totalSemantics: 'unavailable',
+          toolFeeUsd: null,
+          success: generated !== null && failure === null,
+          retryCause: failure,
+          createdAt: Date.now(),
+          costStatus: 'unavailable',
+          costUsd: null,
+          pricingProvenance: null
+        })
+      }
     }
   }
 
@@ -10117,7 +10168,8 @@ export class ChatEngine {
             sessionId,
             projectPath,
             auditorSettings,
-            auditUtilityBudgetContext
+            auditUtilityBudgetContext,
+            await this.modelLacksVision(projectId, auditorSettings)
           )
           utilityRuntimeAvailable = Boolean(utilityInstructions)
         } catch (error) {
@@ -14843,6 +14895,13 @@ function mermaidValidationFailureMessage(failures: MermaidValidationFailure[]): 
     .map((failure) => `diagram ${failure.block}: ${failure.detail}`)
     .join('; ')
   return `The model returned invalid Mermaid syntax (${diagnostics}).`
+}
+
+function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAttemptAccounting[] {
+  const candidate = driver as HarnessDriver & {
+    getTitleAttempts?: () => readonly TitleAttemptAccounting[]
+  }
+  return candidate.getTitleAttempts?.() ?? []
 }
 
 function rejectedMermaidMessage(message: AgentMessage, error: string): AgentMessage {

@@ -45,6 +45,7 @@ const THINKING_LEVELS = new Set<ThreadSettings['thinkingLevel']>([
   'ultra'
 ])
 const INFERENCE_MODES = new Set<InferenceMode>(['normal', 'fast'])
+const TITLE_MODES = new Set<NonNullable<ThreadSettings['titleMode']>>(['model', 'deterministic'])
 const PERMISSION_LEVELS = new Set<ThreadSettings['permissionLevel']>(['auto_review', 'full_access'])
 const PROJECT_SOURCES = new Set<NonNullable<CreateProjectInput['source']>>(['local', 'ssh'])
 const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrackingMode']>>([
@@ -57,6 +58,7 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
   'providerId',
   'modelId',
+  'titleMode',
   'thinkingLevel',
   'inferenceMode',
   'permissionLevel',
@@ -504,6 +506,9 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   }
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')
+  }
+  if (input.titleMode !== undefined) {
+    settings.titleMode = assertEnum(input.titleMode, TITLE_MODES, 'title mode')
   }
   if (input.fileSystemMode !== undefined) {
     settings.fileSystemMode = validateBoolean(input.fileSystemMode, 'File System')
