@@ -256,7 +256,7 @@ export class HarnessUsageRepo {
       `WITH successful_turns AS (
          SELECT DISTINCT parent_turn_id
          FROM usage_events
-         WHERE feature = 'main' AND success = 1
+         WHERE feature IN ('main', 'audit', 'assignment') AND success = 1
            AND (? IS NULL OR created_at >= ?)
            AND (? IS NULL OR created_at < ?)
            AND (? IS NULL OR thread_id = ?)
@@ -271,7 +271,7 @@ export class HarnessUsageRepo {
          COALESCE(SUM(tokens_cached_input), 0) AS cached_input,
          COALESCE(SUM(tokens_output), 0) AS output,
          COALESCE(SUM(tokens_reasoning), 0) AS reasoning,
-         COALESCE(SUM(CASE WHEN feature = 'main' THEN 1 ELSE 0 END), 0) AS main_attempts,
+         COALESCE(SUM(CASE WHEN feature IN ('main', 'audit', 'assignment') THEN 1 ELSE 0 END), 0) AS main_attempts,
          COALESCE(SUM(CASE WHEN feature <> 'main' AND cost_status <> 'unavailable'
                            THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS auxiliary_cost,
          COALESCE(SUM(CASE WHEN cost_status = 'known' THEN cost_usd + COALESCE(tool_fee_usd, 0) ELSE 0 END), 0) AS known_cost,
@@ -280,7 +280,8 @@ export class HarnessUsageRepo {
          COALESCE(SUM(CASE WHEN cost_status <> 'unavailable' THEN 1 ELSE 0 END), 0) AS priced_cost_events,
          COUNT(*) AS total_cost_events,
          COALESCE(SUM(CASE WHEN feature IN ('web', 'computer_use')
-                           THEN COALESCE(tokens_output, 0) ELSE 0 END), 0) AS tool_result_tokens
+                           THEN COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_output, 0)
+                           ELSE 0 END), 0) AS tool_result_tokens
        FROM scoped`,
       range?.startAt ?? null,
       range?.startAt ?? null,

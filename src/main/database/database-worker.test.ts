@@ -9,9 +9,11 @@ import { Database } from './database'
 import { DatabaseWorker, DATABASE_WORKER_DEFAULTS } from './database-worker'
 import { Logger } from '../logger'
 import { ProjectRepo } from './repositories/project-repo'
+import { HarnessUsageRepo } from './repositories/harness-usage-repo'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { HistoryEngine } from '../../lib/engines/history-engine'
-import type { AgentMessage } from '../../lib/types'
+import { mapAntigravityUsage } from '../drivers/antigravity-driver'
+import type { AgentMessage, UsageEvent } from '../../lib/types'
 
 const databaseDir = dirname(fileURLToPath(import.meta.url))
 const workerSource = join(databaseDir, 'database-worker-thread.ts')
@@ -63,6 +65,44 @@ function msg(id: string, createdAt: number, text: string): AgentMessage {
   }
 }
 
+function usageEvent(
+  threadId: string,
+  parentTurnId: string,
+  feature: UsageEvent['feature'],
+  overrides: Partial<UsageEvent> = {}
+): UsageEvent {
+  return {
+    id: `${parentTurnId}-${feature}-${overrides.featureCallId ?? feature}`,
+    threadId,
+    parentTurnId,
+    featureCallId: overrides.featureCallId ?? feature,
+    attempt: 1,
+    feature,
+    harnessId: 'codex',
+    providerId: 'openai',
+    modelId: 'gpt-test',
+    utilityId: null,
+    rawProviderUsage: {},
+    tokens: {
+      uncachedInput: null,
+      cachedInput: null,
+      cacheWrite: null,
+      output: null,
+      reasoning: null
+    },
+    rawTotal: null,
+    totalSemantics: 'unavailable',
+    costStatus: 'unavailable',
+    costUsd: null,
+    pricingProvenance: null,
+    toolFeeUsd: null,
+    success: true,
+    retryCause: null,
+    createdAt: 1,
+    ...overrides
+  }
+}
+
 async function openDatabase(dir: string): Promise<Database> {
   const db = new Database(join(dir, 'app.db'), realWorkerFactory)
   await db.init()
@@ -80,6 +120,97 @@ afterAll(() => {
 })
 
 describe('DatabaseWorker production wrapper', () => {
+  it('counts audit and assignment turns and their reinjected web tokens', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'usage-project',
+      name: 'Usage',
+      path: '/usage',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({
+      id: 'usage-thread',
+      projectId: 'usage-project',
+      providerId: 'openai',
+      title: 'Usage'
+    })
+    const turns: AgentMessage[] = ['audit-turn', 'assignment-turn', 'auxiliary-only'].map(
+      (id, index) => ({
+        id,
+        role: 'user',
+        parts: [{ type: 'text', id: `${id}-p`, messageID: id, text: id }],
+        createdAt: index + 1
+      })
+    )
+    await manager.upsertMessages('usage-project', thread.id, turns, 'usage-session')
+
+    const usage = new HarnessUsageRepo(db)
+    const mapped = mapAntigravityUsage({
+      input_tokens: 100,
+      cache_read_tokens: 70,
+      output_tokens: 20,
+      thinking_tokens: 5,
+      total_tokens: 120
+    }).normalizedUsage
+    expect(mapped).not.toBeNull()
+    usage.recordEvent(
+      usageEvent(thread.id, 'audit-turn', 'audit', {
+        rawProviderUsage: mapped?.rawProviderUsage ?? {},
+        tokens: mapped ?? usageEvent(thread.id, 'audit-turn', 'audit').tokens,
+        rawTotal: mapped?.rawTotal ?? null,
+        totalSemantics: mapped?.totalSemantics ?? 'unavailable'
+      })
+    )
+    usage.recordEvent(usageEvent(thread.id, 'assignment-turn', 'assignment'))
+    usage.recordEvent(
+      usageEvent(thread.id, 'audit-turn', 'web', {
+        featureCallId: 'web-result',
+        utilityId: 'web',
+        tokens: {
+          uncachedInput: 123,
+          cachedInput: null,
+          cacheWrite: null,
+          output: null,
+          reasoning: null
+        }
+      })
+    )
+    usage.recordEvent(usageEvent(thread.id, 'auxiliary-only', 'memory'))
+
+    const kpis = usage.efficiencyKpisForThread(thread.id)
+    expect(kpis.successfulTurns).toBe(2)
+    expect(kpis.mainAttempts).toBe(2)
+    expect(kpis.toolResultTokens).toBe(123)
+    expect(kpis.perSuccessfulTurn.toolResultTokens).toBe(61.5)
+    expect(
+      db.get<{
+        tokens_uncached_input: number
+        tokens_cached_input: number
+        raw_total: number
+        total_semantics: string
+      }>(
+        `SELECT tokens_uncached_input, tokens_cached_input, raw_total, total_semantics
+         FROM usage_events WHERE parent_turn_id = ? AND feature = 'audit'`,
+        'audit-turn'
+      )
+    ).toEqual({
+      tokens_uncached_input: 30,
+      tokens_cached_input: 70,
+      raw_total: 120,
+      total_semantics: 'categories_may_overlap'
+    })
+
+    await db.close()
+  })
+
   it('starts, answers a typed ping, shuts down gracefully, and can restart', async () => {
     const dir = makeDir()
     const worker = new DatabaseWorker(
@@ -318,8 +449,17 @@ describe('DatabaseWorker production wrapper', () => {
       updatedAt: 1
     })
     const manager = new ThreadManager(db)
-    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Redis notes' })
-    await manager.upsertMessages('p1', thread.id, [msg('search-1', 1, 'redis persistence internals')], 'sess')
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'Redis notes'
+    })
+    await manager.upsertMessages(
+      'p1',
+      thread.id,
+      [msg('search-1', 1, 'redis persistence internals')],
+      'sess'
+    )
 
     const found = await manager.searchThreads('redis', { projectId: 'p1' })
     expect(found.some((r) => r.thread.id === thread.id)).toBe(true)
@@ -398,7 +538,11 @@ describe('DatabaseWorker production wrapper', () => {
       updatedAt: 1
     })
     const manager = new ThreadManager(db)
-    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'History' })
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'History'
+    })
     const history = new HistoryEngine(db)
 
     await history.append('p1', thread.id, 'user', 'alpha history note')
@@ -433,7 +577,11 @@ describe('DatabaseWorker production wrapper', () => {
       updatedAt: 1
     })
     const manager = new ThreadManager(db)
-    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Routes' })
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'Routes'
+    })
 
     const messages: AgentMessage[] = []
     for (let i = 0; i < 25; i++) {
@@ -484,7 +632,11 @@ describe('DatabaseWorker production wrapper', () => {
       updatedAt: 1
     })
     const manager = new ThreadManager(db)
-    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Concurrent history' })
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'Concurrent history'
+    })
     const history = new HistoryEngine(db)
 
     const appends = Array.from({ length: 40 }, (_, i) =>
@@ -492,7 +644,9 @@ describe('DatabaseWorker production wrapper', () => {
     )
     await Promise.all(appends)
 
-    const sequences = db.all<{ sequence: number }>('SELECT "sequence" FROM history_entries ORDER BY "sequence" ASC')
+    const sequences = db.all<{ sequence: number }>(
+      'SELECT "sequence" FROM history_entries ORDER BY "sequence" ASC'
+    )
     expect(sequences).toHaveLength(40)
     // Distinct, contiguous, ordered sequences — no two concurrent appends ever
     // allocated the same sequence.
@@ -525,7 +679,11 @@ describe('DatabaseWorker production wrapper', () => {
       updatedAt: 1
     })
     const manager = new ThreadManager(db)
-    const thread = await manager.createThread({ projectId: 'p1', providerId: 'openai', title: 'Large history' })
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'Large history'
+    })
     const history = new HistoryEngine(db)
 
     const total = 1250
