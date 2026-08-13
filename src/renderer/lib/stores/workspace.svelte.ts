@@ -8,7 +8,10 @@ import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 import type { AgentSource } from '$lib/agent-sources'
 import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
+import { notificationPanelState } from './notification-panel.svelte'
+import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
+import { invoke } from '$lib/ipc.svelte'
 
 const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
 const RECENT_THREAD_VISITS_LIMIT = 50
@@ -96,12 +99,6 @@ class WorkspaceState {
   specAgentResponses: SpecAgentResponse[] = $state([])
   pendingThreadStudioOpen: ThreadStudioOpenRequest | null = $state(null)
 
-  // ─── Artifacts (fed by ThreadView, chat mode only) ─────────────────────
-  /** Number of files uploaded to or produced in the active chat. */
-  artifactsCount = $state(0)
-  artifactsOpen = $state(false)
-  toggleArtifacts: (() => void) | null = null
-
   // ─── Navigation (set by App.svelte) ────────────────────────────────────
   navigateToSettings: ((tab?: string) => void) | null = null
   navigateToContent: (() => void) | null = null
@@ -132,6 +129,13 @@ class WorkspaceState {
     this.activeProjectIconUrl = iconUrl ?? null
     contextSidebarState.activateThread(thread.projectId, thread.id)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
+    // Event-driven git refresh: every thread open (creation, switch, restore)
+    // tells the git store the project is in use, so it can refresh status and
+    // the connection-gated PR indicators without any polling.
+    gitState.notifyThreadOpened(project)
+    // The moment a thread is opened its notifications are stale — drop them so
+    // an error/completion that was already seen never lingers in the panel.
+    notificationPanelState.dismissForThread(thread.projectId, thread.id)
   }
 
   openThreadStudio(
@@ -192,6 +196,13 @@ class WorkspaceState {
 
   requestFocusComposer(): void {
     this.focusComposerCount++
+  }
+
+  /** Incremented to focus the composer editor in place (no remount). */
+  focusComposerEditorCount = $state(0)
+
+  requestFocusComposerEditor(): void {
+    this.focusComposerEditorCount++
   }
 
   requestCreateThread(scopeBucketId?: string): void {
@@ -264,6 +275,12 @@ class WorkspaceState {
   pendingAddedProject: Project | null = $state(null)
 
   clearThread(): void {
+    const closingThread = this.selectedThread
+    if (closingThread) {
+      void invoke('agent:killThreadProcesses', closingThread.projectId, closingThread.id).catch(
+        () => undefined
+      )
+    }
     this.selectedThread = null
     this.activeProject = null
     this.activeProjectIconUrl = null
@@ -281,9 +298,6 @@ class WorkspaceState {
     this.specAgentSidebarOpen = false
     this.toggleSpecStudio = null
     this.specAgentResponses = []
-    this.artifactsCount = 0
-    this.artifactsOpen = false
-    this.toggleArtifacts = null
     rendererRecovery.clearSelectedThread()
   }
 }
@@ -302,32 +316,76 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
   return false
 }
 
-export function threadSortKey(t: Thread, draftThreadKeys?: ReadonlySet<string> | null): number {
-  if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  if (t.status === 'created') return 0
-  if (
-    t.status === 'planning' ||
-    t.status === 'executing' ||
-    t.status === 'awaiting_approval' ||
-    t.status === 'failed' ||
-    t.status === 'interrupted'
-  )
-    return 1
-  if (!t.read) return 1
-  return 2
-}
-
 export function threadSort(
   a: Thread,
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
-  const ka = threadSortKey(a, draftThreadKeys)
-  const kb = threadSortKey(b, draftThreadKeys)
+  // Unsent drafts and the empty "New Thread" placeholder stay pinned at the top.
+  const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
+  const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
+  if (aDraft !== bDraft) return aDraft ? -1 : 1
+  if (a.status === 'created' && b.status !== 'created') return -1
+  if (b.status === 'created' && a.status !== 'created') return 1
+  // Order by the newer of the thread's last activity and its manual sort-order
+  // anchor. Any new activity (a send, rename, status change, a working thread,
+  // etc.) always pushes the thread to the top, because its lastActivity (epoch
+  // time, always growing) outranks an older manual anchor. A manual drag sets a
+  // newer timestamp so the thread holds its place — until something moves again,
+  // at which point it can be dragged back above. Threads without an anchor just
+  // fall back to last activity, so the default is pure recency ordering.
+  const aKey = Math.max(a.sortOrder ?? 0, a.lastActivity)
+  const bKey = Math.max(b.sortOrder ?? 0, b.lastActivity)
+  if (aKey !== bKey) return bKey - aKey
+  return a.id.localeCompare(b.id)
+}
+
+/**
+ * Sort for pinned threads. Pin order is authoritative and shared across every
+ * surface: newest-pinned first, with a manual drag-reorder (which rewrites
+ * pinned_at) as the only override. Threads with unsent draft content float to
+ * the top so they are never buried.
+ */
+export function pinnedThreadSort(
+  a: Thread,
+  b: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
+  const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
+  if (aDraft !== bDraft) return aDraft ? -1 : 1
+  const aAt = a.pinnedAt ?? -1
+  const bAt = b.pinnedAt ?? -1
+  if (aAt !== bAt) return bAt - aAt
+  const activityDiff = b.lastActivity - a.lastActivity
+  if (activityDiff !== 0) return activityDiff
+  return a.id.localeCompare(b.id)
+}
+
+/** Sort modes for the Threads view. */
+export type ThreadSortMode = 'default' | 'status' | 'time'
+
+export function threadStatusSortKey(
+  t: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  if (draftThreadKeys?.has(threadVisitKey(t))) return -1
+  // Todo first, then unread, then anything that still needs attention, then done.
+  if (t.status === 'created') return 0
+  if (!t.read) return 1
+  if (t.status !== 'completed') return 2
+  return 3
+}
+
+/** Threads view sort grouped by attention status, most recent activity first within each group. */
+export function threadStatusSort(
+  a: Thread,
+  b: Thread,
+  draftThreadKeys?: ReadonlySet<string> | null
+): number {
+  const ka = threadStatusSortKey(a, draftThreadKeys)
+  const kb = threadStatusSortKey(b, draftThreadKeys)
   if (ka !== kb) return ka - kb
-  const aOrder = a.sortOrder ?? -1
-  const bOrder = b.sortOrder ?? -1
-  if (aOrder !== bOrder) return aOrder - bOrder
   return b.lastActivity - a.lastActivity
 }
 

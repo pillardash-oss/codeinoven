@@ -129,7 +129,12 @@ export class NativeProviderConfigService {
       })
       if (parsedModels.length === 0) return []
       const api = stringValue(provider['api']) ?? 'openai-completions'
-      const npm = api === 'openai-responses' ? '@ai-sdk/openai' : '@ai-sdk/openai-compatible'
+      const npm =
+        api === 'openai-responses'
+          ? '@ai-sdk/openai'
+          : api === 'anthropic-messages'
+            ? '@ai-sdk/anthropic'
+            : '@ai-sdk/openai-compatible'
       return [
         nativeProvider(
           id,
@@ -159,7 +164,12 @@ export class NativeProviderConfigService {
       ...existing,
       name: provider.name,
       baseUrl: provider.baseURL,
-      api: provider.npm === '@ai-sdk/openai' ? 'openai-responses' : 'openai-completions',
+      api:
+        provider.npm === '@ai-sdk/openai'
+          ? 'openai-responses'
+          : provider.npm === '@ai-sdk/anthropic'
+            ? 'anthropic-messages'
+            : 'openai-completions',
       apiKey: removeApiKey ? 'none' : (apiKey ?? existing['apiKey'] ?? 'none'),
       ...(provider.headers ? { headers: provider.headers } : {}),
       models: provider.models.map(serializePiModel)

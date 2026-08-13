@@ -1,0 +1,50 @@
+services:
+  remote-control:
+    build:
+      context: .
+      dockerfile: services/remote-control/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: '1'
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?set GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?set GOOGLE_OAUTH_CLIENT_SECRET}
+      APPLE_OAUTH_CLIENT_ID: ${APPLE_OAUTH_CLIENT_ID:?set APPLE_OAUTH_CLIENT_ID}
+      APPLE_TEAM_ID: ${APPLE_TEAM_ID:?set APPLE_TEAM_ID}
+      APPLE_KEY_ID: ${APPLE_KEY_ID:?set APPLE_KEY_ID}
+      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:?set APPLE_PRIVATE_KEY}
+    expose:
+      - '8877'
+    volumes:
+      - remote-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const response = await fetch('http://127.0.0.1:8877/healthz'); if (!response.ok) process.exit(1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  mobile-pwa:
+    build:
+      context: .
+      dockerfile: services/remote-control/Dockerfile.pwa
+    restart: unless-stopped
+    depends_on:
+      remote-control:
+        condition: service_healthy
+    expose:
+      - '80'
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--spider', 'http://127.0.0.1/']
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  remote-data:

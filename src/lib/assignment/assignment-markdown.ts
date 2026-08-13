@@ -15,6 +15,8 @@ function taskDetails(task: AssignmentTask): string[] {
     task.description,
     '',
     `- Status: ${task.status}`,
+    `- Work pass: ${task.workKind === 'rework' ? `Rework ${task.reworkCycle ?? 1}` : 'Initial'}`,
+    `- Assignment version: ${task.workAssignmentVersion ?? 'Legacy'}`,
     `- Owner: ${task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}`,
     `- Depends on: ${task.dependsOn.join(', ') || 'None'}`,
     `- Model: ${model}`,
@@ -32,10 +34,28 @@ export function exportAssignmentMarkdown(plan: AssignmentPlan): string {
     plan.content.summary,
     '',
     `Status: **${plan.status}**`,
-    '',
-    '```mermaid',
-    'flowchart TD'
+    ''
   ]
+
+  if (plan.auditCycle) {
+    lines.push('## Audit cycle', '', `Status: **${plan.auditCycle.status}**`)
+    if (plan.auditCycle.reworkCycle !== undefined) {
+      lines.push(`Rework cycle: ${plan.auditCycle.reworkCycle}`)
+    }
+    if (plan.auditCycle.startedAt !== undefined) {
+      lines.push(`Started: ${new Date(plan.auditCycle.startedAt).toISOString()}`)
+    }
+    if (plan.auditCycle.failedAt !== undefined) {
+      lines.push(`Failed: ${new Date(plan.auditCycle.failedAt).toISOString()}`)
+    }
+    if (plan.auditCycle.failure) {
+      lines.push('', '### Failure', '')
+      lines.push(...plan.auditCycle.failure.split(/\r?\n/u).map((line) => `> ${line}`))
+    }
+    lines.push('')
+  }
+
+  lines.push('```mermaid', 'flowchart TD')
 
   for (const task of plan.content.tasks) {
     lines.push(`  ${task.id}["${mermaidLabel(task.title)}"]`)

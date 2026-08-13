@@ -1,4 +1,5 @@
-import { clipboard, ipcMain } from 'electron'
+import { clipboard } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type {
   BaseUrlProviderCreateRequest,
   BaseUrlProviderModel,
@@ -209,6 +210,7 @@ function parseCopyClipboardRequest(value: unknown): {
     maxOutputTokens: string
     reasoning: boolean
     defaultThinkingLevel: ThinkingLevel | ''
+    vision: boolean
   }>
   enabled: boolean
 } {
@@ -239,6 +241,7 @@ function parseClipboardModels(value: unknown): Array<{
   maxOutputTokens: string
   reasoning: boolean
   defaultThinkingLevel: ThinkingLevel | ''
+  vision: boolean
 }> {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError('Base URL provider must expose at least one model')
@@ -268,7 +271,8 @@ function parseClipboardModels(value: unknown): Array<{
         32
       ),
       reasoning: raw['reasoning'] === true,
-      defaultThinkingLevel: parseThinkingLevel(raw['defaultThinkingLevel']) ?? ''
+      defaultThinkingLevel: parseThinkingLevel(raw['defaultThinkingLevel']) ?? '',
+      vision: raw['vision'] === false ? false : true
     }
   })
 }
@@ -343,6 +347,12 @@ function parseModels(
     )
     const thinkingPresets = parseThinkingPresets(raw['thinkingPresets'])
     const defaultThinkingLevel = parseThinkingLevel(raw['defaultThinkingLevel'])
+    const vision =
+      raw['vision'] === undefined
+        ? undefined
+        : typeof raw['vision'] === 'boolean'
+          ? raw['vision']
+          : false
     return {
       id,
       name,
@@ -350,7 +360,8 @@ function parseModels(
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       ...(thinkingPresets === undefined ? {} : { thinkingPresets }),
-      ...(defaultThinkingLevel === undefined ? {} : { defaultThinkingLevel })
+      ...(defaultThinkingLevel === undefined ? {} : { defaultThinkingLevel }),
+      ...(vision === undefined ? {} : { vision })
     }
   })
 }

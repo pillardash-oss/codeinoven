@@ -8,10 +8,18 @@ import type {
   UtilityKind,
   PermissionLevel
 } from '../lib/types'
-import type { StorageEngine } from './storage-engine'
+import { UTILITY_KIND_VALUES } from '../lib/types'
+import { StorageEngine } from './storage-engine'
 import { SecretVault } from './secret-vault'
 import { UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
+import {
+  GATEWAY_TOOLS,
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME
+} from '../lib/gateway-tools'
+import { IMAGE_DESCRIPTOR_TOOL_NAME } from '../lib/image-descriptor'
 import {
   StdioMcpClient,
   MCP_TIMEOUT_MS,
@@ -22,8 +30,16 @@ import {
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
-  executeWebTool
+  executeWebTool,
+  webSourceIndex
 } from './web-tool-providers'
+import {
+  IMAGE_DESCRIPTOR_INPUT_SCHEMA,
+  IMAGE_DESCRIPTOR_OUTPUT_SCHEMA,
+  resolveImageEntries,
+  type ImageDescriptorExecutor
+} from './image-descriptor-provider'
+import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../lib/prompt-budget'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const MAX_REQUEST_BYTES = 1_000_000
@@ -52,14 +68,40 @@ export interface UtilityTurnRequest {
   projectId: string
   threadId: string
   projectPath: string
+  /** Main thread session that owns this turn, for scoped user-decision events. */
+  sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** Whether the selected primary model is text-only and needs image description. */
+  modelNeedsImageDescriptor: boolean
+  budgetContext: UtilityTurnBudgetContext
+  attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
+}
+
+export interface UtilityTurnBudgetContext {
+  /** Selected model input allowance after output and tool headroom reserves. */
+  selectedModelInputTokens: number
+  /** Updated by chat-engine as soon as the final turn composition is known. */
+  composedTurnTokens: number
+  /** Persisted user message that owns utility work for this turn. */
+  parentTurnId: string
+}
+
+export interface UtilityResultAttribution {
+  featureCallId: string
+  utilityId: string
+  reinjectedTokens: number
+  truncatedTokens: number
+  success: boolean
+  retryCause: string | null
 }
 
 export interface UtilityTurnGateway {
   id: string
   resolvedUtilities: ResolvedUtility[]
   instructions: string
+  /** Shell-callable fallback for harnesses that cannot safely load a per-turn MCP runtime. */
+  directInstructions: string
   cleanup(): Promise<void>
 }
 
@@ -69,7 +111,11 @@ interface TurnState {
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
+  attributionSequence: number
 }
+
+/** Bridge handler for one gateway route: receives state plus the parsed body. */
+type GatewayBridgeHandler = (state: TurnState, input: Record<string, unknown>) => Promise<unknown>
 
 /**
  * Provides one small, app-owned MCP gateway instead of eagerly injecting every
@@ -78,22 +124,71 @@ interface TurnState {
 export class UtilityOrchestrationService {
   private readonly registry: UtilityRegistryService
   private readonly vault: SecretVault
-  private readonly turns = new Map<string, { server: Server; state: TurnState }>()
-  private cuaActivityListener: ((pid: number) => void) | null = null
+  private readonly turns = new Map<
+    string,
+    { state: TurnState; scriptPath: string; token: string }
+  >()
+  private readonly turnIdsByToken = new Map<string, string>()
+  private gatewayServer: Server | null = null
+  private gatewayBaseUrl: string | null = null
+  private gatewayStarting: Promise<string> | null = null
+  private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
+  private cuaActivityListener: ((pid: number, threadId: string) => void) | null = null
+  private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
     private readonly cuaBridge = new CuaBridgeService(storage)
   ) {
     this.registry = new UtilityRegistryService(storage)
     this.vault = new SecretVault(storage)
+    this.bridgeHandlers = this.buildBridgeHandlers()
+  }
+
+  /** Derive the route → handler map from `GATEWAY_TOOLS`, failing fast if a
+   *  catalog tool has no bridge handler so drift surfaces at startup, not at
+   *  runtime. */
+  private buildBridgeHandlers(): ReadonlyMap<string, GatewayBridgeHandler> {
+    const handlers = new Map<string, GatewayBridgeHandler>()
+    for (const tool of GATEWAY_TOOLS) {
+      const handler = this.bridgeHandlerFor(tool.name)
+      if (!handler) {
+        throw new Error(`Utility gateway tool "${tool.name}" has no bridge handler`)
+      }
+      handlers.set(tool.route, handler)
+    }
+    return handlers
+  }
+
+  private bridgeHandlerFor(name: string): GatewayBridgeHandler | null {
+    switch (name) {
+      case UTILITY_SEARCH_TOOL_NAME:
+        return (state, input) => this.search(state, input)
+      case UTILITY_ACTIVATE_TOOL_NAME:
+        return (state, input) => this.activate(state, input)
+      case UTILITY_INVOKE_TOOL_NAME:
+        return (state, input) => this.invoke(state, input)
+      case IMAGE_DESCRIPTOR_TOOL_NAME:
+        return (state, input) => this.describeImages(state, input)
+      default:
+        return null
+    }
+  }
+
+  /**
+   * Register the executor that runs a vision model for `image_descriptor`
+   * utilities. The chat engine supplies it because it owns driver sessions
+   * and the resolved image-descriptor model selection.
+   */
+  setImageDescriptorExecutor(executor: ImageDescriptorExecutor | null): void {
+    this.imageDescriptorExecutor = executor
   }
 
   /**
    * Register a listener invoked whenever a computer-use utility is called with
-   * a target pid — used by the PiP monitor to latch onto the app an agent is
-   * driving.
+   * a target pid — used by the PiP monitor to latch onto the app a thread's
+   * agent is driving.
    */
-  onCuaActivity(listener: (pid: number) => void): void {
+  onCuaActivity(listener: (pid: number, threadId: string) => void): void {
     this.cuaActivityListener = listener
   }
 
@@ -119,38 +214,35 @@ export class UtilityOrchestrationService {
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
+    const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
+    const gatewayTools = GATEWAY_TOOLS.filter((tool) =>
+      tool.name === IMAGE_DESCRIPTOR_TOOL_NAME ? request.modelNeedsImageDescriptor : hasOnDemand
+    )
+    if (gatewayTools.length === 0) {
+      return {
+        id,
+        resolvedUtilities: always,
+        instructions: '',
+        directInstructions: '',
+        cleanup: async () => undefined
+      }
+    }
     const state: TurnState = {
       id,
       request,
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
-      clients: new Map()
+      clients: new Map(),
+      attributionSequence: 0
     }
+    const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
-    const server = createServer((incoming, response) => {
-      void this.handleRequest(state, token, incoming, response)
-    })
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(0, '127.0.0.1', () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    const address = server.address()
-    if (!address || typeof address === 'string') {
-      server.close()
-      throw new Error('Utility gateway could not bind to loopback')
-    }
-    await this.storage.writeRaw(BRIDGE_SCRIPT_PATH, UTILITY_GATEWAY_SCRIPT)
-    this.turns.set(id, { server, state })
+    const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
+    await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
+    this.turns.set(id, { state, scriptPath, token })
+    this.turnIdsByToken.set(token, id)
 
-    const gateway = gatewayUtility(
-      request,
-      this.storage.resolve(BRIDGE_SCRIPT_PATH),
-      `http://127.0.0.1:${address.port}`,
-      token
-    )
+    const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -164,59 +256,102 @@ export class UtilityOrchestrationService {
     return {
       id,
       resolvedUtilities: [...always, gateway],
-      instructions: `A minimal app gateway is available. Use utility_search only when current tools are insufficient, activate one result with utility_activate, then use utility_invoke. Activated utilities exist only for this turn.`,
+      instructions: hasOnDemand
+        ? `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
+        : '',
+      directInstructions: [
+        'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
+        `Gateway: ${bridgeUrl}`,
+        `Authorization header: Bearer ${token}`,
+        'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}.',
+        'Activate: POST /activate with {"utility_id":"id-from-search"}.',
+        'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
+        'Describe images directly: POST /image_descriptor with {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
+        'Treat these endpoints exactly like utility_search, utility_activate, utility_invoke, and image_descriptor tool calls.'
+      ].join('\n'),
       cleanup
     }
   }
 
   async dispose(): Promise<void> {
     await Promise.all([...this.turns.keys()].map((id) => this.cleanupTurn(id)))
+    const server = this.gatewayServer
+    this.gatewayServer = null
+    this.gatewayBaseUrl = null
+    this.gatewayStarting = null
+    if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
   private async cleanupTurn(id: string): Promise<void> {
     const turn = this.turns.get(id)
     if (!turn) return
     this.turns.delete(id)
+    this.turnIdsByToken.delete(turn.token)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
-    await new Promise<void>((resolve) => turn.server.close(() => resolve()))
+    await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
   }
 
-  private async handleRequest(
-    state: TurnState,
-    token: string,
-    request: IncomingMessage,
-    response: ServerResponse
-  ): Promise<void> {
+  private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (
-        request.method !== 'POST' ||
-        request.headers.authorization !== `Bearer ${token}` ||
-        !request.url
-      ) {
+      const authorization = request.headers.authorization
+      const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
+      const turnId = this.turnIdsByToken.get(token)
+      const state = turnId ? this.turns.get(turnId)?.state : undefined
+      if (request.method !== 'POST' || !state || !request.url) {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
       const input = await readJsonBody(request)
-      const result =
-        request.url === '/search'
-          ? await this.search(state, input)
-          : request.url === '/activate'
-            ? await this.activate(state, input)
-            : request.url === '/invoke'
-              ? await this.invoke(state, input)
-              : null
-      if (result === null) {
+      const handler = this.bridgeHandlers.get(request.url)
+      if (!handler) {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
+      const result = await handler(state, input)
       this.respond(response, 200, result)
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
       })
+    }
+  }
+
+  /**
+   * All utility turns share one loopback listener. Per-turn bearer capabilities
+   * select isolated state; opening another port is never part of starting a turn.
+   */
+  private async ensureGatewayServer(): Promise<string> {
+    if (this.gatewayBaseUrl) return this.gatewayBaseUrl
+    if (this.gatewayStarting) return this.gatewayStarting
+    const starting = new Promise<string>((resolve, reject) => {
+      const server = createServer((request, response) => {
+        void this.handleRequest(request, response)
+      })
+      const fail = (error: Error): void => {
+        server.close()
+        reject(error)
+      }
+      server.once('error', fail)
+      server.listen(0, '127.0.0.1', () => {
+        server.off('error', fail)
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          fail(new Error('Utility gateway could not bind to loopback'))
+          return
+        }
+        this.gatewayServer = server
+        this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
+        resolve(this.gatewayBaseUrl)
+      })
+    })
+    this.gatewayStarting = starting
+    try {
+      return await starting
+    } finally {
+      if (this.gatewayStarting === starting) this.gatewayStarting = null
     }
   }
 
@@ -277,6 +412,12 @@ export class UtilityOrchestrationService {
         inputSchema: WEB_TOOL_INPUT_SCHEMAS[resolved.utility.kind],
         outputSchema: WEB_TOOL_OUTPUT_SCHEMAS[resolved.utility.kind]
       }
+    } else if (resolved.utility.kind === 'image_descriptor') {
+      capability = {
+        operations: ['describe'],
+        inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
+        outputSchema: IMAGE_DESCRIPTOR_OUTPUT_SCHEMA
+      }
     } else {
       capability = {
         note: 'Provider activation changes launch configuration and cannot safely mutate a running turn.'
@@ -310,15 +451,74 @@ export class UtilityOrchestrationService {
       result = await client.callTool(operation, operationInput)
       if (this.isComputerUseUtility(resolved) && Number.isInteger(operationInput['pid'])) {
         const pid = Number(operationInput['pid'])
-        if (pid > 0) this.cuaActivityListener?.(pid)
+        if (pid > 0) this.cuaActivityListener?.(pid, state.request.threadId)
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
-      result = await this.invokeWeb(resolved.utility, operationInput)
+      result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
+    } else if (resolved.utility.kind === 'image_descriptor') {
+      if (operation !== 'describe') {
+        throw new Error(`Image descriptor does not expose the operation "${operation}"`)
+      }
+      const executor = this.imageDescriptorExecutor
+      if (!executor) {
+        throw new Error('The image descriptor vision model is not configured')
+      }
+      result = {
+        results: await executor({
+          images: resolveImageEntries(operationInput),
+          projectId: state.request.projectId,
+          threadId: state.request.threadId,
+          projectPath: state.request.projectPath,
+          sessionId: state.request.sessionId,
+          pinnedSelection: this.pinnedImageDescriptorSelection(state)
+        })
+      }
     } else {
       throw new Error(`Utility kind "${resolved.utility.kind}" does not expose runtime operations`)
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
     return result
+  }
+
+  /**
+   * Direct `image_descriptor` tool handler. Unlike the on-demand utility path
+   * this is always exposed by the gateway, so text-only models can describe
+   * images without any registry configuration.
+   */
+  private async describeImages(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const executor = this.imageDescriptorExecutor
+    if (!executor) {
+      throw new Error('The image descriptor vision model is not configured')
+    }
+    const results = await executor({
+      images: resolveImageEntries(input),
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      pinnedSelection: this.pinnedImageDescriptorSelection(state)
+    })
+    await this.audit(state, 'utility.invoked', {
+      utilityId: 'codeinoven:image-descriptor',
+      operation: 'describe'
+    })
+    return { results }
+  }
+
+  /** Vision model pinned by an eligible, configured image-descriptor utility. */
+  private pinnedImageDescriptorSelection(
+    state: TurnState
+  ): { harnessId: string; providerId: string; modelId: string } | undefined {
+    for (const { utility } of state.eligible.values()) {
+      if (utility.kind !== 'image_descriptor') continue
+      if (!utility.config.providerId || !utility.config.modelId) continue
+      return {
+        harnessId: utility.config.harnessId,
+        providerId: utility.config.providerId,
+        modelId: utility.config.modelId
+      }
+    }
+    return undefined
   }
 
   private isComputerUseUtility(resolved: ResolvedUtility): boolean {
@@ -328,13 +528,58 @@ export class UtilityOrchestrationService {
   }
 
   private async invokeWeb(
+    state: TurnState,
     utility: UtilityDefinitionFor<'web_search'> | UtilityDefinitionFor<'web_fetch'>,
+    operation: string,
     input: Record<string, unknown>
   ): Promise<unknown> {
-    const environment = await this.credentialEnvironment(utility)
-    const provider = utility.config.provider ?? 'custom'
-    const text = await executeWebTool(utility.kind, provider, input, utility.config, environment)
-    return { content: [{ type: 'text', text }] }
+    state.attributionSequence += 1
+    const featureCallId = `${state.id}:${utility.id}:${operation}:${state.attributionSequence}`
+    try {
+      const environment = await this.credentialEnvironment(utility)
+      const provider = utility.config.provider ?? 'custom'
+      const text = await executeWebTool(utility.kind, provider, input, utility.config, environment)
+      let budgeted = budgetToolResult({
+        content: text,
+        turnTokens: state.request.budgetContext.composedTurnTokens,
+        contextWindow:
+          state.request.budgetContext.selectedModelInputTokens +
+          DEFAULT_PROMPT_BUDGET.outputReserveTokens +
+          DEFAULT_PROMPT_BUDGET.toolHeadroomTokens
+      })
+      if (budgeted.truncated) {
+        const sourceIndex = webSourceIndex(text)
+        if (sourceIndex) {
+          budgeted = budgetToolResult({
+            content: `${sourceIndex}\n\n${text}`,
+            turnTokens: state.request.budgetContext.composedTurnTokens,
+            contextWindow:
+              state.request.budgetContext.selectedModelInputTokens +
+              DEFAULT_PROMPT_BUDGET.outputReserveTokens +
+              DEFAULT_PROMPT_BUDGET.toolHeadroomTokens
+          })
+        }
+      }
+      state.request.attributeReinjectedResult({
+        featureCallId,
+        utilityId: utility.id,
+        reinjectedTokens: budgeted.reinjectedTokens,
+        truncatedTokens: budgeted.truncatedTokens,
+        success: true,
+        retryCause: null
+      })
+      return { content: [{ type: 'text', text: budgeted.content }] }
+    } catch (error) {
+      state.request.attributeReinjectedResult({
+        featureCallId,
+        utilityId: utility.id,
+        reinjectedTokens: 0,
+        truncatedTokens: 0,
+        success: false,
+        retryCause: error instanceof Error ? error.message : String(error)
+      })
+      throw error
+    }
   }
 
   private async mcpClient(
@@ -588,6 +833,11 @@ function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): str
     )
   }
   if (kind === 'provider') aliases.push('provider model api inference')
+  if (kind === 'image_descriptor') {
+    aliases.push(
+      'image descriptor describe vision picture photo screenshot see look visual ocr caption alt text'
+    )
+  }
   return aliases.join(' ')
 }
 
@@ -665,14 +915,7 @@ function optionalNumber(value: unknown): number | undefined {
 
 function optionalKinds(value: unknown): Set<UtilityKind> | null {
   if (value === undefined) return null
-  const allowed = new Set<UtilityKind>([
-    'mcp',
-    'skill',
-    'web_search',
-    'web_fetch',
-    'computer_use',
-    'provider'
-  ])
+  const allowed = new Set<UtilityKind>(UTILITY_KIND_VALUES)
   if (
     !Array.isArray(value) ||
     value.some((kind) => typeof kind !== 'string' || !allowed.has(kind as UtilityKind))
@@ -691,49 +934,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-const UTILITY_GATEWAY_SCRIPT = String.raw`import readline from 'node:readline'
+/** Build the stdio MCP gateway script. The tool list and the tools/call route
+ *  map are generated from `GATEWAY_TOOLS`, so the agent-facing contract always
+ *  matches the catalog — no hand-synchronized copy to drift. */
+function buildUtilityGatewayScript(gatewayTools = GATEWAY_TOOLS): string {
+  const tools = gatewayTools.map(({ name, description, inputSchema }) => ({
+    name,
+    description,
+    inputSchema
+  }))
+  const routes: Record<string, string> = {}
+  for (const tool of gatewayTools) routes[tool.name] = tool.route
+  return String.raw`import readline from 'node:readline'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
 const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
-const tools = [
-  {
-    name: 'utility_search',
-    description: 'Search installed utilities only when current tools are insufficient.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string' },
-        kinds: { type: 'array', items: { enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider'] } },
-        limit: { type: 'number', minimum: 1, maximum: 20 }
-      },
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'utility_activate',
-    description: 'Activate one search result for this turn and inspect its available operations.',
-    inputSchema: {
-      type: 'object',
-      properties: { utility_id: { type: 'string' } },
-      required: ['utility_id'],
-      additionalProperties: false
-    }
-  },
-  {
-    name: 'utility_invoke',
-    description: 'Invoke an operation exposed by a utility activated during this turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string' },
-        operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
-      },
-      required: ['utility_id', 'operation'],
-      additionalProperties: false
-    }
-  }
-]
+const tools = ${JSON.stringify(tools)}
+const routes = ${JSON.stringify(routes)}
 
 async function bridge(path, args) {
   if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
@@ -772,7 +989,7 @@ for await (const line of lines) {
     } else if (request.method === 'tools/call') {
       const name = request.params?.name
       const args = request.params?.arguments || {}
-      const path = name === 'utility_search' ? '/search' : name === 'utility_activate' ? '/activate' : name === 'utility_invoke' ? '/invoke' : ''
+      const path = routes[name]
       if (!path) throw new Error('Unknown utility gateway tool')
       const result = await bridge(path, args)
       const content = Array.isArray(result?.content)
@@ -789,3 +1006,4 @@ for await (const line of lines) {
   }
 }
 `
+}

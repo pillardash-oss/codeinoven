@@ -3,6 +3,7 @@ import { stat } from 'fs/promises'
 import { createHash, randomInt } from 'crypto'
 import type { Database } from '../../main/database/database'
 import { AssignmentRepo } from '../../main/database/repositories/assignment-repo'
+import type { AssignmentApiCapabilityRow } from '../../main/database/repositories/assignment-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import type { StorageEngine } from '../../main/storage-engine'
 import type {
@@ -222,6 +223,7 @@ export class AssignmentEngine {
   /** Atomically claim the current durable coordinator state for one automatic prompt. */
   async claimCoordinatorSnapshot(assignmentId: string): Promise<string | null> {
     const plan = this.requireById(assignmentId)
+    if (plan.status === 'stopped') return null
     const snapshotJson = await this.coordinatorSnapshotJson(plan)
     const snapshotHash = createHash('sha256').update(snapshotJson).digest('hex')
     return this.repo.claimCoordinatorSnapshot(plan.id, snapshotHash, snapshotJson)
@@ -236,6 +238,45 @@ export class AssignmentEngine {
   /** Mark the state reached by a completed coordinator turn as already observed. */
   async rememberCoordinatorSnapshot(assignmentId: string): Promise<void> {
     await this.claimCoordinatorSnapshot(assignmentId)
+  }
+
+  /** Durable loopback port for the Assignment API (survives app restarts). */
+  saveApiPort(port: number): void {
+    this.repo.saveApiPort(port)
+  }
+
+  loadApiPort(): number | null {
+    return this.repo.loadApiPort()
+  }
+
+  /** Persist a capability token so in-flight harness sessions survive restarts. */
+  saveApiCapability(token: string, capability: AssignmentApiCapabilityRow): void {
+    this.repo.saveApiCapability(token, capability)
+  }
+
+  /** Restore every persisted capability token after a restart. */
+  loadApiCapabilities(): Map<string, AssignmentApiCapabilityRow> {
+    return this.repo.loadApiCapabilities()
+  }
+
+  /** Drop every capability token when an Assignment is explicitly stopped. */
+  removeApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.repo.removeApiCapabilitiesForAssignment(assignmentId)
+  }
+
+  /** Revoke completed workers while the coordinator continues into independent audit. */
+  removeWorkerApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.repo.removeWorkerApiCapabilitiesForAssignment(assignmentId)
+  }
+
+  /** Revoke the durable capability of a worker that is no longer assigned. */
+  removeApiCapabilitiesForThread(assignmentId: string, threadId: string): void {
+    this.repo.removeApiCapabilitiesForThread(assignmentId, threadId)
+  }
+
+  /** Revoke one stale durable capability discovered during request validation. */
+  removeApiCapability(token: string): void {
+    this.repo.removeApiCapability(token)
   }
 
   async markdownPath(projectId: string, coordinatorThreadId: string): Promise<string> {
@@ -339,10 +380,42 @@ export class AssignmentEngine {
 
     const now = this.now()
     const scopeBucketId = `assignment-${active.id}`
-    const tasks = active.content.tasks.map((task) => ({
-      ...task,
-      status: task.dependsOn.length === 0 ? ('ready' as const) : ('blocked' as const)
-    }))
+    const reworkActivation = active.auditCycle?.status === 'awaiting_rework_approval'
+    const scopeRepairActivation = reworkActivation && active.auditCycle?.scopeRepair === true
+    const completedTaskIds = new Set(
+      active.content.tasks
+        .filter((task) => scopeRepairActivation && task.status === 'completed')
+        .map((task) => task.id)
+    )
+    const tasks = active.content.tasks.map((task) => {
+      if (scopeRepairActivation && task.status === 'completed') return task
+      const {
+        statusBeforeStop: _statusBeforeStop,
+        workerName: _workerName,
+        threadId: _threadId,
+        report: _report,
+        review: _review,
+        startedAt: _startedAt,
+        completedAt: _completedAt,
+        ...taskDefinition
+      } = task
+      return {
+        ...taskDefinition,
+        workKind: task.workKind ?? (reworkActivation ? ('rework' as const) : ('initial' as const)),
+        workAssignmentVersion: reworkActivation
+          ? active.version
+          : (task.workAssignmentVersion ?? active.version),
+        ...(reworkActivation
+          ? { reworkCycle: task.reworkCycle ?? active.auditCycle?.reworkCycle ?? 1 }
+          : {}),
+        status:
+          task.dependsOn.length === 0 ||
+          (scopeRepairActivation &&
+            task.dependsOn.every((dependency) => completedTaskIds.has(dependency)))
+            ? ('ready' as const)
+            : ('blocked' as const)
+      }
+    })
     const approved: AssignmentPlan = {
       ...active,
       status: 'approved',
@@ -393,6 +466,109 @@ export class AssignmentEngine {
       })
     })
     return approved
+  }
+
+  /** Permanently stop orchestration without deleting its reviewable history. */
+  async stop(
+    projectId: string,
+    coordinatorThreadId: string,
+    loopModeBeforeStop = false
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status === 'stopped') return active
+    if (active.status === 'draft') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'A draft Assignment has not started and cannot be stopped'
+      )
+    }
+    if (active.status === 'completed' && active.auditCycle?.status === 'completed') {
+      throw new AssignmentEngineError('invalid_transition', 'The Assignment is already complete')
+    }
+
+    const now = this.now()
+    const stopped: AssignmentPlan = {
+      ...active,
+      status: 'stopped',
+      statusBeforeStop: active.status,
+      loopModeBeforeStop,
+      content: {
+        ...active.content,
+        tasks: active.content.tasks.map((task) => {
+          if (task.status === 'completed') return task
+          const statusBeforeStop =
+            task.status === 'stopped' ? (task.statusBeforeStop ?? 'attention') : task.status
+          return { ...task, status: 'stopped' as const, statusBeforeStop }
+        })
+      },
+      ...(active.auditCycle && active.auditCycle.status !== 'completed'
+        ? {
+            auditCycle: {
+              ...active.auditCycle,
+              status: 'stopped' as const,
+              statusBeforeStop:
+                active.auditCycle.status === 'stopped'
+                  ? (active.auditCycle.statusBeforeStop ?? 'available')
+                  : active.auditCycle.status
+            }
+          }
+        : {}),
+      completedAt: undefined,
+      stoppedAt: now,
+      updatedAt: now
+    }
+    this.repo.save(stopped, active.version)
+    this.removeApiCapabilitiesForAssignment(stopped.id)
+    await this.writeMarkdown(stopped)
+    return stopped
+  }
+
+  /** Restore a stopped Assignment to a safe, explicitly user-requested continuation state. */
+  async resume(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status !== 'stopped') {
+      throw new AssignmentEngineError('invalid_transition', 'The Assignment is not stopped')
+    }
+
+    const tasks = active.content.tasks.map((task): AssignmentTask => {
+      if (task.status !== 'stopped') return task
+      const restoredStatus = task.statusBeforeStop ?? 'attention'
+      const { statusBeforeStop: _statusBeforeStop, ...rest } = task
+      return {
+        ...rest,
+        status: restoredStatus === 'running' ? 'attention' : restoredStatus
+      }
+    })
+    const previousStatus =
+      active.statusBeforeStop ??
+      (tasks.every((task) => task.status === 'completed') ? 'completed' : 'attention')
+    const resumedStatus =
+      previousStatus === 'failed' || tasks.some((task) => task.status === 'attention')
+        ? 'attention'
+        : previousStatus
+    const auditCycle = active.auditCycle
+      ? (() => {
+          if (active.auditCycle.status !== 'stopped') return active.auditCycle
+          const restoredStatus = active.auditCycle.statusBeforeStop ?? 'available'
+          const { statusBeforeStop: _statusBeforeStop, ...rest } = active.auditCycle
+          return {
+            ...rest,
+            status: restoredStatus === 'running' ? ('available' as const) : restoredStatus
+          }
+        })()
+      : undefined
+    const resumed: AssignmentPlan = {
+      ...active,
+      status: resumedStatus,
+      statusBeforeStop: undefined,
+      content: { ...active.content, tasks },
+      auditCycle,
+      stoppedAt: undefined,
+      updatedAt: this.now()
+    }
+    this.repo.save(resumed, active.version)
+    await this.writeMarkdown(resumed)
+    return resumed
   }
 
   async approveWithSpec(
@@ -515,7 +691,7 @@ export class AssignmentEngine {
         'An Assignment audit can start only after implementation completes'
       )
     }
-    if (active.auditCycle && !['available'].includes(active.auditCycle.status)) {
+    if (active.auditCycle && !['available', 'failed'].includes(active.auditCycle.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         `Assignment audit is ${active.auditCycle.status}`
@@ -525,7 +701,30 @@ export class AssignmentEngine {
     return this.saveAuditCycle(active, {
       status: 'running',
       availableAt: active.auditCycle?.availableAt ?? now,
-      startedAt: now
+      startedAt: now,
+      failedAt: undefined,
+      failure: undefined
+    })
+  }
+
+  async failAuditCycle(
+    projectId: string,
+    coordinatorThreadId: string,
+    failure: string
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (active.status !== 'completed' || active.auditCycle?.status !== 'running') {
+      throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not running')
+    }
+    const normalizedFailure = failure.trim()
+    if (!normalizedFailure) {
+      throw new AssignmentEngineError('validation_failed', 'Assignment audit failure is required')
+    }
+    return this.saveAuditCycle(active, {
+      ...active.auditCycle,
+      status: 'failed',
+      failedAt: this.now(),
+      failure: normalizedFailure.slice(0, 20_000)
     })
   }
 
@@ -560,15 +759,19 @@ export class AssignmentEngine {
     if (active.status !== 'completed' || !active.auditCycle) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit report is not ready')
     }
-    if (active.auditCycle.status === 'planning_rework') return active
-    if (active.auditCycle.status !== 'report_ready') {
+    if (active.auditCycle.status === 'reworking') return active
+    if (!['report_ready', 'planning_rework'].includes(active.auditCycle.status)) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit report is not ready')
     }
     const now = this.now()
     return this.saveAuditCycle(active, {
       ...active.auditCycle,
-      status: 'planning_rework',
-      reworkStartedAt: now
+      status: 'reworking',
+      reworkStartedAt: active.auditCycle.reworkStartedAt ?? now,
+      reworkCycle:
+        active.auditCycle.status === 'planning_rework'
+          ? (active.auditCycle.reworkCycle ?? 1)
+          : (active.auditCycle.reworkCycle ?? 0) + 1
     })
   }
 
@@ -582,10 +785,24 @@ export class AssignmentEngine {
     if (active.status === 'draft' && active.auditCycle?.status === 'awaiting_rework_approval') {
       return active
     }
-    if (active.status !== 'completed' || active.auditCycle?.status !== 'planning_rework') {
+    const auditRework =
+      active.status === 'completed' && active.auditCycle?.status === 'planning_rework'
+    const scopeRepair =
+      ['approved', 'running', 'attention'].includes(active.status) &&
+      active.content.tasks.some((task) => task.status === 'rework')
+    if (!auditRework && !scopeRepair) {
       throw new AssignmentEngineError(
         'invalid_transition',
-        'The Sr. Engineer can propose rework only after audit feedback is submitted'
+        'The Sr. Engineer can propose rework only for an active rework task or after audit feedback is submitted'
+      )
+    }
+    if (
+      scopeRepair &&
+      active.content.tasks.some((task) => ['running', 'reported', 'auditing'].includes(task.status))
+    ) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Stop or review active tasks before proposing a scope repair'
       )
     }
     const validation = validateAssignment(content)
@@ -597,14 +814,73 @@ export class AssignmentEngine {
     }
     const now = this.now()
     const nextVersion = active.version + 1
+    const reworkCycle = auditRework
+      ? (active.auditCycle?.reworkCycle ?? 1)
+      : (active.auditCycle?.reworkCycle ?? 0) + 1
+    const currentTasks = new Map(active.content.tasks.map((task) => [task.id, task]))
+    if (scopeRepair) {
+      const proposedTaskIds = new Set(content.tasks.map((task) => task.id))
+      const missingTask = active.content.tasks.find((task) => !proposedTaskIds.has(task.id))
+      if (missingTask) {
+        throw new AssignmentEngineError(
+          'validation_failed',
+          `Scope repair must preserve existing task ${missingTask.id}`
+        )
+      }
+    }
+    const amendedContent: AssignmentPlanContent = {
+      ...structuredClone(content),
+      tasks: content.tasks.map((task) => {
+        const currentTask = currentTasks.get(task.id)
+        if (!scopeRepair || !currentTask) return structuredClone(task)
+        if (currentTask.status === 'completed') return structuredClone(currentTask)
+        return {
+          ...structuredClone(task),
+          status: currentTask.status,
+          ...(currentTask.workKind ? { workKind: currentTask.workKind } : {}),
+          ...(currentTask.reworkCycle ? { reworkCycle: currentTask.reworkCycle } : {}),
+          ...(currentTask.workAssignmentVersion
+            ? { workAssignmentVersion: currentTask.workAssignmentVersion }
+            : {}),
+          ...(currentTask.workerName ? { workerName: currentTask.workerName } : {}),
+          ...(currentTask.threadId ? { threadId: currentTask.threadId } : {}),
+          ...(currentTask.report ? { report: structuredClone(currentTask.report) } : {}),
+          ...(currentTask.review ? { review: structuredClone(currentTask.review) } : {}),
+          ...(currentTask.startedAt ? { startedAt: currentTask.startedAt } : {}),
+          ...(currentTask.completedAt ? { completedAt: currentTask.completedAt } : {})
+        }
+      })
+    }
+    const amendedValidation = validateAssignment(amendedContent)
+    if (!amendedValidation.valid) {
+      throw new AssignmentEngineError(
+        'validation_failed',
+        amendedValidation.issues.map((issue) => issue.message).join('; ')
+      )
+    }
     const draft: AssignmentPlan = {
       ...active,
       version: nextVersion,
       status: 'draft',
-      content: structuredClone(content),
+      content: {
+        ...amendedContent,
+        tasks: amendedContent.tasks.map((task) =>
+          scopeRepair && task.status === 'completed'
+            ? structuredClone(task)
+            : {
+                ...structuredClone(task),
+                workKind: 'rework' as const,
+                reworkCycle,
+                workAssignmentVersion: nextVersion
+              }
+        )
+      },
       auditCycle: {
-        ...active.auditCycle,
+        ...(active.auditCycle ?? {}),
         status: 'awaiting_rework_approval',
+        scopeRepair,
+        reworkStartedAt: active.auditCycle?.reworkStartedAt ?? now,
+        reworkCycle,
         reworkAssignmentVersion: nextVersion
       },
       provenance: {
@@ -657,6 +933,8 @@ export class AssignmentEngine {
       status: 'available',
       availableAt: this.now(),
       startedAt: undefined,
+      failedAt: undefined,
+      failure: undefined,
       reportedAt: undefined,
       completedAt: undefined
     })
@@ -667,16 +945,22 @@ export class AssignmentEngine {
     coordinatorThreadId: string,
     taskId: string
   ): Promise<AssignmentPlan> {
-    const active = this.requireActive(projectId, coordinatorThreadId)
+    const active = await this.requireAuditRework(this.requireActive(projectId, coordinatorThreadId))
     const task = this.requireTask(active, taskId)
-    this.requireAuditRework(active)
     if (task.status !== 'completed') {
       throw new AssignmentEngineError(
         'invalid_transition',
         `Task ${taskId} is ${task.status}, not completed`
       )
     }
-    const updatedTask: AssignmentTask = { ...task, status: 'rework', completedAt: undefined }
+    const updatedTask: AssignmentTask = {
+      ...task,
+      workKind: 'rework',
+      reworkCycle: active.auditCycle?.reworkCycle ?? 1,
+      workAssignmentVersion: active.version,
+      status: 'rework',
+      completedAt: undefined
+    }
     const updated: AssignmentPlan = {
       ...active,
       status: 'running',
@@ -699,10 +983,12 @@ export class AssignmentEngine {
     coordinatorThreadId: string,
     input: AssignmentFollowUpTaskInput
   ): Promise<AssignmentPlan> {
-    const active = this.requireActive(projectId, coordinatorThreadId)
-    this.requireAuditRework(active)
+    const active = await this.requireAuditRework(this.requireActive(projectId, coordinatorThreadId))
     const task: AssignmentTask = {
       ...structuredClone(input),
+      workKind: 'rework',
+      reworkCycle: active.auditCycle?.reworkCycle ?? 1,
+      workAssignmentVersion: active.version,
       status: 'planned'
     }
     const validation = validateAssignment({
@@ -745,10 +1031,11 @@ export class AssignmentEngine {
 
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
-    if (!['ready', 'rework'].includes(task.status)) {
+    const retryingStoppedTask = task.status === 'attention' && task.report === undefined
+    if (!['ready', 'rework', 'failed'].includes(task.status) && !retryingStoppedTask) {
       throw new AssignmentEngineError(
         'invalid_transition',
-        `Task ${taskId} is ${task.status}, not ready for assignment`
+        `Task ${taskId} is ${task.status}, not ready or retryable for assignment`
       )
     }
 
@@ -760,18 +1047,41 @@ export class AssignmentEngine {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
 
+    // A failed task (worker crash / rejected deliverable) is re-dispatchable:
+    // clear its stale report, review, worker name, and thread so a fresh worker
+    // thread is created for the retry — never reuse the crashed worker's thread.
+    // The abandoned thread is unlinked from the Assignment so a late harness
+    // session error on it cannot report as this task's current worker.
+    const replacingWorker = task.status === 'failed' || retryingStoppedTask
+    const staleThreadId = replacingWorker ? task.threadId : undefined
+    const dispatchBase = replacingWorker
+      ? {
+          ...task,
+          report: undefined,
+          review: undefined,
+          workerName: undefined,
+          threadId: undefined
+        }
+      : task.status === 'rework'
+        ? { ...task, report: undefined, review: undefined }
+        : task
+    if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
+      this.removeApiCapabilitiesForThread(active.id, staleThreadId)
+      await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
+    }
+
     let assignedTask: AssignmentTask
     let thread: Thread | null = coordinator
-    if (task.owner === 'senior') {
+    if (dispatchBase.owner === 'senior') {
       assignedTask = {
-        ...task,
+        ...dispatchBase,
         threadId: active.coordinatorThreadId,
         status: 'running',
         startedAt: this.now()
       }
-    } else if (task.threadId) {
-      assignedTask = { ...task, status: 'running', startedAt: this.now() }
-      thread = await this.threads.getThread(active.projectId, task.threadId)
+    } else if (dispatchBase.threadId) {
+      assignedTask = { ...dispatchBase, status: 'running', startedAt: this.now() }
+      thread = await this.threads.getThread(active.projectId, dispatchBase.threadId)
     } else {
       const workerName = await this.workerName(active)
       const settings = await this.workerSettings(active, task, coordinator.settings)
@@ -790,7 +1100,7 @@ export class AssignmentEngine {
         coordinatorThreadId: active.coordinatorThreadId
       })
       assignedTask = {
-        ...task,
+        ...dispatchBase,
         workerName,
         threadId: thread.id,
         status: 'running',
@@ -879,7 +1189,7 @@ export class AssignmentEngine {
 
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
-    if (task.owner !== 'worker' || task.threadId !== workerThreadId) {
+    if (task.threadId !== workerThreadId) {
       throw new AssignmentEngineError('unauthorized', 'Worker thread does not own this task')
     }
     if (task.status !== 'running') {
@@ -889,11 +1199,13 @@ export class AssignmentEngine {
       )
     }
     const worker = await this.threads.getThread(active.projectId, workerThreadId)
-    if (
-      worker?.assignmentId !== assignmentId ||
-      worker.assignmentTaskId !== taskId ||
-      worker.coordinatorThreadId !== active.coordinatorThreadId
-    ) {
+    const validOwner =
+      task.owner === 'senior'
+        ? workerThreadId === active.coordinatorThreadId && worker?.assignmentRole === 'coordinator'
+        : worker?.assignmentId === assignmentId &&
+          worker.assignmentTaskId === taskId &&
+          worker.coordinatorThreadId === active.coordinatorThreadId
+    if (!validOwner) {
       throw new AssignmentEngineError('unauthorized', 'Task thread metadata does not match')
     }
     if (!content.trim() || content.length > 750_000) {
@@ -946,14 +1258,23 @@ export class AssignmentEngine {
       throw new AssignmentEngineError('unauthorized', 'Only the Sr. Engineer can review tasks')
     }
     const task = this.requireTask(active, taskId)
-    if (!['reported', 'attention'].includes(task.status)) {
+    if (!['reported', 'attention', 'failed'].includes(task.status)) {
       throw new AssignmentEngineError('invalid_transition', `Task ${taskId} has not reported`)
     }
     if (!this.repo.claimOperation(operationId, assignmentId, 'review_task')) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
+    const activeReworkCycle =
+      active.auditCycle?.status === 'reworking' ? (active.auditCycle.reworkCycle ?? 1) : undefined
     const reviewedTask: AssignmentTask = {
       ...task,
+      ...(activeReworkCycle
+        ? {
+            workKind: 'rework' as const,
+            reworkCycle: activeReworkCycle,
+            workAssignmentVersion: active.version
+          }
+        : {}),
       review,
       status:
         review.decision === 'pass'
@@ -986,6 +1307,7 @@ export class AssignmentEngine {
         ? {
             auditCycle: {
               ...active.auditCycle,
+              ...(activeReworkCycle ? { reworkCycle: activeReworkCycle } : {}),
               status: 'available',
               availableAt: now,
               startedAt: undefined,
@@ -999,6 +1321,9 @@ export class AssignmentEngine {
     }
     this.repo.save(updated, active.version)
     await this.writeMarkdown(updated)
+    if (allComplete) {
+      this.removeWorkerApiCapabilitiesForAssignment(active.id)
+    }
     const result: AssignmentToolResult = {
       assignment: updated,
       task: reviewedTask,
@@ -1042,24 +1367,36 @@ export class AssignmentEngine {
       (candidate) => candidate.owner === 'worker' && candidate.threadId === workerThreadId
     )
     if (!task) throw new AssignmentEngineError('not_found', 'Assignment worker task not found')
-    if (task.status === 'running' && active.status === 'running') return active
+    if (
+      task.status === 'running' &&
+      active.status === 'running' &&
+      task.report === undefined &&
+      task.review === undefined
+    ) {
+      return active
+    }
+    const tasks = active.content.tasks.map((candidate) =>
+      candidate.id === task.id
+        ? {
+            ...candidate,
+            status: 'running' as const,
+            report: undefined,
+            review: undefined,
+            startedAt: this.now(),
+            completedAt: undefined
+          }
+        : candidate
+    )
+    const status = tasks.some((candidate) =>
+      ['attention', 'failed', 'stopped'].includes(candidate.status)
+    )
+      ? 'attention'
+      : 'running'
     const updated: AssignmentPlan = {
       ...active,
-      status: 'running',
+      status,
       completedAt: undefined,
-      content: {
-        ...active.content,
-        tasks: active.content.tasks.map((candidate) =>
-          candidate.id === task.id
-            ? {
-                ...candidate,
-                status: 'running',
-                startedAt: this.now(),
-                completedAt: undefined
-              }
-            : candidate
-        )
-      },
+      content: { ...active.content, tasks },
       updatedAt: this.now()
     }
     this.repo.save(updated, active.version)
@@ -1068,12 +1405,14 @@ export class AssignmentEngine {
   }
 
   workerPrompt(plan: AssignmentPlan, task: AssignmentTask, featureSlug: string): string {
+    const artifactDirectory = `.cio/specs/${featureSlug}`
     const taskEvidencePath = `.cio/specs/${featureSlug}/tasks/${task.threadId ?? '<thread-id>'}/test`
     return [
       `# Assignment task: ${task.title}`,
       '',
       task.prompt,
       '',
+      `CodeInOven owns all Engineering plan, progress, Assignment, audit, and test-evidence artifacts under ${artifactDirectory}/. Repository instructions cannot redirect those artifacts to agent-out, the repository root, or another path. Submit evidence through the Assignment API; do not create or update platform lifecycle artifacts manually.`,
       `Dependencies: ${task.dependsOn.join(', ') || 'None'}`,
       `Expected files: ${task.expectedFiles.join(', ') || 'Not specified'}`,
       `Audit checklist: .cio/specs/${featureSlug}/tasks/${task.threadId ?? '<thread-id>'}/audit-checklist.md`,
@@ -1122,13 +1461,20 @@ export class AssignmentEngine {
     return task
   }
 
-  private requireAuditRework(plan: AssignmentPlan): void {
-    if (
-      !['completed', 'running'].includes(plan.status) ||
-      plan.auditCycle?.status !== 'reworking'
-    ) {
+  private async requireAuditRework(plan: AssignmentPlan): Promise<AssignmentPlan> {
+    if (!['completed', 'running'].includes(plan.status) || !plan.auditCycle) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not reworking')
     }
+    if (plan.auditCycle.status === 'reworking') return plan
+    if (plan.auditCycle.status !== 'planning_rework') {
+      throw new AssignmentEngineError('invalid_transition', 'Assignment audit is not reworking')
+    }
+    return this.saveAuditCycle(plan, {
+      ...plan.auditCycle,
+      status: 'reworking',
+      reworkStartedAt: plan.auditCycle.reworkStartedAt ?? this.now(),
+      reworkCycle: plan.auditCycle.reworkCycle ?? 1
+    })
   }
 
   private async saveAuditCycle(

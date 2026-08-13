@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
+  import {
+    ArrowUpRight,
+    ChevronLeft,
+    ChevronRight,
+    Play,
+    ShieldCheck,
+    Target
+  } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
@@ -12,18 +19,25 @@
     reportAvailable?: boolean
     selectedThreadId: string
     width: number
+    collapsed: boolean
     auditorSettings: ThreadSettings
     providers: ProviderCatalog[]
     projectId?: string | null
     favoriteModels?: string[]
     recentModels?: string[]
     coordinatorWorking: boolean
+    onToggleCollapsed: () => void
     onOpenAudit?: () => void
     onViewReport?: () => void
     onOpenThread: (thread: Thread) => void
     onResume: () => void
     onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onWidthChange: (width: number) => void
   }
 
@@ -35,18 +49,21 @@
     reportAvailable = false,
     selectedThreadId,
     width,
+    collapsed,
     auditorSettings,
     providers,
     projectId = null,
     favoriteModels = [],
     recentModels = [],
     coordinatorWorking,
+    onToggleCollapsed,
     onOpenAudit,
     onViewReport,
     onOpenThread,
     onResume,
     onModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     onWidthChange
   }: Props = $props()
 
@@ -163,145 +180,170 @@
   }
 </script>
 
-<aside
-  {@attach restoreWidth}
-  class="achievement-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
-  class:select-none={resizing}
-  style:width={`${width}px`}
-  aria-label="Achievement coordinator"
->
+{#if collapsed}
   <button
     type="button"
-    class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
-    title="Resize Achievement coordinator"
-    aria-label="Resize Achievement coordinator"
-    onpointerdown={startResize}
-    onpointermove={resize}
-    onpointerup={finishResize}
-    onpointercancel={finishResize}
-    onkeydown={resizeWithKeyboard}
-  ></button>
+    class="absolute inset-y-0 right-0 z-20 flex w-7 flex-col items-center justify-center border-l border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground focus:bg-elevated focus:outline-none"
+    title="Expand Achievement coordinator"
+    aria-label="Expand Achievement coordinator"
+    onclick={onToggleCollapsed}
+  >
+    <ChevronLeft size={15} />
+  </button>
+{:else}
+  <aside
+    {@attach restoreWidth}
+    class="achievement-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
+    class:select-none={resizing}
+    style:width={`${width}px`}
+    aria-label="Achievement coordinator"
+  >
+    <button
+      type="button"
+      class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
+      title="Resize Achievement coordinator"
+      aria-label="Resize Achievement coordinator"
+      onpointerdown={startResize}
+      onpointermove={resize}
+      onpointerup={finishResize}
+      onpointercancel={finishResize}
+      onkeydown={resizeWithKeyboard}
+    ></button>
 
-  <header class="shrink-0 border-b border-border p-4">
-    <div class="flex items-center gap-2 text-primary">
-      <Target size={15} />
-      <h2 class="text-xs font-semibold uppercase tracking-wide">Achievement coordinator</h2>
-    </div>
-    <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
-    <p class="mt-1 line-clamp-4 text-xs leading-relaxed text-muted">{specSummary}</p>
-    <div class="mt-3 flex gap-2">
-      {#if auditState === 'offered' && onOpenAudit}
+    <header class="shrink-0 border-b border-border p-4">
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-2 text-primary">
+          <Target size={15} class="shrink-0" />
+          <h2 class="text-xs font-semibold uppercase tracking-wide">Achievement coordinator</h2>
+        </div>
         <button
           type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
-          title="Start an audit of the current implementation"
-          onclick={onOpenAudit}
+          class="flex shrink-0 items-center justify-center rounded-md p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Collapse Achievement coordinator"
+          aria-label="Collapse Achievement coordinator"
+          aria-expanded="true"
+          onclick={onToggleCollapsed}
         >
-          Audit work
-          <ShieldCheck size={13} />
+          <ChevronRight size={15} />
         </button>
-      {/if}
-      {#if reportAvailable && onViewReport}
-        <button
-          type="button"
-          class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Open the latest report in Audit Studio"
-          onclick={onViewReport}
-        >
-          View report
-          <ArrowUpRight size={13} />
-        </button>
-      {/if}
-    </div>
-  </header>
-
-  <div class="min-h-0 flex-1 overflow-y-auto">
-    <section class="border-b border-border p-4" aria-label="Achievement progress">
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
-      <div class="mt-2 flex items-start gap-2">
-        <span
-          class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-current {progress.tone}"
-          aria-hidden="true"
-        ></span>
-        <div class="min-w-0">
-          <p class="text-xs font-semibold {progress.tone}">{progress.label}</p>
-          <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
-        </div>
       </div>
-      {#if !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
-        <button
-          type="button"
-          class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
-          title="Ask the Sr. Engineer to continue working toward the achievement"
-          onclick={onResume}
-        >
-          <Play size={12} />
-          Resume coordination
-        </button>
-      {/if}
-    </section>
-
-    <section class="border-b border-border p-4" aria-label="Achievement auditor model">
-      <div class="flex items-start gap-3">
-        <div class="rounded-lg bg-primary/10 p-2 text-primary">
-          <ShieldCheck size={16} />
-        </div>
-        <div class="min-w-0 flex-1">
-          <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>
-          <p class="mt-1 truncate text-xs text-muted">
-            {selectedAuditor.model?.name ?? auditorSettings.modelId}
-          </p>
-          <p class="mt-0.5 truncate text-[10px] text-dimmed">
-            {selectedAuditor.provider?.name ?? auditorSettings.providerId}
-          </p>
-        </div>
+      <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
+      <p class="mt-1 line-clamp-4 text-xs leading-relaxed text-muted">{specSummary}</p>
+      <div class="mt-3 flex gap-2">
+        {#if auditState === 'offered' && onOpenAudit}
+          <button
+            type="button"
+            class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary hover:bg-primary-hover"
+            title="Start an audit of the current implementation"
+            onclick={onOpenAudit}
+          >
+            Audit work
+            <ShieldCheck size={13} />
+          </button>
+        {/if}
+        {#if reportAvailable && onViewReport}
+          <button
+            type="button"
+            class="flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Open the latest report in Audit Studio"
+            onclick={onViewReport}
+          >
+            View report
+            <ArrowUpRight size={13} />
+          </button>
+        {/if}
       </div>
-      <div class="mt-3">
-        <ModelPicker
-          {providers}
-          {projectId}
-          harnessId={auditorSettings.harnessId}
-          providerId={auditorSettings.providerId}
-          modelId={auditorSettings.modelId}
-          {favoriteModels}
-          {recentModels}
-          side="bottom"
-          disabled={modelLocked}
-          label="Change model"
-          variant="action"
-          onSelect={chooseModel}
-          {onToggleFavorite}
-        />
-      </div>
-      {#if modelLocked}
-        <p class="mt-2 text-[10px] leading-relaxed text-dimmed">
-          The auditor model can be changed before the next audit starts.
-        </p>
-      {/if}
-    </section>
+    </header>
 
-    <section class="py-3" aria-label="Achievement audit thread">
-      <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-        Audit thread
-      </h3>
-      {#if auditThread}
-        <div class="px-2">
-          <ThreadRow
-            thread={auditThread}
-            compact
-            selected={auditThread.id === selectedThreadId}
-            showChangeScope={false}
-            onOpen={onOpenThread}
+    <div class="min-h-0 flex-1 overflow-y-auto">
+      <section class="border-b border-border p-4" aria-label="Achievement progress">
+        <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
+        <div class="mt-2 flex items-start gap-2">
+          <span
+            class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-current {progress.tone}"
+            aria-hidden="true"
+          ></span>
+          <div class="min-w-0">
+            <p class="text-xs font-semibold {progress.tone}">{progress.label}</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
+          </div>
+        </div>
+        {#if !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
+          <button
+            type="button"
+            class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
+            title="Ask the Sr. Engineer to continue working toward the achievement"
+            onclick={onResume}
+          >
+            <Play size={12} />
+            Resume coordination
+          </button>
+        {/if}
+      </section>
+
+      <section class="border-b border-border p-4" aria-label="Achievement auditor model">
+        <div class="flex items-start gap-3">
+          <div class="rounded-lg bg-primary/10 p-2 text-primary">
+            <ShieldCheck size={16} />
+          </div>
+          <div class="min-w-0 flex-1">
+            <h3 class="text-xs font-semibold text-foreground">Auditor model</h3>
+            <p class="mt-1 truncate text-xs text-muted">
+              {selectedAuditor.model?.name ?? auditorSettings.modelId}
+            </p>
+            <p class="mt-0.5 truncate text-[10px] text-dimmed">
+              {selectedAuditor.provider?.name ?? auditorSettings.providerId}
+            </p>
+          </div>
+        </div>
+        <div class="mt-3">
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={auditorSettings.harnessId}
+            providerId={auditorSettings.providerId}
+            modelId={auditorSettings.modelId}
+            {favoriteModels}
+            {recentModels}
+            side="bottom"
+            disabled={modelLocked}
+            label="Change model"
+            variant="action"
+            onSelect={chooseModel}
+            {onToggleFavorite}
+            {onReorderFavorite}
           />
         </div>
-      {:else}
-        <p class="px-4 py-2 text-xs leading-relaxed text-muted">
-          A durable audit thread will appear here when the first audit starts.
-        </p>
-      {/if}
-    </section>
-  </div>
-</aside>
+        {#if modelLocked}
+          <p class="mt-2 text-[10px] leading-relaxed text-dimmed">
+            The auditor model can be changed before the next audit starts.
+          </p>
+        {/if}
+      </section>
+
+      <section class="py-3" aria-label="Achievement audit thread">
+        <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+          Audit thread
+        </h3>
+        {#if auditThread}
+          <div class="px-2">
+            <ThreadRow
+              thread={auditThread}
+              compact
+              selected={auditThread.id === selectedThreadId}
+              showChangeScope={false}
+              onOpen={onOpenThread}
+            />
+          </div>
+        {:else}
+          <p class="px-4 py-2 text-xs leading-relaxed text-muted">
+            A durable audit thread will appear here when the first audit starts.
+          </p>
+        {/if}
+      </section>
+    </div>
+  </aside>
+{/if}
 
 <style>
   .achievement-coordinator-panel {

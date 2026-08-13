@@ -37,6 +37,8 @@ export interface Project {
   iconType?: string
   /** Optional while loading projects persisted before change tracking was introduced. */
   changeTrackingMode?: ChangeTrackingMode
+  /** Whether the repo is known to have GitHub deployments; gates the Deployments tab. */
+  hasDeployments?: boolean
   createdAt: number
   updatedAt: number
 }
@@ -53,6 +55,14 @@ export interface CreateProjectInput {
   color?: string
   iconType?: string
   changeTrackingMode?: ChangeTrackingMode
+  hasDeployments?: boolean
+}
+
+/** Destination identity for restart-safe composer attachment files. */
+export interface AttachmentStorageScope {
+  kind: 'project' | 'chat'
+  projectId: string
+  threadId: string
 }
 
 // ─── Scope board ─────────────────────────────────────────────────────────────
@@ -144,6 +154,8 @@ export interface Thread {
   titleSource: ThreadTitleSource
   status: ThreadStatus
   pinned: boolean
+  /** Timestamp (ms) when the thread was pinned; pins are ordered newest-first by this. */
+  pinnedAt?: number
   /** Position for manual drag-to-reorder; items without sortOrder fall back to lastActivity. */
   sortOrder?: number
   /** Position within its current scope bucket and slice; independent of project ordering. */
@@ -159,6 +171,8 @@ export interface Thread {
   scopeBucketId?: string
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
   settings?: ThreadSettings
+  /** Distinct agent harnesses used across this thread's session, newest first. */
+  usedHarnessIds?: string[]
   /** Last-known context/token usage snapshot, for instant meter restore. */
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
@@ -192,6 +206,59 @@ export interface Thread {
   updatedAt: number
   lastActivity: number
   workingDirectory: string
+}
+
+/**
+ * A worker or auditor thread owned by an Achievement/Assignment coordinator
+ * (the Sr. Engineer). These threads are orchestration internals: they never
+ * notify on their own, are hidden from the regular projects/threads surfaces,
+ * and surface only inside their scoped container (scope board) and the
+ * coordinator panels. The coordinator thread itself is always a normal,
+ * user-facing thread and never matches this predicate.
+ */
+export function isOrchestrationChildThread(thread: Thread): boolean {
+  if (thread.achievementRole === 'coordinator' || thread.assignmentRole === 'coordinator') {
+    return false
+  }
+  return (
+    thread.achievementRole === 'auditor' ||
+    thread.assignmentRole === 'worker' ||
+    thread.assignmentId !== undefined ||
+    thread.coordinatorThreadId !== undefined
+  )
+}
+
+/** A harness is actively producing work for this persisted thread. */
+export function isThreadWorking(thread: Thread): boolean {
+  return thread.status === 'planning' || thread.status === 'executing'
+}
+
+/**
+ * The Sr. Engineer is the public source of truth for delegated work. Its row
+ * remains active while any owned worker/auditor is active, even though the
+ * coordinator's own harness turn is intentionally idle between handoffs.
+ */
+export function coordinatorHasActiveDelegates(
+  coordinator: Thread,
+  threads: readonly Thread[]
+): boolean {
+  if (
+    coordinator.assignmentRole !== 'coordinator' &&
+    coordinator.achievementRole !== 'coordinator'
+  ) {
+    return false
+  }
+  if (coordinator.auditState === 'running') return true
+  return threads.some(
+    (candidate) =>
+      candidate.id !== coordinator.id &&
+      isThreadWorking(candidate) &&
+      (candidate.coordinatorThreadId === coordinator.id ||
+        coordinator.auditorThreadId === candidate.id ||
+        (coordinator.assignmentId !== undefined &&
+          candidate.assignmentId === coordinator.assignmentId &&
+          isOrchestrationChildThread(candidate)))
+  )
 }
 
 export interface CreateThreadInput {
@@ -319,6 +386,33 @@ export interface ProviderConnectionInfo {
   version?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
+}
+
+/** Where a confirmed harness-manifest behavior override came from. */
+export type HarnessConfirmationSource = 'user' | 'runtime'
+
+/** A confirmed behavior override layered on top of a harness's declared manifest. */
+export interface ConfirmedHarnessBehavior {
+  value: boolean
+  source: HarnessConfirmationSource
+  confirmedAt: number
+}
+
+/**
+ * Per-harness view of the effective behavior for the Settings surface.
+ * `declared` is the code manifest; `effective` is what the app actually uses
+ * after a confirmed override (or runtime in-use validation) is applied.
+ */
+export interface HarnessManifestEntry {
+  harnessId: string
+  /** The declared (code manifest) value. */
+  declared: boolean
+  /** A user/runtime confirmed override when present. */
+  confirmed?: ConfirmedHarnessBehavior
+  /** What the app actually uses: confirmed override ?? declared. */
+  effective: boolean
+  /** Epoch ms the harness was last actually used, when known. */
+  lastUsedAt?: number
 }
 
 export interface ProviderCapabilities {
@@ -466,6 +560,9 @@ export interface BaseUrlProviderModel {
   thinkingPresets?: ThinkingPreset[]
   /** Default thinking level applied when this model is first selected. */
   defaultThinkingLevel?: ThinkingLevel
+  /** Whether the model can see images. Unspecified is treated as vision-capable
+   *  so a custom model is never wrongly hidden or gated. */
+  vision?: boolean
 }
 
 /** A custom provider defined by base URL, stored and vaulted by CodeInOven. */
@@ -473,7 +570,7 @@ export interface BaseUrlProvider {
   id: string
   /** Harness this provider applies to (e.g. 'opencode'). */
   harnessId: string
-  /** AI SDK npm package to use (e.g. '@ai-sdk/openai-compatible' or '@ai-sdk/openai'). */
+  /** AI SDK npm package to use (e.g. '@ai-sdk/openai-compatible', '@ai-sdk/openai', or '@ai-sdk/anthropic'). */
   npm: string
   /** Display name shown in the model picker. */
   name: string
@@ -601,6 +698,8 @@ export interface ComputerUsePipState {
   active: boolean
   pid?: number
   appName?: string
+  /** Id of the thread whose agent is driving the tracked app, when active. */
+  threadId?: string
 }
 
 export interface SessionConfig {
@@ -654,6 +753,8 @@ export interface AgentDefaultsConfig {
   seniorEngineer?: AgentModelSelection
   worker?: AgentModelSelection
   auditor?: AgentModelSelection
+  /** Vision model used to describe images for text-only models. */
+  imageDescriptor?: AgentModelSelection
   /** When enabled, role changes made inside a thread replace the matching global default. */
   syncFromThreadChanges: boolean
 }
@@ -665,6 +766,8 @@ export interface ThreadSettings {
   /** Model provider exposed by the harness, e.g. anthropic or openai. */
   providerId: string
   modelId: string
+  /** Use only the immediate deterministic fallback title, skipping auxiliary model calls. */
+  titleMode?: 'model' | 'deterministic'
   thinkingLevel: ThinkingLevel
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
@@ -679,6 +782,8 @@ export interface ThreadSettings {
   fileSystemMode?: boolean
   /** Independent model selected for Achievement audits. */
   loopAuditor?: AgentModelSelection
+  /** Vision model used to describe images for this thread's text-only model. */
+  imageDescriptor?: AgentModelSelection
 }
 
 /** A model exposed by a harness provider. */
@@ -728,6 +833,40 @@ export interface PermissionRequest {
     expiresAt?: number
     scopedPaths: string[]
   }
+}
+
+/** How the user resolved a failed image-descriptor vision-model call. */
+export type ImageDescriptorReplyAction = 'retry' | 'ignore'
+
+/**
+ * A failed image-descriptor vision-model call that needs a user decision.
+ * Surfaced by the renderer so the user can change the model, retry, or send
+ * whatever partial output exists to the text-only model.
+ */
+export interface ImageDescriptorErrorRequest {
+  id: string
+  sessionId: string
+  projectId: string
+  /** Thread whose image tool call is blocked (worker thread for delegated work). */
+  threadId: string
+  /** User-facing thread where the decision card must be shown. */
+  surfaceThreadId: string
+  /** Assignment task identity shown when a worker owns the blocked call. */
+  assignmentTaskId?: string
+  assignmentTaskTitle?: string
+  workerTitle?: string
+  /** The actual error reported by the vision model / harness session. */
+  error: string
+  /** Provider-neutral failure category used to explain network/upload failures clearly. */
+  kind: AgentProviderIssueKind
+  /** Vision model that produced the failure. */
+  selection?: AgentModelSelection
+  /** Partial description generated before the failure, if any. */
+  partialOutput: string
+  /** Number of images that failed in this descriptor call. */
+  imageCount: number
+  /** When the failure was surfaced. */
+  createdAt: number
 }
 
 /** A file attached to an outgoing prompt. */
@@ -843,7 +982,19 @@ export interface AgentToolCatalog {
 // ─── Utility registry ────────────────────────────────────────────────────────
 
 /** Additional capabilities CodeInOven can expose when a harness lacks them. */
-export type UtilityKind = 'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider'
+export type UtilityKind =
+  'mcp' | 'skill' | 'web_search' | 'web_fetch' | 'computer_use' | 'provider' | 'image_descriptor'
+
+/** Every `UtilityKind` as a runtime array — single source for schema enums and validation sets. */
+export const UTILITY_KIND_VALUES: readonly UtilityKind[] = [
+  'mcp',
+  'skill',
+  'web_search',
+  'web_fetch',
+  'computer_use',
+  'provider',
+  'image_descriptor'
+]
 
 export type UtilityActivation = 'on_demand' | 'always'
 
@@ -898,6 +1049,16 @@ export interface ProviderUtilityConfig {
   defaultModel?: string
 }
 
+/** Vision model (from the harness catalog) used to describe images for text-only models. */
+export interface ImageDescriptorUtilityConfig {
+  /** Harness whose catalog exposes the vision model (e.g. 'opencode'). */
+  harnessId: string
+  /** Provider id that exposes the vision model. */
+  providerId: string
+  /** Model id that can see images (`attachment: true`). */
+  modelId: string
+}
+
 export interface UtilityConfigMap {
   mcp: McpUtilityConfig
   skill: SkillUtilityConfig
@@ -905,6 +1066,7 @@ export interface UtilityConfigMap {
   web_fetch: WebUtilityConfig
   computer_use: ComputerUseUtilityConfig
   provider: ProviderUtilityConfig
+  image_descriptor: ImageDescriptorUtilityConfig
 }
 
 /** How one harness receives a resolved utility without writing into the project. */
@@ -1085,6 +1247,14 @@ export interface AgentToolState {
   time?: { start: number; end?: number }
 }
 
+/** A live operating-system process started beneath one task's agent harness. */
+export interface AgentRunningProcess {
+  pid: number
+  parentPid: number
+  command: string
+  startedAt: number
+}
+
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
 export interface AgentSubagentActivity {
   status: AgentToolStatus
@@ -1132,6 +1302,128 @@ export interface AgentTokenUsage {
   total: number
 }
 
+/** Model or utility operation responsible for one persisted usage event. */
+export type UsageEventFeature =
+  'main' | 'title' | 'memory' | 'image_descriptor' | 'computer_use' | 'web' | 'audit' | 'assignment'
+
+/** Whether and how a provider-reported total can be interpreted. */
+export type UsageTotalSemantics =
+  | 'includes_cache'
+  | 'excludes_cache'
+  | 'categories_may_overlap'
+  | 'provider_defined'
+  | 'unavailable'
+
+/** Source used to calculate or verify an event's monetary cost. */
+export interface UsagePricingProvenance {
+  source: 'provider' | 'model_catalog' | 'utility_catalog' | 'manual'
+  sourceId?: string
+  currency: 'USD'
+  capturedAt: number
+}
+
+/** Provider-neutral token categories. Null means the provider did not report the category. */
+export interface NormalizedUsageTokens {
+  uncachedInput: number | null
+  cachedInput: number | null
+  cacheWrite: number | null
+  output: number | null
+  reasoning: number | null
+}
+
+/** Canonical provider-neutral usage attached to messages and usage events. */
+export interface NormalizedUsage extends NormalizedUsageTokens {
+  rawProviderUsage: Record<string, unknown>
+  rawTotal: number | null
+  totalSemantics: UsageTotalSemantics
+}
+
+/** Cost fields preserve the difference between a true zero and missing pricing data. */
+export type UsageEventCost =
+  | {
+      costStatus: 'known' | 'estimated'
+      costUsd: number
+      pricingProvenance: UsagePricingProvenance
+    }
+  | {
+      costStatus: 'unavailable'
+      costUsd: null
+      pricingProvenance: null
+    }
+
+/** Stable identity and measurements for one model or utility usage attempt. */
+export interface UsageEventDetails {
+  id: string
+  threadId: string
+  parentTurnId: string
+  /** Stable caller-provided identity that separates multiple calls of the same feature. */
+  featureCallId: string
+  attempt: number
+  feature: UsageEventFeature
+  harnessId: string | null
+  providerId: string | null
+  modelId: string | null
+  utilityId: string | null
+  rawProviderUsage: Record<string, unknown>
+  tokens: NormalizedUsageTokens
+  rawTotal: number | null
+  totalSemantics: UsageTotalSemantics
+  toolFeeUsd: number | null
+  success: boolean
+  retryCause: string | null
+  createdAt: number
+}
+
+/** Durable, replay-safe accounting record for one attempt. */
+export type UsageEvent = UsageEventDetails & UsageEventCost
+
+/** One main-agent cache measurement grouped by its telemetry provenance. */
+export interface UsageCacheHitBreakdown {
+  harnessId: string | null
+  providerId: string | null
+  modelId: string | null
+  mainAttempts: number
+  reportedAttempts: number
+  uncachedInputTokens: number
+  cachedInputTokens: number
+  cacheHitRatio: number | null
+}
+
+/** Provider-neutral efficiency metrics derived only from normalized usage events. */
+export interface UsageEfficiencyKpis {
+  successfulTurns: number
+  uncachedInputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cachedInputTokens: number
+  /** Main-agent cache hit ratio; auxiliary model and utility calls are excluded. */
+  cacheHitRatio: number | null
+  cacheEligibleEvents: number
+  cacheReportedEvents: number
+  cacheCoverageRatio: number | null
+  cacheBreakdown: UsageCacheHitBreakdown[]
+  auxiliaryUncachedInputTokens: number
+  auxiliaryCachedInputTokens: number
+  auxiliaryCacheHitRatio: number | null
+  mainAttempts: number
+  retryAmplification: number | null
+  auxiliaryCostUsd: number
+  totalPricedCostUsd: number
+  auxiliaryCostShare: number | null
+  toolResultTokens: number
+  knownCostUsd: number
+  estimatedCostUsd: number
+  unavailableCostEvents: number
+  pricedCostEvents: number
+  totalCostEvents: number
+  costCoverageRatio: number | null
+  perSuccessfulTurn: {
+    uncachedInputTokens: number | null
+    outputAndReasoningTokens: number | null
+    toolResultTokens: number | null
+  }
+}
+
 /** Optional account quota telemetry exposed by a provider. */
 export interface AgentRateLimitWindow {
   id: string
@@ -1142,19 +1434,72 @@ export interface AgentRateLimitWindow {
   remaining?: number
   limit?: number
   resetsAt?: number
+  /** Rolling window length in minutes (e.g. 300 for the Codex 5-hour limit). */
+  windowMinutes?: number
+  /** Model the window applies to, when the provider splits limits per model. */
+  model?: string
   overageStatus?: string
   overageDisabledReason?: string
   isUsingOverage?: boolean
 }
 
+/** Prepaid-credit balance reported alongside quota windows (e.g. Codex credits). */
+export interface AgentUsageCredits {
+  /** Remaining balance in the provider's credit currency, when metered. */
+  balance?: number
+  /** True when the account is metered by prepaid credits rather than a plan. */
+  hasCredits?: boolean
+  /** True when the account reports an unlimited cap. */
+  unlimited?: boolean
+  /** Provider plan identifier, such as `prolite` for Codex. */
+  planType?: string
+}
+
 /** Display-ready provider-neutral usage for the active conversation. */
 export interface AgentContextUsage {
   contextWindow?: number
-  contextUsed: number
+  /** Tokens occupying the context when the harness reports that value. */
+  contextUsed?: number
   contextPercent?: number
   costUsd: number
-  tokens: AgentTokenUsage
+  /** Per-turn token categories when the harness exposes token accounting. */
+  tokens?: AgentTokenUsage
   rateLimits: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported alongside quota windows. */
+  credits?: AgentUsageCredits
+}
+
+/** Per-harness quota telemetry for threads that used more than one harness. */
+export interface AgentHarnessUsage {
+  harnessId: string
+  providerId: string
+  modelId?: string
+  /** Total USD this harness consumed on the thread, when the harness reports cost. */
+  costUsd: number
+  /** Latest quota windows reported by this harness on the thread. */
+  rateLimits: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported by this harness on the thread. */
+  credits?: AgentUsageCredits
+  /** Cumulative token accounting from the harness_usage table, when available. */
+  tokens?: AgentTokenUsage
+  /** Assistant messages attributed to this harness on the thread. */
+  messageCount?: number
+  /** Approximate cumulative wall-clock time spent in turns, ms. */
+  durationMs?: number
+  /** Per-model cost breakdown for this harness on the thread, when available. */
+  models?: HarnessModelUsage[]
+}
+
+/** On-demand account quota snapshot for one harness used on a thread. */
+export interface AgentAccountUsage {
+  harnessId: string
+  providerId: string
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  /** Effective model context window (tokens) for the active session, when known. */
+  contextWindow?: number
+  /** Tokens currently occupying the model context, when known. */
+  contextUsed?: number
 }
 
 /** Last-known usage snapshot stored with a thread so the meter restores
@@ -1164,6 +1509,146 @@ export interface AgentContextUsage {
 export interface ThreadContextUsage extends AgentContextUsage {
   harnessId: string
   providerId: string
+}
+
+/** One row of cumulative per-harness analytics keyed by (thread, harness, provider). */
+export interface HarnessUsage {
+  projectId: string
+  threadId: string
+  harnessId: string
+  providerId: string
+  /** Last model observed for this harness on the thread. */
+  modelId?: string
+  /** Number of assistant messages attributed to this harness on the thread. */
+  messageCount: number
+  /** Cumulative USD cost, when the harness reports cost. */
+  costUsd: number
+  /** Cumulative token accounting across this harness's messages on the thread. */
+  tokens: AgentTokenUsage
+  /** Approximate cumulative wall-clock time spent in turns attributed to this harness, ms. */
+  durationMs: number
+  firstUsedAt: number
+  lastUsedAt: number
+  /** Per-model cost breakdown for this harness on the thread, when available. */
+  models?: HarnessModelUsage[]
+}
+
+/** One row of cumulative per-model analytics keyed by (thread, harness, provider, model). */
+export interface HarnessModelUsage {
+  threadId: string
+  harnessId: string
+  providerId: string
+  modelId: string
+  /** Number of assistant messages attributed to this model on the thread. */
+  messageCount: number
+  /** Cumulative USD cost attributed to this model, when the harness reports cost. */
+  costUsd: number
+  /** Cumulative token accounting across this model's messages on the thread. */
+  tokens: AgentTokenUsage
+  /** Approximate cumulative wall-clock time spent in turns, ms. */
+  durationMs: number
+  firstUsedAt: number
+  lastUsedAt: number
+}
+
+/** One aggregate row shown on the account profile. */
+export interface AccountUsageBreakdown {
+  id: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+}
+
+/** One calendar day containing completed assistant work. */
+export interface AccountActivityDay {
+  date: string
+  messageCount: number
+}
+
+/** App-wide local usage rolled up for cloud persistence and profile display. */
+export interface AccountUsageSummary {
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  topHarnessId: string | null
+  topModelId: string | null
+  harnesses: AccountUsageBreakdown[]
+  models: AccountUsageBreakdown[]
+  activityDays: AccountActivityDay[]
+  generatedAt: number
+}
+
+/** Inclusive/exclusive local analytics window supplied by the Profile page. */
+export interface LocalProfileAnalyticsRange {
+  startAt: number
+  endAt: number
+}
+
+/** Date-range usage row with enough identity to render harness and provider marks. */
+export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
+  harnessId?: string
+  providerId?: string
+  durationMs: number
+}
+
+/** Date-range project activity shown on the local Profile page. */
+export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
+  name: string
+  color?: string
+  iconType?: string
+  hasCustomIcon: boolean
+  durationMs: number
+  threadCount: number
+  activeDays: number
+  lastActiveAt: number
+}
+
+/** Fully local, range-aware analytics. This is never required for account authentication. */
+export interface LocalProfileAnalytics {
+  range: LocalProfileAnalyticsRange
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  topHarnessId: string | null
+  topProviderId: string | null
+  topModelId: string | null
+  harnesses: LocalProfileUsageBreakdown[]
+  providers: LocalProfileUsageBreakdown[]
+  models: LocalProfileUsageBreakdown[]
+  /** Auxiliary utility calls (image descriptor, memory, title) with their cost. */
+  utilities: LocalProfileUsageBreakdown[]
+  projects: LocalProfileProjectBreakdown[]
+  activityDays: AccountActivityDay[]
+  generatedAt: number
+}
+
+/** Account identity plus the cloud-backed workstation profile data. */
+export interface AccountProfile {
+  id: string
+  email: string
+  displayName: string
+  image: string | null
+  usage: AccountUsageSummary
+  globalMemories: MemoryEntry[]
+  updatedAt: number
+}
+
+export type AccountProfileState =
+  | { status: 'signed-out'; profile: null }
+  | { status: 'pending'; profile: null }
+  | { status: 'signed-in'; profile: AccountProfile }
+
+export type AccountAuthProvider = 'google' | 'apple'
+
+export interface AccountSignInStart {
+  url: string
+}
+
+export interface AccountProfileSyncPayload {
+  usage: AccountUsageSummary
+  globalMemories: MemoryEntry[]
 }
 
 /** A selectable option within an agent question. */
@@ -1276,6 +1761,7 @@ export type AgentPart =
       reason: string
       cost?: number
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
     }
   | {
       type: 'compaction'
@@ -1324,13 +1810,20 @@ export interface AgentMessage {
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */
   cost?: number
+  /** Provenance of `cost` when it was derived from a pricing table rather than
+   *  reported verbatim by the provider (kept transient; not persisted). */
+  costProvenance?: UsagePricingProvenance
   tokens?: AgentTokenUsage
+  /** Canonical accounting payload; raw provider evidence and semantics are preserved. */
+  normalizedUsage?: NormalizedUsage
   /** Effective model context window reported by the harness, when available. */
   contextWindow?: number
   /** Cumulative tokens currently occupying the model context, when available. */
   contextUsed?: number
   /** Optional account quota windows when the provider exposes them. */
   rateLimits?: AgentRateLimitWindow[]
+  /** Prepaid-credit balance reported alongside quota windows. */
+  credits?: AgentUsageCredits
   /** Present on assistant messages that ended with an error. */
   error?: string
   /** Validated JSON-schema result returned by a harness structured-output tool. */
@@ -1347,6 +1840,15 @@ export interface ThreadMessageCursor {
 export interface ThreadMessagePage {
   messages: AgentMessage[]
   hasOlder: boolean
+  /** True when newer messages exist beyond this page (set by centered loads). */
+  hasNewer?: boolean
+}
+
+/** Lightweight user-authored message summary for the header history jump list. */
+export interface UserMessageSummary {
+  id: string
+  content: string
+  createdAt: number
 }
 
 // ─── Agent streaming events (forwarded main → renderer) ────────────────────
@@ -1381,7 +1883,19 @@ export interface AgentProviderIssue {
  * retry so consumers never have to infer a stalled run from missing output.
  */
 export type AgentSessionStatus =
-  | { state: 'working' }
+  | {
+      state: 'working'
+      /** Authoritative start of the owning workflow, preserved across renderer reloads. */
+      startedAt?: number
+      /** Human-readable progress from an internal coordinator-owned worker. */
+      activity?: {
+        kind: 'spec_generation'
+        label: string
+        attempt: number
+        maxAttempts: number
+        updatedAt: number
+      }
+    }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }
   | { state: 'error'; issue: AgentProviderIssue }
@@ -1391,6 +1905,12 @@ export type BrainstormTraceUpdate =
   | { type: 'part.updated'; messageId: string; part: AgentPart }
   | { type: 'part.delta'; messageId: string; partId: string; field: string; delta: string }
   | { type: 'completed'; messages: AgentMessage[] }
+
+export type SpecGenerationTraceUpdate =
+  | { type: 'started'; startedAt: number }
+  | { type: 'part.updated'; part: AgentPart }
+  | { type: 'part.delta'; partId: string; field: string; delta: string }
+  | { type: 'completed' }
 
 export type AgentEvent =
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
@@ -1426,12 +1946,15 @@ export type AgentEvent =
       structuredOutput?: unknown
       /** Token accounting reported when the harness closes the turn. */
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
       /** Effective model context window reported when the harness closes the turn. */
       contextWindow?: number
       /** Cumulative tokens currently occupying the model context, when available. */
       contextUsed?: number
       /** Account quota windows reported after the harness refreshes usage. */
       rateLimits?: AgentRateLimitWindow[]
+      /** Prepaid-credit balance reported alongside quota windows. */
+      credits?: AgentUsageCredits
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
     }
@@ -1440,10 +1963,12 @@ export type AgentEvent =
       sessionId: string
       messageId: string
       tokens?: AgentTokenUsage
+      normalizedUsage?: NormalizedUsage
       contextWindow?: number
       contextUsed?: number
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
+      credits?: AgentUsageCredits
     }
   | { type: 'session.status'; sessionId: string; status: AgentSessionStatus }
   | { type: 'session.idle'; sessionId: string }
@@ -1499,6 +2024,13 @@ export type AgentEvent =
       update: BrainstormTraceUpdate
     }
   | {
+      type: 'spec.trace'
+      sessionId: string
+      projectId: string
+      threadId: string
+      update: SpecGenerationTraceUpdate
+    }
+  | {
       type: 'spec.ready'
       sessionId: string
       projectId: string
@@ -1519,6 +2051,21 @@ export type AgentEvent =
       type: 'providerCatalog.updated'
       projectId: string
       catalogs: ProviderCatalog[]
+    }
+  | {
+      type: 'imageDescriptor.error'
+      sessionId: string
+      projectId: string
+      threadId: string
+      request: ImageDescriptorErrorRequest
+    }
+  | {
+      type: 'imageDescriptor.resolved'
+      sessionId: string
+      projectId: string
+      threadId: string
+      requestId: string
+      action: ImageDescriptorReplyAction
     }
 
 /**
@@ -1866,7 +2413,7 @@ export interface EngineeringWorkflowState {
 // ─── Assignment Plans ──────────────────────────────────────────────────────
 
 export type AssignmentStatus =
-  'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed'
+  'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed' | 'stopped'
 
 export type AssignmentTaskStatus =
   | 'planned'
@@ -1879,8 +2426,10 @@ export type AssignmentTaskStatus =
   | 'attention'
   | 'completed'
   | 'failed'
+  | 'stopped'
 
 export type AssignmentTaskOwner = 'senior' | 'worker'
+export type AssignmentTaskWorkKind = 'initial' | 'rework'
 
 export interface AssignmentModelSelection extends AgentModelSelection {
   thinkingLevel: ThinkingLevel
@@ -1925,7 +2474,14 @@ export interface AssignmentTask {
   expectedFiles: string[]
   auditChecklist: string[]
   model?: AssignmentModelSelection
+  /** Durable identity of the implementation pass this task belongs to. */
+  workKind?: AssignmentTaskWorkKind
+  /** One-based post-audit rework cycle; absent for initial implementation. */
+  reworkCycle?: number
+  /** Assignment version whose implementation pass produced this task execution. */
+  workAssignmentVersion?: number
   status: AssignmentTaskStatus
+  statusBeforeStop?: Exclude<AssignmentTaskStatus, 'stopped'>
   workerName?: string
   threadId?: string
   report?: AssignmentTaskReport
@@ -1944,21 +2500,30 @@ export interface AssignmentPlanContent {
 export type AssignmentAuditCycleStatus =
   | 'available'
   | 'running'
+  | 'failed'
   | 'report_ready'
   | 'planning_rework'
   | 'awaiting_rework_approval'
   | 'reworking'
   | 'completed'
+  | 'stopped'
 
 /** Persisted hand-off between Assignment implementation and its independent audit. */
 export interface AssignmentAuditCycle {
   status: AssignmentAuditCycleStatus
+  /** True when the reviewable rework version repairs an unfinished Assignment's signed scope. */
+  scopeRepair?: boolean
+  statusBeforeStop?: Exclude<AssignmentAuditCycleStatus, 'stopped'>
   availableAt?: number
   startedAt?: number
+  failedAt?: number
+  failure?: string
   reportId?: string
   reportVersion?: number
   reportedAt?: number
   reworkStartedAt?: number
+  /** One-based count of post-audit correction cycles. */
+  reworkCycle?: number
   /** Reviewable Assignment version proposed by the Sr. Engineer for this audit report. */
   reworkAssignmentVersion?: number
   completedAt?: number
@@ -1998,6 +2563,8 @@ export interface AssignmentPlan {
   specVersion: number
   version: number
   status: AssignmentStatus
+  statusBeforeStop?: Exclude<AssignmentStatus, 'stopped'>
+  loopModeBeforeStop?: boolean
   scopeBucketId?: string
   /** Durable auditor thread created after this Assignment completes. */
   auditorThreadId?: string
@@ -2011,6 +2578,7 @@ export interface AssignmentPlan {
   updatedAt: number
   approvedAt?: number
   completedAt?: number
+  stoppedAt?: number
 }
 
 export type AssignmentValidationCode =
@@ -2055,11 +2623,52 @@ export interface AuditFinding {
   evidence: string
 }
 
+export type AuditVerificationCheckKind =
+  'format' | 'lint' | 'typecheck' | 'test' | 'build' | 'other'
+
+export type AuditVerificationStatus = 'passed' | 'failed' | 'not_applicable'
+
+export interface AuditVerificationCheck {
+  id: string
+  kind: AuditVerificationCheckKind
+  command: string
+  files: string[]
+  status: AuditVerificationStatus
+  exitCode?: number
+  evidence: string
+  /** Project-relative, platform-written full command output for this check. */
+  evidencePath?: string
+  findingIds: string[]
+}
+
+export interface AuditVerificationUtility {
+  name: string
+  status: 'used' | 'unavailable' | 'not_applicable'
+  evidence: string
+}
+
+export interface AuditVerificationEvidence {
+  repositoryRevision: string
+  scope: string
+  checks: AuditVerificationCheck[]
+  utilities: AuditVerificationUtility[]
+  limitations: string[]
+}
+
+export interface AuditedFileEvidence {
+  path: string
+  reason: string
+}
+
 export interface AuditReportContent {
   executiveSummary: string
   findings: AuditFinding[]
   resolutionRecommendation: string
   conclusion: string
+  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  auditedFiles?: AuditedFileEvidence[]
+  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  verification?: AuditVerificationEvidence
 }
 
 export interface AuditAnnotation {
@@ -2085,6 +2694,10 @@ export interface AuditReport {
   threadId: string
   specId: string
   specVersion: number
+  /** Exact Assignment implementation graph audited, when this is an Assignment audit. */
+  assignmentId?: string
+  assignmentVersion?: number
+  reworkCycle?: number
   version: number
   content: AuditReportContent
   annotations: AuditAnnotation[]
@@ -2171,7 +2784,7 @@ export type SlashCommandMode = 'app' | 'passthrough'
 
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference'
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
-export type MemoryScope = 'global' | 'project' | 'thread' | 'chat'
+export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
 export type MemorySource = 'manual' | 'auto-detected'
 
 export interface MemoryEntry {
@@ -2191,7 +2804,10 @@ export interface MemoryEntry {
 }
 
 export interface MemoryConfig {
+  /** Whether persistent memory is sent to project agents (global + projects + project + thread). */
   enabled: boolean
+  /** Whether persistent memory is sent to chat agents (global + chat + thread). */
+  chatEnabled: boolean
   entries: MemoryEntry[]
 }
 
@@ -2231,8 +2847,20 @@ export interface AppConfig {
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
   autoInstallUpdates: boolean
+  /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
+  updateChannel: 'stable' | 'nightly'
   /** Prevent the display and system from sleeping while any agent is working. */
   keepAwakeWhileWorking: boolean
+  /** When true, sending an image to a text-only model auto-uses the configured
+   *  image descriptor model instead of showing the vision-model picker card. */
+  imageDescriptorAskAgain: boolean
+  /** Automatically resume threads whose turn ended in a usage/rate-limit reset
+   *  once the reported reset time passes. Only applies to harnesses that do not
+   *  schedule their own provider retries (OpenCode manages its own). */
+  autoRetryAfterReset: boolean
+  /** Resume regular and Sr. Engineer threads that were interrupted by an app
+   *  closure or unknown issue when the app restarts. */
+  resumeWorkOnRestart: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2256,6 +2884,690 @@ export type AppConfigPatch = Partial<
     | 'agentDefaults'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
+    | 'updateChannel'
     | 'keepAwakeWhileWorking'
+    | 'imageDescriptorAskAgain'
+    | 'autoRetryAfterReset'
+    | 'resumeWorkOnRestart'
   >
 >
+
+// ─── Git management ──────────────────────────────────────────────────────────
+
+/** Status of one file in the working tree. */
+export type GitFileStatus =
+  'modified' | 'added' | 'deleted' | 'untracked' | 'renamed' | 'conflicted'
+
+/** A single working-tree entry surfaced by porcelain status. */
+export interface GitFileChange {
+  path: string
+  /** Original path for renames/copies. */
+  oldPath?: string
+  status: GitFileStatus
+  /** True when the change is staged for commit. */
+  staged: boolean
+}
+
+/** A unified diff for a single file, bounded to protect the IPC contract. */
+export interface GitDiff {
+  path: string
+  /** True when the diff is computed against the index (staged). */
+  staged: boolean
+  /** Unified diff text; empty for binary files. */
+  content: string
+  binary: boolean
+  additions: number
+  deletions: number
+  /** True when the diff was cut at the payload bound. */
+  truncated: boolean
+  /** Full before (left) side content, for reuse of the unified diff viewer. */
+  before?: string
+  /** Full after (right) side content, for reuse of the unified diff viewer. */
+  after?: string
+}
+
+/** Snapshot of the repository working tree and branch state. */
+export interface GitStatus {
+  repositoryRoot: string
+  branch: string | null
+  /** True when HEAD is detached (no branch checked out). */
+  detached: boolean
+  /** Upstream tracking ref (e.g. `origin/main`), when set. */
+  upstream: string | null
+  /** Active merge/rebase state, used to offer the correct abort action. */
+  conflictState: 'merge' | 'rebase' | 'none'
+  clean: boolean
+  changes: GitFileChange[]
+  /** Count of staged changes (including staged deletions). */
+  stagedChanges: number
+  /** Count of unstaged modifications. */
+  unstagedChanges: number
+  /** Count of untracked files. */
+  untrackedChanges: number
+  /** Paths currently in a merge/rebase conflict. */
+  conflicted: string[]
+  /** Commits the local branch is ahead of its upstream by. */
+  ahead: number
+  /** Commits the local branch is behind its upstream by. */
+  behind: number
+}
+
+/** One local branch and its tracking relationship, when set. */
+export interface GitBranchInfo {
+  name: string
+  current: boolean
+  remote: string | null
+  ahead: number
+  behind: number
+}
+
+/** A configured remote. */
+export interface GitRemoteInfo {
+  name: string
+  url: string
+}
+
+/** Git identity read from `user.name` / `user.email` config. */
+export interface GitIdentity {
+  name: string | null
+  email: string | null
+  configured: boolean
+}
+
+/** Renderer-safe git identity write request. */
+export interface GitIdentityInput {
+  name: string
+  email: string
+}
+
+/** One commit from `git log`, surfaced in a compact form. */
+export interface GitCommitInfo {
+  hash: string
+  shortHash: string
+  author: string
+  date: number
+  message: string
+}
+
+/** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
+export type GitResetMode = 'soft' | 'mixed' | 'hard'
+
+/** Renderer-safe git reset request. */
+export interface GitResetInput {
+  mode: GitResetMode
+  /** Commit hash to reset the current branch to. Defaults to HEAD. */
+  target?: string
+}
+
+/** Result of a push/pull that reports upstream drift. */
+export interface GitSyncSummary {
+  ahead: number
+  behind: number
+}
+
+/** Conflict information reported by a merge/rebase failure. */
+export interface GitConflictFile {
+  path: string
+  reason?: string
+}
+
+/** Normalized merge/rebase outcome, including conflict state. */
+export interface MergeSummary {
+  conflicted: GitConflictFile[]
+  merged: string[]
+  result: string
+  /** True when the operation was aborted (merge --abort / rebase --abort). */
+  aborted: boolean
+}
+
+/** Request to prepare a local merge to resolve a PR's online conflicts. */
+export interface PrResolveOptions {
+  /** Remote to fetch the PR head and base from (e.g. `origin`). */
+  remote: string
+  pullNumber: number
+  /** Base branch to merge into the checked-out PR head (e.g. `main`). */
+  baseBranch: string
+}
+
+/** Merge method accepted by provider merge endpoints. */
+export type PrMergeMethod = 'merge' | 'squash' | 'rebase'
+
+/** Filter for pull request listings. */
+export type PrState = 'open' | 'closed' | 'all'
+
+/** Draft-shaped request to create a pull request on the provider. */
+export interface PrDraft {
+  owner: string
+  repo: string
+  title: string
+  body?: string
+  head: string
+  base: string
+  draft?: boolean
+}
+
+/** PR create request as the renderer sends it; owner/repo resolve from the origin. */
+export type PrCreateInput = Omit<PrDraft, 'owner' | 'repo'>
+
+/** GitHub App installation access needed before a repository mutation can run. */
+export interface GitHubPermissionRequired {
+  status: 'permission_required'
+  message: string
+  settingsUrl: string
+}
+
+/** Typed boundary for GitHub writes, including recoverable installation access. */
+export type GitHubMutationResult<T> = { status: 'completed'; value: T } | GitHubPermissionRequired
+
+/** Result of submitting a pull-request review through the GitHub App. */
+export type PullRequestReviewResult = GitHubMutationResult<null>
+
+/** Renderer-safe PR reference created or merged by a provider. */
+export interface PullRequestReference {
+  number: number
+  url: string
+  title: string
+}
+
+/**
+ * Pull request as shown in the sidebar list.
+ *
+ * Avatars are deliberately absent: the renderer CSP blocks remote image hosts,
+ * so the UI renders a monogram from `authorLogin` instead of a network image.
+ */
+export interface PullRequestSummary {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed' | 'merged'
+  draft: boolean
+  authorLogin: string
+  headRef: string
+  baseRef: string
+  createdAt: string
+  updatedAt: string
+  /** Issue-comment count as reported by the provider (review comments excluded). */
+  comments: number
+  /**
+   * Whether the provider has computed the PR as mergeable (`false` = conflicts).
+   * Populated from list payloads where available; absent for locally-constructed
+   * summaries (e.g. a just-created PR). Null when not yet computed.
+   */
+  mergeable?: boolean | null
+  /**
+   * GitHub's `mergeable_state` from list payloads — `dirty` means the PR has
+   * conflicts even when `mergeable` hasn't been computed yet (it is frequently
+   * null in list responses). `clean` | `dirty` | `behind` | `unstable` |
+   * `draft` | `unknown`.
+   */
+  mergeableState?: string | null
+}
+
+/** One page of pull requests, with a cursor the UI can advance. */
+export interface PullRequestPage {
+  items: PullRequestSummary[]
+  page: number
+  /** Whether another page exists after this one. */
+  hasMore: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+}
+
+/**
+ * GitHub compare result for two refs, used to gate pull request creation.
+ * A PR only makes sense when the head actually has commits the base lacks.
+ */
+export interface PullRequestCompare {
+  /** Whether the comparison reflects GitHub or commits that only exist locally. */
+  source: 'remote' | 'local'
+  status: 'ahead' | 'behind' | 'diverged' | 'identical'
+  /** Commits the head has that the base does not. */
+  aheadBy: number
+  /** Commits the base has that the head does not. */
+  behindBy: number
+  totalCommits: number
+  /** Changed files between the two refs. */
+  filesChanged: number
+  /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
+  hasChanges: boolean
+}
+
+/** Full pull request view, loaded when one is opened in the sidebar. */
+export interface PullRequestDetail extends PullRequestSummary {
+  body: string
+  /** Null when the provider has not finished computing mergeability yet. */
+  mergeable: boolean | null
+  merged: boolean
+  additions: number
+  deletions: number
+  changedFiles: number
+  commitCount: number
+}
+
+/** One commit belonging to a pull request. */
+export interface PullRequestCommit {
+  sha: string
+  /** Seven-character short sha, precomputed for display. */
+  shortSha: string
+  message: string
+  authorName: string
+  date: string
+}
+
+/** One issue comment on a pull request. */
+export interface PullRequestComment {
+  id: number
+  authorLogin: string
+  body: string
+  createdAt: string
+  url: string
+}
+
+/** Review verdict submitted from the sidebar. */
+export type PrReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+
+/** One changed file in a pull request or commit, with its unified patch. */
+export interface PullRequestFile {
+  path: string
+  /** Provider status: added, modified, removed, renamed… */
+  status: string
+  additions: number
+  deletions: number
+  /** Unified diff hunk text; null for binary files or oversized patches. */
+  patch: string | null
+}
+
+/** A submitted review (approval, change request, or review comment). */
+export interface PullRequestReview {
+  id: number
+  authorLogin: string
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED… */
+  state: string
+  body: string
+  submittedAt: string
+}
+
+/** An inline code comment attached to a line of the diff. */
+export interface PullRequestReviewComment {
+  id: number
+  authorLogin: string
+  body: string
+  path: string
+  /** Line in the file the comment anchors to; null once outdated. */
+  line: number | null
+  createdAt: string
+}
+
+/** One CI check or commit status on the PR head. */
+export interface PullRequestCheck {
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion:
+    | 'success'
+    | 'failure'
+    | 'neutral'
+    | 'cancelled'
+    | 'timed_out'
+    | 'action_required'
+    | 'skipped'
+    | null
+  /** Provider page for the run, when one exists. */
+  url: string | null
+}
+
+/** Rolled-up CI state for a pull request head. */
+export interface PullRequestChecks {
+  state: 'success' | 'failure' | 'pending' | 'none'
+  checks: PullRequestCheck[]
+}
+
+/**
+ * Everything the PR detail view renders, fetched in one round trip.
+ *
+ * The sidebar shows this as a single unit, so bundling avoids six sequential
+ * spinners and lets the renderer cache one object per pull request.
+ */
+export interface PullRequestBundle {
+  detail: PullRequestDetail
+  commits: PullRequestCommit[]
+  comments: PullRequestComment[]
+  reviews: PullRequestReview[]
+  reviewComments: PullRequestReviewComment[]
+  files: PullRequestFile[]
+  checks: PullRequestChecks
+  /** Epoch ms this bundle was fetched, for cache staleness display. */
+  fetchedAt: number
+}
+
+/** An agent's review report read back from `.cio/git/pr/<number>/review.md`. */
+export interface PrAgentReport {
+  /** Absolute path to the report file. */
+  path: string
+  content: string
+  /** Epoch ms of the last write, or null when no report exists yet. */
+  updatedAt: number | null
+  /** Thread the review was handed to, so the UI can jump back into it. */
+  threadId: string | null
+}
+
+/** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
+export interface GitRepositoryIdentity {
+  owner: string
+  repo: string
+}
+
+/** Result of a provider credential status query — presence only, never plaintext. */
+export interface GitCredentialStatus {
+  configured: boolean
+  secureStorageAvailable: boolean
+}
+
+/** Device-code request payload returned by the GitHub device flow. */
+export interface GitHubDeviceCode {
+  deviceCode: string
+  userCode: string
+  verificationUri: string
+  expiresIn: number
+  interval: number
+}
+
+/** Result of one poll of the GitHub device flow token endpoint. */
+export type GitHubPollResult =
+  | { status: 'pending' }
+  | { status: 'authorized' }
+  | { status: 'expired' }
+  | { status: 'error'; message: string }
+
+/** Presence-only status of the GitHub OAuth connection. Never carries plaintext. */
+export interface GitHubAuthStatus {
+  connected: boolean
+  /** Whether the app has a GitHub App client ID configured to sign in with. */
+  configured: boolean
+  /** Public profile of the signed-in user, when connected. */
+  user?: GitHubUser | null
+}
+
+/** Public GitHub user profile, safe to surface in the UI. */
+export interface GitHubUser {
+  login: string
+  name: string | null
+  /**
+   * Avatar as a `data:` URL — the renderer's CSP blocks remote image hosts, so
+   * the main process downloads and inlines it. Null when the download failed;
+   * the UI falls back to the GitHub mark.
+   */
+  avatarUrl: string | null
+}
+
+/** One recent GitHub Actions workflow run shown in deployment monitoring. */
+export interface GitHubWorkflowRun {
+  id: number
+  name: string
+  displayTitle: string
+  runNumber: number
+  event: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+  branch: string
+  headSha: string
+  url: string
+  actorLogin: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Latest status recorded for one GitHub deployment. */
+export interface GitHubDeploymentStatus {
+  state: string
+  description: string
+  environmentUrl: string | null
+  logUrl: string | null
+  createdAt: string
+}
+
+/** One recent GitHub deployment and its latest status. */
+export interface GitHubDeployment {
+  id: number
+  environment: string
+  description: string
+  ref: string
+  sha: string
+  createdAt: string
+  updatedAt: string
+  latestStatus: GitHubDeploymentStatus | null
+}
+
+/** Read-only GitHub Actions and Deployments snapshot for a repository. */
+export interface GitHubDeploymentOverview {
+  workflowRuns: GitHubWorkflowRun[]
+  deployments: GitHubDeployment[]
+  fetchedAt: number
+}
+
+/**
+ * `deployment:overview` IPC result. `hasDeployments` is derived from the
+ * snapshot and drives whether the Deployments tab is shown at all.
+ */
+export interface GitHubDeploymentOverviewResult extends GitHubDeploymentOverview {
+  hasDeployments: boolean
+  /** Actionable repository-access failure returned without rejecting IPC. */
+  accessError?: string
+}
+
+/** One step inside a workflow run job — the granular "why did it fail" data. */
+export interface GitHubDeploymentJobStep {
+  number: number
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | 'unknown'
+  conclusion: string | null
+}
+
+/** One workflow run job, with its step-level breakdown. */
+export interface GitHubDeploymentJob {
+  id: number
+  name: string
+  status: string
+  conclusion: string | null
+  startedAt: string
+  completedAt: string | null
+  url: string
+  steps: GitHubDeploymentJobStep[]
+}
+
+/** Everything the in-app deployment detail view needs. */
+export interface GitHubDeploymentDetail {
+  deployment: GitHubDeployment
+  statuses: GitHubDeploymentStatus[]
+  workflowRun: GitHubWorkflowRun | null
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
+}
+
+/** Capped raw log text for one workflow run job. */
+export interface GitHubDeploymentJobLog {
+  jobId: number
+  log: string
+  truncated: boolean
+}
+
+/** Everything the in-app workflow-run detail view needs. */
+export interface GitHubWorkflowRunDetail {
+  run: GitHubWorkflowRun
+  jobs: GitHubDeploymentJob[]
+  fetchedAt: number
+}
+
+// ─── Cloud deployments ───────────────────────────────────────────────────────
+
+/** Provider-agnostic deployment hosts the Cloud Deployments panel can reach. */
+export type CloudDeploymentProviderKind =
+  'coolify' | 'netlify' | 'railway' | 'vercel' | 'dokploy' | 'custom'
+
+/** Every `CloudDeploymentProviderKind` as a runtime array — single source for schema enums. */
+export const CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES: readonly CloudDeploymentProviderKind[] = [
+  'coolify',
+  'netlify',
+  'railway',
+  'vercel',
+  'dokploy',
+  'custom'
+]
+
+/**
+ * Provider kinds backed by the not-implemented stub (v1 is Coolify-only).
+ * Attempting to query these must surface a not-implemented-yet signal and must
+ * never trigger a network call. Single source shared by main and renderer.
+ */
+export const CLOUD_DEPLOYMENT_NOT_IMPLEMENTED_KINDS: readonly CloudDeploymentProviderKind[] = [
+  'netlify',
+  'railway',
+  'vercel',
+  'dokploy'
+]
+
+/** Latest build/run state of a cloud deployment container. */
+export type CloudDeploymentStatus = 'building' | 'success' | 'failed' | 'unknown'
+
+/**
+ * One deployment/build record for a cloud deployment container. The detail view
+ * shows the last several of these so the user can compare a passing vs failing
+ * run and open the build log for any of them.
+ */
+export interface CloudDeploymentDeployment {
+  /** Provider-side deployment id (e.g. a Coolify deployment_uuid). */
+  id: string
+  /** Latest known status of this deployment/build. */
+  status: CloudDeploymentStatus
+  /** Epoch ms this deployment was last updated. */
+  updatedAt?: number
+  /** Commit hash the deployment built, when the provider reports it. */
+  commit?: string
+  /** Capped raw build log for this deployment, when available. */
+  log?: string
+}
+
+/** One provider-agnostic cloud deployment container/application mapping. */
+export interface CloudDeploymentContainer {
+  /** Stable container identity the provider adapter can query by. */
+  id: string
+  /** User-supplied custom label shown in the panel. */
+  label: string
+  /** Provider that owns this container. */
+  providerKind: CloudDeploymentProviderKind
+  /** Latest known deployment/build status. */
+  status: CloudDeploymentStatus
+  /** Live URL of the deployed application, when known. */
+  url?: string
+  /** All known live URLs/domains for the deployed application, when the
+   *  provider exposes more than one (e.g. multiple Coolify FQDNs). */
+  urls?: string[]
+  /** Coolify project (or provider grouping) this container belongs to, when known. */
+  project?: string
+  /** Epoch ms the container was first seen. */
+  createdAt?: number
+  /** Epoch ms of the last status change. */
+  updatedAt?: number
+  /** Capped raw log text for the latest deployment, when available. */
+  log?: string
+}
+
+/**
+ * A cloud deployment provider account in the global registry. Accounts are
+ * created once, labelled by the user, and can be attached to any project.
+ * They are NOT scoped to a project: the same account (e.g. one Coolify
+ * instance, or one Vercel team) is reused across every project that uses it.
+ */
+export interface CloudDeploymentProviderAccount {
+  /** Stable account identity, unique across the whole registry. */
+  id: string
+  /** User-supplied label shown in the panel (e.g. 'Coolify — Personal'). */
+  label: string
+  /** Provider this account authenticates. */
+  providerKind: CloudDeploymentProviderKind
+  /** Opaque SecretVault reference for the stored token; never carries plaintext. */
+  secretRef: string
+  /** Verified base URL the provider is reached at (e.g. the Coolify host), when known. */
+  baseUrl?: string
+  /** Whether this account currently holds a stored credential. */
+  configured: boolean
+  /** Whether this account is enabled for use. Disabled accounts are skipped by monitoring. */
+  enabled: boolean
+  /** Epoch ms the account was first created. */
+  createdAt: number
+  /** Epoch ms the account's credential was last stored or rotated. */
+  updatedAt: number
+}
+
+/**
+ * The global cloud deployment provider account registry. Persisted by main,
+ * independent of any project. Keyed by account id.
+ */
+export interface CloudDeploymentAccountRegistry {
+  accounts: CloudDeploymentProviderAccount[]
+}
+
+/**
+ * A project's attachment to a provider's accounts. A project can attach
+ * several accounts of the same provider and pick one active for monitoring.
+ */
+export interface CloudDeploymentProjectProviderAccounts {
+  /** Ids of the global accounts attached to this project for this provider. */
+  attachedAccountIds: string[]
+  /** Id of the active attached account for this provider, or null when none. */
+  activeAccountId: string | null
+}
+
+/** One project's selected providers and their labelled container mappings. */
+export interface CloudDeploymentProjectConfig {
+  /** Provider kinds selected for this project. */
+  providers: CloudDeploymentProviderKind[]
+  /** Container mappings configured for this project, with user labels. */
+  containers: CloudDeploymentContainer[]
+  /** Per-provider account attachments (which global accounts this project uses). */
+  providerAccounts?: Partial<
+    Record<CloudDeploymentProviderKind, CloudDeploymentProjectProviderAccounts>
+  >
+}
+
+/**
+ * Per-project cloud deployment configuration, persisted by main, never in the
+ * repo. Accounts themselves live in the global `CloudDeploymentAccountRegistry`
+ * (see `cloudDeploy:listAccounts`); this config only records which accounts the
+ * project attaches and which is active per provider.
+ */
+export interface CloudDeploymentConfig {
+  version: 3
+  projectId: string
+  /** Selected providers plus labelled container mappings and account attachments. */
+  project: CloudDeploymentProjectConfig
+  /** Epoch ms of the last configuration change. */
+  updatedAt: number
+}
+
+/** Read-only provider-agnostic deployment snapshot for a project. */
+export interface CloudDeploymentOverview {
+  containers: CloudDeploymentContainer[]
+  fetchedAt: number
+}
+
+/**
+ * Cloud deployment overview IPC result. `hasDeployments` is derived from the
+ * snapshot and drives whether the Cloud Deployments panel is shown at all.
+ */
+export interface CloudDeploymentResult extends CloudDeploymentOverview {
+  hasDeployments: boolean
+  /** Actionable provider/credential access failure returned without rejecting IPC. */
+  accessError?: string
+}
+
+/** One entry from `git stash list`, e.g. `stash@{0}`. */
+export interface GitStashEntry {
+  /** Reflog selector, e.g. `stash@{0}`. */
+  id: string
+  /** Stash message, e.g. `WIP on main: abc1234 feat: thing`. */
+  message: string
+  /** Branch the stash was created on, when derivable. */
+  branch: string | null
+  /** Unix timestamp of the stash commit. */
+  date: number
+}

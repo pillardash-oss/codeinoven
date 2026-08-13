@@ -32,12 +32,110 @@ export interface RichInlineBadge {
   value: string
 }
 
-function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]): string {
+interface EditorLinkReference {
+  url: string
+  title?: string
+}
+
+/** Document-scoped state shared by every `renderInline` call: reference-link
+ *  definitions, footnote definitions, and footnote numbering in reference order. */
+interface EditorRenderContext {
+  linkRefs: Map<string, EditorLinkReference>
+  footnoteLabels: Set<string>
+  footnoteNumbers: Map<string, number>
+  nextFootnoteNumber: number
+}
+
+interface EditorDefinitions {
+  context: EditorRenderContext
+  /** Line indexes that are `[label]: url` or `[^label]: text` definitions. They
+   *  render as escaped literal text so their own `[label]`/`[^label]` never
+   *  becomes a link or footnote reference. */
+  definitionLines: Set<number>
+}
+
+const FOOTNOTE_REF_PATTERN = /\[\^([^\]]+)\]/gu
+const INLINE_LINK_PATTERN = /(?<![!])\[([^\]]+)\]\(([^)\n]+)\)/gu
+const REFERENCE_LINK_PATTERN = /\[([^\]]+)\]\[([^\]]*)\]/gu
+// A shortcut reference `[text]` is only valid when not followed by `(` (inline
+// link) or `[` (an explicit reference label) — otherwise it is plain prose.
+const SHORTCUT_LINK_PATTERN = /\[([^\]]+)\](?!\(|\[)/gu
+
+function normalizeReferenceLabel(label: string): string {
+  return label.trim().toLowerCase()
+}
+
+/** Reject `javascript:`/`data:`-style schemes; allow http(s), mailto, fragment
+ *  links and scheme-less relative targets. */
+function safeLinkUrl(url: string): boolean {
+  const trimmed = url.trim()
+  if (!trimmed) return false
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) {
+    return /^(https?|mailto):/iu.test(trimmed)
+  }
+  return true
+}
+
+/** Parse an inline link target `url "title"` into its parts. */
+function parseLinkTarget(target: string): { url: string; title?: string } {
+  const trimmed = target.trim()
+  const match = /^(?:<([^>\n]+)>|(\S+))(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?$/u.exec(trimmed)
+  if (!match) return { url: trimmed }
+  return {
+    url: (match[1] ?? match[2] ?? trimmed).trim(),
+    title: match[3] ?? match[4] ?? match[5]
+  }
+}
+
+function collectEditorDefinitions(lines: string[]): EditorDefinitions {
+  const linkRefs = new Map<string, EditorLinkReference>()
+  const footnoteLabels = new Set<string>()
+  const definitionLines = new Set<number>()
+  const referencePattern = /^\[([^\]]+)\]:\s*(.+)$/u
+  const footnotePattern = /^\[\^([^\]]+)\]:\s*(.+)$/u
+
+  lines.forEach((line, index) => {
+    const footnote = footnotePattern.exec(line)
+    if (footnote) {
+      footnoteLabels.add((footnote[1] ?? '').trim())
+      definitionLines.add(index)
+      return
+    }
+    const reference = referencePattern.exec(line)
+    if (!reference) return
+    const label = (reference[1] ?? '').trim()
+    const parsed = parseLinkTarget(reference[2] ?? '')
+    if (!parsed.url) return
+    linkRefs.set(normalizeReferenceLabel(label), { url: parsed.url, title: parsed.title })
+    definitionLines.add(index)
+  })
+
+  return {
+    context: {
+      linkRefs,
+      footnoteLabels,
+      footnoteNumbers: new Map(),
+      nextFootnoteNumber: 0
+    },
+    definitionLines
+  }
+}
+
+function renderInline(
+  source: string,
+  inlineBadges: readonly RichInlineBadge[],
+  context: EditorRenderContext
+): string {
   const code: string[] = []
   const badges: string[] = []
+  const tokens: string[] = []
   const stashCode = (_match: string, content: string): string => {
     const index = code.push(`<code class="${INLINE_CODE_CLASS}">${escapeHtml(content)}</code>`)
     return `\uE000${index - 1}\uE001`
+  }
+  const stashToken = (html: string): string => {
+    const index = tokens.push(html)
+    return `\uE004${index - 1}\uE005`
   }
 
   let prepared = source.replace(/`([^`\n]+)`/g, stashCode)
@@ -55,15 +153,63 @@ function renderInline(source: string, inlineBadges: readonly RichInlineBadge[]):
     })
   }
 
+  // Footnote references become numbered superscripts; only defined labels count.
+  prepared = prepared.replace(FOOTNOTE_REF_PATTERN, (match, label: string) => {
+    const normalized = label.trim()
+    if (!context.footnoteLabels.has(normalized)) return match
+    let number = context.footnoteNumbers.get(normalized)
+    if (number === undefined) {
+      number = context.nextFootnoteNumber + 1
+      context.nextFootnoteNumber = number
+      context.footnoteNumbers.set(normalized, number)
+    }
+    // Zero-width anchors keep the caret out of the non-editable superscript.
+    const html = `<sup contenteditable="false" data-editor-footnote-ref="${escapeHtml(normalized)}">${String(number)}</sup>`
+    return `\u200b${stashToken(html)}\u200b`
+  })
+
+  // Inline links `[text](url)` (never `![alt](url)` images).
+  prepared = prepared.replace(INLINE_LINK_PATTERN, (match, text: string, target: string) => {
+    const parsed = parseLinkTarget(target)
+    if (!safeLinkUrl(parsed.url)) return match
+    const titleAttr = parsed.title ? ` title="${escapeHtml(parsed.title)}"` : ''
+    const html = `<a data-editor-link="true" data-editor-link-title="${escapeHtml(parsed.title ?? '')}" href="${escapeHtml(parsed.url)}"${titleAttr}>${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
+  // Reference links `[text][label]` and collapsed `[text][]`.
+  prepared = prepared.replace(REFERENCE_LINK_PATTERN, (match, text: string, rawLabel: string) => {
+    const label = rawLabel.trim()
+    const reference = context.linkRefs.get(normalizeReferenceLabel(label || text))
+    if (!reference) return match
+    const html = `<a data-editor-link="true" data-editor-link-label="${escapeHtml(label || text)}" data-editor-link-text="${escapeHtml(text.trim())}" data-editor-link-raw="${escapeHtml(match)}" href="${escapeHtml(reference.url)}">${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
+  // Shortcut references `[text]` — only when a matching definition exists.
+  prepared = prepared.replace(SHORTCUT_LINK_PATTERN, (match, text: string) => {
+    const reference = context.linkRefs.get(normalizeReferenceLabel(text))
+    if (!reference) return match
+    const html = `<a data-editor-link="true" data-editor-link-label="${escapeHtml(text.trim())}" data-editor-link-text="${escapeHtml(text.trim())}" data-editor-link-raw="${escapeHtml(match)}" href="${escapeHtml(reference.url)}">${escapeHtml(text.trim())}</a>`
+    return stashToken(html)
+  })
+
   let html = escapeHtml(prepared)
   html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong class="font-semibold">$1</strong>')
-  html = html.replace(/__([^_\n]+)__/g, '<strong class="font-semibold">$1</strong>')
+  html = html.replace(
+    /(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__(?![A-Za-z0-9])/g,
+    '<strong class="font-semibold">$1</strong>'
+  )
   html = html.replace(/~~([^~\n]+)~~/g, '<del class="text-muted line-through">$1</del>')
   html = html.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-  html = html.replace(/(?<!_)_([^_\n]+)_(?!_)/g, '<em class="italic">$1</em>')
+  html = html.replace(
+    /(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_(?![A-Za-z0-9])/g,
+    '<em class="italic">$1</em>'
+  )
   return html
     .replace(/\uE000(\d+)\uE001/g, (_match, index: string) => code[Number(index)] ?? '')
     .replace(/\uE002(\d+)\uE003/g, (_match, index: string) => badges[Number(index)] ?? '')
+    .replace(/\uE004(\d+)\uE005/g, (_match, index: string) => tokens[Number(index)] ?? '')
 }
 
 function renderCodeBlockHTML(language: string, content: string): string {
@@ -78,6 +224,7 @@ export function renderRichMarkdown(
   if (!markdown.trim()) return '<p><br></p>'
 
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
+  const { context, definitionLines } = collectEditorDefinitions(lines)
   const blocks: string[] = []
   let index = 0
 
@@ -111,7 +258,7 @@ export function renderRichMarkdown(
     if (heading) {
       const level = heading[1]?.length ?? 1
       blocks.push(
-        `<h${level} class="${headingClass(level)}">${renderInline(heading[2] ?? '', inlineBadges)}</h${level}>`
+        `<h${level} class="${headingClass(level)}">${renderInline(heading[2] ?? '', inlineBadges, context)}</h${level}>`
       )
       index += 1
       continue
@@ -123,7 +270,7 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*[-+*]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges)}</li>`)
+        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
         index += 1
       }
       blocks.push(`<ul class="${LIST_CLASS} list-disc">${items.join('')}</ul>`)
@@ -136,7 +283,7 @@ export function renderRichMarkdown(
       while (index < lines.length) {
         const match = (lines[index] ?? '').match(/^\s*\d+[.)]\s+(.+)$/)
         if (!match) break
-        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges)}</li>`)
+        items.push(`<li class="my-0.5">${renderInline(match[1] ?? '', inlineBadges, context)}</li>`)
         index += 1
       }
       blocks.push(`<ol class="${LIST_CLASS} list-decimal">${items.join('')}</ol>`)
@@ -144,20 +291,29 @@ export function renderRichMarkdown(
     }
 
     const paragraph: string[] = []
+    const paragraphLineIndexes: number[] = []
     while (index < lines.length) {
       const candidate = lines[index] ?? ''
       if (
-        /^(#{1,6})\s+/.test(candidate) ||
-        /^\s*[-+*]\s+/.test(candidate) ||
-        /^\s*\d+[.)]\s+/.test(candidate)
+        /^```(\S*)/.test(candidate) ||
+        /^(#{1,6})\s+(.+)$/.test(candidate) ||
+        /^\s*[-+*]\s+(.+)$/.test(candidate) ||
+        /^\s*\d+[.)]\s+(.+)$/.test(candidate)
       ) {
         break
       }
       paragraph.push(candidate)
+      paragraphLineIndexes.push(index)
       index += 1
     }
     blocks.push(
-      `<p class="mb-1 last:mb-0">${paragraph.map((line) => renderInline(line, inlineBadges)).join('<br>')}</p>`
+      `<p class="mb-1 last:mb-0">${paragraph
+        .map((line, lineIndex) =>
+          definitionLines.has(paragraphLineIndexes[lineIndex] ?? 0)
+            ? escapeHtml(line)
+            : renderInline(line, inlineBadges, context)
+        )
+        .join('<br>')}</p>`
     )
   }
 
@@ -199,6 +355,25 @@ function serializeInline(node: Node): string {
       return `~~${content}~~`
     case 'CODE':
       return node.parentElement?.tagName === 'PRE' ? (node.textContent ?? '') : `\`${content}\``
+    case 'A': {
+      const linkLabel = node.dataset.editorLinkLabel
+      if (linkLabel) {
+        const raw = node.dataset.editorLinkRaw
+        const originalText = node.dataset.editorLinkText
+        // Preserve the author's exact `[text][label]` / `[text][]` / `[text]`
+        // spelling while the link text is untouched; otherwise re-emit with the
+        // edited text against the resolved label.
+        if (raw && originalText !== undefined && content === originalText) return raw
+        return `[${content}][${linkLabel}]`
+      }
+      const title = node.dataset.editorLinkTitle
+      const href = node.getAttribute('href') ?? ''
+      return title ? `[${content}](${href} "${title}")` : `[${content}](${href})`
+    }
+    case 'SUP': {
+      const footnote = node.dataset.editorFootnoteRef
+      return footnote !== undefined ? `[^${footnote}]` : content
+    }
     default:
       return content
   }
@@ -325,6 +500,70 @@ export function placeCaretInside(element: HTMLElement): void {
   selection.addRange(range)
 }
 
+function placeCaretAtStart(element: HTMLElement): void {
+  const selection = window.getSelection()
+  if (!selection) return
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+/** Lifts nested lists out of a list item so the item can be re-shaped as a block
+ *  (paragraph or a sibling item) without dragging its sub-lists along. */
+function liftNestedLists(item: HTMLElement): HTMLElement[] {
+  const lists = Array.from(item.children).filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && (child.tagName === 'UL' || child.tagName === 'OL')
+  )
+  for (const list of lists) {
+    list.remove()
+  }
+  return lists
+}
+
+/** Reverts a list item that the caret sits at the very start of: an item nested
+ *  inside another item is lifted up a level, and the first item of a top-level
+ *  list becomes a plain paragraph in front of the list. Mid-list items fall back
+ *  to the browser's native merge and return false. */
+export function unlistListItem(root: HTMLElement, listItem: HTMLElement): boolean {
+  const list = listItem.parentElement
+  if (!list || (list.tagName !== 'UL' && list.tagName !== 'OL')) return false
+  if (!root.contains(listItem) || listItem.previousElementSibling !== null) return false
+
+  const parentListItem = list.parentElement?.closest('li')
+  if (parentListItem) {
+    const parentList = parentListItem.parentElement
+    if (!parentList) return false
+    listItem.remove()
+    parentList.insertBefore(listItem, parentListItem.nextSibling)
+    if (!list.firstElementChild) list.remove()
+    placeCaretAtStart(listItem)
+    return true
+  }
+
+  const nestedLists = liftNestedLists(listItem)
+  const paragraph = document.createElement('p')
+  paragraph.append(...Array.from(listItem.childNodes))
+  if (paragraph.childNodes.length === 0) paragraph.append(document.createElement('br'))
+  listItem.remove()
+  list.before(paragraph)
+  let cursor: ChildNode = paragraph
+  for (const nested of nestedLists) {
+    cursor.after(nested)
+    cursor = nested
+  }
+  if (!list.firstElementChild) {
+    list.remove()
+    if (!root.firstElementChild) {
+      root.innerHTML = renderRichMarkdown('')
+    }
+  }
+  placeCaretAtStart(paragraph)
+  return true
+}
+
 function currentBlock(root: HTMLElement, node: Node): HTMLElement | null {
   const element = node instanceof HTMLElement ? node : node.parentElement
   const block = element?.closest('p, div, h1, h2, h3, h4, h5, h6, li, pre')
@@ -406,10 +645,10 @@ function applyInlineRule(root: HTMLElement): boolean {
   const prefix = textNode.data.slice(0, endOffset)
   const rules: Array<[RegExp, 'strong' | 'em' | 'del' | 'code']> = [
     [/\*\*([^*\n]+)\*\*$/, 'strong'],
-    [/__([^_\n]+)__$/, 'strong'],
+    [/(?<![A-Za-z0-9])__([^\s_](?:[^\n]*?[^\s])?)__$/, 'strong'],
     [/~~([^~\n]+)~~$/, 'del'],
     [/(?<!\*)\*([^*\n]+)\*$/, 'em'],
-    [/(?<!_)_([^_\n]+)_$/, 'em'],
+    [/(?<![A-Za-z0-9_])_([^\s_](?:[^\n]*?[^\s])?)_$/, 'em'],
     [/`([^`\n]+)`$/, 'code']
   ]
 
@@ -474,6 +713,61 @@ function createCodeBlockElement(language: string): HTMLElement {
   return wrapper
 }
 
+function childIndexOf(parent: Node, child: Node): number {
+  const children = parent.childNodes
+  for (let index = 0; index < children.length; index += 1) {
+    if (children[index] === child) return index
+  }
+  return -1
+}
+
+/** True when a node contributes real content to its block. Soft breaks (`<br>`)
+ *  are treated as whitespace so a caret sitting before a trailing break or after
+ *  a leading one still resolves to a block boundary. */
+function hasVisibleContent(node: Node): boolean {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return (node.textContent ?? '').replace(/[\u200b\u00a0]/g, '').length > 0
+  }
+  if (node instanceof HTMLBRElement) return false
+  if (node instanceof HTMLElement) {
+    return Array.from(node.childNodes).some(hasVisibleContent)
+  }
+  return false
+}
+
+/** Whether there is visible content before (`before`) or after (`after`) a
+ *  position inside `block`. The scan is scoped to the block so a caret at a
+ *  block boundary never counts siblings in neighbouring blocks. */
+function hasContentAt(
+  block: HTMLElement,
+  container: Node,
+  offset: number,
+  before: boolean
+): boolean {
+  if (container.nodeType === Node.TEXT_NODE) {
+    const text = container.textContent ?? ''
+    const slice = before ? text.slice(0, offset) : text.slice(offset)
+    if (slice.replace(/[\u200b\u00a0]/g, '').length > 0) return true
+    const parent = container.parentNode
+    if (!parent) return false
+    return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
+  }
+  const children = Array.from(container.childNodes)
+  if (before) {
+    for (let index = offset - 1; index >= 0; index -= 1) {
+      if (hasVisibleContent(children[index] ?? block)) return true
+    }
+  } else {
+    for (let index = offset; index < children.length; index += 1) {
+      if (hasVisibleContent(children[index] ?? block)) return true
+    }
+  }
+  if (container === block) return false
+  const parent = container.parentNode
+  if (!parent) return false
+  return hasContentAt(block, parent, childIndexOf(parent, container) + (before ? 0 : 1), before)
+}
+
 function applyCodeFenceRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
@@ -493,15 +787,37 @@ function applyCodeFenceRule(root: HTMLElement): boolean {
 
   const fenceStart = cleanBefore.length - fence[0].length
   textNode.deleteData(fenceStart, caretOffset - fenceStart)
+  // Deleting the fence shifts any text after it left; the caret boundary now sits
+  // at `fenceStart` inside the node.
+  const boundaryOffset = fenceStart
 
   const wrapper = createCodeBlockElement(fence[1] ?? '')
   const code = wrapper.querySelector('code')
-  const blockHasText = (block.textContent ?? '').trim().length > 0
-  if (blockHasText) {
+  const hasBefore = hasContentAt(block, textNode, boundaryOffset, true)
+  const hasAfter = hasContentAt(block, textNode, boundaryOffset, false)
+
+  if (hasBefore && hasAfter && textNode.parentElement === block) {
+    // The caret is mid-paragraph (e.g. across a soft break). Split the block:
+    // keep the text before the caret, insert the code block exactly there, and
+    // move the text after the caret into its own paragraph.
+    const range = document.createRange()
+    range.setStart(textNode, boundaryOffset)
+    range.setEnd(block, block.childNodes.length)
+    const fragment = range.extractContents()
+    if (fragment.firstChild instanceof HTMLBRElement) fragment.firstChild.remove()
+    if (block.lastChild instanceof HTMLBRElement) block.lastChild.remove()
     block.after(wrapper)
+    const paragraph = document.createElement('p')
+    paragraph.append(fragment)
+    wrapper.after(paragraph)
+  } else if (hasBefore) {
+    block.after(wrapper)
+  } else if (hasAfter) {
+    block.before(wrapper)
   } else {
     block.replaceWith(wrapper)
   }
+
   if (code) placeCaretInside(code)
   return true
 }

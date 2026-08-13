@@ -2,6 +2,7 @@
   import { ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -41,6 +42,7 @@
     maxOutputTokens: string
     reasoning: boolean
     defaultThinkingLevel: ThinkingLevel | ''
+    vision: boolean
   }
 
   interface ProviderDraft {
@@ -58,7 +60,8 @@
 
   const NPM_OPTIONS = [
     { value: '@ai-sdk/openai-compatible', label: 'OpenAI-compatible (/v1/chat/completions)' },
-    { value: '@ai-sdk/openai', label: 'OpenAI (/v1/responses)' }
+    { value: '@ai-sdk/openai', label: 'OpenAI (/v1/responses)' },
+    { value: '@ai-sdk/anthropic', label: 'Anthropic (/v1/messages)' }
   ] as const
 
   const THINKING_LEVELS: ThinkingLevel[] = [
@@ -150,7 +153,8 @@
               contextWindow: model.contextWindow?.toString() ?? '',
               maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
               reasoning: model.reasoning,
-              defaultThinkingLevel: model.defaultThinkingLevel ?? ''
+              defaultThinkingLevel: model.defaultThinkingLevel ?? '',
+              vision: model.vision ?? true
             }))
           : [emptyModelDraft()],
         enabled: provider.enabled
@@ -166,7 +170,8 @@
       contextWindow: '',
       maxOutputTokens: '',
       reasoning: false,
-      defaultThinkingLevel: ''
+      defaultThinkingLevel: '',
+      vision: true
     }
   }
 
@@ -201,7 +206,8 @@
         contextWindow: '',
         maxOutputTokens: '',
         reasoning: false,
-        defaultThinkingLevel: ''
+        defaultThinkingLevel: '',
+        vision: true
       }
     ]
   }
@@ -237,6 +243,7 @@
         id,
         name: model.name.trim() || id,
         reasoning: model.reasoning,
+        vision: model.vision,
         ...(model.contextWindow.trim()
           ? { contextWindow: Number.parseInt(model.contextWindow, 10) }
           : {}),
@@ -354,6 +361,7 @@
     maxOutputTokens: string
     reasoning: boolean
     defaultThinkingLevel: ThinkingLevel | ''
+    vision: boolean
   }): ModelDraft {
     return {
       id: model.id,
@@ -361,13 +369,14 @@
       contextWindow: model.contextWindow,
       maxOutputTokens: model.maxOutputTokens,
       reasoning: model.reasoning,
-      defaultThinkingLevel: model.defaultThinkingLevel
+      defaultThinkingLevel: model.defaultThinkingLevel,
+      vision: model.vision
     }
   }
 
   async function copyText(text: string, successMessage: string): Promise<void> {
     try {
-      await invoke('clipboard:writeText', text)
+      await copyTextToClipboard(text)
       toast.success(successMessage)
     } catch (copyError) {
       toast.error(copyError instanceof Error ? copyError.message : 'Clipboard copy failed.')
@@ -614,6 +623,9 @@
             </label>
           </div>
           <div class="mt-2 flex items-center gap-4">
+            <Switch bind:checked={model.vision}>
+              <span class="text-[11px] font-medium">Can see images</span>
+            </Switch>
             <Switch bind:checked={model.reasoning}>
               <span class="text-[11px] font-medium">Supports reasoning</span>
             </Switch>

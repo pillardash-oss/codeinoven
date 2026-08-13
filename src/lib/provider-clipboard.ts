@@ -14,6 +14,8 @@ export interface BaseUrlProviderModelClipboardData {
   maxOutputTokens: string
   reasoning: boolean
   defaultThinkingLevel: ThinkingLevel | ''
+  /** Whether the model can see images. */
+  vision: boolean
 }
 
 /** Draft-style provider fields, matching the BaseUrlProviderEditor form. */
@@ -101,7 +103,9 @@ function parseModel(raw: unknown): BaseUrlProviderModelClipboardData {
     contextWindow: optionalString(model['contextWindow']),
     maxOutputTokens: optionalString(model['maxOutputTokens']),
     reasoning: model['reasoning'] === true,
-    defaultThinkingLevel: thinkingLevel(model['defaultThinkingLevel'])
+    defaultThinkingLevel: thinkingLevel(model['defaultThinkingLevel']),
+    // Absent on older clipboards → default to vision-capable.
+    vision: model['vision'] !== false
   }
 }
 

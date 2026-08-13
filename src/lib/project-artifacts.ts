@@ -1,11 +1,16 @@
 import { join } from 'path'
+import { readFile } from 'fs/promises'
 import type { Database } from '../main/database/database'
 import { ThreadRepo } from '../main/database/repositories/thread-repo'
 import { ProjectRepo } from '../main/database/repositories/project-repo'
 import type { Project } from './types'
+import { atomicWrite, ensureDir } from './utils'
+import { APP_NAME } from './brand'
 
 export const PROJECT_DATA_DIRECTORY = '.cio'
 export const PROJECT_SPECS_DIRECTORY = 'specs'
+
+const PROJECT_GITIGNORE_BLOCK = `# ${APP_NAME} agent scratch space (context, reports, temp work)\n.cio/\n`
 
 export function featureSlugFromTitle(title: string): string {
   const normalized = title
@@ -23,6 +28,37 @@ export function featureSlugFromTitle(title: string): string {
 
 export function featureArtifactDirectory(featureSlug: string): string {
   return join(PROJECT_DATA_DIRECTORY, PROJECT_SPECS_DIRECTORY, featureSlug)
+}
+
+/**
+ * Create the project's `.cio/` agent scratch pad and gitignore it from day
+ * one. Best-effort: a local project must never fail to register because of
+ * this, so callers treat a thrown error as non-fatal.
+ */
+export async function ensureProjectScratchSpace(projectPath: string): Promise<void> {
+  await ensureDir(join(projectPath, PROJECT_DATA_DIRECTORY))
+
+  const ignorePath = join(projectPath, '.gitignore')
+  let current = ''
+  try {
+    current = await readFile(ignorePath, 'utf-8')
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error
+  }
+
+  if (gitignoreCoversCio(current)) return
+  const separator = current.trimEnd() ? '\n\n' : ''
+  await atomicWrite(ignorePath, `${current.trimEnd()}${separator}${PROJECT_GITIGNORE_BLOCK}`)
+}
+
+/** True when an existing `.gitignore` already covers the `.cio` directory. */
+function gitignoreCoversCio(content: string): boolean {
+  return content.split(/\r?\n/u).some((line) => {
+    const pattern = line.trim()
+    if (!pattern || pattern.startsWith('#')) return false
+    const normalized = pattern.replace(/^\/+?/u, '').replace(/^\*\*\//u, '')
+    return normalized === PROJECT_DATA_DIRECTORY || normalized === `${PROJECT_DATA_DIRECTORY}/`
+  })
 }
 
 /** Assign a readable feature identity once; later thread renames never alter it. */

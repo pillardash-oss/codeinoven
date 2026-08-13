@@ -10,6 +10,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
 
   const filters: { key: NotificationFilter; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -59,7 +60,7 @@
 
   async function copyError(e: AppErrorEntry): Promise<void> {
     try {
-      await navigator.clipboard.writeText(e.message)
+      await copyText(e.message)
       copiedId = e.id
       window.setTimeout(() => {
         if (copiedId === e.id) copiedId = null

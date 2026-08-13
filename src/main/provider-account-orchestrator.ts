@@ -12,6 +12,7 @@ import type {
   HarnessLoginOptions
 } from './drivers/driver.interface'
 import { buildHarnessEnvironment } from './drivers/cli-environment'
+import { antigravityModelSlugs } from './drivers/antigravity-model-output'
 
 const STATUS_TIMEOUT_MS = 10_000
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
@@ -21,6 +22,8 @@ const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
 /** OpenCode's global config file — hiding providers writes disabled_providers here. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+/** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
+const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
 
 interface AuthDefinition {
   id: string
@@ -163,7 +166,7 @@ function parseAntigravityStatus(output: string, succeeded: boolean): HarnessAuth
   if (/please sign in|sign in to view|authentication required/iu.test(clean)) {
     return { state: 'unauthenticated', accounts: [] }
   }
-  const hasSlugs = clean.split(/\r?\n/u).some((line) => /^[a-z0-9][a-z0-9.-]*$/iu.test(line.trim()))
+  const hasSlugs = antigravityModelSlugs(clean).length > 0
   if (hasSlugs) {
     return {
       state: 'authenticated',
@@ -308,6 +311,62 @@ async function readPiStatus(): Promise<HarnessAuthStatus> {
   }
 }
 
+/**
+ * Muse keeps OAuth credentials in `~/.config/muse/auth.json` (or
+ * `$XDG_CONFIG_HOME/muse/auth.json`) and honors a `META_API_KEY` env var that
+ * takes priority over a logged-in session. The CLI exposes no `auth status`
+ * subcommand, so the auth file is read directly. Its shape is
+ * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }` —
+ * a provider is authenticated when it carries an `access_token` or `api_key`.
+ */
+async function readMuseStatus(): Promise<HarnessAuthStatus> {
+  if (process.env['META_API_KEY']) {
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'meta', label: 'Meta', method: 'api-key', active: true }]
+    }
+  }
+  let stored: Record<string, unknown>
+  try {
+    const raw = await readFile(MUSE_AUTH_PATH, 'utf8')
+    stored = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return { state: 'unauthenticated', accounts: [] }
+  }
+  const providers = stored['providers']
+  if (typeof providers !== 'object' || providers === null || Array.isArray(providers)) {
+    return { state: 'unauthenticated', accounts: [] }
+  }
+  const accounts: HarnessAuthAccount[] = []
+  let signedIn = 0
+  for (const [providerId, rawEntry] of Object.entries(providers as Record<string, unknown>)) {
+    const entry = rawEntry as Record<string, unknown> | null
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue
+    const token = typeof entry['access_token'] === 'string' ? entry['access_token'] : undefined
+    const apiKey = typeof entry['api_key'] === 'string' ? entry['api_key'] : undefined
+    const authenticated = Boolean((token && token.length > 0) || (apiKey && apiKey.length > 0))
+    const method =
+      typeof entry['mechanism'] === 'string'
+        ? entry['mechanism']
+        : typeof entry['obtained_via'] === 'string'
+          ? entry['obtained_via']
+          : authenticated
+            ? 'oauth'
+            : undefined
+    accounts.push({
+      id: accountId(providerId),
+      label: (typeof entry['user_full_name'] === 'string' && entry['user_full_name']) || providerId,
+      ...(method === undefined ? {} : { method }),
+      active: authenticated
+    })
+    if (authenticated) signedIn += 1
+  }
+  return {
+    state: signedIn > 0 ? 'authenticated' : 'unauthenticated',
+    accounts
+  }
+}
+
 /** Provider ids listed under `disabled_providers` in OpenCode's global config. */
 function readHiddenProviders(): string[] {
   try {
@@ -417,6 +476,15 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     command: 'agy',
     readStatus: readAntigravityStatus,
     loginArgs: () => [],
+    pickerLogin: true
+  },
+  {
+    id: 'muse',
+    name: 'Muse Code',
+    command: 'muse',
+    readStatus: readMuseStatus,
+    loginArgs: () => ['login'],
+    logoutArgs: () => ['logout'],
     pickerLogin: true
   }
 ]
@@ -528,6 +596,16 @@ export class ProviderAccountOrchestrator {
         }))
       }
       case 'antigravity': {
+        const status = await this.getStatus(harnessId)
+        if (status.state === 'error') return []
+        return status.accounts.map((account) => ({
+          id: account.id,
+          name: account.label,
+          modelCount: 0,
+          authenticated: status.state === 'authenticated'
+        }))
+      }
+      case 'muse': {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
         return status.accounts.map((account) => ({

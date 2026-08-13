@@ -1,5 +1,9 @@
 import type { AgentMessage, AgentPart } from '$shared/types'
-import { extractCitations, normalizeCitationPath } from '$lib/agent-source-citations'
+import {
+  extractCitations,
+  extractSectionReferences,
+  normalizeCitationPath
+} from '$lib/agent-source-citations'
 
 interface BaseAgentSource {
   id: string
@@ -27,7 +31,13 @@ export interface FileCitationAgentSource extends BaseAgentSource {
   lineEnd?: number
 }
 
-export type AgentSource = FileAgentSource | WebAgentSource | FileCitationAgentSource
+export interface SectionAgentSource extends BaseAgentSource {
+  kind: 'section'
+  section: string
+}
+
+export type AgentSource =
+  FileAgentSource | WebAgentSource | FileCitationAgentSource | SectionAgentSource
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
 const MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu
@@ -266,6 +276,16 @@ export function collectAgentSources(messages: AgentMessage[]): AgentSource[] {
             path: citation.path,
             line: citation.line,
             lineEnd: citation.lineEnd,
+            messageId: message.id,
+            createdAt: message.createdAt
+          })
+        }
+        for (const section of extractSectionReferences(cleanText)) {
+          addSource(sources, {
+            id: sourceId('section', section),
+            kind: 'section',
+            title: `Section ${section}`,
+            section,
             messageId: message.id,
             createdAt: message.createdAt
           })

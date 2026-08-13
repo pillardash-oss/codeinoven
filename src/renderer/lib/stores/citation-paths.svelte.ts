@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { INBOX_PROJECT_ID } from '$shared/types'
 
 /**
  * Shared, reactive cache of file citations confirmed to exist on disk.
@@ -44,9 +45,17 @@ class CitationPathsState {
 
   /** Queue existence checks for candidate paths in the active project. */
   ensureActiveProjectChecked(candidates: string[]): void {
-    const projectId = workspaceState.activeProject?.id
-    if (!projectId || candidates.length === 0) return
-    this.ensureChecked(projectId, candidates)
+    const project = workspaceState.activeProject
+    if (
+      !project ||
+      project.id === INBOX_PROJECT_ID ||
+      project.source !== 'local' ||
+      !project.path.trim() ||
+      candidates.length === 0
+    ) {
+      return
+    }
+    this.ensureChecked(project.id, candidates)
   }
 
   /**
@@ -55,6 +64,7 @@ class CitationPathsState {
    * inflight drain per project.
    */
   ensureChecked(projectId: string, candidates: string[]): void {
+    if (projectId === INBOX_PROJECT_ID) return
     const cache = this.cacheFor(projectId)
     for (const candidate of candidates) {
       if (candidate.length === 0 || cache.checked.has(candidate)) continue

@@ -1,38 +1,87 @@
-import { app, ipcMain, dialog, shell, clipboard, BrowserWindow } from 'electron'
-import { readFile, writeFile, mkdtemp } from 'fs/promises'
-import { tmpdir, release } from 'os'
+import { app, dialog, shell, clipboard, BrowserWindow } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
+import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { readFile, writeFile, mkdir, stat } from 'fs/promises'
+import { release } from 'os'
+import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join } from 'path'
-import { fileURLToPath } from 'url'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import type { Database } from './database/database'
 import { StorageEngine } from './storage-engine'
 import { Logger } from './logger'
 import { EditorService } from './editor-service'
 import { RepositoryService } from './repository-service'
+import { GitService } from './git-service'
+import { SecretVault } from './secret-vault'
+import { GitHubAuthService } from './github-auth-service'
+import { GitHubProvider, ProviderHttpError } from './providers/github-provider'
+import { isDevelopmentEnvironment, validateBaseUrl } from './providers/base-url'
+import { resolveDeploymentProvider } from './providers/registry'
+import type { DeploymentProviderContext } from './deployment-provider.interface'
+import type { GitProvider } from './git-provider.interface'
 import { ProjectFilesService } from './project-files-service'
 import { CheckpointManager } from './checkpoint-manager'
+import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { DiagnosticsService } from './diagnostics-service'
+import { resolveFavicons } from './favicon-service'
 import { MemoryService, validateMemoryConfig } from './memory-service'
+import { harnessLoadsAgentsMd } from './harness-registry'
+import type { HarnessManifestService } from './harness-manifest-service'
 import { SpecContextService } from './spec-context-service'
 import type { UpdaterService } from './updater-service'
 import type { ChatEngine } from './chat-engine'
 import type { PowerWakeService } from './power-wake-service'
-import { broadcastThreadUpdate, dismissThreadNotifications } from './thread-events'
+import type { RetrySchedulerService } from './retry-scheduler-service'
+import {
+  broadcastThreadDeleted,
+  broadcastThreadUpdate,
+  dismissThreadNotifications
+} from './thread-events'
 import { parseThreadContextUsage } from './database/repositories/thread-repo'
+import { AttachmentGrantRepo } from './database/repositories/attachment-grant-repo'
+import { HarnessUsageRepo } from './database/repositories/harness-usage-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
   validateBoolean,
+  validateBranchName,
   validateChecklistItemStatus,
+  validateCommitMessage,
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
+  validateGitIdentity,
+  validateGitPathArray,
+  validateGitRelativePath,
+  validateGitResetMode,
   validateHistoryRole,
+  validateMergeMethod,
+  validateMergeTarget,
+  MAX_GITHUB_NUMERIC_ID,
+  validatePrResolveOptions,
+  validatePrCreateInput,
+  validatePrNumber,
+  validatePrState,
+  validatePrPage,
+  validatePrReviewEvent,
+  validatePrCommentBody,
+  validatePushOptions,
+  validatePullIntegrateOptions,
+  validateMergeCommitTitle,
+  validateMergeCommitMessage,
+  validateRemoteName,
+  validateRemoteUrl,
+  validateFaviconHostnames,
   validateScopeBoard,
   validateScopeSlice,
+  validateStashMessage,
+  validateStashId,
   validateThreadSettings,
   validateThreadStatus,
-  validateThreadUpdateInput
+  validateThreadUpdateInput,
+  validateSortOrder,
+  PrivilegedIpcValidator,
+  isMissingScopedPathError
 } from './ipc-validation'
 import { ProjectManager } from '../lib/engines/project-manager'
 import { ThreadManager } from '../lib/engines/thread-manager'
@@ -55,6 +104,7 @@ import {
   type AddAssignmentAnnotationInput
 } from '../lib/engines/assignment-engine'
 import { validateAuditReportContent } from '../lib/audit/audit-validation'
+import { exportAuditReportMarkdown } from '../lib/audit/audit-markdown'
 import { exportAssignmentMarkdown } from '../lib/assignment/assignment-markdown'
 import { validateAssignment } from '../lib/assignment/assignment-validation'
 import {
@@ -63,11 +113,15 @@ import {
 } from '../lib/spec/spec-markdown'
 import { validateEngineeringSpec } from '../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../lib/brainstorm/brainstorm-validation'
-import { atomicWrite } from '../lib/utils'
+import { exportBrainstormMarkdown } from '../lib/brainstorm/brainstorm-markdown'
+import { atomicWrite, getConfigRoot } from '../lib/utils'
+import { PROJECT_DATA_DIRECTORY } from '../lib/project-artifacts'
 import { normalizeWorkerNames } from '../lib/assignment/worker-names'
+import { retainTemporaryAttachment } from './temporary-attachment-retention'
 import type {
   AppConfig,
   AppConfigPatch,
+  AttachmentStorageScope,
   AgentDefaultsConfig,
   AgentModelSelection,
   AgentRole,
@@ -82,21 +136,81 @@ import type {
   CreateProjectInput,
   EngineeringSpec,
   EngineeringSpecContent,
+  GitHubMutationResult,
+  GitHubPermissionRequired,
+  GitHubDeploymentOverview,
   AuditSectionId,
   HistoryEntry,
   EditorId,
+  LocalProfileAnalyticsRange,
   MemoryEntry,
   SpecContextReference,
   SpecSectionId,
   SpecValidationCode,
   SpecValidationIssue,
-  ThreadMessageCursor
+  Thread,
+  ThreadMessageCursor,
+  CloudDeploymentConfig,
+  CloudDeploymentContainer,
+  CloudDeploymentProjectProviderAccounts,
+  CloudDeploymentProviderAccount,
+  CloudDeploymentProviderKind,
+  CloudDeploymentStatus
 } from '../lib/types'
+import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../lib/types'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
 const THEMES = new Set(['light', 'dark', 'system'])
+/** Pull requests fetched per sidebar page. */
+const PR_PAGE_SIZE = 20
+const GITHUB_REPOSITORY_ACCESS_MESSAGE =
+  'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
+const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
+
+/** Reduce local/tracking ref spellings to the branch name GitHub expects. */
+function canonicalGitHubBranch(branch: string): string {
+  return branch
+    .replace(/^refs\/remotes\/origin\//u, '')
+    .replace(/^refs\/heads\//u, '')
+    .replace(/^origin\//u, '')
+}
+
+function githubPermissionRequired(
+  error: unknown,
+  owner: string,
+  repo: string
+): GitHubPermissionRequired | null {
+  if (
+    !(error instanceof ProviderHttpError) ||
+    error.status !== 403 ||
+    !/resource not accessible by integration/iu.test(error.message)
+  ) {
+    return null
+  }
+  return {
+    status: 'permission_required',
+    message:
+      `CodeInOven needs Pull requests read and write access for ${owner}/${repo}. ` +
+      'Install the GitHub App on this repository or approve its pending permission update.',
+    settingsUrl: GITHUB_APP_INSTALL_URL
+  }
+}
+
+async function runGitHubMutation<T>(
+  owner: string,
+  repo: string,
+  mutation: () => Promise<T>
+): Promise<GitHubMutationResult<T>> {
+  try {
+    return { status: 'completed', value: await mutation() }
+  } catch (error) {
+    const permission = githubPermissionRequired(error, owner, repo)
+    if (permission) return permission
+    throw error
+  }
+}
 const EDITOR_IDS = new Set<EditorId>([
   'system',
   'terminal',
@@ -112,6 +226,28 @@ const EDITOR_IDS = new Set<EditorId>([
   'webstorm',
   'idea'
 ])
+const MAX_PROFILE_ANALYTICS_RANGE_MS = 371 * 24 * 60 * 60 * 1_000
+
+function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyticsRange {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new TypeError('Profile analytics range must be an object')
+  }
+  const range = value as Record<string, unknown>
+  const startAt = range['startAt']
+  const endAt = range['endAt']
+  if (
+    typeof startAt !== 'number' ||
+    !Number.isSafeInteger(startAt) ||
+    startAt < 0 ||
+    typeof endAt !== 'number' ||
+    !Number.isSafeInteger(endAt) ||
+    endAt <= startAt ||
+    endAt - startAt > MAX_PROFILE_ANALYTICS_RANGE_MS
+  ) {
+    throw new TypeError('Profile analytics range is invalid')
+  }
+  return { startAt, endAt }
+}
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
   'threadLimit',
@@ -122,7 +258,11 @@ const CONFIG_PATCH_FIELDS = new Set([
   'agentDefaults',
   'autoDownloadUpdates',
   'autoInstallUpdates',
-  'keepAwakeWhileWorking'
+  'updateChannel',
+  'keepAwakeWhileWorking',
+  'imageDescriptorAskAgain',
+  'autoRetryAfterReset',
+  'resumeWorkOnRestart'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -162,11 +302,31 @@ const AGENT_DEFAULT_FIELDS = new Set([
   'seniorEngineer',
   'worker',
   'auditor',
+  'imageDescriptor',
   'syncFromThreadChanges'
 ])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
+  if (!isRecord(value) || (value.kind !== 'project' && value.kind !== 'chat')) {
+    throw new TypeError('Attachment storage scope is invalid')
+  }
+  return {
+    kind: value.kind,
+    projectId: validateEntityId(value.projectId, 'Project ID'),
+    threadId: validateEntityId(value.threadId, 'Thread ID')
+  }
+}
+
+function isMissingFilesystemError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    (error.code === 'ENOENT' || error.code === 'ENOTDIR')
+  )
 }
 
 function requireString(value: unknown, label: string, allowEmpty = false): string {
@@ -218,7 +378,15 @@ function validateAgentDefaults(value: unknown): AgentDefaultsConfig {
       : { worker: validateAgentModelSelection(value.worker, 'Worker default') }),
     ...(value.auditor === undefined
       ? {}
-      : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') })
+      : { auditor: validateAgentModelSelection(value.auditor, 'Auditor default') }),
+    ...(value.imageDescriptor === undefined
+      ? {}
+      : {
+          imageDescriptor: validateAgentModelSelection(
+            value.imageDescriptor,
+            'Image descriptor default'
+          )
+        })
   }
 }
 
@@ -827,6 +995,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.autoInstallUpdates = value.autoInstallUpdates
   }
 
+  if ('updateChannel' in value) {
+    if (value.updateChannel !== 'stable' && value.updateChannel !== 'nightly') {
+      throw new TypeError('updateChannel must be either "stable" or "nightly"')
+    }
+    patch.updateChannel = value.updateChannel
+  }
+
   if ('keepAwakeWhileWorking' in value) {
     if (typeof value.keepAwakeWhileWorking !== 'boolean') {
       throw new TypeError('keepAwakeWhileWorking must be a boolean')
@@ -834,13 +1009,271 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.keepAwakeWhileWorking = value.keepAwakeWhileWorking
   }
 
+  if ('imageDescriptorAskAgain' in value) {
+    if (typeof value.imageDescriptorAskAgain !== 'boolean') {
+      throw new TypeError('imageDescriptorAskAgain must be a boolean')
+    }
+    patch.imageDescriptorAskAgain = value.imageDescriptorAskAgain
+  }
+
+  if ('autoRetryAfterReset' in value) {
+    if (typeof value.autoRetryAfterReset !== 'boolean') {
+      throw new TypeError('autoRetryAfterReset must be a boolean')
+    }
+    patch.autoRetryAfterReset = value.autoRetryAfterReset
+  }
+
+  if ('resumeWorkOnRestart' in value) {
+    if (typeof value.resumeWorkOnRestart !== 'boolean') {
+      throw new TypeError('resumeWorkOnRestart must be a boolean')
+    }
+    patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
   return patch
+}
+
+const CLOUD_DEPLOYMENT_PROVIDER_KINDS = new Set<string>(CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES)
+const CLOUD_DEPLOYMENT_STATUSES = new Set<string>(['building', 'success', 'failed', 'unknown'])
+const CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH = 16_384
+
+function validateCloudDeploymentProviderKind(
+  value: unknown,
+  label = 'Provider kind'
+): CloudDeploymentProviderKind {
+  if (typeof value !== 'string' || !CLOUD_DEPLOYMENT_PROVIDER_KINDS.has(value)) {
+    throw new TypeError(
+      `${label} must be one of: ${CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES.join(', ')}`
+    )
+  }
+  return value as CloudDeploymentProviderKind
+}
+
+function validateCloudDeploymentStatus(value: unknown, label: string): CloudDeploymentStatus {
+  if (typeof value !== 'string' || !CLOUD_DEPLOYMENT_STATUSES.has(value)) {
+    throw new TypeError(`${label} status must be building, success, failed, or unknown`)
+  }
+  return value as CloudDeploymentStatus
+}
+
+function validateCloudDeploymentContainer(value: unknown, index: number): CloudDeploymentContainer {
+  if (!isRecord(value)) throw new TypeError(`Cloud deployment container ${index} must be an object`)
+  return {
+    id: requireString(value.id, `Cloud deployment container ${index} ID`, true),
+    label: requireString(value.label, `Cloud deployment container ${index} label`),
+    providerKind: validateCloudDeploymentProviderKind(
+      value.providerKind,
+      `Cloud deployment container ${index} provider kind`
+    ),
+    status: validateCloudDeploymentStatus(value.status, `Cloud deployment container ${index}`),
+    ...(typeof value.url === 'string' ? { url: value.url } : {}),
+    ...(value.createdAt === undefined
+      ? {}
+      : {
+          createdAt: requireTimestamp(
+            value.createdAt,
+            `Cloud deployment container ${index} creation`
+          )
+        }),
+    ...(value.updatedAt === undefined
+      ? {}
+      : {
+          updatedAt: requireTimestamp(value.updatedAt, `Cloud deployment container ${index} update`)
+        }),
+    ...(typeof value.log === 'string' ? { log: value.log } : {})
+  }
+}
+
+/**
+ * Validate a project's per-provider account association. The active account id,
+ * when set, must reference one of the attached account ids.
+ */
+function validateCloudDeploymentProjectProviderAccounts(
+  value: unknown,
+  kind: CloudDeploymentProviderKind
+): CloudDeploymentProjectProviderAccounts {
+  if (!isRecord(value)) {
+    throw new TypeError(`Cloud deployment account association for ${kind} must be an object`)
+  }
+  if (!Array.isArray(value.attachedAccountIds)) {
+    throw new TypeError(`Cloud deployment account association for ${kind} must have attached ids`)
+  }
+  const attachedAccountIds = value.attachedAccountIds.map((id, index) =>
+    requireString(id, `${kind} attached account ID ${index}`, true)
+  )
+  const activeAccountId =
+    value.activeAccountId === null
+      ? null
+      : requireString(value.activeAccountId, `${kind} active account ID`, true)
+  if (activeAccountId !== null && !attachedAccountIds.includes(activeAccountId)) {
+    throw new TypeError(`Active account ${activeAccountId} is not attached for ${kind}`)
+  }
+  return { attachedAccountIds, activeAccountId }
+}
+
+/**
+ * Validate a renderer-supplied cloud deployment config at the IPC boundary.
+ * `projectId` is pinned to the channel argument so the renderer cannot persist
+ * a config for a different project by passing a mismatched body. Accounts
+ * themselves live in the global registry; this only validates the project's
+ * provider/container selection and account association.
+ */
+function validateCloudDeploymentConfig(value: unknown, projectId: string): CloudDeploymentConfig {
+  if (!isRecord(value)) throw new TypeError('Cloud deployment config must be an object')
+  if (value.version !== 3) throw new TypeError('Unsupported cloud deployment config schema')
+  if (validateEntityId(value.projectId, 'Config project ID') !== projectId) {
+    throw new TypeError('Config project ID does not match the requested project')
+  }
+  if (!isRecord(value.project)) {
+    throw new TypeError('Cloud deployment project config must be an object')
+  }
+  if (!Array.isArray(value.project.providers)) {
+    throw new TypeError('Cloud deployment providers must be an array')
+  }
+  if (!Array.isArray(value.project.containers)) {
+    throw new TypeError('Cloud deployment containers must be an array')
+  }
+
+  const providers: CloudDeploymentProviderKind[] = value.project.providers.map((provider, index) =>
+    validateCloudDeploymentProviderKind(provider, `Provider ${index}`)
+  )
+  const seen = new Set<CloudDeploymentProviderKind>()
+  for (const provider of providers) {
+    if (seen.has(provider)) throw new TypeError(`Duplicate cloud deployment provider: ${provider}`)
+    seen.add(provider)
+  }
+
+  const containers = value.project.containers.map((container, index) =>
+    validateCloudDeploymentContainer(container, index)
+  )
+  const containerKeys = new Set<string>()
+  for (const container of containers) {
+    if (!providers.includes(container.providerKind)) {
+      throw new TypeError(
+        `Container ${container.id} references provider ${container.providerKind} that is not selected`
+      )
+    }
+    const key = `${container.providerKind}/${container.id}`
+    if (containerKeys.has(key)) {
+      throw new TypeError(`Duplicate cloud deployment container mapping: ${key}`)
+    }
+    containerKeys.add(key)
+  }
+
+  let providerAccounts: CloudDeploymentConfig['project']['providerAccounts']
+  if (value.project.providerAccounts === undefined) {
+    providerAccounts = undefined
+  } else if (!isRecord(value.project.providerAccounts)) {
+    throw new TypeError('Cloud deployment account association must be an object')
+  } else {
+    providerAccounts = {}
+    for (const key of Object.keys(value.project.providerAccounts)) {
+      const kind = validateCloudDeploymentProviderKind(key)
+      providerAccounts[kind] = validateCloudDeploymentProjectProviderAccounts(
+        value.project.providerAccounts[key],
+        kind
+      )
+    }
+  }
+
+  return {
+    version: 3,
+    projectId,
+    project: {
+      providers,
+      containers,
+      ...(providerAccounts === undefined ? {} : { providerAccounts })
+    },
+    updatedAt: requireTimestamp(value.updatedAt, 'Cloud deployment config update')
+  }
+}
+
+function validateProviderToken(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH ||
+    value.includes('\0')
+  ) {
+    throw new TypeError(
+      `Provider token must be a string of at most ${CLOUD_DEPLOYMENT_MAX_TOKEN_LENGTH} characters`
+    )
+  }
+  return value
+}
+
+function validateAccountLabel(value: unknown): string {
+  return requireString(value, 'Account label')
+}
+
+function validateProviderBaseUrl(value: unknown, kind: CloudDeploymentProviderKind): string {
+  if (typeof value !== 'string') throw new TypeError(`${kind} base URL must be a string`)
+  const result = validateBaseUrl(value, { development: isDevelopmentEnvironment() })
+  if (!result.ok || result.baseUrl === null) {
+    throw new TypeError(`Invalid ${kind} base URL: ${result.reason ?? 'unsupported value'}`)
+  }
+  return result.baseUrl
+}
+
+/**
+ * Fold a provider's live container results into the project's configured
+ * container mappings for one provider kind. Only containers the user has mapped
+ * are returned; each keeps the configured id and the user's custom label
+ * (overriding whatever the provider reports). A mapped container the provider
+ * has not returned yet is still represented with an unknown/available status so
+ * configured containers always appear in the panel.
+ */
+function mergeCloudDeploymentContainers(
+  providerContainers: CloudDeploymentContainer[],
+  mappedContainers: CloudDeploymentContainer[],
+  kind: CloudDeploymentProviderKind
+): CloudDeploymentContainer[] {
+  const byId = new Map<string, CloudDeploymentContainer>()
+  for (const container of providerContainers) byId.set(container.id, container)
+
+  const merged: CloudDeploymentContainer[] = []
+  for (const mapping of mappedContainers) {
+    if (mapping.providerKind !== kind) continue
+    const live = byId.get(mapping.id)
+    if (!live) {
+      merged.push({ ...mapping, status: 'unknown' })
+      continue
+    }
+    merged.push({
+      id: mapping.id,
+      label: mapping.label,
+      providerKind: kind,
+      status: live.status,
+      ...(live.url === undefined ? {} : { url: live.url }),
+      ...(live.project === undefined ? {} : { project: live.project }),
+      ...(live.createdAt === undefined
+        ? mapping.createdAt === undefined
+          ? {}
+          : { createdAt: mapping.createdAt }
+        : { createdAt: live.createdAt }),
+      ...(live.updatedAt === undefined
+        ? mapping.updatedAt === undefined
+          ? {}
+          : { updatedAt: mapping.updatedAt }
+        : { updatedAt: live.updatedAt }),
+      ...(live.log === undefined ? {} : { log: live.log })
+    })
+  }
+  return merged
 }
 
 export interface RegisterIpcHandlersOptions {
   projectManager?: ProjectManager
   projectFilesService?: ProjectFilesService
   powerWakeService?: PowerWakeService
+  /** Auto-resume scheduler gated by the General settings toggle. */
+  retryScheduler?: RetrySchedulerService
+  /** Confirmed-override layer on the declarative harness behavior manifests. */
+  harnessManifestService?: HarnessManifestService
+  /** Hydration channels already registered before BrowserWindow navigation. */
+  hydrationHandlersRegistered?: boolean
+  /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
+  threadCreation?: ThreadCreationCoordinator
 }
 
 export function registerIpcHandlers(
@@ -852,12 +1285,25 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
-  const threadManager = new ThreadManager(database, broadcastThreadUpdate, (thread) => {
-    if (chatEngine?.deleteThreadSession) {
-      void chatEngine.deleteThreadSession(thread.projectId, thread.id)
+  const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
+  const checkpointManager = new CheckpointManager(database)
+  const threadManager = new ThreadManager(
+    database,
+    broadcastThreadUpdate,
+    async (thread) => {
+      if (chatEngine?.deleteThreadSession) {
+        await chatEngine.deleteThreadSession(thread.projectId, thread.id)
+      }
+      await memoryService.deleteThreadMemory(thread.projectId, thread.id)
+      dismissThreadNotifications(thread.projectId, thread.id)
+    },
+    async (threads) => {
+      for (const thread of threads) broadcastThreadDeleted(thread)
+      for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
+        await checkpointManager.pruneUnusedBlobs(projectId)
+      }
     }
-    dismissThreadNotifications(thread.projectId, thread.id)
-  })
+  )
   const scopeManager = new ScopeManager(database)
   const historyEngine = new HistoryEngine(database)
   const planEngine = new PlanEngine(storage, database)
@@ -870,17 +1316,89 @@ export function registerIpcHandlers(
   const specContextService = new SpecContextService(database, projectManager)
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
-  const checkpointManager = new CheckpointManager(database)
-  const diagnosticsService = new DiagnosticsService(database)
+  const gitService = new GitService()
+  const vault = new SecretVault(storage)
+  const githubAuthService = new GitHubAuthService(vault)
+  const diagnosticsService = new DiagnosticsService(database, () =>
+    memoryService.auxiliaryUsageByFeature()
+  )
   const memoryService = new MemoryService(storage)
+  const attachmentGrantRepo = new AttachmentGrantRepo(database)
+  const harnessUsageRepo = new HarnessUsageRepo(database)
+
+  // Shared privileged-IPC boundary: every renderer call that can open the
+  // system browser, reveal files, or read local files is validated here.
+  const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+  const privilegedIpc = new PrivilegedIpcValidator({
+    navigationTargets: appRendererNavigationTargets(),
+    allowDevelopmentHttp: !isProduction,
+    scopes: {
+      projectRoots: async () =>
+        (await projectManager.listProjects())
+          .map((project) => project.path)
+          .filter((path): path is string => typeof path === 'string' && path.length > 0),
+      appArtifactRoots: async () => {
+        const projects = await projectManager.listProjects()
+        return [
+          join(getConfigRoot(), 'chats'),
+          ...projects.flatMap((project) => [
+            join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
+            join(getConfigRoot(), 'projects', project.id, 'threads')
+          ])
+        ]
+      },
+      isApprovedFile: (canonicalPath) => attachmentGrantRepo.isApproved(canonicalPath)
+    }
+  })
+
+  /** Register a privileged channel whose sender frame must be trusted. */
+  function privileged<TArgs extends unknown[]>(
+    channel: string,
+    handler: (event: IpcMainInvokeEvent, ...args: TArgs) => unknown
+  ): void {
+    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+      privilegedIpc.assertTrustedSender(event)
+      return handler(event, ...(args as TArgs))
+    })
+  }
+
+  async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
+    const project = await projectManager.getProject(scope.projectId)
+    if (project?.source === 'local' && project.path) {
+      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
+    }
+
+    return scope.kind === 'chat'
+      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
+      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+  }
+
+  // A native File supplied by Electron's webUtils represents an explicit user
+  // drop/paste gesture. The preload keeps this channel private so renderer code
+  // cannot grant an arbitrary string path.
+  privileged('file:registerSelection', async (_event, path: unknown, rawScope: unknown) => {
+    if (typeof path !== 'string' || path.length === 0) return null
+    const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
+    const retainedPath = scope
+      ? await retainTemporaryAttachment(path, await attachmentStorageDirectory(scope))
+      : path
+    await privilegedIpc.registerUserSelectedFile(retainedPath)
+    return retainedPath
+  })
 
   // ─── Application config ────────────────────────────────────────────────
-  ipcMain.handle('config:get', () => storage.getConfig())
+  ipcMain.handle('account:getLocalUsage', (_, input: unknown) =>
+    harnessUsageRepo.profileAnalytics(validateLocalProfileAnalyticsRange(input))
+  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('config:get', () => storage.getConfig())
+  }
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
+    options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
@@ -939,10 +1457,18 @@ export function registerIpcHandlers(
               ? 'Pi'
               : thread?.settings?.harnessId === 'antigravity'
                 ? 'Antigravity'
-                : 'OpenCode'
+                : thread?.settings?.harnessId === 'muse'
+                  ? 'Muse Code'
+                  : 'OpenCode'
+    const harnessId = thread?.settings?.harnessId ?? 'opencode'
+    const loadsAgentsMd =
+      options.harnessManifestService === undefined
+        ? harnessLoadsAgentsMd(harnessId)
+        : await options.harnessManifestService.resolveLoadsAgentsMd(harnessId)
     const driverInfo = {
-      id: thread?.settings?.harnessId ?? 'opencode',
-      name: driverName
+      id: harnessId,
+      name: driverName,
+      loadsAgentsMd
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
@@ -1184,9 +1710,9 @@ export function registerIpcHandlers(
   ipcMain.handle('assignment:validate', (_, content: unknown) =>
     validateAssignment(validateAssignmentContent(content))
   )
-  ipcMain.handle(
+  privileged(
     'assignment:openInEditor',
-    async (_, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
+    async (_event, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
       const active = assignmentEngine.getActive(safeProjectId, safeThreadId)
@@ -1199,9 +1725,9 @@ export function registerIpcHandlers(
       return targetPath
     }
   )
-  ipcMain.handle(
+  privileged(
     'assignment:revealInFiles',
-    async (_, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
+    async (_event, projectId: unknown, coordinatorThreadId: unknown, content: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
       const active = assignmentEngine.getActive(safeProjectId, safeThreadId)
@@ -1237,6 +1763,12 @@ export function registerIpcHandlers(
       )
     }
   )
+  ipcMain.handle('brainstorm:resetWorkflow', (_, projectId: unknown, threadId: unknown) => {
+    brainstormEngine.resetWorkflow(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  })
   ipcMain.handle('brainstorm:getActive', (_, projectId: unknown, threadId: unknown) =>
     brainstormEngine.getActive(
       validateEntityId(projectId, 'Project ID'),
@@ -1395,6 +1927,68 @@ export function registerIpcHandlers(
         requireVersion(version),
         note === undefined ? '' : requireString(note, 'Brainstorm finalization note', true)
       )
+  )
+  privileged(
+    'brainstorm:openInEditor',
+    async (
+      _event,
+      projectId: unknown,
+      threadId: unknown,
+      brainstormId: unknown,
+      version: unknown
+    ) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
+      const validVersion = requireVersion(version)
+      const document = brainstormEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      if (!document) throw new Error('Brainstorm version not found')
+      const targetPath = await brainstormEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportBrainstormMarkdown(document))
+      const config = await storage.getConfig()
+      await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
+      return targetPath
+    }
+  )
+  privileged(
+    'brainstorm:revealInFiles',
+    async (
+      _event,
+      projectId: unknown,
+      threadId: unknown,
+      brainstormId: unknown,
+      version: unknown
+    ) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validBrainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
+      const validVersion = requireVersion(version)
+      const document = brainstormEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      if (!document) throw new Error('Brainstorm version not found')
+      const targetPath = await brainstormEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validBrainstormId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportBrainstormMarkdown(document))
+      return targetPath
+    }
   )
   ipcMain.handle('spec:getActive', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
@@ -1630,6 +2224,56 @@ export function registerIpcHandlers(
     await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
     return assignment
   })
+  privileged(
+    'audit:openInEditor',
+    async (_event, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validReportId = validateEntityId(reportId, 'Audit report ID')
+      const validVersion = requireVersion(version)
+      const report = auditEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      if (!report) throw new Error('Audit report version not found')
+      const targetPath = await auditEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportAuditReportMarkdown(report))
+      const config = await storage.getConfig()
+      await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
+      return targetPath
+    }
+  )
+  privileged(
+    'audit:revealInFiles',
+    async (_event, projectId: unknown, threadId: unknown, reportId: unknown, version: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validReportId = validateEntityId(reportId, 'Audit report ID')
+      const validVersion = requireVersion(version)
+      const report = auditEngine.getVersion(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      if (!report) throw new Error('Audit report version not found')
+      const targetPath = await auditEngine.markdownPath(
+        validProjectId,
+        validThreadId,
+        validReportId,
+        validVersion
+      )
+      await atomicWrite(targetPath, exportAuditReportMarkdown(report))
+      return targetPath
+    }
+  )
   ipcMain.handle(
     'spec:addAnnotation',
     (_, projectId: unknown, threadId: unknown, specId: unknown, version: unknown, input: unknown) =>
@@ -1864,7 +2508,7 @@ export function registerIpcHandlers(
     await atomicWrite(result.filePath, exportEngineeringSpecMarkdown(spec))
     return result.filePath
   })
-  ipcMain.handle('spec:openInEditor', async (_, rawSpec: unknown) => {
+  privileged('spec:openInEditor', async (_event, rawSpec: unknown) => {
     const spec = validateEngineeringSpecInput(rawSpec)
     const persisted = await specEngine.getVersion(
       spec.projectId,
@@ -1884,7 +2528,7 @@ export function registerIpcHandlers(
     await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
     return targetPath
   })
-  ipcMain.handle('spec:revealInFiles', async (_, rawSpec: unknown) => {
+  privileged('spec:revealInFiles', async (_event, rawSpec: unknown) => {
     const spec = validateEngineeringSpecInput(rawSpec)
     const persisted = await specEngine.getVersion(
       spec.projectId,
@@ -1922,8 +2566,10 @@ export function registerIpcHandlers(
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
 
-      // Remember the chosen folder for next time.
+      // Remember the chosen folder for next time and record it as a
+      // user-approved scope for reveal/preview operations.
       config.lastFolderDialogPath = result.filePaths[0]
+      await privilegedIpc.registerUserSelectedRoot(result.filePaths[0])
       await storage.saveConfig(config)
 
       return result.filePaths[0]
@@ -1940,13 +2586,16 @@ export function registerIpcHandlers(
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
 
-  ipcMain.handle('clipboard:saveImage', async () => {
+  ipcMain.handle('clipboard:saveImage', async (_event, rawScope: unknown) => {
     try {
+      const scope = validateAttachmentStorageScope(rawScope)
       const image = clipboard.readImage()
       if (image.isEmpty()) return null
-      const tempDir = await mkdtemp(join(tmpdir(), 'cio-clipboard-'))
-      const tempPath = join(tempDir, 'pasted-image.png')
-      await writeFile(tempPath, image.toPNG())
+      const tempDir = await attachmentStorageDirectory(scope)
+      await mkdir(tempDir, { recursive: true })
+      const tempPath = join(tempDir, `pasted-${randomUUID()}.png`)
+      await writeFile(tempPath, image.toPNG(), { flag: 'wx', mode: 0o600 })
+      await privilegedIpc.registerUserSelectedFile(tempPath)
       return tempPath
     } catch (error) {
       Logger.error('clipboard:saveImage failed:', error)
@@ -1954,8 +2603,9 @@ export function registerIpcHandlers(
     }
   })
 
-  ipcMain.handle('dialog:pickFile', async () => {
+  ipcMain.handle('dialog:pickFile', async (_event, rawScope: unknown) => {
     try {
+      const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
       if (win && !win.isFocused()) win.focus()
 
@@ -1998,9 +2648,14 @@ export function registerIpcHandlers(
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
-      config.lastAttachmentDialogPath = dirname(result.filePaths[0])
+      const selectedPath = result.filePaths[0]
+      config.lastAttachmentDialogPath = dirname(selectedPath)
+      const retainedPath = scope
+        ? await retainTemporaryAttachment(selectedPath, await attachmentStorageDirectory(scope))
+        : selectedPath
+      await privilegedIpc.registerUserSelectedFile(retainedPath)
       await storage.saveConfig(config)
-      return result.filePaths[0]
+      return retainedPath
     } catch (error) {
       Logger.error('dialog:pickFile failed:', error)
       return null
@@ -2026,6 +2681,7 @@ export function registerIpcHandlers(
         ? await dialog.showOpenDialog(win, options)
         : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
+      await privilegedIpc.registerUserSelectedFile(result.filePaths[0])
       return result.filePaths[0]
     } catch (error) {
       Logger.error('dialog:pickImage failed:', error)
@@ -2033,24 +2689,39 @@ export function registerIpcHandlers(
     }
   })
 
-  ipcMain.handle('shell:openExternal', (_event, url: string) => {
-    shell.openExternal(url)
+  privileged('shell:openExternal', (_event, url: unknown) => {
+    try {
+      const safeUrl = privilegedIpc.validateExternalUrl(url)
+      void shell.openExternal(safeUrl)
+    } catch (error) {
+      Logger.error('shell:openExternal rejected unsafe URL:', error)
+    }
   })
 
-  // Reveal a chat artifact (uploaded or agent-created file) in the system file manager.
-  ipcMain.handle('shell:revealPath', (_event, path: string) => {
+  // Resolve website favicons for external links. Hostnames are validated at the
+  // IPC boundary; data URLs returned by the resolver are image content only.
+  ipcMain.handle('web:favicon', async (_event, rawHostnames: unknown) => {
+    const hostnames = validateFaviconHostnames(rawHostnames)
+    return resolveFavicons(hostnames)
+  })
+
+  // Reveal a chat artifact (uploaded or agent-created file) in the system file
+  // manager. The path must resolve inside a registered project, the config root,
+  // or a user-selected scope.
+  privileged('shell:revealPath', async (_event, path: unknown) => {
     try {
-      const target = path.startsWith('file://') ? fileURLToPath(path) : path
-      shell.showItemInFolder(target)
+      const safePath = await privilegedIpc.resolveScopedPath(path)
+      shell.showItemInFolder(safePath)
       return true
     } catch (error) {
-      Logger.error('shell:revealPath failed:', error)
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return false
+      Logger.error('shell:revealPath rejected out-of-scope path:', error)
       return false
     }
   })
 
   // Read a file from disk and return it as a data URL — used for local previews
-  // without persisting anything to project storage.
+  // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {
     '.png': 'image/png',
     '.jpg': 'image/jpeg',
@@ -2062,15 +2733,33 @@ export function registerIpcHandlers(
     '.pdf': 'application/pdf'
   }
 
-  ipcMain.handle('file:readAsDataUrl', async (_event, filePath: unknown) => {
+  // Read a local file into bytes for renderer-side media previews. The preload
+  // no longer reads files directly; it delegates here so the path can be
+  // constrained to registered project, config-root, or user-selected scopes.
+  privileged('file:read', async (_event, filePath: unknown) => {
     try {
-      const safePath = requireString(filePath, 'File path')
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      const buffer = await readFile(safePath)
+      return new Uint8Array(
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
+      )
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:read rejected out-of-scope path:', error)
+      return null
+    }
+  })
+
+  privileged('file:readAsDataUrl', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
       const ext = extname(safePath).toLowerCase()
       const mime = MIME_MAP[ext] ?? 'application/octet-stream'
       const buffer = await readFile(safePath)
       return `data:${mime};base64,${buffer.toString('base64')}`
     } catch (error) {
-      Logger.error('file:readAsDataUrl failed:', error)
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
       return null
     }
   })
@@ -2110,12 +2799,14 @@ export function registerIpcHandlers(
       threadLimit: input.threadLimit ?? config.threadLimit
     })
   })
-  ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-  ipcMain.handle('project:list', () => projectManager.listProjects())
-  ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
-  ipcMain.handle('scope:get', (_, projectId: unknown) =>
-    scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
+    ipcMain.handle('project:list', () => projectManager.listProjects())
+    ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
+    ipcMain.handle('scope:get', (_, projectId: unknown) =>
+      scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
+    )
+  }
   ipcMain.handle('scope:save', (_, projectId: unknown, board: unknown) =>
     scopeManager.saveBoard(validateEntityId(projectId, 'Project ID'), validateScopeBoard(board))
   )
@@ -2131,9 +2822,11 @@ export function registerIpcHandlers(
     await projectManager.deleteProject(projectId)
     projectFilesService.invalidateProject(projectId)
   })
-  ipcMain.handle('project:getIcon', (_, projectId: string) =>
-    projectManager.getIconDataUrl(projectId)
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('project:getIcon', (_, projectId: string) =>
+      projectManager.getIconDataUrl(projectId)
+    )
+  }
   ipcMain.handle('project:setIcon', (_, projectId: string, sourcePath: string) =>
     projectManager.setIcon(projectId, sourcePath)
   )
@@ -2142,6 +2835,12 @@ export function registerIpcHandlers(
     projectManager.setPinned(
       validateEntityId(projectId, 'Project ID'),
       validateBoolean(pinned, 'Pinned')
+    )
+  )
+  ipcMain.handle('project:setHasDeployments', (_, projectId: unknown, hasDeployments: unknown) =>
+    projectManager.setHasDeployments(
+      validateEntityId(projectId, 'Project ID'),
+      validateBoolean(hasDeployments, 'Has deployments')
     )
   )
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
@@ -2198,15 +2897,28 @@ export function registerIpcHandlers(
       requireString(relativePath, 'Project file path')
     )
   )
-  ipcMain.handle(
+  privileged(
     'projectFiles:openInEditor',
-    async (_, projectId: unknown, relativePath: unknown) => {
+    async (_event, projectId: unknown, relativePath: unknown) => {
       const config = await storage.getConfig()
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path')
       )
       await editorService.openInEditor(config.preferredEditor, target, 'file')
+    }
+  )
+  privileged(
+    'projectFiles:openInEditorWith',
+    async (_event, projectId: unknown, relativePath: unknown, editorId: unknown) => {
+      if (typeof editorId !== 'string' || !EDITOR_IDS.has(editorId as EditorId)) {
+        throw new TypeError('Unknown editor')
+      }
+      const target = await projectFilesService.resolveForExternalEditor(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path')
+      )
+      await editorService.openInEditor(editorId as EditorId, target, 'file')
     }
   )
   ipcMain.handle('projectFiles:read', (_, projectId: unknown, relativePath: unknown) =>
@@ -2270,6 +2982,25 @@ export function registerIpcHandlers(
       )
     }
   )
+  ipcMain.handle('projectFiles:saveAs', async (_, projectId: unknown, relativePath: unknown) => {
+    const safeRelativePath = requireString(relativePath, 'Project file path')
+    const textFile = await projectFilesService.readText(
+      validateEntityId(projectId, 'Project ID'),
+      safeRelativePath
+    )
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const options: Electron.SaveDialogOptions = {
+      title: 'Save file as',
+      defaultPath: basename(safeRelativePath),
+      filters: [{ name: 'All Files', extensions: ['*'] }]
+    }
+    const result = win
+      ? await dialog.showSaveDialog(win, options)
+      : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await atomicWrite(result.filePath, textFile.content)
+    return result.filePath
+  })
   ipcMain.handle('repository:preflight', (_, projectPath: string) =>
     repositoryService.preflight(projectPath)
   )
@@ -2279,6 +3010,1197 @@ export function registerIpcHandlers(
   ipcMain.handle('repository:remoteOrigin', (_, projectPath: string) =>
     repositoryService.getRemoteOrigin(projectPath)
   )
+
+  // ─── Git management ─────────────────────────────────────────────────────
+  const resolveProjectPath = async (projectId: string): Promise<string> => {
+    const project = await projectManager.getProject(projectId)
+    if (!project?.path) throw new Error(`Project not found: ${projectId}`)
+    return project.path
+  }
+  ipcMain.handle('git:status', async (_, projectId: unknown) =>
+    gitService.getStatus(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle(
+    'git:diff',
+    async (_, projectId: unknown, relativePath: unknown, staged: unknown) =>
+      gitService.getDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath),
+        validateBoolean(staged, 'Staged')
+      )
+  )
+  ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
+    gitService.stage(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:resolveConflicted', async (_, projectId: unknown, path: unknown) =>
+    gitService.resolveConflicted(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitRelativePath(path)
+    )
+  )
+  ipcMain.handle('git:unstage', async (_, projectId: unknown, paths: unknown) =>
+    gitService.unstage(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:commit', async (_, projectId: unknown, message: unknown) =>
+    gitService.commit(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateCommitMessage(message)
+    )
+  )
+  ipcMain.handle('git:init', async (_, projectId: unknown) =>
+    gitService.initialize(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:branches', async (_, projectId: unknown) =>
+    gitService.listBranches(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:checkout', async (_, projectId: unknown, branch: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.checkout(
+      await resolveProjectPath(safeProjectId),
+      validateBranchName(branch)
+    )
+    // Keep thread.branch coherent when the app drives a checkout (D7): update
+    // every owned thread whose working directory is this project.
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:createBranch', async (_, projectId: unknown, name: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.createBranch(
+      await resolveProjectPath(safeProjectId),
+      validateBranchName(name)
+    )
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:deleteBranch', async (_, projectId: unknown, name: unknown) => {
+    return gitService.deleteBranch(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateBranchName(name)
+    )
+  })
+  ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown, offset?: unknown) => {
+    const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
+    const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)
+    return gitService.log(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      bounded,
+      boundedOffset
+    )
+  })
+  ipcMain.handle('git:commitDiff', async (_, projectId: unknown, hash: unknown) => {
+    const safeHash = validateEntityId(hash, 'Commit hash')
+    return gitService.commitDiff(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      safeHash
+    )
+  })
+  ipcMain.handle(
+    'git:commitFileDiff',
+    async (_, projectId: unknown, hash: unknown, relativePath: unknown) =>
+      gitService.commitFileDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateEntityId(hash, 'Commit hash'),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle('git:amend', async (_, projectId: unknown, message: unknown) =>
+    gitService.amend(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateCommitMessage(message)
+    )
+  )
+  ipcMain.handle('git:reset', async (_, projectId: unknown, mode: unknown, target?: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.reset(
+      await resolveProjectPath(safeProjectId),
+      validateGitResetMode(mode),
+      target === undefined ? undefined : validateEntityId(target, 'Reset target')
+    )
+    // A reset moves the branch, so keep thread.branch coherent like checkout.
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:deleteCommit', async (_, projectId: unknown, target: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const status = await gitService.deleteCommit(
+      await resolveProjectPath(safeProjectId),
+      validateEntityId(target, 'Delete commit target')
+    )
+    const threads = await threadManager.listThreads(safeProjectId)
+    for (const thread of threads) {
+      if (thread.workingDirectory) {
+        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+      }
+    }
+    return status
+  })
+  ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
+    gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:setIdentity', async (_, projectId: unknown, identity: unknown) => {
+    const safe = validateGitIdentity(identity)
+    return gitService.setIdentity(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      safe.name,
+      safe.email
+    )
+  })
+  // ─── Git remotes, sync & credentials ────────────────────────────────────
+  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
+  const gitCredentialStatus = async (projectId: string) => ({
+    configured: await vault.exists(gitCredentialRef(projectId)),
+    secureStorageAvailable: vault.isAvailable()
+  })
+  ipcMain.handle('git:remotes', async (_, projectId: unknown) =>
+    gitService.listRemotes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:addRemote', async (_, projectId: unknown, name: unknown, url: unknown) =>
+    gitService.addRemote(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateRemoteName(name),
+      validateRemoteUrl(url)
+    )
+  )
+  ipcMain.handle('git:removeRemote', async (_, projectId: unknown, name: unknown) =>
+    gitService.removeRemote(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateRemoteName(name)
+    )
+  )
+  ipcMain.handle('git:fetch', async (_, projectId: unknown) =>
+    gitService.fetch(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle(
+    'git:fetchBranch',
+    async (_, projectId: unknown, remote: unknown, branch: unknown) =>
+      gitService.fetchBranch(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateRemoteName(remote),
+        validateBranchName(branch)
+      )
+  )
+  ipcMain.handle('git:pull', async (_, projectId: unknown) =>
+    gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:pullIntegrate', async (_, projectId: unknown, options: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeOptions = validatePullIntegrateOptions(options)
+    // Resolve the vaulted PAT in main only; the token never crosses IPC.
+    const tokenRef = gitCredentialRef(safeProjectId)
+    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+    return gitService.pullIntegrate(await resolveProjectPath(safeProjectId), {
+      ...safeOptions,
+      token
+    })
+  })
+  ipcMain.handle('git:push', async (_, projectId: unknown, options: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeOptions = validatePushOptions(options)
+    // Resolve the vaulted PAT in main only; the token never crosses IPC.
+    const tokenRef = gitCredentialRef(safeProjectId)
+    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+    return gitService.push(await resolveProjectPath(safeProjectId), { ...safeOptions, token })
+  })
+  ipcMain.handle('git:getCredentialStatus', async (_, projectId: unknown) =>
+    gitCredentialStatus(validateEntityId(projectId, 'Project ID'))
+  )
+  ipcMain.handle('git:setCredential', async (_, projectId: unknown, token: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    if (
+      typeof token !== 'string' ||
+      token.length === 0 ||
+      token.length > 16_384 ||
+      token.includes('\0')
+    ) {
+      throw new TypeError('Provider token must be a string of at most 16384 characters')
+    }
+    await vault.save(token, gitCredentialRef(safeProjectId))
+    return gitCredentialStatus(safeProjectId)
+  })
+  ipcMain.handle('git:removeCredential', async (_, projectId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    await vault.remove(gitCredentialRef(safeProjectId))
+    return gitCredentialStatus(safeProjectId)
+  })
+
+  // ─── Merge / rebase / stash (Phase 4) ───────────────────────────────────
+  ipcMain.handle('git:merge', async (_, projectId: unknown, target: unknown) =>
+    gitService.merge(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateMergeTarget(target)
+    )
+  )
+  ipcMain.handle('git:rebase', async (_, projectId: unknown, target: unknown) =>
+    gitService.rebase(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateMergeTarget(target)
+    )
+  )
+  ipcMain.handle('git:preparePrResolve', async (_, projectId: unknown, options: unknown) =>
+    gitService.preparePrResolve(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validatePrResolveOptions(options)
+    )
+  )
+  ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown, paths?: unknown) =>
+    gitService.stash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashMessage(message),
+      paths === undefined ? undefined : validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:ignore', async (_, projectId: unknown, paths: unknown) =>
+    gitService.ignore(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:discard', async (_, projectId: unknown, paths: unknown) =>
+    gitService.discard(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitPathArray(paths)
+    )
+  )
+  ipcMain.handle('git:stashList', async (_, projectId: unknown) =>
+    gitService.listStashes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:stashPop', async (_, projectId: unknown, id?: unknown) =>
+    gitService.popStash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id)
+    )
+  )
+  ipcMain.handle('git:stashDrop', async (_, projectId: unknown, id?: unknown) =>
+    gitService.dropStash(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id)
+    )
+  )
+  ipcMain.handle('git:stashDiff', async (_, projectId: unknown, id: unknown) =>
+    gitService.stashDiff(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateStashId(id) ?? ''
+    )
+  )
+  ipcMain.handle(
+    'git:stashFileDiff',
+    async (_, projectId: unknown, id: unknown, relativePath: unknown) =>
+      gitService.stashFileDiff(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateStashId(id) ?? '',
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle('git:abortMerge', async (_, projectId: unknown) =>
+    gitService.abortMerge(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+  ipcMain.handle('git:abortRebase', async (_, projectId: unknown) =>
+    gitService.abortRebase(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  )
+
+  // ─── Pull requests (GitHub-first) ───────────────────────────────────────
+  const providerForProject = async (projectId: string): Promise<GitProvider | null> => {
+    const oauthToken = await githubAuthService.resolveToken()
+    if (oauthToken) {
+      return new GitHubProvider(oauthToken, undefined, () => githubAuthService.resolveToken(true))
+    }
+    const tokenRef = gitCredentialRef(projectId)
+    if (!(await vault.exists(tokenRef))) return null
+    const token = await vault.resolve(tokenRef)
+    return new GitHubProvider(token)
+  }
+  const remoteIdentity = async (projectId: string): Promise<{ owner: string; repo: string }> => {
+    const remoteUrl = await repositoryService.getRemoteOrigin(await resolveProjectPath(projectId))
+    const provider = new GitHubProvider('')
+    const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
+    if (!identity) {
+      throw new Error('No GitHub remote (origin) is configured for this project')
+    }
+    return identity
+  }
+  ipcMain.handle('pr:create', async (_, projectId: unknown, input: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const provider = await providerForProject(safeProjectId)
+    if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+    const identity = await remoteIdentity(safeProjectId)
+    const draft = validatePrCreateInput(input)
+    return runGitHubMutation(identity.owner, identity.repo, () =>
+      provider.createPullRequest({
+        owner: identity.owner,
+        repo: identity.repo,
+        title: draft.title,
+        body: draft.body,
+        head: draft.head,
+        base: draft.base,
+        draft: draft.draft
+      })
+    )
+  })
+  ipcMain.handle(
+    'pr:list',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state?: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) return []
+      return provider.listPullRequests({
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        ...(state === undefined ? {} : { state: validatePrState(state) })
+      })
+    }
+  )
+  ipcMain.handle(
+    'pr:merge',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      method: unknown,
+      commitTitle?: unknown,
+      commitMessage?: unknown
+    ) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+      const safeOwner = validateBoundedString(owner, 'PR owner', 1, 128)
+      const safeRepo = validateBoundedString(repo, 'PR repository', 1, 128)
+      return runGitHubMutation(safeOwner, safeRepo, () =>
+        provider.mergePullRequest({
+          owner: safeOwner,
+          repo: safeRepo,
+          pullNumber: validatePrNumber(pullNumber),
+          method: validateMergeMethod(method),
+          ...(commitTitle === undefined
+            ? {}
+            : { commitTitle: validateMergeCommitTitle(commitTitle) }),
+          ...(commitMessage === undefined
+            ? {}
+            : { commitMessage: validateMergeCommitMessage(commitMessage) })
+        })
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:compare',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, base: unknown, head: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
+      if (!provider) throw new Error('Sign in to GitHub to create pull requests')
+      const safeBase = canonicalGitHubBranch(validateBranchName(base, 'Compare base'))
+      const safeHead = canonicalGitHubBranch(validateBranchName(head, 'Compare head'))
+      if (safeBase === safeHead) {
+        return {
+          source: 'local' as const,
+          status: 'identical' as const,
+          aheadBy: 0,
+          behindBy: 0,
+          totalCommits: 0,
+          filesChanged: 0,
+          hasChanges: false
+        }
+      }
+      const input = {
+        owner: validateBoundedString(owner, 'PR owner', 1, 128),
+        repo: validateBoundedString(repo, 'PR repository', 1, 128),
+        base: safeBase,
+        head: safeHead
+      }
+      let remoteCompare = null
+      let missingRemoteHead: ProviderHttpError | null = null
+      try {
+        remoteCompare = await provider.comparePullRequests(input)
+        if (remoteCompare.hasChanges) return remoteCompare
+      } catch (error) {
+        // A branch that has never been pushed cannot be compared by GitHub yet.
+        if (!(error instanceof ProviderHttpError) || error.status !== 404) throw error
+        missingRemoteHead = error
+      }
+      const localCompare = await gitService.comparePullRequestBranches(
+        await resolveProjectPath(safeProjectId),
+        safeBase,
+        safeHead
+      )
+      if (localCompare?.hasChanges) return localCompare
+      const fallback = remoteCompare ?? localCompare
+      if (fallback) return fallback
+      throw missingRemoteHead ?? new Error('Could not compare these branches')
+    }
+  )
+
+  ipcMain.handle(
+    'pr:reopen',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () => provider.reopenPullRequest(target))
+    }
+  )
+
+  ipcMain.handle(
+    'pr:close',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () => provider.closePullRequest(target))
+    }
+  )
+
+  /** Shared preamble for every single-PR channel: provider + validated target. */
+  const pullRequestTarget = async (
+    projectId: unknown,
+    owner: unknown,
+    repo: unknown,
+    pullNumber: unknown
+  ): Promise<{ provider: GitProvider; owner: string; repo: string; pullNumber: number }> => {
+    const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+    if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+    return {
+      provider,
+      owner: validateBoundedString(owner, 'PR owner', 1, 128),
+      repo: validateBoundedString(repo, 'PR repository', 1, 128),
+      pullNumber: validatePrNumber(pullNumber)
+    }
+  }
+
+  ipcMain.handle(
+    'pr:page',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, state: unknown, page: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      const safePage = validatePrPage(page)
+      // An unauthenticated page is NOT an empty page — the renderer must be
+      // able to tell "no open PRs" from "GitHub isn't connected yet", or the
+      // header conflict indicator would treat a cold start as zero conflicts.
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      try {
+        return await provider.listPullRequestPage({
+          owner: validateBoundedString(owner, 'PR owner', 1, 128),
+          repo: validateBoundedString(repo, 'PR repository', 1, 128),
+          state: validatePrState(state),
+          page: safePage,
+          perPage: PR_PAGE_SIZE
+        })
+      } catch (error) {
+        if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
+          return {
+            items: [],
+            page: safePage,
+            hasMore: false,
+            accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
+          }
+        }
+        throw error
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:overview',
+    async (_, projectId: unknown, owner: unknown, repo: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
+      if (!provider) throw new Error('Sign in to GitHub to monitor deployments')
+      let overview: GitHubDeploymentOverview
+      try {
+        overview = await provider.getDeploymentOverview({
+          owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+          repo: validateBoundedString(repo, 'Deployment repository', 1, 128)
+        })
+      } catch (error) {
+        if (error instanceof ProviderHttpError && (error.status === 403 || error.status === 404)) {
+          return {
+            workflowRuns: [],
+            deployments: [],
+            fetchedAt: Date.now(),
+            hasDeployments: false,
+            accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
+          }
+        }
+        throw error
+      }
+      // The repo either deploys or it doesn't — persist that fact so the
+      // Deployments tab only ever appears when there is something to show.
+      const hasDeployments = overview.deployments.length > 0 || overview.workflowRuns.length > 0
+      if (hasDeployments) {
+        await projectManager.setHasDeployments(safeProjectId, true).catch(() => undefined)
+      }
+      return { ...overview, hasDeployments }
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:detail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, deploymentId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to inspect deployments')
+      return provider.getDeploymentDetail({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        deploymentId: validateBoundedInteger(
+          deploymentId,
+          'Deployment ID',
+          1,
+          MAX_GITHUB_NUMERIC_ID
+        )
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:runDetail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, runId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to inspect workflow runs')
+      return provider.getWorkflowRunDetail({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        runId: validateBoundedInteger(runId, 'Workflow run ID', 1, MAX_GITHUB_NUMERIC_ID)
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'deployment:jobLog',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, jobId: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub to read job logs')
+      return provider.getDeploymentJobLog({
+        owner: validateBoundedString(owner, 'Deployment owner', 1, 128),
+        repo: validateBoundedString(repo, 'Deployment repository', 1, 128),
+        jobId: validateBoundedInteger(jobId, 'Job ID', 1, MAX_GITHUB_NUMERIC_ID)
+      })
+    }
+  )
+
+  // ─── Cloud deployment config & credentials ────────────────────────────
+  // The provider token is vaulted by main via `safeStorage` and never crosses
+  // ─── Cloud deployment accounts & monitoring ────────────────────────────
+  // Provider accounts live in a GLOBAL registry (task: reusable across
+  // projects) and their tokens are vaulted by account id. A project's config
+  // only records which accounts it attaches and which is active per provider.
+  // The provider adapter is resolved by kind through the registry, and its
+  // credential context (verified base URL + vaulted token) is assembled here
+  // in main so plaintext tokens never cross the IPC boundary. A provider with
+  // no attached configured account is rejected up front.
+  const syncCloudDeploymentsFlag = async (projectId: string): Promise<void> => {
+    const hasDeployments = await storage.hasCloudDeployments(projectId)
+    await projectManager.setHasDeployments(projectId, hasDeployments).catch(() => undefined)
+  }
+
+  const loadOrCreateCloudDeploymentConfig = async (
+    projectId: string
+  ): Promise<CloudDeploymentConfig> => {
+    const existing = await storage.getCloudDeploymentConfig(projectId)
+    if (existing) return existing
+    return {
+      version: 3,
+      projectId,
+      project: { providers: [], containers: [] },
+      updatedAt: Date.now()
+    }
+  }
+
+  ipcMain.handle('cloudDeploy:getConfig', async (_, projectId: unknown) =>
+    storage.getCloudDeploymentConfig(validateEntityId(projectId, 'Project ID'))
+  )
+
+  ipcMain.handle('cloudDeploy:saveConfig', async (_, projectId: unknown, rawConfig: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeConfig = validateCloudDeploymentConfig(rawConfig, safeProjectId)
+    // Accounts live in the global registry; saveConfig only persists the
+    // project's provider/container selection and account association. It can
+    // never create or mutate account/credential state.
+    await storage.saveCloudDeploymentConfig(safeProjectId, safeConfig)
+    await syncCloudDeploymentsFlag(safeProjectId)
+    return safeConfig
+  })
+
+  ipcMain.handle('cloudDeploy:clearConfig', async (_, projectId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    await storage.clearCloudDeploymentConfig(safeProjectId)
+    await syncCloudDeploymentsFlag(safeProjectId)
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:updateContainer',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown, patch: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID', true)
+      if (!isRecord(patch)) throw new TypeError('Container update must be an object')
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const index = config.project.containers.findIndex(
+        (mapping) => mapping.providerKind === kind && mapping.id === safeContainerId
+      )
+      if (index === -1) throw new TypeError('Container not found')
+
+      const current = config.project.containers[index]
+      const next: CloudDeploymentContainer = { ...current }
+      if (patch.label !== undefined) {
+        next.label = requireString(patch.label, 'Container label')
+      }
+      if (patch.id !== undefined) {
+        const newId = requireString(patch.id, 'Container ID')
+        if (
+          config.project.containers.some(
+            (mapping) => mapping.id === newId && mapping.id !== current.id
+          )
+        ) {
+          throw new TypeError(`A container with id ${newId} is already configured`)
+        }
+        next.id = newId
+      }
+      config.project.containers = [...config.project.containers]
+      config.project.containers[index] = next
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:removeContainer',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID', true)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const remaining = config.project.containers.filter(
+        (mapping) => !(mapping.providerKind === kind && mapping.id === safeContainerId)
+      )
+      if (remaining.length === config.project.containers.length) {
+        throw new TypeError('Container not found')
+      }
+      config.project.containers = remaining
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle('cloudDeploy:listAccounts', async () => storage.getCloudDeploymentAccounts())
+
+  ipcMain.handle(
+    'cloudDeploy:createAccount',
+    async (
+      _,
+      providerKind: unknown,
+      accountLabel: unknown,
+      token: unknown,
+      rawBaseUrl?: unknown
+    ) => {
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeLabel = validateAccountLabel(accountLabel)
+      const safeToken = validateProviderToken(token)
+      const baseUrl =
+        rawBaseUrl === undefined ? undefined : validateProviderBaseUrl(rawBaseUrl, kind)
+
+      const registry = await storage.getCloudDeploymentAccounts()
+      if (registry.accounts.some((account) => account.label === safeLabel)) {
+        throw new TypeError(`A provider account named "${safeLabel}" already exists`)
+      }
+      const accountId = randomUUID()
+      const secretRef = await vault.saveProviderToken(accountId, safeToken)
+      const now = Date.now()
+      const account: CloudDeploymentProviderAccount = {
+        id: accountId,
+        label: safeLabel,
+        providerKind: kind,
+        secretRef,
+        ...(baseUrl === undefined ? {} : { baseUrl }),
+        configured: true,
+        enabled: true,
+        createdAt: now,
+        updatedAt: now
+      }
+      registry.accounts.push(account)
+      await storage.saveCloudDeploymentAccounts(registry)
+      // The secret is never returned to the renderer.
+      return { ...account, secretRef: '' }
+    }
+  )
+
+  /**
+   * Update a global provider account's metadata: label, base URL, and enabled
+   * state. The secret is handled by `cloudDeploy:rotateAccountSecret` and is
+   * never touched here.
+   */
+  ipcMain.handle(
+    'cloudDeploy:updateAccount',
+    async (_, accountId: unknown, patch: unknown): Promise<CloudDeploymentProviderAccount> => {
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+      if (!isRecord(patch)) throw new TypeError('Provider account update must be an object')
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+
+      if (patch.label !== undefined) {
+        const safeLabel = validateAccountLabel(patch.label)
+        if (
+          registry.accounts.some((entry) => entry.id !== safeAccountId && entry.label === safeLabel)
+        ) {
+          throw new TypeError(`A provider account named "${safeLabel}" already exists`)
+        }
+        account.label = safeLabel
+      }
+      if (patch.baseUrl !== undefined) {
+        account.baseUrl = validateProviderBaseUrl(patch.baseUrl, account.providerKind)
+      }
+      if (patch.enabled !== undefined) {
+        if (typeof patch.enabled !== 'boolean') {
+          throw new TypeError('Provider account enabled flag must be a boolean')
+        }
+        account.enabled = patch.enabled
+      }
+      account.updatedAt = Date.now()
+      await storage.saveCloudDeploymentAccounts(registry)
+      return { ...account, secretRef: '' }
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:rotateAccountSecret',
+    async (_, accountId: unknown, token: unknown) => {
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+      const safeToken = validateProviderToken(token)
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      account.secretRef = await vault.saveProviderToken(safeAccountId, safeToken)
+      account.configured = true
+      account.updatedAt = Date.now()
+      await storage.saveCloudDeploymentAccounts(registry)
+      // The secret is update-only; never return it. Return the sanitized account.
+      return { ...account, secretRef: '' }
+    }
+  )
+
+  ipcMain.handle('cloudDeploy:removeAccount', async (_, accountId: unknown) => {
+    const safeAccountId = requireString(accountId, 'Account ID', true)
+    const registry = await storage.getCloudDeploymentAccounts()
+    if (!registry.accounts.some((entry) => entry.id === safeAccountId)) {
+      throw new TypeError('Provider account not found')
+    }
+    registry.accounts = registry.accounts.filter((entry) => entry.id !== safeAccountId)
+    await storage.saveCloudDeploymentAccounts(registry)
+    await vault.removeProviderToken(safeAccountId)
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:attachAccount',
+    async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+
+      const registry = await storage.getCloudDeploymentAccounts()
+      const account = registry.accounts.find((entry) => entry.id === safeAccountId)
+      if (!account) throw new TypeError('Provider account not found')
+      if (account.providerKind !== kind) {
+        throw new TypeError(`Account "${account.label}" is not a ${kind} account`)
+      }
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind] ?? {
+        attachedAccountIds: [],
+        activeAccountId: null
+      }
+      if (association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is already attached for ${kind}`)
+      }
+      association.attachedAccountIds.push(safeAccountId)
+      if (association.activeAccountId === null) {
+        association.activeAccountId = safeAccountId
+      }
+      config.project.providerAccounts = { ...providerAccounts, [kind]: association }
+      if (!config.project.providers.includes(kind)) {
+        config.project.providers = [...config.project.providers, kind]
+      }
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:detachAccount',
+    async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind]
+      if (!association || !association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is not attached for ${kind}`)
+      }
+      const remaining = association.attachedAccountIds.filter((id) => id !== safeAccountId)
+      if (remaining.length === 0) {
+        delete providerAccounts[kind]
+        config.project.providerAccounts = providerAccounts
+        config.project.providers = config.project.providers.filter((provider) => provider !== kind)
+      } else {
+        providerAccounts[kind] = {
+          attachedAccountIds: remaining,
+          activeAccountId:
+            association.activeAccountId === safeAccountId
+              ? (remaining[0] ?? null)
+              : association.activeAccountId
+        }
+        config.project.providerAccounts = providerAccounts
+      }
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:setActiveAccount',
+    async (_, projectId: unknown, providerKind: unknown, accountId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeAccountId = requireString(accountId, 'Account ID', true)
+
+      const config = await loadOrCreateCloudDeploymentConfig(safeProjectId)
+      const providerAccounts = config.project.providerAccounts ?? {}
+      const association = providerAccounts[kind]
+      if (!association || !association.attachedAccountIds.includes(safeAccountId)) {
+        throw new TypeError(`Account is not attached for ${kind}`)
+      }
+      providerAccounts[kind] = { ...association, activeAccountId: safeAccountId }
+      config.project.providerAccounts = providerAccounts
+      config.updatedAt = Date.now()
+      await storage.saveCloudDeploymentConfig(safeProjectId, config)
+      await syncCloudDeploymentsFlag(safeProjectId)
+      return config
+    }
+  )
+
+  const resolveDeploymentContext = async (
+    projectId: string,
+    kind: CloudDeploymentProviderKind
+  ): Promise<DeploymentProviderContext> => {
+    const config = await storage.getCloudDeploymentConfig(projectId)
+    const association = config?.project.providerAccounts?.[kind]
+    const activeAccountId = association?.activeAccountId ?? null
+    const registry = activeAccountId === null ? null : await storage.getCloudDeploymentAccounts()
+    const activeAccount =
+      activeAccountId === null
+        ? undefined
+        : registry?.accounts.find((account) => account.id === activeAccountId)
+    if (!activeAccount?.configured || !activeAccount.secretRef) {
+      throw new TypeError(`Cloud deployment provider ${kind} is not configured for this project`)
+    }
+    if (!activeAccount.enabled) {
+      throw new TypeError(`Cloud deployment account "${activeAccount.label}" is disabled`)
+    }
+    const token = await vault.resolveProviderToken(activeAccount.id)
+    return {
+      ...(activeAccount.baseUrl === undefined ? {} : { baseUrl: activeAccount.baseUrl }),
+      token
+    }
+  }
+
+  ipcMain.handle('cloudDeploy:overview', async (_, projectId: unknown, providerKind: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const kind = validateCloudDeploymentProviderKind(providerKind)
+    const hasDeployments = await storage.hasCloudDeployments(safeProjectId)
+    try {
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      const [liveContainers, config] = await Promise.all([
+        provider.listContainers(),
+        loadOrCreateCloudDeploymentConfig(safeProjectId)
+      ])
+      const containers = mergeCloudDeploymentContainers(
+        liveContainers,
+        config.project.containers,
+        kind
+      )
+      return { containers, fetchedAt: Date.now(), hasDeployments }
+    } catch (error) {
+      return {
+        containers: [],
+        fetchedAt: Date.now(),
+        hasDeployments,
+        accessError: error instanceof Error ? error.message : 'Provider request failed'
+      }
+    }
+  })
+
+  ipcMain.handle(
+    'cloudDeploy:availableContainers',
+    async (_, projectId: unknown, providerKind: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      try {
+        const provider = resolveDeploymentProvider(
+          kind,
+          await resolveDeploymentContext(safeProjectId, kind)
+        )
+        return await provider.listContainers()
+      } catch (error) {
+        return {
+          accessError: error instanceof Error ? error.message : 'Provider request failed'
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:containerStatus',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      return provider.getStatus(safeContainerId)
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:containerLog',
+    async (
+      _,
+      projectId: unknown,
+      providerKind: unknown,
+      containerId: unknown,
+      deploymentId?: unknown
+    ) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const safeDeploymentId =
+        deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      const log = await provider.getLogs(safeContainerId, safeDeploymentId)
+      return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
+    }
+  )
+
+  ipcMain.handle(
+    'cloudDeploy:deployments',
+    async (_, projectId: unknown, providerKind: unknown, containerId: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const kind = validateCloudDeploymentProviderKind(providerKind)
+      const safeContainerId = requireString(containerId, 'Container ID')
+      const provider = resolveDeploymentProvider(
+        kind,
+        await resolveDeploymentContext(safeProjectId, kind)
+      )
+      return provider.listDeployments(safeContainerId)
+    }
+  )
+
+  ipcMain.handle(
+    'pr:bundle',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      // Fetched together so the sidebar renders one complete view, not six
+      // staggered ones. Optional surfaces degrade to empty rather than failing
+      // the whole bundle (e.g. a repo with checks disabled).
+      const [detail, commits, comments, reviews, reviewComments, files, checks] = await Promise.all(
+        [
+          provider.getPullRequest(target),
+          provider.listPullRequestCommits(target).catch(() => []),
+          provider.listPullRequestComments(target).catch(() => []),
+          provider.listPullRequestReviews(target).catch(() => []),
+          provider.listPullRequestReviewComments(target).catch(() => []),
+          provider.listPullRequestFiles(target).catch(() => []),
+          provider
+            .getPullRequestChecks(target)
+            .catch(() => ({ state: 'none' as const, checks: [] }))
+        ]
+      )
+      return {
+        detail,
+        commits,
+        comments,
+        reviews,
+        reviewComments,
+        files,
+        checks,
+        fetchedAt: Date.now()
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'pr:commitFiles',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, sha: unknown) => {
+      const provider = await providerForProject(validateEntityId(projectId, 'Project ID'))
+      if (!provider) throw new Error('Sign in to GitHub first (Git panel → GitHub account)')
+      return provider.getCommitFiles(
+        {
+          owner: validateBoundedString(owner, 'PR owner', 1, 128),
+          repo: validateBoundedString(repo, 'PR repository', 1, 128)
+        },
+        validateEntityId(sha, 'Commit sha')
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:detail',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const {
+        provider,
+        owner: safeOwner,
+        repo: safeRepo,
+        pullNumber: safeNumber
+      } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return provider.getPullRequest({
+        owner: safeOwner,
+        repo: safeRepo,
+        pullNumber: safeNumber
+      })
+    }
+  )
+
+  ipcMain.handle('pr:agentReport', async (_, projectId: unknown, pullNumber: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const reportPath = join(
+      projectPath,
+      '.cio',
+      'git',
+      'pr',
+      String(validatePrNumber(pullNumber)),
+      'review.md'
+    )
+    const threadId = await readFile(join(dirname(reportPath), 'thread.json'), 'utf-8')
+      .then((raw) => {
+        const parsed: unknown = JSON.parse(raw)
+        const value =
+          typeof parsed === 'object' && parsed !== null
+            ? (parsed as Record<string, unknown>)['threadId']
+            : null
+        return typeof value === 'string' ? value : null
+      })
+      .catch(() => null)
+    try {
+      const [content, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
+      return { path: reportPath, content, updatedAt: stats.mtimeMs, threadId }
+    } catch {
+      // No report yet — the agent hasn't finished (or hasn't been asked).
+      return { path: reportPath, content: '', updatedAt: null, threadId }
+    }
+  })
+
+  ipcMain.handle(
+    'pr:comment',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.createPullRequestComment({
+          ...target,
+          body: validatePrCommentBody(body)
+        })
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'pr:review',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      event: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      const verdict = validatePrReviewEvent(event)
+      const text = validatePrCommentBody(body, true)
+      // GitHub rejects a REQUEST_CHANGES or COMMENT review without a body.
+      if (verdict !== 'APPROVE' && !text.trim()) {
+        throw new Error('Leave a comment explaining the requested changes')
+      }
+      return runGitHubMutation(target.owner, target.repo, async () => {
+        await provider.createPullRequestReview({ ...target, event: verdict, body: text })
+        return null
+      })
+    }
+  )
+
+  ipcMain.handle(
+    'pr:reviewWorkspace',
+    async (_, projectId: unknown, pullNumber: unknown, threadId?: unknown) => {
+      const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+      const directory = join(projectPath, '.cio', 'git', 'pr', String(validatePrNumber(pullNumber)))
+      await mkdir(directory, { recursive: true })
+      if (threadId !== undefined) {
+        // Remember which thread owns this review so the sidebar can jump back
+        // into the conversation after a restart.
+        await writeFile(
+          join(directory, 'thread.json'),
+          JSON.stringify({ threadId: validateEntityId(threadId, 'Thread ID') }, null, 2),
+          'utf-8'
+        )
+      }
+      return directory
+    }
+  )
+
+  ipcMain.handle('github:authStatus', () => githubAuthService.status())
+  ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
+  ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
+    githubAuthService.pollAccessToken(validateBoundedString(deviceCode, 'Device code', 1, 256))
+  )
+  ipcMain.handle('github:logout', async () => {
+    await githubAuthService.logout()
+    return githubAuthService.status()
+  })
+
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)
   )
@@ -2313,7 +4235,7 @@ export function registerIpcHandlers(
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )
-  ipcMain.handle('project:openInEditor', async (_, projectId: string) => {
+  privileged('project:openInEditor', async (_event, projectId: string) => {
     const project = await projectManager.getProject(projectId)
     if (!project?.path) return
 
@@ -2344,21 +4266,84 @@ export function registerIpcHandlers(
         ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
       }
     }
-    const thread = await threadManager.createThread(validated)
-    if (thread.workingDirectory) {
-      const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-      if (branch) {
-        await threadManager.setBranch(thread.projectId, thread.id, branch)
-        thread.branch = branch
+    // Optimistic create: the thread object (with its stable id) is returned
+    // immediately while persistence, lazy capacity eviction, and branch
+    // detection finalize in the background. Session/message entry points await
+    // `threadCreation.awaitReady`, so a message sent in this window renders
+    // instantly and is queued behind the finalization before reaching the
+    // harness — thread creation never waits on the database.
+    const { thread, finalize } = threadManager.prepareCreateThread(validated, {
+      onEvictionError: (error) =>
+        Logger.error('Thread capacity eviction failed', {
+          threadId: thread.id,
+          error: String(error)
+        })
+    })
+    threadCreation.begin(thread.id, async () => {
+      await finalize()
+      if (thread.workingDirectory) {
+        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branch) {
+          await threadManager.setBranch(thread.projectId, thread.id, branch)
+          thread.branch = branch
+        }
       }
-    }
+    })
     return thread
   })
-  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-    threadManager.getThread(projectId, threadId)
-  )
+  if (!options.hydrationHandlersRegistered) {
+    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+      await threadCreation.awaitReady(threadId)
+      return threadManager.getThread(projectId, threadId)
+    })
+  }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
+  if (!options.hydrationHandlersRegistered) {
+    // Bounded hydration query: legacy archived rows never cross IPC and the
+    // payload is capped, with the selected project ordered first so the
+    // visible workspace renders before the rest of the workspace data.
+    ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
+      const options = isRecord(rawOptions) ? rawOptions : {}
+      const projectId =
+        options.projectId === undefined
+          ? undefined
+          : validateEntityId(options.projectId, 'Project ID')
+      const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
+      const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
+      const threads = await threadManager.listAllThreads({
+        includeArchived: false,
+        limit,
+        offset,
+        order: 'activity'
+      })
+      if (!projectId) return threads
+      const preferred: Thread[] = []
+      const rest: Thread[] = []
+      for (const thread of threads) {
+        ;(thread.projectId === projectId ? preferred : rest).push(thread)
+      }
+      return [...preferred, ...rest]
+    })
+  }
+  // Older active tasks are deliberately opt-in and never participate in
+  // initial renderer hydration.
+  ipcMain.handle('thread:listHistoryPage', async (_, rawOptions: unknown) => {
+    const options = isRecord(rawOptions) ? rawOptions : {}
+    const projectId =
+      options.projectId === undefined
+        ? undefined
+        : validateEntityId(options.projectId, 'Project ID')
+    const limit = validateBoundedInteger(options.limit ?? 50, 'History page limit', 1, 100)
+    const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
+    const threads = await threadManager.listAllThreads({
+      includeArchived: false,
+      limit,
+      offset,
+      order: 'activity'
+    })
+    return projectId ? threads.filter((thread) => thread.projectId === projectId) : threads
+  })
   ipcMain.handle('threads:search', (_, query: unknown, options?: unknown) => {
     const safeQuery = requireString(query, 'Search query')
     const safeOptions: { projectId?: string; limit?: number } = {}
@@ -2376,7 +4361,7 @@ export function registerIpcHandlers(
   // Mirror-only transcript read — fast disk access, never touches a harness driver.
   ipcMain.handle(
     'thread:loadMessages',
-    (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
+    async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
       let safeBefore: ThreadMessageCursor | undefined
       if (before !== undefined) {
         if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
@@ -2390,14 +4375,36 @@ export function registerIpcHandlers(
           id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
         }
       }
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      await threadCreation.awaitReady(safeThreadId)
       return threadManager.loadMessagePage(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+        safeProjectId,
+        safeThreadId,
         safeBefore,
         validateBoundedInteger(limit, 'Message page limit', 1, 100)
       )
     }
   )
+  // Mirror-only centered transcript read for quick jumps to arbitrary messages.
+  ipcMain.handle(
+    'thread:loadMessagesAround',
+    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) => {
+      return threadManager.loadMessagePageAround(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateBoundedString(anchorId, 'Message ID', 1, 512),
+        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+      )
+    }
+  )
+  // Lightweight full user-message history for the header quick-jump list.
+  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.loadUserMessages(safeProjectId, safeThreadId)
+  })
   ipcMain.handle('thread:update', (_, projectId: string, threadId: string, input) =>
     threadManager.updateThread(
       validateEntityId(projectId, 'Project ID'),
@@ -2409,7 +4416,6 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     await threadManager.deleteThread(validProjectId, validThreadId)
-    await memoryService.deleteThreadMemory(validProjectId, validThreadId)
   })
   ipcMain.handle(
     'thread:dismissSpecReview',
@@ -2459,22 +4465,46 @@ export function registerIpcHandlers(
       )
     }
   )
-  ipcMain.handle(
-    'thread:setArchived',
-    (_, projectId: unknown, threadId: unknown, archived: unknown) =>
-      threadManager.setArchived(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateBoolean(archived, 'Archived')
-      )
-  )
-  ipcMain.handle('thread:markRead', (_, projectId: string, threadId: string) =>
-    threadManager.markRead(projectId, threadId)
-  )
+  ipcMain.handle('thread:harnessUsage', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.harnessUsageFor(safeProjectId, safeThreadId)
+  })
+  ipcMain.handle('thread:efficiencyKpis', async (_, projectId: unknown, threadId: unknown) => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation.awaitReady(safeThreadId)
+    return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
+  })
+  ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
+    await threadCreation.awaitReady(threadId)
+    return threadManager.markRead(projectId, threadId)
+  })
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
     threadManager.reorderThreads(
       validateEntityId(projectId, 'Project ID'),
       validateStringArray(orderedIds, 'Ordered IDs')
+    )
+  )
+  ipcMain.handle(
+    'thread:setSortOrder',
+    (_, projectId: unknown, threadId: unknown, sortOrder: unknown) =>
+      threadManager.setSortOrder(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateSortOrder(sortOrder)
+      )
+  )
+  ipcMain.handle('thread:reorderPinned', (_, projectId: unknown, orderedPinnedIds: unknown) =>
+    threadManager.reorderPinnedThreads(
+      validateEntityId(projectId, 'Project ID'),
+      validateStringArray(orderedPinnedIds, 'Ordered pinned IDs')
+    )
+  )
+  ipcMain.handle('thread:reorderPinnedGlobal', (_, orderedPinnedIds: unknown) =>
+    threadManager.reorderPinnedThreadsGlobal(
+      validateStringArray(orderedPinnedIds, 'Ordered pinned IDs')
     )
   )
   ipcMain.handle(
@@ -2504,7 +4534,8 @@ export function registerIpcHandlers(
       threadId: unknown,
       title: unknown,
       checkpointId?: unknown,
-      messageId?: unknown
+      messageId?: unknown,
+      targetProjectId?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
@@ -2514,14 +4545,19 @@ export function registerIpcHandlers(
           ? undefined
           : validateEntityId(checkpointId, 'Checkpoint ID', 256)
       const safeMessageId =
-        messageId === undefined ? undefined : validateEntityId(messageId, 'Message ID', 256)
+        messageId === undefined ? undefined : validateBoundedString(messageId, 'Message ID', 1, 256)
+      const safeTargetProjectId =
+        targetProjectId === undefined
+          ? undefined
+          : validateEntityId(targetProjectId, 'Target project ID')
       await chatEngine?.loadMessages(safeProjectId, safeThreadId)
       const forked = await threadManager.forkThread(
         safeProjectId,
         safeThreadId,
         safeTitle,
         safeCheckpointId,
-        safeMessageId
+        safeMessageId,
+        safeTargetProjectId
       )
       if (forked.workingDirectory) {
         const branch = await repositoryService.getCurrentBranch(forked.workingDirectory)

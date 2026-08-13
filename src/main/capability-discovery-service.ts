@@ -86,6 +86,14 @@ const HARNESS_SPECS: Record<string, HarnessSpec> = {
     globalSkillDirs: [],
     projectSkillDirs: [],
     mcpFormat: 'mcpServers'
+  },
+  muse: {
+    id: 'muse',
+    globalConfigPaths: ['.config/muse/settings.json'],
+    projectConfigPaths: ['.muse/mcp.json'],
+    globalSkillDirs: ['.config/muse/skills'],
+    projectSkillDirs: ['.muse/skills'],
+    mcpFormat: 'mcpServers'
   }
 }
 

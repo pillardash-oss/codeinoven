@@ -3,6 +3,7 @@ import type {
   AgentModelSelection,
   AgentRole,
   AgentSessionStatus,
+  AgentRunningProcess,
   AssignmentModelSelection,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -42,6 +43,8 @@ import type {
   ScopedHarnessCommand,
   HistoryEntry,
   HistoryRole,
+  ImageDescriptorErrorRequest,
+  ImageDescriptorReplyAction,
   PermissionRequest,
   PermissionReply,
   PendingAgentQuestionRequest,
@@ -51,6 +54,40 @@ import type {
   ProjectFileInfo,
   ProjectFileTransferMode,
   ProjectTextFile,
+  GitBranchInfo,
+  GitCommitInfo,
+  GitCredentialStatus,
+  GitDiff,
+  GitFileChange,
+  GitHubAuthStatus,
+  GitHubDeviceCode,
+  GitHubDeploymentDetail,
+  GitHubDeploymentJobLog,
+  GitHubDeploymentOverviewResult,
+  GitHubPollResult,
+  GitHubMutationResult,
+  GitHubWorkflowRunDetail,
+  GitIdentity,
+  GitIdentityInput,
+  GitRemoteInfo,
+  GitStatus,
+  GitStashEntry,
+  HarnessUsage,
+  MergeSummary,
+  PrCreateInput,
+  PrAgentReport,
+  PrMergeMethod,
+  PrReviewEvent,
+  PrResolveOptions,
+  PrState,
+  PullRequestBundle,
+  PullRequestComment,
+  PullRequestCompare,
+  PullRequestDetail,
+  PullRequestFile,
+  PullRequestPage,
+  PullRequestReference,
+  PullRequestReviewResult,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -63,6 +100,7 @@ import type {
   HarnessUpdateHandoff,
   HarnessUpdateStatus,
   HarnessInstallInfo,
+  HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
   RepositoryPreflightResult,
@@ -79,10 +117,14 @@ import type {
   SpecValidationResult,
   Thread,
   ThreadContextUsage,
+  AgentAccountUsage,
+  AttachmentStorageScope,
   ThreadMessageCursor,
   ThreadMessagePage,
+  UserMessageSummary,
   ThreadSettings,
   ThreadStatus,
+  UsageEfficiencyKpis,
   TurnCheckpointFileDiff,
   TurnCheckpointSummary,
   UtilityCatalog,
@@ -123,6 +165,16 @@ export interface UpdaterStatus {
 }
 
 export interface IpcInvokeContract {
+  'account:getLocalUsage': Contract<
+    [range: import('./types').LocalProfileAnalyticsRange],
+    import('./types').LocalProfileAnalytics
+  >
+  'account:getProfile': Contract<[], import('./types').AccountProfileState>
+  'account:beginSignIn': Contract<
+    [provider: import('./types').AccountAuthProvider],
+    import('./types').AccountSignInStart
+  >
+  'account:syncProfile': Contract<[], import('./types').AccountProfileState>
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -135,6 +187,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, choice: BrainstormEntryChoice],
     BrainstormWorkflowState
   >
+  'brainstorm:resetWorkflow': Contract<[projectId: string, threadId: string], void>
   'brainstorm:getActive': Contract<[projectId: string, threadId: string], BrainstormDocument | null>
   'brainstorm:listVersions': Contract<
     [projectId: string, threadId: string, brainstormId: string],
@@ -389,6 +442,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentSessionStatus | null
   >
+  'agent:dismissSessionError': Contract<
+    [projectId: string, threadId: string, sessionId: string],
+    void
+  >
   'agent:getChildSessionStatus': Contract<
     [projectId: string, threadId: string, sessionId: string],
     AgentSessionStatus | null
@@ -396,6 +453,14 @@ export interface IpcInvokeContract {
   'agent:retryChildSession': Contract<
     [projectId: string, threadId: string, sessionId: string],
     void
+  >
+  'agent:retryAssignmentWorker': Contract<
+    [projectId: string, coordinatorThreadId: string, workerThreadId: string],
+    AssignmentPlan
+  >
+  'agent:resumeAssignmentAttention': Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentPlan
   >
   'agent:abortChildSession': Contract<
     [projectId: string, threadId: string, sessionId: string],
@@ -458,6 +523,11 @@ export interface IpcInvokeContract {
     [projectId: string, coordinatorThreadId: string],
     AssignmentPlan
   >
+  'agent:stopAssignment': Contract<[projectId: string, coordinatorThreadId: string], AssignmentPlan>
+  'agent:resumeAssignment': Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentPlan
+  >
   'agent:listCommands': Contract<[projectId: string, threadId: string], ScopedHarnessCommand[]>
   'agent:listQuestions': Contract<
     [projectId: string, threadId: string],
@@ -478,6 +548,7 @@ export interface IpcInvokeContract {
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
+  'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
   'agent:listTools': Contract<
     [projectId?: string, harnessId?: string, providerId?: string, modelId?: string],
     AgentToolCatalog
@@ -486,6 +557,9 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentContextCapabilities
   >
+  'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
+  'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
+  'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
   'capabilities:readSkill': Contract<[source: AgentCapabilitySource], NativeSkillContent | null>
   'capabilities:updateSkill': Contract<
     [source: AgentCapabilitySource, instructions: string],
@@ -509,6 +583,20 @@ export interface IpcInvokeContract {
   'agent:loadTemporaryChatMessages': Contract<[temporaryChatId: string], AgentMessage[]>
   'agent:replyPermission': Contract<
     [projectId: string, requestId: string, reply: PermissionReply, alternative?: string],
+    void
+  >
+  'agent:listImageDescriptorErrors': Contract<
+    [projectId: string, threadId: string],
+    ImageDescriptorErrorRequest[]
+  >
+  'agent:replyImageDescriptor': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      requestId: string,
+      action: ImageDescriptorReplyAction,
+      selection?: AgentModelSelection
+    ],
     void
   >
   'agent:runCommand': Contract<
@@ -555,7 +643,7 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selection: string | undefined,
+      selections: string[],
       initialContext: string | undefined
     ],
     AgentMessage
@@ -572,6 +660,16 @@ export interface IpcInvokeContract {
   'agent:touchTemporaryChat': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
+  >
+  'temporary-chat:convertToThread': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      title?: string
+    ],
+    Thread
   >
   'agent:truncateMessages': Contract<
     [projectId: string, threadId: string, messageId: string],
@@ -611,16 +709,322 @@ export interface IpcInvokeContract {
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
-  'clipboard:saveImage': Contract<[], string | null>
+  'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
-  'dialog:pickFile': Contract<[], string | null>
+  'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
+  'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
   'file:readAsDataUrl': Contract<[filePath: string], string | null>
   'editors:detect': Contract<[], EditorInfo[]>
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
+  'git:status': Contract<[projectId: string], GitStatus>
+  'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
+  'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
+  'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:commit': Contract<[projectId: string, message: string], GitStatus>
+  'git:init': Contract<[projectId: string], GitStatus>
+  'git:branches': Contract<[projectId: string], GitBranchInfo[]>
+  'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
+  'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
+  'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
+  'git:log': Contract<[projectId: string, limit?: number, offset?: number], GitCommitInfo[]>
+  'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
+  'git:commitFileDiff': Contract<[projectId: string, hash: string, path: string], GitDiff>
+  'git:amend': Contract<[projectId: string, message: string], GitStatus>
+  'git:reset': Contract<
+    [projectId: string, mode: import('./types').GitResetMode, target?: string],
+    GitStatus
+  >
+  'git:deleteCommit': Contract<[projectId: string, target: string], GitStatus>
+  'git:getIdentity': Contract<[projectId: string], GitIdentity>
+
+  'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
+  'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>
+  'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>
+  'git:removeRemote': Contract<[projectId: string, name: string], GitRemoteInfo[]>
+  'git:fetch': Contract<[projectId: string], GitStatus>
+  'git:fetchBranch': Contract<[projectId: string, remote: string, branch: string], GitStatus>
+  'git:pull': Contract<[projectId: string], GitStatus>
+  'git:pullIntegrate': Contract<
+    [projectId: string, options: { remote?: string; branch?: string; rebase: boolean }],
+    GitStatus
+  >
+  'git:push': Contract<
+    [projectId: string, options: { setUpstream: boolean; remote?: string; branch?: string }],
+    GitStatus
+  >
+  'git:getCredentialStatus': Contract<[projectId: string], GitCredentialStatus>
+  'git:setCredential': Contract<[projectId: string, token: string], GitCredentialStatus>
+  'git:removeCredential': Contract<[projectId: string], GitCredentialStatus>
+  'git:merge': Contract<[projectId: string, target: string], MergeSummary>
+  'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
+  'git:preparePrResolve': Contract<[projectId: string, options: PrResolveOptions], GitStatus>
+  'git:stash': Contract<[projectId: string, message?: string, paths?: string[]], GitStatus>
+  'git:ignore': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:discard': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:stashList': Contract<[projectId: string], GitStashEntry[]>
+  'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
+  'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
+  'git:stashDiff': Contract<[projectId: string, id: string], GitFileChange[]>
+  'git:stashFileDiff': Contract<[projectId: string, id: string, path: string], GitDiff>
+  'git:abortMerge': Contract<[projectId: string], GitStatus>
+  'git:abortRebase': Contract<[projectId: string], GitStatus>
+  'pr:create': Contract<
+    [projectId: string, input: PrCreateInput],
+    GitHubMutationResult<PullRequestReference>
+  >
+  'pr:list': Contract<
+    [projectId: string, owner: string, repo: string, state?: string],
+    PullRequestReference[]
+  >
+  'pr:merge': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      method: PrMergeMethod,
+      commitTitle?: string,
+      commitMessage?: string
+    ],
+    GitHubMutationResult<PullRequestReference>
+  >
+  'pr:compare': Contract<
+    [projectId: string, owner: string, repo: string, base: string, head: string],
+    PullRequestCompare
+  >
+  'pr:reopen': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >
+  'pr:close': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >
+  'pr:page': Contract<
+    [projectId: string, owner: string, repo: string, state: PrState, page: number],
+    PullRequestPage
+  >
+  /**
+   * Read one pull request's detail. Hitting the detail endpoint forces GitHub
+   * to compute mergeability, so it is used as the authoritative mergeability
+   * probe when a list payload reported `mergeable`/`mergeable_state` as null.
+   */
+  'pr:detail': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestDetail
+  >
+  'deployment:overview': Contract<
+    [projectId: string, owner: string, repo: string],
+    GitHubDeploymentOverviewResult
+  >
+  'deployment:detail': Contract<
+    [projectId: string, owner: string, repo: string, deploymentId: number],
+    GitHubDeploymentDetail
+  >
+  'deployment:runDetail': Contract<
+    [projectId: string, owner: string, repo: string, runId: number],
+    GitHubWorkflowRunDetail
+  >
+  'deployment:jobLog': Contract<
+    [projectId: string, owner: string, repo: string, jobId: number],
+    GitHubDeploymentJobLog
+  >
+  /**
+   * Read a project's cloud deployment config, or null when none exists. The
+   * config is persisted by main under the CodeInOven config directory; the
+   * renderer never touches the filesystem or Node APIs for it.
+   */
+  'cloudDeploy:getConfig': Contract<
+    [projectId: string],
+    import('./types').CloudDeploymentConfig | null
+  >
+  /**
+   * Persist a project's cloud deployment config (selected providers + labelled
+   * containers with credential references) and refresh the project's
+   * has-deployments flag for panel visibility. Returns the stored config.
+   */
+  'cloudDeploy:saveConfig': Contract<
+    [projectId: string, config: import('./types').CloudDeploymentConfig],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove a project's cloud deployment config and clear its has-deployments flag. */
+  'cloudDeploy:clearConfig': Contract<[projectId: string], void>
+  /** Update a container's label/id in a project's config. Returns the stored config. */
+  'cloudDeploy:updateContainer': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string,
+      patch: { label?: string; id?: string }
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Remove a container from a project's config. Returns the stored config. */
+  'cloudDeploy:removeContainer': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** List every provider account in the global registry. */
+  'cloudDeploy:listAccounts': Contract<[], import('./types').CloudDeploymentAccountRegistry>
+  /**
+   * Create a new provider account in the GLOBAL registry and vault its token by
+   * account id. The account is reusable across every project that attaches it.
+   * The plaintext token is vaulted by main via `safeStorage` and never crosses
+   * back to the renderer. Returns the sanitized account (no secret).
+   */
+  'cloudDeploy:createAccount': Contract<
+    [
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountLabel: string,
+      token: string,
+      baseUrl?: string
+    ],
+    import('./types').CloudDeploymentProviderAccount
+  >
+  /** Update a global provider account's metadata (label, base URL, enabled). */
+  'cloudDeploy:updateAccount': Contract<
+    [
+      accountId: string,
+      patch: {
+        label?: string
+        baseUrl?: string
+        enabled?: boolean
+      }
+    ],
+    import('./types').CloudDeploymentProviderAccount
+  >
+  /**
+   * Rotate a global provider account's secret. Update-only: the token is vaulted
+   * and the current secret is never returned to the renderer. Returns the
+   * sanitized account (secretRef cleared).
+   */
+  'cloudDeploy:rotateAccountSecret': Contract<
+    [accountId: string, token: string],
+    import('./types').CloudDeploymentProviderAccount
+  >
+  /** Remove a global provider account and its vaulted token. */
+  'cloudDeploy:removeAccount': Contract<[accountId: string], void>
+  /** Attach a global provider account to a project for a provider kind. */
+  'cloudDeploy:attachAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Detach a global provider account from a project for a provider kind. */
+  'cloudDeploy:detachAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /** Set which attached account is active for a provider within a project. */
+  'cloudDeploy:setActiveAccount': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      accountId: string
+    ],
+    import('./types').CloudDeploymentConfig
+  >
+  /**
+   * Fetch a provider-agnostic snapshot of a configured provider's containers.
+   * The adapter is resolved by kind via the registry; `hasDeployments` drives
+   * whether the Cloud Deployments panel is shown at all. Provider/credential
+   * failures are returned as `accessError` rather than rejecting IPC.
+   */
+  'cloudDeploy:overview': Contract<
+    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    import('./types').CloudDeploymentResult
+  >
+  /**
+   * List every container the account can see on the provider (not filtered to
+   * this project's mappings), so the add-container flow can offer a picker.
+   * Provider/credential failures are returned as `{ accessError }`.
+   */
+  'cloudDeploy:availableContainers': Contract<
+    [projectId: string, providerKind: import('./types').CloudDeploymentProviderKind],
+    import('./types').CloudDeploymentContainer[] | { accessError: string }
+  >
+  /**
+   * Latest snapshot for one configured container, or null when the provider
+   * cannot resolve it.
+   */
+  'cloudDeploy:containerStatus': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('./types').CloudDeploymentContainer | null
+  >
+  /**
+   * List the most recent deployments/builds for a container, newest first
+   * (bounded to a UI window such as the last ten).
+   */
+  'cloudDeploy:deployments': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string
+    ],
+    import('./types').CloudDeploymentDeployment[]
+  >
+  /** Capped raw log text for a container's latest deployment. */
+  'cloudDeploy:containerLog': Contract<
+    [
+      projectId: string,
+      providerKind: import('./types').CloudDeploymentProviderKind,
+      containerId: string,
+      deploymentId?: string
+    ],
+    { containerId: string; deploymentId: string | null; log: string }
+  >
+  /** Everything the PR detail view needs, fetched in parallel in one round trip. */
+  'pr:bundle': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    PullRequestBundle
+  >
+  'pr:commitFiles': Contract<
+    [projectId: string, owner: string, repo: string, sha: string],
+    PullRequestFile[]
+  >
+  /** Read back the agent's `.cio/git/pr/<number>/review.md`, if it wrote one. */
+  'pr:agentReport': Contract<[projectId: string, pullNumber: number], PrAgentReport>
+  'pr:comment': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number, body: string],
+    GitHubMutationResult<PullRequestComment>
+  >
+  'pr:review': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      event: PrReviewEvent,
+      body: string
+    ],
+    PullRequestReviewResult
+  >
+  /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
+  'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>
+  'github:authStatus': Contract<[], GitHubAuthStatus>
+  'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
+  'github:poll': Contract<[deviceCode: string], GitHubPollResult>
+  'github:logout': Contract<[], GitHubAuthStatus>
   'history:search': Contract<[query: string, projectId?: string, limit?: number], HistoryEntry[]>
   'project:search': Contract<[query: string, limit?: number], Project[]>
   'threads:search': Contract<
@@ -641,6 +1045,7 @@ export interface IpcInvokeContract {
   'scope:save': Contract<[projectId: string, board: ScopeBoard], ScopeBoard>
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
+  'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>
   'plan:approve': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:get': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:save': Contract<[projectId: string, threadId: string, content: string], Plan>
@@ -672,6 +1077,11 @@ export interface IpcInvokeContract {
   'projectFiles:delete': Contract<[projectId: string, relativePath: string], void>
   'projectFiles:info': Contract<[projectId: string, relativePath: string], ProjectFileInfo>
   'projectFiles:openInEditor': Contract<[projectId: string, relativePath: string], void>
+  'projectFiles:openInEditorWith': Contract<
+    [projectId: string, relativePath: string, editorId: EditorId],
+    void
+  >
+  'projectFiles:saveAs': Contract<[projectId: string, relativePath: string], string | null>
   'projectFiles:paste': Contract<
     [
       sourceProjectId: string,
@@ -703,6 +1113,12 @@ export interface IpcInvokeContract {
   'harnessUpdates:handoff': Contract<[harnessId: string], HarnessUpdateHandoff>
   'harnessInstall:getInfo': Contract<[harnessId: string], HarnessInstallInfo>
   'harnessUninstall:handoff': Contract<[harnessId: string], HarnessUninstallHandoff>
+  'harnessManifest:list': Contract<[], HarnessManifestEntry[]>
+  'harnessManifest:confirm': Contract<
+    [input: { harnessId: string; behavior: string; value: boolean }],
+    void
+  >
+  'harnessManifest:reset': Contract<[input: { harnessId: string; behavior: string }], void>
   'providerAccounts:getAuthStatus': Contract<
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
@@ -763,6 +1179,8 @@ export interface IpcInvokeContract {
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
+  /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
+  'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'spec:addAnnotation': Contract<
     [
       projectId: string,
@@ -936,6 +1354,22 @@ export interface IpcInvokeContract {
   'audit:complete': Contract<[projectId: string, threadId: string], Thread>
   'audit:beginRework': Contract<[projectId: string, threadId: string], Thread>
   'audit:returnToOffer': Contract<[projectId: string, threadId: string], AssignmentPlan>
+  'audit:openInEditor': Contract<
+    [projectId: string, threadId: string, reportId: string, version: number],
+    string
+  >
+  'audit:revealInFiles': Contract<
+    [projectId: string, threadId: string, reportId: string, version: number],
+    string
+  >
+  'brainstorm:openInEditor': Contract<
+    [projectId: string, threadId: string, brainstormId: string, version: number],
+    string
+  >
+  'brainstorm:revealInFiles': Contract<
+    [projectId: string, threadId: string, brainstormId: string, version: number],
+    string
+  >
   'thread:create': Contract<[input: CreateThreadInput], Thread>
   'thread:delete': Contract<[projectId: string, threadId: string], void>
   'thread:dismissSpecReview': Contract<
@@ -943,13 +1377,38 @@ export interface IpcInvokeContract {
     Thread
   >
   'thread:fork': Contract<
-    [projectId: string, threadId: string, title: string, checkpointId?: string, messageId?: string],
+    [
+      projectId: string,
+      threadId: string,
+      title: string,
+      checkpointId?: string,
+      messageId?: string,
+      targetProjectId?: string
+    ],
     Thread
   >
   'thread:get': Contract<[projectId: string, threadId: string], Thread | null>
   'thread:list': Contract<[projectId: string], Thread[]>
   'thread:listAll': Contract<[], Thread[]>
+  /**
+   * Bounded task listing for startup hydration. Never returns legacy rows
+   * pending deletion and never crosses the full task history over IPC.
+   * `projectId` (when given) is ordered first so the selected project's recent
+   * active threads render before anything else.
+   */
+  'thread:listRecent': Contract<
+    [options: { projectId?: string; limit?: number; offset?: number }],
+    Thread[]
+  >
+  /** Paged history for an explicit older-task request. */
+  'thread:listHistoryPage': Contract<
+    [options: { projectId?: string; limit?: number; offset?: number }],
+    Thread[]
+  >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
+  'thread:setSortOrder': Contract<[projectId: string, threadId: string, sortOrder: number], Thread>
+  'thread:reorderPinned': Contract<[projectId: string, orderedPinnedIds: string[]], Thread[]>
+  'thread:reorderPinnedGlobal': Contract<[orderedPinnedIds: string[]], Thread[]>
   'thread:reorderScope': Contract<
     [projectId: string, bucketId: string, slice: ScopeSlice, orderedIds: string[]],
     Thread[]
@@ -958,13 +1417,19 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, before?: ThreadMessageCursor, limit?: number],
     ThreadMessagePage
   >
+  'thread:loadMessagesAround': Contract<
+    [projectId: string, threadId: string, anchorId: string, limit: number],
+    ThreadMessagePage
+  >
+  'thread:loadUserMessages': Contract<[projectId: string, threadId: string], UserMessageSummary[]>
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
-  'thread:setArchived': Contract<[projectId: string, threadId: string, archived: boolean], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<
     [projectId: string, threadId: string, usage: ThreadContextUsage],
     void
   >
+  'thread:harnessUsage': Contract<[projectId: string, threadId: string], HarnessUsage[]>
+  'thread:efficiencyKpis': Contract<[projectId: string, threadId: string], UsageEfficiencyKpis>
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
   'thread:update': Contract<
     [
@@ -993,7 +1458,33 @@ export interface IpcInvokeContract {
   'updater:getStatus': Contract<[], UpdaterStatus>
   'updater:download': Contract<[], void>
   'updater:install': Contract<[], void>
+  'remote:getStatus': Contract<[], RemoteModeStatus>
+  'remote:ensureGateway': Contract<[], RemoteModeStatus>
+  'remote:toggle': Contract<[enabled: boolean], RemoteModeStatus>
+  'remote:listDevices': Contract<[], RemoteDeviceInfo[]>
+  'remote:disconnectDevice': Contract<[deviceId: string], void>
+  'remote:renameDevice': Contract<[deviceId: string, name: string], RemoteModeStatus>
+  'remote:revokeDevice': Contract<[deviceId: string, reason: string], RemoteModeStatus>
+  'remote:approveStepUp': Contract<[approvalId: string], boolean>
+  'remote:rejectStepUp': Contract<[approvalId: string], boolean>
+  'remote:listPendingApprovals': Contract<[], RemotePendingStepUpApproval[]>
+  'remote:listAuditEvents': Contract<[limit: number], RemoteAuditEventInfo[]>
+  'remote:beginCloudEnrollment': Contract<[], RemoteModeStatus>
+  'remote:resetCloudEnrollment': Contract<[], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
+  /**
+   * Asks the main process to close the main window — the same path as the
+   * traffic-light close button, so the working-threads confirmation gate applies.
+   */
+  'app:requestClose': Contract<[], void>
+  /** Resolves after post-paint feature IPC and harness services are registered. */
+  'app:waitForFeatures': Contract<[], void>
+  /**
+   * Signalled by the renderer after its initial hydration completes so the main
+   * process can timestamp the `renderer:hydrated` / `workspace:ready` startup
+   * phases. Carries no payload.
+   */
+  'app:rendererReady': Contract<[], void>
 }
 
 export interface ThreadClickedPayload {
@@ -1001,16 +1492,34 @@ export interface ThreadClickedPayload {
   threadId: string
 }
 
+/** One thread still being worked on, blocking the close. */
+export interface CloseConfirmationThread {
+  threadId: string
+  title: string
+  status: 'planning' | 'executing'
+}
+
 /** A project with at least one thread still being worked on. */
 export interface CloseConfirmationProject {
   projectId: string
   projectName: string
   threadCount: number
+  /** The exact threads blocking the close, most active first. */
+  threads: CloseConfirmationThread[]
 }
 
-/** Sent when the user tries to close the app while threads are still working. */
+/** An open file with unsaved edits, blocking the close. */
+export interface CloseConfirmationFile {
+  projectId: string
+  path: string
+}
+
+/** Sent when the user tries to close the app while threads are still working
+ *  or files have unsaved edits. `files` is populated by the renderer, which
+ *  owns the unsaved-editor state. */
 export interface CloseConfirmationPayload {
   projects: CloseConfirmationProject[]
+  files: CloseConfirmationFile[]
 }
 
 export type AgentNotificationKind = 'completed' | 'attention' | 'error'
@@ -1027,20 +1536,130 @@ export type SystemNotificationTestResult =
   | { status: 'unsupported'; message: string }
   | { status: 'failed'; message: string }
 
+/**
+ * macOS notification authorization, queried on demand. On non-macOS platforms the
+ * permission concept does not apply, so `platform` is `'other'`.
+ */
+export type SystemNotificationPermissionStatus =
+  { platform: 'darwin'; status: 'granted' | 'denied' | 'prompt' } | { platform: 'other' }
+
+/** Remote-mode keep-alive phase, mirroring the renderer's `KeepAlivePhase`. */
+export type RemoteModePhase =
+  'IDLE' | 'KEEP_ALIVE_ARMED' | 'KEEP_ALIVE_ACTIVE' | 'REMOTE_SESSION_LIVE'
+
+export interface RemoteGatewayInfo {
+  listening: boolean
+  port: number
+  /** The URL a phone can open to reach the installable PWA. */
+  url: string | null
+}
+
+export interface RemoteCloudStatus {
+  configured: boolean
+  state: 'disabled' | 'enrollment-pending' | 'connecting' | 'online' | 'offline' | 'error'
+  apiOrigin: string | null
+  desktopId: string | null
+  enrollmentCode: string | null
+  enrollmentExpiresAt: number | null
+  lastError: string | null
+}
+
+/** A phone device known to the desktop (enrolled, connected, or revoked). */
+export interface RemoteDeviceInfo {
+  id: string
+  /** Human-readable device name (reported by the phone or renamed on desktop). */
+  name: string
+  connectedAt: number
+  transport: 'lan' | 'relay'
+  /** Whether the device currently holds a live session. */
+  connected: boolean
+  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  scopes: string[]
+  /** SHA-256 fingerprint prefix of the device signing key. */
+  fingerprint: string | null
+  lastUsedAt: number | null
+  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  expiresAt: number | null
+  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  credentialExpiresAt: number | null
+  revokedAt: number | null
+  authVersion: number
+  /** Whether the device may reach every project (local explicit choice). */
+  allProjects: boolean
+  /** Project ids allowed when `allProjects` is false. */
+  projectIds: string[]
+}
+
+export interface RemoteModeStatus {
+  remoteMode: boolean
+  phase: RemoteModePhase
+  blockedQuit: boolean
+  gateway: RemoteGatewayInfo
+  cloud: RemoteCloudStatus
+  /** Connected phone devices, newest first. */
+  devices: RemoteDeviceInfo[]
+}
+
+/** A pending single-use local step-up approval awaiting desktop disposition. */
+export interface RemotePendingStepUpApproval {
+  approvalId: string
+  deviceId: string
+  channel: string
+  action: string
+  resource: string | null
+  expiresAt: number
+}
+
+/** A redacted security audit record — never contains secrets or content. */
+export interface RemoteAuditEventInfo {
+  id: string
+  timestamp: number
+  deviceId: string | null
+  deviceName: string | null
+  fingerprintPrefix: string | null
+  channel: string | null
+  projectId: string | null
+  requiredScope: string | null
+  decision: string
+  reasonCode: string | null
+  stepUpApprovalId: string | null
+  authVersion: number | null
+}
+
 export interface IpcEventContract {
+  /** Post-paint feature IPC, chat, and harness registration completed. */
+  'app:featuresReady': []
+  'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
+  'thread:deleted': [projectId: string, threadId: string]
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': []
-  /** Emitted when the app is asked to close while threads are still working. */
+  /** Emitted when the app is asked to close while threads are still working or
+   *  files have unsaved edits. The renderer populates `files` from its editor
+   *  state and either confirms the close or shows the confirmation modal. */
   'window:confirmClose': [payload: CloseConfirmationPayload]
+  /**
+   * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
+   * key (so the macOS "Close Window" menu accelerator never fires) and asks the
+   * renderer to close the active surface — modal, settings page, or thread —
+   * and only fall back to closing the window when nothing is active.
+   */
+  'window:closeShortcut': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
+  /** Remote-mode status changes from the main process. */
+  'remote:status': [status: RemoteModeStatus]
+  /**
+   * Pending single-use local step-up approvals awaiting desktop disposition.
+   * Emitted whenever a high-risk remote operation requires local approval.
+   */
+  'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

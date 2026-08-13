@@ -1,6 +1,6 @@
 import { APP_SLUG } from '$shared/brand'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
-import type { Thread } from '$shared/types'
+import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
 export type NotificationFilter = 'all' | 'completed' | 'attention' | 'error' | 'app-errors'
 
@@ -77,7 +77,11 @@ class NotificationPanelState {
   /** Populate attention notifications from persisted threads on startup. */
   hydrateFromThreads(threads: Thread[]): void {
     for (const thread of threads) {
-      if (thread.status === 'awaiting_approval' && !thread.read) {
+      if (
+        thread.status === 'awaiting_approval' &&
+        !thread.read &&
+        !isOrchestrationChildThread(thread)
+      ) {
         this.add({
           id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
           kind: 'attention',

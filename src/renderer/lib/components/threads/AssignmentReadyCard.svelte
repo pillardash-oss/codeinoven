@@ -14,6 +14,7 @@
     projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     busy?: boolean
@@ -22,7 +23,13 @@
     onApprove: (content: AssignmentPlanContent) => void
     onOpenFullscreen: () => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -31,6 +38,7 @@
     projectId = null,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     busy = false,
@@ -39,7 +47,9 @@
     onApprove,
     onOpenFullscreen,
     onWorkerModelChange,
-    onToggleFavorite
+    onSeniorModelChange,
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   // The card owns an editable snapshot until the user explicitly saves it.
@@ -93,12 +103,15 @@
       {projectId}
       {harnessId}
       {fallbackModel}
+      {seniorModel}
       {favoriteModels}
       {recentModels}
       compact
       onChange={(content) => (draft = content)}
       {onWorkerModelChange}
+      {onSeniorModelChange}
       {onToggleFavorite}
+      {onReorderFavorite}
     />
 
     {#if error}

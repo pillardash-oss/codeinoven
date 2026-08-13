@@ -1,6 +1,9 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
+import { setTerminalFocused } from './focus'
+import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
+import { FileLinkProvider } from './path-links'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 
 export interface TerminalSession {
@@ -10,7 +13,14 @@ export interface TerminalSession {
   host: HTMLDivElement
   exited: boolean
   ptySpawned: boolean
+  /** Owning project, resolved once the terminal attaches to a panel. */
+  projectId: string | null
+  /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
+  respawnCount: number
 }
+
+const MAX_RESPAWNS = 5
+const RESPAWN_BACKOFF_RESET_MS = 2000
 
 function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
   return styles.getPropertyValue(token).trim()
@@ -108,6 +118,7 @@ class TerminalSessionManager {
   /** Spawn the shell PTY after the terminal has been attached and sized. */
   private async ensurePty(session: TerminalSession, projectId: string): Promise<void> {
     if (session.ptySpawned) return
+    session.projectId = projectId
     session.ptySpawned = true
     try {
       await invoke('pty:create', session.id, projectId, session.term.cols, session.term.rows)
@@ -138,18 +149,38 @@ class TerminalSessionManager {
     term.open(host)
     fitAddon.observeResize()
 
+    // Reflect terminal focus to the app's shortcut routing. On non-mac platforms
+    // Ctrl+W must keep its shell delete-word behavior while the terminal is
+    // focused, so both the main process and the renderer fallback need to know.
+    const onFocusIn = (): void => setTerminalFocused(true)
+    const onFocusOut = (): void => setTerminalFocused(false)
+    host.addEventListener('focusin', onFocusIn)
+    host.addEventListener('focusout', onFocusOut)
+    const cleanupFocus = (): void => {
+      host.removeEventListener('focusin', onFocusIn)
+      host.removeEventListener('focusout', onFocusOut)
+    }
+
     const session: TerminalSession = {
       id,
       term,
       fitAddon,
       host,
       exited: false,
-      ptySpawned: false
+      ptySpawned: false,
+      projectId: null,
+      respawnCount: 0
     }
     this.sessions.set(id, session)
 
+    // File/directory paths echoed by tooling are clickable links only once they
+    // are confirmed to exist in the owning project; cmd/ctrl+click reveals them
+    // in the OS file manager. (ghostty-web ships no file-path provider.)
+    term.registerLinkProvider(new FileLinkProvider(term, { getProjectId: () => session.projectId }))
+
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
+    subs.push(cleanupFocus)
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR
@@ -167,12 +198,43 @@ class TerminalSessionManager {
       })
     )
 
+    // Restart the shell after it exits (Ctrl-D / `exit` / crash), like a
+    // desktop terminal. The live Ghostty buffer and this session are reused —
+    // only the PTY is respawned. A broken shell that exits immediately is
+    // backoff-guarded so we don't respawn forever.
+    let respawnTimer: ReturnType<typeof setTimeout> | undefined
+    const respawn = async (): Promise<void> => {
+      if (!session.projectId) {
+        session.exited = true
+        return
+      }
+      if (session.respawnCount >= MAX_RESPAWNS) {
+        session.exited = true
+        return
+      }
+      session.respawnCount += 1
+      session.ptySpawned = false
+      try {
+        await this.ensurePty(session, session.projectId)
+        session.exited = false
+        // A shell that survives this window is healthy, so reset the guard.
+        respawnTimer = setTimeout(() => {
+          session.respawnCount = 0
+        }, RESPAWN_BACKOFF_RESET_MS)
+      } catch {
+        session.exited = true
+      }
+    }
+
     subs.push(
       subscribe(`pty:exit:${id}`, () => {
-        session.exited = true
         term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
+        void respawn()
       })
     )
+    subs.push(() => {
+      if (respawnTimer) clearTimeout(respawnTimer)
+    })
 
     // Terminal input → PTY
     const inputDisposable = term.onData((data) => {
@@ -195,6 +257,15 @@ class TerminalSessionManager {
       })
     )
 
+    // Multi-line paste (bracketed-paste aware, CR-normalized) and option/control
+    // +Arrow word hopping for the shell. ghostty-web's built-in handling is
+    // missing both.
+    subs.push(
+      attachTerminalInputCompat({ term, host }, (data) => {
+        window.api.send('pty:write', id, data)
+      })
+    )
+
     this.disposables.set(id, subs)
     return session
   }
@@ -210,6 +281,9 @@ class TerminalSessionManager {
       session.term.dispose()
       this.sessions.delete(id)
     }
+    // The focused terminal is gone — make sure the app no longer thinks a
+    // terminal is focused so non-mac Ctrl+W resumes closing surfaces.
+    setTerminalFocused(false)
   }
 }
 

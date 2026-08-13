@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { fileLineSelection } from '$lib/file-line-navigation'
   import { highlightFileContent } from './file-language'
 
   interface Props {
@@ -40,6 +39,7 @@
   let gutter = $state<HTMLPreElement | null>(null)
   let highlightLayer = $state<HTMLPreElement | null>(null)
   let findHighlightLayer = $state<HTMLPreElement | null>(null)
+  let handledFocusLineRequest = 0
   let highlighted = $derived(highlightFileContent(value, path))
   let lineMetrics = $derived.by(() => {
     let count = 1
@@ -114,12 +114,13 @@
   $effect(() => {
     const requestedLine = focusLine
     const request = focusLineRequest
-    if (!editor || !requestedLine || request === 0) return
+    if (!editor || !requestedLine || request === 0 || request === handledFocusLineRequest) return
+    handledFocusLineRequest = request
 
-    const selection = fileLineSelection(value, requestedLine)
-    editor.focus({ preventScroll: true })
-    editor.setSelectionRange(selection.start, selection.end)
-    editor.scrollTop = Math.max(0, (selection.line - 1) * 20 - editor.clientHeight / 3)
+    // A citation line is only a scroll target. Do not focus the editor or move
+    // its selection: the user's caret remains wherever they put it.
+    const line = Math.max(1, Math.floor(requestedLine))
+    editor.scrollTop = Math.max(0, (line - 1) * 20 - editor.clientHeight / 3)
     handleScroll()
   })
 

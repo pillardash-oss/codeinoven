@@ -1,11 +1,14 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { Popover } from 'bits-ui'
   import {
     ChevronRight,
     Clock,
     Cpu,
+    GripVertical,
     ListFilter,
+    RefreshCw,
     Search,
     Star,
     SquareTerminal,
@@ -13,6 +16,7 @@
     X
   } from '@lucide/svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { modelKey, parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
@@ -35,11 +39,18 @@
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
     label?: string
-    responsiveLabel?: boolean
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
+    /** When true, only models that report vision capability are shown. */
+    visionOnly?: boolean
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Reorders a favorite relative to another favorite; position in display order. */
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -55,31 +66,34 @@
     disabled = false,
     variant = 'compact',
     label,
-    responsiveLabel = false,
     fast = false,
+    visionOnly = false,
     onSelect,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   const pickerId = crypto.randomUUID()
   const searchId = `model-search-${pickerId}`
   const listId = `model-list-${pickerId}`
   let search = $state('')
+  let searchInput: HTMLInputElement
+  let modelList: HTMLDivElement
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
-  /**
-   * Catalogs displayed by this picker. When a project is known, the reactive
-   * store cache is preferred so a lazy refresh on open lands immediately;
-   * otherwise the caller-supplied `providers` prop is used as-is.
-   */
-  let displayProviders = $derived(
+  /** Harness catalogs are app-wide. Keep the union available while a newly
+   * opened project's time-budgeted refresh is still returning partial results. */
+  let cachedProviders = $derived(providerCatalog.allCached())
+  let currentProviders = $derived(
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
-  /** Catalogs cached for other projects — lets global favorites/recent models
-   * resolve even when the current thread's project catalog is cold or differs. */
-  let cachedProviders = $derived(providerCatalog.allCached())
+  /** Current-project entries win when present without dropping harnesses that
+   * are still pending from its background catalog enrichment. */
+  let displayProviders = $derived(
+    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders])
+  )
   const selectedHarnesses = new SvelteSet<string>()
-  let showAllHarnesses = $state(false)
+  let showAllHarnesses = $state(true)
   let harnessFilterOpen = $state(false)
   let selectedProvider = $derived(
     displayProviders.find(
@@ -103,7 +117,7 @@
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
-        provider.models.map((model) => modelKey(provider.id, model.id))
+        provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
       )
     )
   )
@@ -123,9 +137,7 @@
       .map(([id, name]) => ({ id, name }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
-  let effectiveHarnessCount = $derived(
-    showAllHarnesses ? 0 : selectedHarnesses.size || (harnessId ? 1 : 0)
-  )
+  let effectiveHarnessCount = $derived(showAllHarnesses ? 0 : selectedHarnesses.size || 0)
   let harnessFilterActive = $derived(effectiveHarnessCount > 0)
   let harnessFilterLabel = $derived(
     harnessFilterActive
@@ -144,29 +156,37 @@
   )
   let favoriteModelsList = $derived(
     filterEntries(
-      favoriteModels
-        .slice()
-        .reverse()
-        .map((key) => {
-          const parsed = parseModelKey(key)
-          if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
-        })
-        .filter((entry): entry is ModelEntry => entry !== null),
+      dedupeModelEntries(
+        favoriteModels
+          .slice()
+          .reverse()
+          .map((key) => {
+            const parsed = parseModelKey(key)
+            if (!parsed.providerId) return null
+            const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
+            return entry && passesVisionFilter(entry.model) ? entry : null
+          })
+          .filter((entry): entry is ModelEntry => entry !== null)
+      ),
       search
     )
   )
   let recentModelsList = $derived(
     filterEntries(
-      recentModels
-        .map((key) => {
-          const parsed = parseModelKey(key)
-          if (!parsed.providerId) return null
-          const entry = resolveModel(parsed.providerId, parsed.modelId)
-          return entry && passesHarnessFilter(entry.provider.harnessId) ? entry : null
-        })
-        .filter((entry): entry is ModelEntry => entry !== null),
+      dedupeModelEntries(
+        recentModels
+          .map((key) => {
+            const parsed = parseModelKey(key)
+            if (!parsed.providerId) return null
+            const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
+            return entry &&
+              passesHarnessFilter(entry.provider.harnessId) &&
+              passesVisionFilter(entry.model)
+              ? entry
+              : null
+          })
+          .filter((entry): entry is ModelEntry => entry !== null)
+      ),
       search
     )
   )
@@ -178,9 +198,11 @@
         ...provider,
         models:
           words.length === 0
-            ? provider.models
-            : provider.models.filter((model) =>
-                words.every((word) => modelHaystack(provider, model).includes(word))
+            ? provider.models.filter(passesVisionFilter)
+            : provider.models.filter(
+                (model) =>
+                  passesVisionFilter(model) &&
+                  words.every((word) => modelHaystack(provider, model).includes(word))
               )
       }))
       .filter(
@@ -199,8 +221,16 @@
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
 
-  function modelKey(nextProviderId: string, nextModelId: string): string {
-    return `${nextProviderId}:${nextModelId}`
+  function mergeProviderEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+    const merged: ProviderCatalog[] = []
+    for (const provider of catalogs) {
+      const index = merged.findIndex(
+        (candidate) => candidate.harnessId === provider.harnessId && candidate.id === provider.id
+      )
+      if (index === -1) merged.push(provider)
+      else merged[index] = provider
+    }
+    return merged
   }
 
   /**
@@ -217,16 +247,9 @@
     )
   }
 
-  /** Render identity is harness-scoped even though legacy favorite keys are not. */
+  /** Render identity is harness-scoped. */
   function modelEntryKey(entry: ModelEntry): string {
-    return `${entry.provider.harnessId}:${entry.provider.id}:${entry.model.id}`
-  }
-
-  function parseModelKey(key: string): { providerId: string; modelId: string } {
-    const separator = key.indexOf(':')
-    return separator === -1
-      ? { providerId: '', modelId: key }
-      : { providerId: key.slice(0, separator), modelId: key.slice(separator + 1) }
+    return modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)
   }
 
   function searchWords(value: string): string[] {
@@ -255,17 +278,16 @@
 
   function passesHarnessFilter(candidateHarnessId: string): boolean {
     if (showAllHarnesses) return true
-    if (selectedHarnesses.size === 0) return candidateHarnessId === harnessId
+    if (selectedHarnesses.size === 0) return true
     return selectedHarnesses.has(candidateHarnessId)
   }
 
   function isHarnessSelected(candidateHarnessId: string): boolean {
-    return !showAllHarnesses && passesHarnessFilter(candidateHarnessId)
+    return !showAllHarnesses && selectedHarnesses.has(candidateHarnessId)
   }
 
   function toggleHarness(nextHarnessId: string): void {
     if (showAllHarnesses) showAllHarnesses = false
-    if (selectedHarnesses.size === 0 && harnessId) selectedHarnesses.add(harnessId)
     if (selectedHarnesses.has(nextHarnessId)) {
       if (selectedHarnesses.size > 1) selectedHarnesses.delete(nextHarnessId)
       return
@@ -282,6 +304,13 @@
     return `${harnessName(provider.harnessId)} ${provider.name} ${model.name} ${model.id}`.toLowerCase()
   }
 
+  /** Models able to see images. When the catalog does not report the flag,
+   *  the model is treated as vision-capable so it is never hidden incorrectly. */
+  function passesVisionFilter(model: ProviderModel): boolean {
+    if (!visionOnly) return true
+    return model.attachment !== false
+  }
+
   function filterEntries(entries: ModelEntry[], value: string): ModelEntry[] {
     const words = searchWords(value)
     return words.length === 0
@@ -291,66 +320,304 @@
         )
   }
 
-  /** Resolve a model key against the current catalog first, then cached catalogs. */
-  function resolveModel(providerId: string, modelId: string): ModelEntry | null {
+  /**
+   * Collapse duplicate resolved model entries. A legacy 2-segment key and a
+   * harness-scoped 3-segment key can both resolve to the same catalog entry
+   * (e.g. during the key-format migration), which would otherwise render as
+   * duplicate `each` keys. Keeps the first occurrence, preserving display order.
+   */
+  function dedupeModelEntries(entries: ModelEntry[]): ModelEntry[] {
+    const seen: Record<string, true> = {}
+    const deduped: ModelEntry[] = []
+    for (const entry of entries) {
+      const identity = modelEntryKey(entry)
+      if (seen[identity]) continue
+      seen[identity] = true
+      deduped.push(entry)
+    }
+    return deduped
+  }
+
+  /** Resolve a model key against the current catalog first, then cached catalogs.
+   *  When the key is harness-scoped, only the matching harness is considered;
+   *  legacy keys fall back to the current harness, then any harness. */
+  function resolveModel(
+    providerId: string,
+    modelId: string,
+    keyHarnessId?: string
+  ): ModelEntry | null {
     return (
-      findModelEntry(displayProviders, providerId, modelId) ??
-      findModelEntry(cachedProviders, providerId, modelId)
+      findModelEntry(displayProviders, providerId, modelId, keyHarnessId) ??
+      findModelEntry(cachedProviders, providerId, modelId, keyHarnessId)
     )
   }
 
   function findModelEntry(
     catalogs: ProviderCatalog[],
     providerId: string,
-    modelId: string
+    modelId: string,
+    keyHarnessId?: string
   ): ModelEntry | null {
-    const provider =
-      catalogs.find(
-        (candidate) => candidate.id === providerId && candidate.harnessId === harnessId
-      ) ?? catalogs.find((candidate) => candidate.id === providerId)
+    let provider: ProviderCatalog | undefined
+    if (keyHarnessId) {
+      provider = catalogs.find(
+        (candidate) => candidate.harnessId === keyHarnessId && candidate.id === providerId
+      )
+    } else {
+      provider =
+        catalogs.find(
+          (candidate) => candidate.id === providerId && candidate.harnessId === harnessId
+        ) ?? catalogs.find((candidate) => candidate.id === providerId)
+    }
     if (!provider) return null
     const model = provider.models.find((candidate) => candidate.id === modelId)
     return model ? { provider, model } : null
   }
 
-  $effect(() => {
-    if (open) {
-      void tick().then(() => {
-        document.getElementById(searchId)?.focus()
-        document
-          .getElementById(listId)
-          ?.querySelector(`[data-model-id="${CSS.escape(modelId)}"]`)
-          ?.scrollIntoView({ block: 'nearest' })
-      })
-      // Opening the picker revalidates the catalog in the background. The store
-      // is warmed eagerly at app start for every project, so this almost always
-      // resolves from the fresh cache instantly; a stale or failed hydration is
-      // the only case where it actually contacts the harness drivers.
-      if (projectId) {
-        void providerCatalog.refresh(projectId)
-      }
-    }
-  })
-
   function close(): void {
     open = false
+  }
+
+  function resetPicker(): void {
     search = ''
     harnessFilterOpen = false
-    selectedHarnesses.clear()
-    showAllHarnesses = false
+    pickerListScrollTop = 0
   }
 
-  function show(): void {
-    if (disabled) return
-    selectedHarnesses.clear()
-    showAllHarnesses = false
-    open = true
-    search = ''
+  function handleOpenChange(nextOpen: boolean): void {
+    if (!nextOpen) {
+      resetPicker()
+      return
+    }
+    resetPicker()
+    void tick().then(() => {
+      searchInput?.focus()
+      const selectedOffset = pickerOffsetForSelectedModel()
+      if (selectedOffset !== undefined) {
+        scrollPickerListTo(selectedOffset - 60)
+      }
+    })
+    // Revalidate exactly once per open. Keeping this outside a reactive effect
+    // prevents catalog updates from snapping the user's scroll position back
+    // to the selected model.
+    if (projectId) void providerCatalog.refresh(projectId)
   }
 
-  function toggle(): void {
-    if (open) close()
-    else show()
+  // ---- Virtualized model list ----------------------------------------------
+  // The list can render 500+ model rows on every open; mounting them all
+  // synchronously costs ~120ms and delays the picker's first paint. Only the
+  // rows intersecting the scroll viewport (plus an overscan) are mounted,
+  // positioned by exact per-kind heights so scroll offsets stay accurate.
+  const PICKER_OVERSCAN = 8
+  const PICKER_ROW_HEIGHT = {
+    divider: 9,
+    header: 28,
+    'provider-header': 28,
+    'provider-message': 32,
+    'unavailable-model': 40,
+    model: 44
+  } as const
+
+  type PickerListItem =
+    | { kind: 'divider'; key: string }
+    | {
+        kind: 'header'
+        key: string
+        id: string
+        text: string
+        icon: typeof Star
+        iconClass: string
+        count: number
+      }
+    | { kind: 'provider-header'; key: string; provider: ProviderCatalog }
+    | { kind: 'provider-message'; key: string; provider: ProviderCatalog }
+    | {
+        kind: 'unavailable-model'
+        key: string
+        favorite: { modelKey: string; harnessId?: string; providerId: string; modelId: string }
+      }
+    | {
+        kind: 'model'
+        key: string
+        entry: ModelEntry
+        favoriteKey?: string
+        draggable: boolean
+      }
+
+  let pickerListScrollTop = $state(0)
+  let pickerViewport = $state(240)
+
+  /** Flatten every visible list section into positioned rows. */
+  let pickerLayout = $derived.by(() => {
+    const items: PickerListItem[] = []
+
+    if (favoriteModelsList.length > 0) {
+      items.push({
+        kind: 'header',
+        key: 'header-favorites',
+        id: 'favorites',
+        text: 'Favorites',
+        icon: Star,
+        iconClass: 'text-amber-400',
+        count: favoriteModelsList.length
+      })
+      if (!collapsedGroups.has('favorites')) {
+        for (const entry of favoriteModelsList) {
+          items.push({
+            kind: 'model',
+            key: `fav-${modelEntryKey(entry)}`,
+            entry,
+            favoriteKey: modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id),
+            draggable: Boolean(onReorderFavorite)
+          })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-favorites' })
+    }
+
+    if (recentModelsList.length > 0) {
+      items.push({
+        kind: 'header',
+        key: 'header-recent',
+        id: 'recent',
+        text: 'Recently used',
+        icon: Clock,
+        iconClass: 'text-muted',
+        count: recentModelsList.length
+      })
+      if (!collapsedGroups.has('recent')) {
+        for (const entry of recentModelsList) {
+          items.push({ kind: 'model', key: `rec-${modelEntryKey(entry)}`, entry, draggable: false })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-recent' })
+    }
+
+    if (unavailableFavoriteModels.length > 0 && !search) {
+      items.push({
+        kind: 'header',
+        key: 'header-unavailable',
+        id: 'unavailable-favorites',
+        text: 'Unavailable favorites',
+        icon: Star,
+        iconClass: 'text-dimmed',
+        count: unavailableFavoriteModels.length
+      })
+      if (!collapsedGroups.has('unavailable-favorites')) {
+        for (const favorite of unavailableFavoriteModels) {
+          items.push({ kind: 'unavailable-model', key: `unav-${favorite.modelKey}`, favorite })
+        }
+      }
+      items.push({ kind: 'divider', key: 'div-unavailable' })
+    }
+
+    for (const provider of filteredProviders) {
+      const providerKey = provider.harnessId + ':' + provider.id
+      items.push({ kind: 'provider-header', key: `ph-${providerKey}`, provider })
+      if (!collapsedGroups.has(providerKey)) {
+        if (provider.catalogStatus === 'unavailable') {
+          items.push({ kind: 'provider-message', key: `pm-${providerKey}`, provider })
+        } else {
+          for (const model of provider.models) {
+            items.push({
+              kind: 'model',
+              key: `m-${modelEntryKey({ provider, model })}`,
+              entry: { provider, model },
+              draggable: false
+            })
+          }
+        }
+      }
+    }
+
+    let total = 0
+    const offsets: number[] = []
+    for (const item of items) {
+      offsets.push(total)
+      total += PICKER_ROW_HEIGHT[item.kind]
+    }
+    offsets.push(total)
+    return { items, offsets, total }
+  })
+
+  /** Flat, ordered keys of every model row, for keyboard navigation. */
+  let pickerModelKeys = $derived(
+    pickerLayout.items.filter((item) => item.kind === 'model').map((item) => item.key)
+  )
+
+  let pickerVisibleItems = $derived.by(() => {
+    const { items, offsets, total } = pickerLayout
+    if (items.length === 0) return { items: [], total }
+    const start = Math.max(0, pickerItemIndexAt(offsets, pickerListScrollTop) - PICKER_OVERSCAN)
+    const end = Math.min(
+      items.length,
+      pickerItemIndexAt(offsets, pickerListScrollTop + pickerViewport) + PICKER_OVERSCAN + 1
+    )
+    const visible: (PickerListItem & { offset: number })[] = []
+    for (let index = start; index < end; index++) {
+      visible.push({ ...items[index], offset: offsets[index] })
+    }
+    return { items: visible, total }
+  })
+
+  /** Index of the item whose [offset, offset+height) range contains `target`. */
+  function pickerItemIndexAt(offsets: number[], target: number): number {
+    let low = 0
+    let high = offsets.length - 2
+    if (target <= offsets[low]) return low
+    if (target >= offsets[high + 1]) return high
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (offsets[mid + 1] <= target) low = mid + 1
+      else high = mid
+    }
+    return low
+  }
+
+  /** Pixel offset of the currently selected model row, if it is listed. */
+  function pickerOffsetForSelectedModel(): number | undefined {
+    const index = pickerLayout.items.findIndex(
+      (item) =>
+        item.kind === 'model' &&
+        item.entry.model.id === modelId &&
+        item.entry.provider.id === providerId &&
+        item.entry.provider.harnessId === harnessId
+    )
+    return index === -1 ? undefined : pickerLayout.offsets[index]
+  }
+
+  /** Scroll the virtual list to a pixel offset (state + DOM stay in sync). */
+  function scrollPickerListTo(top: number): void {
+    pickerListScrollTop = Math.max(0, top)
+    if (modelList) modelList.scrollTop = pickerListScrollTop
+  }
+
+  /** Keep the viewport height and scroll position in sync for the virtual list. */
+  function measurePickerList(node: HTMLDivElement): { destroy(): void } {
+    pickerViewport = node.clientHeight
+    const resizeObserver = new ResizeObserver(() => {
+      pickerViewport = node.clientHeight
+    })
+    resizeObserver.observe(node)
+    const onScroll = (): void => {
+      pickerListScrollTop = node.scrollTop
+    }
+    node.addEventListener('scroll', onScroll, { passive: true })
+    return {
+      destroy() {
+        resizeObserver.disconnect()
+        node.removeEventListener('scroll', onScroll)
+      }
+    }
+  }
+
+  /** True while the current project's catalog is being re-probed by the store. */
+  let refreshing = $derived(projectId ? providerCatalog.refreshing(projectId) : false)
+
+  /** Force a fresh catalog from the harness drivers, bypassing the TTL cache. */
+  function refreshCatalog(): void {
+    if (!projectId) return
+    void providerCatalog.refresh(projectId, true)
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
@@ -362,242 +629,253 @@
     if (collapsedGroups.has(id)) collapsedGroups.delete(id)
     else collapsedGroups.add(id)
   }
+
+  /** Key of the favorite currently being dragged, if any. */
+  let draggingFavoriteKey = $state<string | null>(null)
+  /** Drop target + position for the favorites section, if dragging over a row. */
+  let favoriteDropTarget = $state<{ key: string; position: 'before' | 'after' } | null>(null)
+
+  function startFavoriteDrag(event: DragEvent, key: string, name: string): void {
+    if (!onReorderFavorite) return
+    event.dataTransfer!.setData('text/plain', key)
+    event.dataTransfer!.effectAllowed = 'move'
+    draggingFavoriteKey = key
+    const ghost = document.createElement('div')
+    ghost.textContent = name
+    ghost.style.cssText =
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:6px;font-size:12px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+    document.body.appendChild(ghost)
+    event.dataTransfer!.setDragImage(ghost, 0, 0)
+    requestAnimationFrame(() => document.body.removeChild(ghost))
+  }
+
+  function favoriteDragOver(event: DragEvent, targetKey: string): void {
+    if (!onReorderFavorite) return
+    event.preventDefault()
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    favoriteDropTarget = {
+      key: targetKey,
+      position: event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+    }
+  }
+
+  function favoriteDrop(event: DragEvent, targetKey: string): void {
+    if (!onReorderFavorite) return
+    event.preventDefault()
+    const draggedKey = event.dataTransfer?.getData('text/plain')
+    const position = favoriteDropTarget?.key === targetKey ? favoriteDropTarget.position : 'after'
+    favoriteDropTarget = null
+    draggingFavoriteKey = null
+    if (!draggedKey || draggedKey === targetKey) return
+    // Display order is the reverse of storage order (favorites are stored
+    // oldest-first), so flip before/after before forwarding to the store.
+    onReorderFavorite(draggedKey, targetKey, position === 'before' ? 'after' : 'before')
+  }
+
+  function clearFavoriteDrag(): void {
+    favoriteDropTarget = null
+    draggingFavoriteKey = null
+  }
 </script>
 
-<div class="relative">
-  <button
-    type="button"
-    class={triggerClasses}
-    aria-label={`Select model, currently ${selectedLabel}`}
-    title={`Select model — ${selectedLabel}`}
-    {disabled}
-    onclick={toggle}
-  >
-    {#if selectedProvider}
-      <span class="flex shrink-0 items-center gap-0.5">
-        {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
-      </span>
-    {:else if selectedHarnessIcon}
-      {@render harnessIcon(harnessId)}
-    {:else}
-      <Cpu size={12} />
-    {/if}
-    <span class="min-w-0 flex-1 truncate text-left" class:responsive-model-label={responsiveLabel}
-      >{selectedLabel}</span
+<div>
+  <Popover.Root bind:open onOpenChange={handleOpenChange}>
+    <Popover.Trigger
+      type="button"
+      class={triggerClasses}
+      aria-label={`Select model, currently ${selectedLabel}`}
+      title={`Select model — ${selectedLabel}`}
+      {disabled}
     >
-    {#if fast}
-      <Zap size={11} class="shrink-0 text-accent" fill="currentColor" aria-label="Fast inference" />
-    {/if}
-  </button>
-
-  {#if open}
-    <button
-      class="fixed inset-0 z-30 cursor-default"
-      aria-label="Close model picker"
-      title="Close model picker"
-      onclick={close}
-    ></button>
-    <div
-      class={`absolute left-0 z-40 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg ${side === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'}`}
-      role="dialog"
-      aria-label="Select model"
-      tabindex="-1"
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key === 'Escape') close()
-      }}
-    >
-      <div class="flex items-center gap-2 border-b px-2.5 py-2">
-        <Search size={12} class="shrink-0 text-dimmed" />
-        <input
-          id={searchId}
-          bind:value={search}
-          type="text"
-          class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search models..."
-          aria-label="Search models"
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault()
-              const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-              if (firstBtn instanceof HTMLElement) firstBtn.focus()
-              return
-            }
-            if (event.key === 'Escape') {
-              event.stopPropagation()
-              close()
-            }
-          }}
+      {#if selectedProvider}
+        <span class="flex shrink-0 items-center gap-0.5">
+          {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+        </span>
+      {:else if selectedHarnessIcon}
+        {@render harnessIcon(harnessId)}
+      {:else}
+        <Cpu size={12} />
+      {/if}
+      <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+      {#if fast}
+        <Zap
+          size={11}
+          class="shrink-0 text-accent"
+          fill="currentColor"
+          aria-label="Fast inference"
         />
-        {#if search}
-          <button
-            type="button"
-            class="shrink-0 text-dimmed transition-colors hover:text-foreground"
-            title="Clear model search"
-            aria-label="Clear model search"
-            onclick={() => (search = '')}
-          >
-            <X size={11} />
-          </button>
-        {/if}
-      </div>
+      {/if}
+    </Popover.Trigger>
 
-      {#if harnessOptions.length > 1}
-        <div class="border-b px-2.5 py-1.5">
-          <div class="flex items-center gap-1.5">
+    <Popover.Portal>
+      <Popover.Content
+        {side}
+        align="start"
+        sideOffset={4}
+        collisionPadding={12}
+        class="z-50 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        role="dialog"
+        aria-label="Select model"
+        tabindex={-1}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onkeydown={(event: KeyboardEvent) => {
+          if (event.key === 'Escape') close()
+        }}
+      >
+        <div class="flex items-center gap-2 border-b px-2.5 py-2">
+          <Search size={12} class="shrink-0 text-dimmed" />
+          <input
+            id={searchId}
+            bind:this={searchInput}
+            bind:value={search}
+            oninput={() => scrollPickerListTo(0)}
+            type="text"
+            class="w-full bg-transparent text-xs text-foreground outline-none placeholder:text-dimmed"
+            placeholder="Search models..."
+            aria-label="Search models"
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault()
+                scrollPickerListTo(0)
+                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                close()
+              }
+            }}
+          />
+          {#if search}
             <button
               type="button"
-              class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-expanded={harnessFilterOpen}
-              aria-haspopup="true"
-              title={harnessFilterOpen ? 'Hide harness filter options' : 'Filter models by harness'}
-              onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
+              class="shrink-0 text-dimmed transition-colors hover:text-foreground"
+              title="Clear model search"
+              aria-label="Clear model search"
+              onclick={() => (search = '')}
             >
-              <ListFilter size={11} class="shrink-0 text-dimmed" />
-              <span class="truncate">{harnessFilterLabel}</span>
-              {#if harnessFilterActive}
-                <span class="ml-auto shrink-0 text-[9px] text-primary">Filtered</span>
-              {/if}
+              <X size={11} />
             </button>
-            {#if harnessFilterActive}
-              <button
-                type="button"
-                class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
-                title="Clear harness filter"
-                aria-label="Clear harness filter"
-                onclick={clearHarnessFilter}
-              >
-                <X size={11} />
-              </button>
-            {/if}
-          </div>
-          {#if harnessFilterOpen}
-            <div
-              class="mt-1.5 flex flex-wrap gap-1"
-              role="group"
-              aria-label="Filter models by harness"
+          {/if}
+          {#if projectId}
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer text-dimmed transition-colors hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              title="Refresh model list"
+              aria-label="Refresh model list"
+              disabled={refreshing}
+              onclick={() => void refreshCatalog()}
             >
+              <RefreshCw size={12} class={refreshing ? 'animate-spin text-primary' : ''} />
+            </button>
+          {/if}
+        </div>
+
+        {#if harnessOptions.length > 1}
+          <div class="border-b px-2.5 py-1.5">
+            <div class="flex items-center gap-1.5">
               <button
                 type="button"
-                class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
-                  ? 'border-primary bg-primary text-on-primary'
-                  : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                aria-pressed={!harnessFilterActive}
-                onclick={clearHarnessFilter}
+                class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                aria-expanded={harnessFilterOpen}
+                aria-haspopup="true"
+                title={harnessFilterOpen
+                  ? 'Hide harness filter options'
+                  : 'Filter models by harness'}
+                onclick={() => (harnessFilterOpen = !harnessFilterOpen)}
               >
-                <ListFilter size={11} class="shrink-0" />
-                All
+                <ListFilter size={11} class="shrink-0 text-dimmed" />
+                <span class="truncate">{harnessFilterLabel}</span>
+                {#if harnessFilterActive}
+                  <span class="ml-auto shrink-0 text-[9px] text-primary">Filtered</span>
+                {/if}
               </button>
-              {#each harnessOptions as option (option.id)}
+              {#if harnessFilterActive}
                 <button
                   type="button"
-                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {isHarnessSelected(
-                    option.id
-                  )
+                  class="shrink-0 rounded-lg p-1 text-dimmed transition-colors hover:text-foreground"
+                  title="Clear harness filter"
+                  aria-label="Clear harness filter"
+                  onclick={clearHarnessFilter}
+                >
+                  <X size={11} />
+                </button>
+              {/if}
+            </div>
+            {#if harnessFilterOpen}
+              <div
+                class="mt-1.5 flex flex-wrap gap-1"
+                role="group"
+                aria-label="Filter models by harness"
+              >
+                <button
+                  type="button"
+                  class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {!harnessFilterActive
                     ? 'border-primary bg-primary text-on-primary'
                     : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                  aria-pressed={isHarnessSelected(option.id)}
-                  onclick={() => toggleHarness(option.id)}
+                  aria-pressed={!harnessFilterActive}
+                  onclick={clearHarnessFilter}
                 >
-                  {@render harnessIcon(option.id)}
-                  <span class="truncate">{option.name}</span>
+                  <ListFilter size={11} class="shrink-0" />
+                  All
                 </button>
+                {#each harnessOptions as option (option.id)}
+                  <button
+                    type="button"
+                    class="flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium transition-colors {isHarnessSelected(
+                      option.id
+                    )
+                      ? 'border-primary bg-primary text-on-primary'
+                      : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                    aria-pressed={isHarnessSelected(option.id)}
+                    onclick={() => toggleHarness(option.id)}
+                  >
+                    {@render harnessIcon(option.id)}
+                    <span class="truncate">{option.name}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
+
+        <div
+          id={listId}
+          bind:this={modelList}
+          use:measurePickerList
+          class="max-h-60 overflow-y-auto p-1"
+        >
+          {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
+            <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
+          {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
+            <p class="px-2 py-2 text-[11px] text-dimmed">
+              {search
+                ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
+                : visionOnly
+                  ? 'No vision-capable models found'
+                  : 'No models in the selected harnesses'}
+            </p>
+          {:else}
+            <div style:height={`${pickerLayout.total}px`} style:position="relative">
+              {#each pickerVisibleItems.items as item (item.key)}
+                <div
+                  style:position="absolute"
+                  style:left="0"
+                  style:right="0"
+                  style:top={`${item.offset}px`}
+                  style:height={`${PICKER_ROW_HEIGHT[item.kind]}px`}
+                  class="overflow-hidden"
+                >
+                  {@render renderPickerItem(item)}
+                </div>
               {/each}
             </div>
           {/if}
         </div>
-      {/if}
-
-      <div id={listId} class="max-h-60 overflow-y-auto p-1">
-        {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
-          <p class="px-2 py-2 text-[11px] text-dimmed">No providers connected</p>
-        {:else if filteredProviders.length === 0 && favoriteModelsList.length === 0 && recentModelsList.length === 0 && (unavailableFavoriteModels.length === 0 || Boolean(search))}
-          <p class="px-2 py-2 text-[11px] text-dimmed">
-            {search
-              ? `No models match “${search}”${harnessFilterActive ? ' in the selected harnesses' : ''}`
-              : 'No models in the selected harnesses'}
-          </p>
-        {:else}
-          {#if favoriteModelsList.length > 0}
-            {@render groupLabel(Star, 'Favorites', 'text-amber-400')}
-            {#each favoriteModelsList as entry (modelEntryKey(entry))}
-              {@render modelRow(entry)}
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#if recentModelsList.length > 0}
-            {@render groupLabel(Clock, 'Recently used', 'text-muted')}
-            {#each recentModelsList as entry (modelEntryKey(entry))}
-              {@render modelRow(entry)}
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#if unavailableFavoriteModels.length > 0 && !search}
-            {@render groupLabel(Star, 'Unavailable favorites', 'text-dimmed')}
-            {#each unavailableFavoriteModels as favorite (favorite.modelKey)}
-              <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-xs">{favorite.modelId}</span>
-                  {#if favorite.providerId}
-                    <span class="block truncate text-[10px]">{favorite.providerId}</span>
-                  {/if}
-                </span>
-                {#if onToggleFavorite}
-                  <button
-                    type="button"
-                    class="shrink-0 transition-colors hover:text-foreground"
-                    title="Remove unavailable favorite"
-                    aria-label={`Remove ${favorite.modelId} from favorites`}
-                    onclick={() => onToggleFavorite(favorite.providerId, favorite.modelId)}
-                  >
-                    <X size={11} />
-                  </button>
-                {/if}
-              </div>
-            {/each}
-            {@render divider()}
-          {/if}
-
-          {#each filteredProviders as provider (provider.harnessId + ':' + provider.id)}
-            {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
-            <button
-              type="button"
-              class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-              aria-expanded={!collapsed}
-              title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
-              onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
-            >
-              <ChevronRight
-                size={11}
-                class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
-              />
-              <VendorIcon name={provider.name} size={14} />
-              <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                {provider.name}
-              </span>
-              {#if provider.catalogStatus === 'unavailable'}
-                <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
-              {:else}
-                <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
-              {/if}
-            </button>
-            {#if !collapsed}
-              {#if provider.catalogStatus === 'unavailable'}
-                <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
-                  {provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
-                </p>
-              {:else}
-                {#each provider.models as model (model.id)}
-                  {@render modelRow({ provider, model })}
-                {/each}
-              {/if}
-            {/if}
-          {/each}
-        {/if}
-      </div>
-    </div>
-  {/if}
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
 </div>
 
 {#snippet harnessIcon(harnessId: string)}
@@ -615,35 +893,168 @@
   {/if}
 {/snippet}
 
-{#snippet groupLabel(Icon: typeof Star, text: string, iconClass: string)}
-  <div class="flex items-center gap-1.5 px-2 pb-1 pt-1.5">
+{#snippet groupHeader(
+  Icon: typeof Star,
+  id: string,
+  text: string,
+  iconClass: string,
+  count: number
+)}
+  {@const collapsed = collapsedGroups.has(id)}
+  <button
+    type="button"
+    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    aria-expanded={!collapsed}
+    title={collapsed ? `Expand ${text}` : `Collapse ${text}`}
+    onclick={() => toggleGroup(id)}
+  >
+    <ChevronRight
+      size={11}
+      class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+    />
     <Icon size={10} class={iconClass} />
     <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">{text}</span>
-  </div>
+    <span class="ml-auto text-[9px] text-dimmed">{count}</span>
+  </button>
 {/snippet}
 
 {#snippet divider()}
   <div class="mx-2 my-1 border-t border-border"></div>
 {/snippet}
 
-{#snippet modelRow(entry: ModelEntry)}
-  {@const key = modelKey(entry.provider.id, entry.model.id)}
+{#snippet providerHeader(provider: ProviderCatalog)}
+  {@const collapsed = collapsedGroups.has(provider.harnessId + ':' + provider.id)}
+  <button
+    type="button"
+    class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+    aria-expanded={!collapsed}
+    title={collapsed ? `Expand ${provider.name}` : `Collapse ${provider.name}`}
+    onclick={() => toggleGroup(provider.harnessId + ':' + provider.id)}
+  >
+    <ChevronRight
+      size={11}
+      class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
+    />
+    <VendorIcon name={provider.name} size={14} />
+    <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+      {provider.name}
+    </span>
+    {#if provider.catalogStatus === 'unavailable'}
+      <span class="ml-auto text-[9px] font-medium text-dimmed">Unavailable</span>
+    {:else}
+      <span class="ml-auto text-[9px] text-dimmed">{provider.models.length}</span>
+    {/if}
+  </button>
+{/snippet}
+
+{#snippet renderPickerItem(item: PickerListItem & { offset: number })}
+  {#if item.kind === 'divider'}
+    {@render divider()}
+  {:else if item.kind === 'header'}
+    {@render groupHeader(item.icon, item.id, item.text, item.iconClass, item.count)}
+  {:else if item.kind === 'provider-header'}
+    {@render providerHeader(item.provider)}
+  {:else if item.kind === 'provider-message'}
+    <p class="px-2 py-1.5 text-[10px] leading-relaxed text-dimmed">
+      {item.provider.catalogMessage ?? 'The harness model catalog is unavailable.'}
+    </p>
+  {:else if item.kind === 'unavailable-model'}
+    <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-dimmed">
+      <span class="min-w-0 flex-1">
+        <span class="block truncate text-xs">{item.favorite.modelId}</span>
+        {#if item.favorite.providerId}
+          <span class="block truncate text-[10px]">{item.favorite.providerId}</span>
+        {/if}
+      </span>
+      {#if onToggleFavorite}
+        <button
+          type="button"
+          class="shrink-0 transition-colors hover:text-foreground"
+          title="Remove unavailable favorite"
+          aria-label={`Remove ${item.favorite.modelId} from favorites`}
+          onclick={() =>
+            onToggleFavorite(
+              item.favorite.providerId,
+              item.favorite.modelId,
+              item.favorite.harnessId ?? ''
+            )}
+        >
+          <X size={11} />
+        </button>
+      {/if}
+    </div>
+  {:else}
+    {#if item.favoriteKey !== undefined}
+      {@const key = item.favoriteKey}
+      <div
+        class="relative"
+        role="listitem"
+        class:opacity-50={draggingFavoriteKey === key}
+        draggable={item.draggable}
+        ondragstart={(event: DragEvent) => startFavoriteDrag(event, key, item.entry.model.name)}
+        ondragover={(event: DragEvent) => favoriteDragOver(event, key)}
+        ondrop={(event: DragEvent) => favoriteDrop(event, key)}
+        ondragleave={clearFavoriteDrag}
+        ondragend={clearFavoriteDrag}
+      >
+        {#if item.draggable}
+          <span
+            class="pointer-events-none absolute left-0.5 top-1/2 -translate-y-1/2 text-dimmed"
+            aria-hidden="true"
+          >
+            <GripVertical size={11} />
+          </span>
+        {/if}
+        <div class={item.draggable ? 'pl-4' : ''}>
+          {@render modelRow(item.entry, item.key)}
+        </div>
+        <div
+          class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+            key && favoriteDropTarget.position === 'before'
+            ? 'bg-primary'
+            : 'bg-transparent'}"
+        ></div>
+        <div
+          class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
+            key && favoriteDropTarget.position === 'after'
+            ? 'bg-primary'
+            : 'bg-transparent'}"
+        ></div>
+      </div>
+    {:else}
+      {@render modelRow(item.entry, item.key)}
+    {/if}
+  {/if}
+{/snippet}
+
+{#snippet modelRow(entry: ModelEntry, rowKey: string)}
+  {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   <button
     class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
+    data-model-key={rowKey}
     onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
-        const buttons = document.querySelectorAll(`#${CSS.escape(listId)} .model-row-btn`)
-        const currentIndex = Array.from(buttons).indexOf(event.currentTarget as HTMLElement)
-        const nextIndex =
+        const currentIndex = pickerModelKeys.indexOf(rowKey)
+        if (currentIndex === -1) return
+        const targetIndex =
           event.key === 'ArrowDown'
-            ? Math.min(currentIndex + 1, buttons.length - 1)
+            ? Math.min(currentIndex + 1, pickerModelKeys.length - 1)
             : Math.max(currentIndex - 1, 0)
-        const next = buttons[nextIndex] as HTMLElement
-        if (next) next.focus()
+        if (targetIndex === currentIndex) return
+        const targetKey = pickerModelKeys[targetIndex]
+        const targetItemIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+        if (targetItemIndex !== -1) {
+          scrollPickerListTo(pickerLayout.offsets[targetItemIndex] - 60)
+        }
+        void tick().then(() => {
+          modelList
+            ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+            ?.focus()
+        })
         return
       }
       if (event.key === 'Escape') {
@@ -673,12 +1084,12 @@
             title={favoriteModelsSet.has(key) ? 'Remove from favorites' : 'Add to favorites'}
             onclick={(event: MouseEvent) => {
               event.stopPropagation()
-              onToggleFavorite(entry.provider.id, entry.model.id)
+              onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
             }}
             onkeydown={(event: KeyboardEvent) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.stopPropagation()
-                onToggleFavorite(entry.provider.id, entry.model.id)
+                onToggleFavorite(entry.provider.id, entry.model.id, entry.provider.harnessId)
               }
             }}
           >
@@ -696,11 +1107,3 @@
     </span>
   </button>
 {/snippet}
-
-<style>
-  @container (max-width: 520px) {
-    .responsive-model-label {
-      display: none;
-    }
-  }
-</style>

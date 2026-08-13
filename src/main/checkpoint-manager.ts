@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { APP_NAME } from '../lib/brand'
 import { generateId, getConfigRoot } from '../lib/utils'
@@ -13,7 +13,9 @@ import {
   ChangeTrackingService,
   type CheckpointBlobStore,
   type CheckpointChange,
-  type ProjectCheckpoint
+  type CheckpointFile,
+  type ProjectCheckpoint,
+  type ProjectFingerprint
 } from './change-tracking-service'
 
 export interface TurnCheckpoint {
@@ -84,10 +86,16 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
  * It never uses git reset or rewrites paths that are absent from the recorded diff.
  */
 export class CheckpointManager {
+  private readonly trackers = new Map<string, ChangeTrackingService>()
+
   constructor(private readonly db: Database) {}
 
   private tracker(projectId: string): ChangeTrackingService {
-    return new ChangeTrackingService(new StorageCheckpointBlobStore(projectId))
+    const existing = this.trackers.get(projectId)
+    if (existing) return existing
+    const tracker = new ChangeTrackingService(new StorageCheckpointBlobStore(projectId))
+    this.trackers.set(projectId, tracker)
+    return tracker
   }
 
   async beginTurn(
@@ -114,13 +122,27 @@ export class CheckpointManager {
       createdAt: Date.now()
     }
     await this.save(checkpoint)
-    this.db.run(
+    await this.writeRow(
       'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-      projectId,
-      threadId,
-      id
+      [projectId, threadId, id]
     )
     return checkpoint
+  }
+
+  /** Stat-only project scan used to attribute shell-command mutations to their run window. */
+  fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
+    assertId(projectId)
+    return this.tracker(projectId).fingerprint(projectPath)
+  }
+
+  /** Project-relative paths that changed between two fingerprints. */
+  diffFingerprints(
+    projectId: string,
+    before: ProjectFingerprint,
+    after: ProjectFingerprint
+  ): string[] {
+    assertId(projectId)
+    return this.tracker(projectId).diffFingerprints(before, after)
   }
 
   async completeTurn(
@@ -155,11 +177,10 @@ export class CheckpointManager {
       ...(failure ? { failure } : {})
     }
     await this.save(updated)
-    this.db.run(
-      'DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?',
+    await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
       projectId,
       threadId
-    )
+    ])
     return updated
   }
 
@@ -190,11 +211,10 @@ export class CheckpointManager {
         failure: `${interruption} Change capture failed: ${detail}`
       }
       await this.save(updated)
-      this.db.run(
-        'DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
         projectId,
         threadId
-      )
+      ])
       return updated
     }
   }
@@ -215,25 +235,62 @@ export class CheckpointManager {
       completedAt: checkpoint.completedAt ?? Date.now()
     }
     await this.save(updated)
-    this.db.run(
-      'DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?',
+    await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
       projectId,
       threadId
-    )
+    ])
     return updated
   }
 
   async list(projectId: string, threadId: string): Promise<TurnCheckpoint[]> {
     assertId(projectId)
     assertId(threadId)
-    const rows = this.db.all<{ data: string }>(
+    const rows = await this.queryDataRows(
       'SELECT data FROM turn_checkpoints WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC',
-      projectId,
-      threadId
+      [projectId, threadId],
+      10_000
     )
     return rows.map((row) =>
       this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
     )
+  }
+
+  /** Remove project checkpoint blobs that no remaining thread references. */
+  async pruneUnusedBlobs(projectId: string): Promise<number> {
+    assertId(projectId)
+    const referenced = new Set<string>()
+    const rows = await this.queryDataRows(
+      'SELECT data FROM turn_checkpoints WHERE project_id = ?',
+      [projectId],
+      100_000
+    )
+    for (const row of rows) {
+      try {
+        const checkpoint = JSON.parse(row.data) as TurnCheckpoint
+        for (const file of Object.values(checkpoint.before.files)) referenced.add(file.hash)
+        for (const file of Object.values(checkpoint.after?.files ?? {})) referenced.add(file.hash)
+      } catch {
+        // A corrupt remaining checkpoint cannot safely identify its blobs, so
+        // preserve the project blob directory rather than risk data loss.
+        return 0
+      }
+    }
+
+    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return 0
+      throw error
+    }
+    let deleted = 0
+    for (const entry of entries) {
+      if (!entry.isFile() || referenced.has(entry.name)) continue
+      await rm(join(directory, entry.name), { force: true })
+      deleted++
+    }
+    return deleted
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
@@ -303,10 +360,12 @@ export class CheckpointManager {
     assertId(projectId)
     assertId(threadId)
     assertId(turnId)
-    const row = this.db.get<{ data: string }>(
+    const rows = await this.queryDataRows(
       'SELECT data FROM turn_checkpoints WHERE turn_id = ?',
-      turnId
+      [turnId],
+      2
     )
+    const row = rows[0]
     return row
       ? this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
       : null
@@ -390,14 +449,63 @@ export class CheckpointManager {
   }
 
   private async save(checkpoint: TurnCheckpoint): Promise<void> {
-    this.db.run(
+    const stored = this.compactCheckpoint(checkpoint)
+    await this.writeRow(
       'INSERT OR REPLACE INTO turn_checkpoints(turn_id, project_id, thread_id, data, created_at) VALUES(?, ?, ?, ?, ?)',
-      checkpoint.id,
-      checkpoint.projectId,
-      checkpoint.threadId,
-      JSON.stringify(checkpoint),
-      checkpoint.createdAt
+      [stored.id, stored.projectId, stored.threadId, JSON.stringify(stored), stored.createdAt]
     )
+  }
+
+  /**
+   * Prune the project-wide `before`/`after` file maps down to the changed
+   * paths. The full maps duplicate the per-change snapshots and dominate the
+   * row size (each entry is a tracked repo file), so a finished checkpoint only
+   * retains what rollback, summaries, diffs, and blob pruning actually need.
+   * Checkpoints with an empty change list keep their full maps so the legacy
+   * `recoverUnfilteredChanges` pass can still rebuild the diff.
+   */
+  private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
+    if (checkpoint.changes.length === 0) return checkpoint
+    const paths = new Set(checkpoint.changes.map((change) => change.path))
+    const trimFiles = (snapshot: ProjectCheckpoint): ProjectCheckpoint => {
+      const files: Record<string, CheckpointFile> = {}
+      for (const path of paths) {
+        const file = snapshot.files[path]
+        if (file) files[path] = file
+      }
+      return { ...snapshot, files }
+    }
+    return {
+      ...checkpoint,
+      before: trimFiles(checkpoint.before),
+      ...(checkpoint.after ? { after: trimFiles(checkpoint.after) } : {})
+    }
+  }
+
+  /**
+   * Bounded `turn_checkpoints.data` read on the maintenance worker's
+   * connection so disk I/O and SQLite iteration never block the Electron main
+   * process. Falls back to the primary connection when the worker is
+   * unavailable or a query cannot be served.
+   */
+  private async queryDataRows(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<Array<{ data: string }>> {
+    const result = await this.db.queryViaWorker(sql, params, maxRows)
+    if (result.ok && !result.truncated) {
+      return result.rows as Array<{ data: string }>
+    }
+    return this.db.all<{ data: string }>(sql, ...params)
+  }
+
+  /** Single write statement on the maintenance worker's connection (primary fallback). */
+  private async writeRow(sql: string, params: unknown[]): Promise<void> {
+    const result = await this.db.executeViaWorker(sql, params)
+    if (!result.ok) {
+      throw new Error(result.error ?? 'checkpoint write failed')
+    }
   }
 
   private async calculateLineStats(

@@ -8,15 +8,21 @@ publish:
   owner: pillardash-oss
   repo: codeinoven
   releaseType: release
+afterPack: scripts/native-splash/after-pack.js
 files:
   - out/**/*
+  - '!out/**/.DS_Store'
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/binding.gyp'
 # Signing is driven by CI environment variables (CSC_LINK, CSC_KEY_PASSWORD,
 # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
-# produce unsigned artifacts so contributors can package locally.
+# produce unsigned artifacts. Local macOS package scripts opt into ad-hoc
+# signing after fuses are applied so integrity-protected builds remain runnable.
 forceCodeSigning: false
+# The native Stage 0 hook applies these same security fuses directly to the
+# renamed Electron child before electron-builder signs it. Declaring them here
+# would make electron-builder target the public native launcher instead.
 mac:
   hardenedRuntime: true
   notarize: true

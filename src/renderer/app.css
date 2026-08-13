@@ -10,6 +10,9 @@
   --color-elevated: #f0efea;
   --color-overlay: #e8e7e2;
   --color-raised: #edece7;
+  /* Active-thread highlight — brighter than elevated so it never blends with
+     hovered/working rows; the dark value is tuned to stand out in dark mode. */
+  --color-selected: #f0efea;
 
   /* Text tokens */
   --color-foreground: #081825;
@@ -83,6 +86,7 @@
   --color-elevated: #1c1c20;
   --color-overlay: #242429;
   --color-raised: #202025;
+  --color-selected: #2c2c33;
 
   --color-foreground: #f5f4f0;
   --color-muted: #9d9da6;
@@ -261,6 +265,17 @@ body {
   font-size: 1.1em;
 }
 
+/* Section-anchored headings keep their scroll target clear of sticky chrome
+   when a `§2.3` reference or a Sources panel entry jumps to them. */
+.markdown-body h1[id],
+.markdown-body h2[id],
+.markdown-body h3[id],
+.markdown-body h4[id],
+.markdown-body h5[id],
+.markdown-body h6[id] {
+  scroll-margin-top: 1.25rem;
+}
+
 .markdown-body a {
   color: var(--color-info);
   text-decoration: underline;
@@ -269,6 +284,17 @@ body {
 
 .markdown-body a:hover {
   opacity: 0.85;
+}
+
+.markdown-body a > .markdown-link-favicon {
+  height: 1em;
+  width: 1em;
+  margin-right: 0.3em;
+  vertical-align: -0.125em;
+  display: inline-block;
+  object-fit: contain;
+  border-radius: 2px;
+  max-width: 1em;
 }
 
 .markdown-body strong {
@@ -354,6 +380,55 @@ body {
 .markdown-body img {
   max-width: 100%;
   border-radius: 8px;
+}
+
+/* Raw-HTML blocks, rendered only for provider-authored markdown (pull
+   requests). `<details>` collapsibles are the common case in PR templates. */
+.markdown-body details {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.5em 0.75em;
+}
+
+.markdown-body summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.markdown-body details[open] > summary {
+  margin-bottom: 0.5em;
+}
+
+.markdown-body sub,
+.markdown-body sup {
+  font-size: 0.8em;
+}
+
+/* Footnote references and the footnotes section (GFM flavor). */
+.markdown-body .footnote-ref a {
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.markdown-body .footnotes {
+  margin-top: 1.25em;
+  padding-top: 0.75em;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 0.9em;
+}
+
+.markdown-body .footnotes ol {
+  padding-left: 1.375em;
+}
+
+.markdown-body .footnotes p {
+  margin-block: 0.25em;
+}
+
+.markdown-body .footnote-backref {
+  text-decoration: none;
+  margin-left: 0.25em;
 }
 
 /* ─── Syntax highlighting (chat code blocks) ────────────────────────────── */
@@ -500,4 +575,39 @@ body {
 ::highlight(conversation-find-active) {
   background-color: color-mix(in srgb, var(--color-primary) 52%, transparent);
   color: inherit;
+}
+
+/* ─── Rich markdown editor: GitHub-style links and footnotes ────────────── */
+/* Links render for recognition (GitHub reference-style + inline) but clicks
+   are intercepted in the editor so composing never navigates. Footnote
+   references render as superscript numbers like GitHub. */
+.rich-markdown-editor a[data-editor-link] {
+  color: var(--color-info);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rich-markdown-editor a[data-editor-link]:hover {
+  opacity: 0.85;
+}
+
+.rich-markdown-editor sup[data-editor-footnote-ref] {
+  font-size: 0.75em;
+  vertical-align: super;
+  line-height: 0;
+  font-weight: 600;
+  color: var(--color-info);
+}
+
+/* ─── Touch affordances ──────────────────────────────────────────────────── */
+/*
+ * A finger cannot hover. Every control that only fades in on `group-hover`
+ * would otherwise be unreachable on the phone client, so on a device with no
+ * hover they are simply visible. Long-press covers the cases driven by JS
+ * state instead of CSS (see `long-press.svelte.ts`).
+ */
+@media (hover: none) {
+  [class~='group-hover:opacity-100'] {
+    opacity: 1;
+  }
 }

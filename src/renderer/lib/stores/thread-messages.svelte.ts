@@ -139,7 +139,7 @@ class ThreadMessagesStore {
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
-  async load(projectId: string, threadId: string): Promise<void> {
+  async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.entry(projectId, threadId)
     if (entry.loading) return
     entry.loading = true
@@ -147,7 +147,11 @@ class ThreadMessagesStore {
     this.#notify()
 
     try {
-      const serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+      const serverMessages =
+        recentLimit === undefined
+          ? await invoke('agent:loadMessages', projectId, threadId)
+          : (await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit))
+              .messages
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
     } catch (err) {
@@ -464,7 +468,9 @@ class ThreadMessagesStore {
     compaction = false,
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
-    contextUsed?: number
+    contextUsed?: number,
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -476,6 +482,8 @@ class ThreadMessagesStore {
     if (tokens) doneMsg.tokens = tokens
     if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
     if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (rateLimits) doneMsg.rateLimits = rateLimits
+    if (credits) doneMsg.credits = credits
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -507,7 +515,8 @@ class ThreadMessagesStore {
     contextWindow?: number,
     contextUsed?: number,
     cost?: number,
-    rateLimits?: AgentMessage['rateLimits']
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -518,6 +527,7 @@ class ThreadMessagesStore {
     if (contextUsed !== undefined) message.contextUsed = contextUsed
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
+    if (credits) message.credits = credits
     entry.messages = [...entry.messages]
     this.#notify()
   }
@@ -555,6 +565,14 @@ class ThreadMessagesStore {
     if (!target) return
     const { projectId, threadId } = target
 
+    // Live streaming activity is authoritative evidence the agent is still
+    // working. A stray idle/status snapshot between activity blips must never
+    // leave the thread idle — and fold its working trace — while parts keep
+    // streaming (the definitive session.idle that ends the turn clears it).
+    if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+      agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
+    }
+
     switch (event.type) {
       case 'message.part.updated':
         this.upsertPart(projectId, threadId, event.sessionId, event.part)
@@ -580,7 +598,9 @@ class ThreadMessagesStore {
           event.compaction,
           event.tokens,
           event.contextWindow,
-          event.contextUsed
+          event.contextUsed,
+          event.rateLimits,
+          event.credits
         )
         break
       case 'usage.updated':
@@ -593,7 +613,8 @@ class ThreadMessagesStore {
           event.contextWindow,
           event.contextUsed,
           event.cost,
-          event.rateLimits
+          event.rateLimits,
+          event.credits
         )
         break
       case 'session.status':

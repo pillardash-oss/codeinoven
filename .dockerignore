@@ -1,0 +1,8 @@
+.git
+.github
+.env
+agent-out
+dist
+node_modules
+out
+*.log

@@ -5,6 +5,7 @@
 
   interface Props {
     threadTitle: string
+    reworkCycle?: number
     settings: ThreadSettings
     providers: ProviderCatalog[]
     projectId?: string | null
@@ -14,11 +15,17 @@
     onCancel: () => void
     onAudit: (settings: ThreadSettings) => void
     onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
     threadTitle,
+    reworkCycle,
     settings,
     providers,
     projectId = null,
@@ -28,7 +35,8 @@
     onCancel,
     onAudit,
     onModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
   let selected = $derived.by(() => {
     const provider =
@@ -50,9 +58,11 @@
   <div class="flex items-start gap-3">
     <div class="rounded-lg bg-primary/10 p-2 text-primary"><ShieldCheck size={18} /></div>
     <div class="min-w-0 flex-1">
-      <h3 class="text-sm font-semibold">Implementation finished</h3>
+      <h3 class="text-sm font-semibold">
+        {reworkCycle ? `Rework ${reworkCycle} complete — audit again` : 'Implementation finished'}
+      </h3>
       <p class="mt-1 text-xs text-muted">
-        Audit “{threadTitle}” with
+        {reworkCycle ? 'Verify the completed corrections for' : 'Audit'} “{threadTitle}” with
         <span class="font-medium text-foreground">
           {selected.model?.name ?? settings.modelId}
         </span>
@@ -83,6 +93,7 @@
         variant="action"
         onSelect={chooseModel}
         {onToggleFavorite}
+        {onReorderFavorite}
       />
       <button
         class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
@@ -90,7 +101,7 @@
         onclick={() => onAudit(settings)}
       >
         {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
-        Audit
+        {reworkCycle ? 'Audit again' : 'Audit'}
       </button>
     </div>
   </div>

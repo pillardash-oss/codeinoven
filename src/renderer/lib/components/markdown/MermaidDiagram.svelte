@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Check, Code2, Copy, Expand, MessageSquarePlus, X } from '@lucide/svelte'
   import { Dialog } from 'bits-ui'
+  import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
@@ -16,28 +17,29 @@
   const diagramId = `mermaid-${componentId}`
   let copied = $state(false)
   let error = $state<string>()
+  let errorDetail = $state<string>()
   let expanded = $state(false)
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  function cssToken(style: CSSStyleDeclaration, name: string): string {
-    return style.getPropertyValue(name).trim()
+  function cssToken(style: CSSStyleDeclaration, name: string, fallback: string): string {
+    return style.getPropertyValue(name).trim() || fallback
   }
 
   function readTheme(): MermaidTheme {
     const style = getComputedStyle(document.documentElement)
     return {
-      app: cssToken(style, '--color-app'),
-      border: cssToken(style, '--color-border'),
-      borderStrong: cssToken(style, '--color-border-strong'),
-      elevated: cssToken(style, '--color-elevated'),
-      foreground: cssToken(style, '--color-foreground'),
-      muted: cssToken(style, '--color-muted'),
-      overlay: cssToken(style, '--color-overlay'),
-      surface: cssToken(style, '--color-surface'),
-      fontFamily: cssToken(style, '--font-sans')
+      app: cssToken(style, '--color-app', '#0b0b0d'),
+      border: cssToken(style, '--color-border', '#27272c'),
+      borderStrong: cssToken(style, '--color-border-strong', '#3b3b42'),
+      elevated: cssToken(style, '--color-elevated', '#1c1c20'),
+      foreground: cssToken(style, '--color-foreground', '#f5f4f0'),
+      muted: cssToken(style, '--color-muted', '#9d9da6'),
+      overlay: cssToken(style, '--color-overlay', '#242429'),
+      surface: cssToken(style, '--color-surface', '#141417'),
+      fontFamily: cssToken(style, '--font-sans', 'system-ui, sans-serif')
     }
   }
 
@@ -50,14 +52,16 @@
         const renderNumber = ++currentRender
         rendering = true
         error = undefined
+        errorDetail = undefined
 
         try {
           const nextSvg = await renderMermaid(`${diagramId}-${renderNumber}`, source, readTheme())
           if (disposed || renderNumber !== currentRender) return
           svg = nextSvg
-        } catch {
+        } catch (reason) {
           if (disposed || renderNumber !== currentRender) return
           error = 'This Mermaid diagram could not be rendered.'
+          errorDetail = reason instanceof Error ? reason.message : String(reason)
         } finally {
           if (!disposed && renderNumber === currentRender) rendering = false
         }
@@ -80,7 +84,7 @@
 
   async function copySource(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
@@ -172,7 +176,14 @@
   </div>
 
   {#if error}
-    <div class="border-b bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">{error}</div>
+    <div class="border-b bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">
+      <p>{error}</p>
+      {#if errorDetail}
+        <p class="mt-0.5 break-words font-mono text-[10px] text-danger/70" title={errorDetail}>
+          {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
+        </p>
+      {/if}
+    </div>
   {/if}
 
   {#if !error}

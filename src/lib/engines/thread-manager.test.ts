@@ -1,12 +1,23 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
 import type { AgentMessage, ThreadSettings } from '../types'
-import { ThreadManager } from './thread-manager'
+import { AllThreadsPinnedError, ThreadManager } from './thread-manager'
 import { ensureFeatureSlug } from '../project-artifacts'
+import { AgentMessageRepo } from '../../main/database/repositories/agent-message-repo'
 
 const temporaryDatabases: Database[] = []
+const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
+let temporaryConfigRoot = ''
+
+beforeEach(() => {
+  temporaryConfigRoot = mkdtempSync(join(tmpdir(), 'codeinoven-thread-manager-'))
+  process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
+})
 
 async function createManager(threadLimit = 70): Promise<{
   manager: ThreadManager
@@ -32,6 +43,10 @@ async function createManager(threadLimit = 70): Promise<{
 afterEach(async () => {
   vi.useRealTimers()
   temporaryDatabases.splice(0).forEach(destroyTestDb)
+  rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  temporaryConfigRoot = ''
+  if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
+  else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot
 })
 
 describe('ThreadManager', () => {
@@ -132,7 +147,7 @@ describe('ThreadManager', () => {
     expect(await restartedManager.loadMessages('project1', thread.id)).toEqual(messages)
   })
 
-  it('evicts the oldest unpinned thread at the limit while preserving pinned threads', async () => {
+  it('permanently deletes the oldest unpinned thread at the limit while preserving pinned threads', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T11:00:00.000Z'))
     const { manager } = await createManager(2)
@@ -158,9 +173,38 @@ describe('ThreadManager', () => {
     })
     const listed = await manager.listThreads('project1')
 
-    expect(await manager.getThread('project1', pinned.id)).not.toBeNull()
     expect(await manager.getThread('project1', oldestUnpinned.id)).toBeNull()
+    expect(await manager.getThread('project1', pinned.id)).not.toBeNull()
     expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id])
+  })
+
+  it('refuses to exceed the limit when every active thread is pinned', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
+    const { manager } = await createManager(2)
+    const first = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'First'
+    })
+    const second = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Second'
+    })
+    await manager.setPinned('project1', first.id, true)
+    await manager.setPinned('project1', second.id, true)
+
+    await expect(
+      manager.createThread({
+        projectId: 'project1',
+        providerId: 'openai',
+        title: 'Cannot fit'
+      })
+    ).rejects.toThrow(AllThreadsPinnedError)
+
+    const capacity = await manager.getThreadCapacity('project1')
+    expect(capacity).toMatchObject({ limit: 2, activeCount: 2, pinnedCount: 2, deletableCount: 0 })
   })
 
   it('keeps a stable feature slug across renames and forks', async () => {
@@ -195,5 +239,58 @@ describe('ThreadManager', () => {
 
     expect(await ensureFeatureSlug(db, 'project1', first.id)).toBe('shared-title')
     expect(await ensureFeatureSlug(db, 'project1', second.id)).toBe('shared-title-2')
+  })
+
+  it('detects same-count/same-final-id transcript edits and appends only deltas', async () => {
+    const { manager, db } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Delta'
+    })
+    const repo = new AgentMessageRepo(db)
+
+    const a1: AgentMessage = {
+      id: 'delta-1',
+      role: 'assistant',
+      parts: [{ type: 'text', id: 'p1', messageID: 'delta-1', text: 'original' }],
+      createdAt: 100
+    }
+    const b: AgentMessage = {
+      id: 'delta-2',
+      role: 'assistant',
+      parts: [{ type: 'text', id: 'p2', messageID: 'delta-2', text: 'final' }],
+      createdAt: 200
+    }
+    const first = await manager.upsertMessages('project1', thread.id, [a1, b], 'sess')
+    expect(first.applied).toBe(2)
+    expect(first.noop).toBe(false)
+    const cursorAfterFirst = repo.getProviderCursor(thread.id, 'sess')
+    expect(cursorAfterFirst?.lastMessageId).toBe('delta-2')
+
+    // True noop: identical transcript → zero writes (cursor row untouched).
+    const beforeNoop = repo.getProviderCursor(thread.id, 'sess')
+    const noop = await manager.upsertMessages('project1', thread.id, [a1, b], 'sess')
+    expect(noop.applied).toBe(0)
+    expect(noop.skipped).toBe(2)
+    expect(noop.noop).toBe(true)
+    expect(noop.cursor).toBeNull()
+    expect(repo.getProviderCursor(thread.id, 'sess')?.syncedAt).toBe(beforeNoop?.syncedAt)
+
+    // Same count and same final id, but the first message was edited in place.
+    const a1Edited: AgentMessage = {
+      ...a1,
+      parts: [{ type: 'text', id: 'p1', messageID: 'delta-1', text: 'edited' }]
+    }
+    const edited = await manager.upsertMessages('project1', thread.id, [a1Edited, b], 'sess')
+    expect(edited.applied).toBe(1)
+    expect(edited.skipped).toBe(1)
+    expect(edited.noop).toBe(false)
+
+    const persisted = await manager.loadMessages('project1', thread.id)
+    expect(persisted.find((m) => m.id === 'delta-1')?.parts).toEqual([
+      { type: 'text', id: 'p1', messageID: 'delta-1', text: 'edited' }
+    ])
+    expect(persisted.find((m) => m.id === 'delta-2')?.parts).toEqual(b.parts)
   })
 })

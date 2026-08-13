@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - dev
       - nightly
   workflow_dispatch:
 
@@ -17,10 +16,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Check, lint, test, and build
+  promotion-policy:
+    name: Release promotion policy
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Read promotion versions
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          echo "BASE_VERSION=$(git show "${BASE_SHA}:package.json" | jq -r .version)" >> "$GITHUB_ENV"
+          echo "CURRENT_VERSION=$(jq -r .version package.json)" >> "$GITHUB_ENV"
+
+      - name: Validate branch direction and version bump
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: bun scripts/validate-release-promotion.ts
+
+  install:
+    name: Frozen install
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     steps:
       - name: Check out repository
@@ -34,5 +63,223 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
-      - name: Verify application
+  check:
+    name: Type check
+    runs-on: macos-latest
+    timeout-minutes: 15
+    needs: install
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+  lint:
+    name: Lint
+    runs-on: macos-latest
+    timeout-minutes: 15
+    needs: install
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint .
+
+  test:
+    name: Tests
+    runs-on: macos-latest
+    timeout-minutes: 15
+    needs: install
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Tests
+        run: bun run test
+
+  audit:
+    name: Dependency audit
+    runs-on: macos-latest
+    timeout-minutes: 15
+    needs: install
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Dependency audit
+        run: bun audit
+
+  build:
+    name: Production build
+    runs-on: macos-latest
+    timeout-minutes: 20
+    needs: install
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Production build
+        run: bun run build:production
+
+      - name: Bundle budgets
+        run: bun run check:bundle
+
+  windows-runtime:
+    name: Windows quality and packaged startup
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bun run check
+
+      - name: Tests
+        run: bun run test
+
+      - name: Production build and bundle budgets
+        shell: bash
+        run: |
+          bun run build:production
+          bun run check:bundle
+
+      - name: Package unpacked Windows application
+        run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
+
+      - name: Launch packaged application through workspace readiness
+        run: >-
+          bun run smoke:packaged --target win --app-dir dist/win-unpacked
+          --output agent-out/windows-startup-smoke.json
+
+      - name: Upload Windows startup evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-startup-smoke
+          path: agent-out/windows-startup-smoke.json
+          if-no-files-found: warn
+
+  linux-runtime:
+    name: Linux quality and packaged startup
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install native launcher headers
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Production build and bundle budgets
+        run: |
+          bun run build:production
+          bun run check:bundle
+
+      - name: Package unpacked Linux application
+        run: bunx electron-builder --linux --x64 --dir -c.forceCodeSigning=false
+
+      - name: Launch packaged application through workspace readiness
+        run: >-
+          xvfb-run -a bun run smoke:packaged --target linux --app-dir dist/linux-unpacked
+          --output agent-out/linux-startup-smoke.json
+
+      - name: Upload Linux startup evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-startup-smoke
+          path: agent-out/linux-startup-smoke.json
+          if-no-files-found: warn
+
+  verify-release:
+    name: Release verification
+    runs-on: macos-latest
+    timeout-minutes: 30
+    needs: [check, lint, test, audit, build, windows-runtime, linux-runtime]
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Install locked dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Release verification
         run: bun run verify:release

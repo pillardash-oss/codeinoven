@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, Copy } from '@lucide/svelte'
+  import { copyText } from '$lib/copy-text'
   import { highlightCode } from './markdown'
 
   interface Props {
@@ -19,7 +20,7 @@
 
   async function copy(): Promise<void> {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyText(code)
       copied = true
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copied = false), 1500)
@@ -45,8 +46,9 @@
       {/if}
     </button>
   </div>
+  <!-- eslint-disable svelte/no-at-html-tags -- hljs output is escaped text + spans -->
   <pre class="overflow-x-auto p-3 font-mono text-xs leading-relaxed text-foreground"><code
-      ><!-- eslint-disable-next-line svelte/no-at-html-tags -- hljs output is escaped text + spans -->
-      {@html html}</code
+      >{@html html}</code
     ></pre>
+  <!-- eslint-enable svelte/no-at-html-tags -->
 </div>
