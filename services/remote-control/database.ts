@@ -12,6 +12,8 @@ import type {
 
 export type AuditEventKind =
   | 'desktop.enrollment-created'
+  | 'desktop.enrollment-conflict'
+  | 'desktop.profile-synced'
   | 'desktop.claimed'
   | 'desktop.control-grant-created'
   | 'desktop.revoked'
@@ -112,6 +114,7 @@ CREATE TABLE IF NOT EXISTS desktops (
   platform TEXT NOT NULL,
   lan_endpoint TEXT,
   token_hash TEXT NOT NULL UNIQUE,
+  profile_token_hash TEXT NOT NULL UNIQUE,
   control_secret_cipher TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER,
@@ -156,6 +159,13 @@ CREATE INDEX IF NOT EXISTS audit_events_user_idx ON audit_events(user_id, create
 CREATE INDEX IF NOT EXISTS audit_events_created_idx ON audit_events(created_at DESC);
 `
 
+export class EnrollmentClaimConflictError extends Error {
+  constructor(readonly desktopId: string) {
+    super('Desktop enrollment ownership changed')
+    this.name = 'EnrollmentClaimConflictError'
+  }
+}
+
 export class RemoteControlDatabase {
   private readonly db: Database
 
@@ -174,6 +184,7 @@ export class RemoteControlDatabase {
     `)
     this.db.transaction(() => this.db.exec(SCHEMA))()
     this.ensureUserImageColumn()
+    this.ensureDesktopProfileTokenColumn()
     this.db.exec('PRAGMA optimize = 0x10002;')
   }
 
@@ -182,6 +193,17 @@ export class RemoteControlDatabase {
     if (!columns.some((column) => column.name === 'image_url')) {
       this.db.exec('ALTER TABLE users ADD COLUMN image_url TEXT')
     }
+  }
+
+  private ensureDesktopProfileTokenColumn(): void {
+    const columns = this.db.prepare('PRAGMA table_info(desktops)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'profile_token_hash')) {
+      this.db.exec('ALTER TABLE desktops ADD COLUMN profile_token_hash TEXT')
+      this.db.exec('UPDATE desktops SET profile_token_hash = lower(hex(randomblob(32)))')
+    }
+    this.db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS desktops_profile_token_idx ON desktops(profile_token_hash)'
+    )
   }
 
   close(): void {
@@ -273,9 +295,9 @@ export class RemoteControlDatabase {
     this.db
       .prepare(
         `INSERT INTO desktops(
-          id, user_id, name, platform, lan_endpoint, token_hash, control_secret_cipher,
-          created_at, last_seen_at, revoked_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          id, user_id, name, platform, lan_endpoint, token_hash, profile_token_hash,
+          control_secret_cipher, created_at, last_seen_at, revoked_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         desktop.id,
@@ -284,6 +306,7 @@ export class RemoteControlDatabase {
         desktop.platform,
         desktop.lan_endpoint,
         desktop.token_hash,
+        desktop.profile_token_hash,
         desktop.control_secret_cipher,
         desktop.created_at,
         desktop.last_seen_at,
@@ -303,6 +326,22 @@ export class RemoteControlDatabase {
       (this.db
         .prepare('SELECT * FROM desktops WHERE token_hash = ? AND revoked_at IS NULL')
         .get(hash) as DesktopRecord | undefined) ?? null
+    )
+  }
+
+  findDesktopByProfileTokenHash(hash: string): DesktopRecord | null {
+    return (
+      (this.db
+        .prepare('SELECT * FROM desktops WHERE profile_token_hash = ? AND revoked_at IS NULL')
+        .get(hash) as DesktopRecord | undefined) ?? null
+    )
+  }
+
+  rotateDesktopProfileToken(id: string, hash: string): boolean {
+    return (
+      this.db
+        .prepare('UPDATE desktops SET profile_token_hash = ? WHERE id = ? AND revoked_at IS NULL')
+        .run(hash, id).changes === 1
     )
   }
 
@@ -430,7 +469,9 @@ export class RemoteControlDatabase {
            WHERE id = ? AND revoked_at IS NULL AND (user_id IS NULL OR user_id = ?)`
         )
         .run(claimInput.userId, enrollment.desktop_id, claimInput.userId)
-      if (desktopClaimed.changes !== 1) throw new Error('Desktop enrollment ownership changed')
+      if (desktopClaimed.changes !== 1) {
+        throw new EnrollmentClaimConflictError(enrollment.desktop_id)
+      }
 
       this.db
         .prepare(

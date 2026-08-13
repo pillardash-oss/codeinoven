@@ -1597,20 +1597,41 @@
   ): Promise<void> {
     const projectThreads = allThreads
       .filter((t) => t.projectId === projectId && !t.archived && (includePinned || !t.pinned))
-      .map((t) => t.id)
-    const fromIdx = projectThreads.indexOf(draggedId)
-    const toIdx = projectThreads.indexOf(targetId)
+      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+    const fromIdx = projectThreads.findIndex((t) => t.id === draggedId)
+    const toIdx = projectThreads.findIndex((t) => t.id === targetId)
     if (fromIdx === -1 || toIdx === -1) return
 
+    const dragged = projectThreads[fromIdx]
     projectThreads.splice(fromIdx, 1)
-    const adjustedTo = projectThreads.indexOf(targetId)
+    const adjustedTo = projectThreads.findIndex((t) => t.id === targetId)
     if (adjustedTo === -1) return
-    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, draggedId)
+    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, dragged)
 
-    const updated = await invoke('thread:reorder', projectId, projectThreads)
-    for (const t of updated) {
-      upsertThreadInList(t)
+    // Assign a "frozen recency" anchor between the dragged thread's new
+    // neighbours' effective keys, so it holds position while newer activity
+    // can still bubble above it. The dragged thread's index in the new list is
+    // where its anchor must sit.
+    const idx = projectThreads.findIndex((t) => t.id === draggedId)
+    const above = projectThreads[idx - 1]
+    const below = projectThreads[idx + 1]
+    const aboveKey = above ? (above.sortOrder ?? above.lastActivity) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? (below.sortOrder ?? below.lastActivity) : 0
+    let sortOrder: number
+    if (above && below) {
+      sortOrder = (aboveKey + belowKey) / 2
+    } else if (above) {
+      sortOrder = Math.max(aboveKey - 1, 0)
+    } else if (below) {
+      sortOrder = belowKey + 1
+    } else {
+      sortOrder = Date.now()
     }
+
+    // Optimistic: anchor immediately so the sidebar reorders on drop.
+    allThreads = allThreads.map((t) => (t.id === draggedId ? { ...t, sortOrder } : t))
+    const persisted = await invoke('thread:setSortOrder', projectId, draggedId, sortOrder)
+    upsertThreadInList(persisted)
   }
 
   /**
