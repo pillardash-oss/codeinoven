@@ -51,6 +51,10 @@
   let compareSequence = 0
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
+  /** Set when the push was rejected: shows the pull/rebase recovery panel. */
+  let pushRejected = $state(false)
+  /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
+  let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while the panel is collapsed into the bottom-right dock. */
   let minimized = $state(false)
 
@@ -88,7 +92,8 @@
       hasChangesToPublish &&
       (compare?.source !== 'local' || pushLocal) &&
       !creating &&
-      !submitting
+      !submitting &&
+      recoverMode === null
   )
 
   function canonicalBranch(value: string): string {
@@ -124,6 +129,7 @@
     const sequence = ++compareSequence
     comparing = true
     compareError = ''
+    pushRejected = false
     try {
       const snapshot = await gitState.comparePullRequests(
         projectId,
@@ -174,26 +180,56 @@
           gitState.branches.find((candidate) => candidate.name === head)?.remote != null
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
         if (pushed === 'rejected') {
-          gitState.error =
-            'Push was rejected — the remote branch has commits that are not in your branch. Pull or rebase first, then try again.'
+          pushRejected = true
           return
         }
         if (pushed === 'failed') return
       }
       // 3. Create the pull request.
-      const reference = await gitState.createPullRequest(projectId, {
-        title: title.trim(),
-        body: body.trim() || undefined,
-        head,
-        base,
-        draft
-      })
-      if (reference) {
-        result = reference
-        onCreated?.()
-      }
+      await finishCreate()
     } finally {
       submitting = false
+    }
+  }
+
+  async function finishCreate(): Promise<void> {
+    if (!originIdentity || !head || !base) return
+    const reference = await gitState.createPullRequest(projectId, {
+      title: title.trim(),
+      body: body.trim() || undefined,
+      head,
+      base,
+      draft
+    })
+    if (reference) {
+      result = reference
+      onCreated?.()
+    }
+  }
+
+  /**
+   * Pull the remote into the local head (merge or rebase), then retry the push
+   * and finish creating the PR once integration is clean. Conflicts hand over
+   * to the conflict UI; the half-merged tree is never auto-pushed.
+   */
+  async function recoverPush(mode: 'merge' | 'rebase'): Promise<void> {
+    if (!originIdentity || !head || !base || recoverMode) return
+    pushRejected = false
+    recoverMode = mode
+    try {
+      await gitState.pullIntegrate(projectId, 'origin', head, mode === 'rebase')
+      if (gitState.error || gitState.conflicted.length > 0) return
+      const hasUpstream =
+        gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+      const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
+      if (pushed === 'rejected') {
+        pushRejected = true
+        return
+      }
+      if (pushed === 'failed') return
+      await finishCreate()
+    } finally {
+      recoverMode = null
     }
   }
 
@@ -454,6 +490,54 @@
             onchange={(value) => (draft = value)}
             aria-label="Create as draft"
           />
+        </div>
+      </div>
+    {/if}
+
+    {#if pushRejected && !result}
+      <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+        <div class="flex items-start gap-2">
+          <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
+          <div class="min-w-0 flex-1">
+            <p class="text-[10px] font-medium text-warning">Push blocked — branch has diverged</p>
+            <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+              The remote branch
+              <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
+              so Git won't let you push over them. Pull the remote changes in first — the pull request
+              is created automatically afterwards.
+            </p>
+            {#if headIsCurrent}
+              <div class="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                  disabled={recoverMode !== null}
+                  onclick={() => void recoverPush('rebase')}
+                >
+                  {#if recoverMode === 'rebase'}
+                    <Loader2 size={11} class="animate-spin" />
+                  {/if}
+                  Rebase &amp; push
+                </button>
+                <button
+                  type="button"
+                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  disabled={recoverMode !== null}
+                  onclick={() => void recoverPush('merge')}
+                >
+                  {#if recoverMode === 'merge'}
+                    <Loader2 size={11} class="animate-spin" />
+                  {/if}
+                  Pull &amp; push
+                </button>
+              </div>
+            {:else}
+              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                Check out <span class="font-mono text-foreground">{head}</span> first, then use Pull &amp;
+                push to resolve this here.
+              </p>
+            {/if}
+          </div>
         </div>
       </div>
     {/if}
