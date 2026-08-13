@@ -1,6 +1,7 @@
-import { app, dialog, shell, clipboard, BrowserWindow } from 'electron'
+import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { readFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
@@ -1290,10 +1291,6 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
-  const preparedFileDrags = new Map<
-    string,
-    { paths: string[]; icon: Electron.NativeImage; expiresAt: number }
-  >()
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const threadManager = new ThreadManager(
@@ -2985,30 +2982,21 @@ export function registerIpcHandlers(
         requireString(destinationDirectory, 'Destination directory', true)
       )
   )
-  ipcMain.handle(
-    'projectFiles:prepareDrag',
-    async (_event, projectId: unknown, relativePaths: unknown) => {
-      const paths = await projectFilesService.resolveForDrag(
+  ipcMain.on('projectFiles:startDrag', (event, projectId: unknown, relativePaths: unknown) => {
+    try {
+      const paths = projectFilesService.resolveForDragSync(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(relativePaths, 'Dragged paths')
       )
       if (paths.length === 0) throw new Error('No files are available to drag')
-      const icon = await app.getFileIcon(paths[0], { size: 'normal' })
-      const now = Date.now()
-      for (const [token, prepared] of preparedFileDrags) {
-        if (prepared.expiresAt <= now) preparedFileDrags.delete(token)
-      }
-      const token = randomUUID()
-      preparedFileDrags.set(token, { paths, icon, expiresAt: now + 10_000 })
-      return token
+      const icon = nativeImage.createFromBuffer(
+        readFileSync(join(app.getAppPath(), 'out', 'renderer', 'icon.png'))
+      )
+      if (icon.isEmpty()) throw new Error('The native file drag icon is unavailable')
+      event.sender.startDrag({ file: paths[0], files: paths, icon })
+    } catch (error) {
+      Logger.error('Could not start native file drag', error)
     }
-  )
-  ipcMain.on('projectFiles:startDrag', (event, token: unknown) => {
-    if (typeof token !== 'string') return
-    const prepared = preparedFileDrags.get(token)
-    preparedFileDrags.delete(token)
-    if (!prepared || prepared.expiresAt <= Date.now()) return
-    event.sender.startDrag({ file: prepared.paths[0], files: prepared.paths, icon: prepared.icon })
   })
   ipcMain.handle(
     'projectFiles:save',
