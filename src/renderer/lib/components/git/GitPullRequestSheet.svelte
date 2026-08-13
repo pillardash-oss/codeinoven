@@ -586,7 +586,6 @@
                     favoriteModels={rendererRecovery.favoriteModels}
                     recentModels={rendererRecovery.recentModels}
                     side="top"
-                    label="Change"
                     variant="action"
                     onSelect={chooseComposeModel}
                     onToggleFavorite={(providerId, modelId, harnessId) =>
