@@ -16,7 +16,7 @@
     Permissions-Policy "camera=(), microphone=(), geolocation=()"
   }
 
-  @backend path /api/auth/* /v1/* /healthz
+  @backend path /api/auth/* /desktop/* /v1/* /healthz
   handle @backend {
     reverse_proxy remote-control:8877 {
       header_up X-Client-IP {client_ip}
