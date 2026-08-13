@@ -13,7 +13,7 @@ import { HarnessUsageRepo } from './repositories/harness-usage-repo'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { HistoryEngine } from '../../lib/engines/history-engine'
 import { mapAntigravityUsage } from '../drivers/antigravity-driver'
-import type { AgentMessage, UsageEvent } from '../../lib/types'
+import type { AgentMessage, UsageEvent, UsageEventDetails } from '../../lib/types'
 
 const databaseDir = dirname(fileURLToPath(import.meta.url))
 const workerSource = join(databaseDir, 'database-worker-thread.ts')
@@ -69,7 +69,7 @@ function usageEvent(
   threadId: string,
   parentTurnId: string,
   feature: UsageEvent['feature'],
-  overrides: Partial<UsageEvent> = {}
+  overrides: Partial<UsageEventDetails> = {}
 ): UsageEvent {
   return {
     id: `${parentTurnId}-${feature}-${overrides.featureCallId ?? feature}`,
@@ -92,14 +92,14 @@ function usageEvent(
     },
     rawTotal: null,
     totalSemantics: 'unavailable',
-    costStatus: 'unavailable',
-    costUsd: null,
-    pricingProvenance: null,
     toolFeeUsd: null,
     success: true,
     retryCause: null,
     createdAt: 1,
-    ...overrides
+    ...overrides,
+    costStatus: 'unavailable',
+    costUsd: null,
+    pricingProvenance: null
   }
 }
 
@@ -137,7 +137,6 @@ describe('DatabaseWorker production wrapper', () => {
     })
     const manager = new ThreadManager(db)
     const thread = await manager.createThread({
-      id: 'usage-thread',
       projectId: 'usage-project',
       providerId: 'openai',
       title: 'Usage'
