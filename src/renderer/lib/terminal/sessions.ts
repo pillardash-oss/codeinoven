@@ -1,5 +1,6 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
+import { setTerminalFocused } from './focus'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
@@ -143,6 +144,18 @@ class TerminalSessionManager {
     term.open(host)
     fitAddon.observeResize()
 
+    // Reflect terminal focus to the app's shortcut routing. On non-mac platforms
+    // Ctrl+W must keep its shell delete-word behavior while the terminal is
+    // focused, so both the main process and the renderer fallback need to know.
+    const onFocusIn = (): void => setTerminalFocused(true)
+    const onFocusOut = (): void => setTerminalFocused(false)
+    host.addEventListener('focusin', onFocusIn)
+    host.addEventListener('focusout', onFocusOut)
+    const cleanupFocus = (): void => {
+      host.removeEventListener('focusin', onFocusIn)
+      host.removeEventListener('focusout', onFocusOut)
+    }
+
     const session: TerminalSession = {
       id,
       term,
@@ -161,6 +174,7 @@ class TerminalSessionManager {
 
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
+    subs.push(cleanupFocus)
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR
@@ -230,6 +244,9 @@ class TerminalSessionManager {
       session.term.dispose()
       this.sessions.delete(id)
     }
+    // The focused terminal is gone — make sure the app no longer thinks a
+    // terminal is focused so non-mac Ctrl+W resumes closing surfaces.
+    setTerminalFocused(false)
   }
 }
 

@@ -211,6 +211,11 @@ ipcMain.handle('app:requestClose', () => {
   }
 })
 
+/** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
+ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
+  terminalFocused = focused === true
+})
+
 /** Guard so the renderer's readiness signal is timestamped at most once. */
 let rendererReadyReported = false
 let packagedSmokeProofStarted = false
@@ -279,12 +284,22 @@ ipcMain.handle('app:rendererReady', async () => {
   await completeStartupIfReady()
 })
 
-/** Cmd/Ctrl+W is "close the active surface" — the renderer decides what that is. */
+/**
+ * Whether a terminal in the renderer currently holds focus (Windows-only
+ * concern). While true, Ctrl+W is left to the shell's delete-word binding
+ * instead of closing the active surface.
+ */
+let terminalFocused = false
+
+/**
+ * Whether the shortcut closes the active surface. macOS only treats Cmd+W as
+ * close (Ctrl+W must never close anything there); other platforms use Ctrl+W.
+ */
 function isCloseShortcut(input: Electron.Input): boolean {
   return (
     input.type === 'keyDown' &&
     !input.isAutoRepeat &&
-    (input.meta || input.control) &&
+    (process.platform === 'darwin' ? input.meta : input.control) &&
     !input.alt &&
     input.key.toLowerCase() === 'w'
   )
@@ -754,7 +769,10 @@ function createWindow(): BrowserWindow {
     // settings page, or thread). Prevent the default here so the macOS
     // application menu's "Close Window" accelerator never closes the window
     // before the renderer can decide what should actually close.
-    if (isCloseShortcut(input)) {
+    //
+    // On non-mac platforms, when a terminal is focused, Ctrl+W is the shell's
+    // delete-word binding — leave it alone so it reaches the shell.
+    if (isCloseShortcut(input) && !(terminalFocused && process.platform !== 'darwin')) {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:closeShortcut')
     }
