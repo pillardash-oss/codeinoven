@@ -1615,8 +1615,9 @@
     const idx = projectThreads.findIndex((t) => t.id === draggedId)
     const above = projectThreads[idx - 1]
     const below = projectThreads[idx + 1]
-    const aboveKey = above ? (above.sortOrder ?? above.lastActivity) : Number.MAX_SAFE_INTEGER
-    const belowKey = below ? (below.sortOrder ?? below.lastActivity) : 0
+    const effectiveKey = (t: Thread) => Math.max(t.sortOrder ?? 0, t.lastActivity)
+    const aboveKey = above ? effectiveKey(above) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? effectiveKey(below) : 0
     let sortOrder: number
     if (above && below) {
       sortOrder = (aboveKey + belowKey) / 2
