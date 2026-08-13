@@ -1406,6 +1406,7 @@ export interface IpcInvokeContract {
     Thread[]
   >
   'thread:reorder': Contract<[projectId: string, orderedIds: string[]], Thread[]>
+  'thread:setSortOrder': Contract<[projectId: string, threadId: string, sortOrder: number], Thread>
   'thread:reorderPinned': Contract<[projectId: string, orderedPinnedIds: string[]], Thread[]>
   'thread:reorderPinnedGlobal': Contract<[orderedPinnedIds: string[]], Thread[]>
   'thread:reorderScope': Contract<

@@ -316,37 +316,24 @@ export function wouldThreadChangePosition(prev: Thread, next: Thread): boolean {
   return false
 }
 
-export function threadSortKey(t: Thread, draftThreadKeys?: ReadonlySet<string> | null): number {
-  if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  // The empty "New Thread" placeholder stays pinned at the top until first use.
-  if (t.status === 'created') return 0
-  if (
-    t.status === 'planning' ||
-    t.status === 'executing' ||
-    t.status === 'awaiting_approval' ||
-    t.status === 'failed' ||
-    t.status === 'interrupted'
-  )
-    return 1
-  if (!t.read) return 1
-  return 2
-}
-
 export function threadSort(
   a: Thread,
   b: Thread,
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
-  const ka = threadSortKey(a, draftThreadKeys)
-  const kb = threadSortKey(b, draftThreadKeys)
-  if (ka !== kb) return ka - kb
-  // Order by last modified time. A manual drag-reorder (sortOrder) only breaks
-  // exact lastActivity ties — it must never pin a thread out of recency order.
-  const activityDiff = b.lastActivity - a.lastActivity
-  if (activityDiff !== 0) return activityDiff
-  const aOrder = a.sortOrder ?? -1
-  const bOrder = b.sortOrder ?? -1
-  if (aOrder !== bOrder) return aOrder - bOrder
+  // Unsent drafts and the empty "New Thread" placeholder stay pinned at the top.
+  const aDraft = draftThreadKeys?.has(threadVisitKey(a)) ?? false
+  const bDraft = draftThreadKeys?.has(threadVisitKey(b)) ?? false
+  if (aDraft !== bDraft) return aDraft ? -1 : 1
+  if (a.status === 'created' && b.status !== 'created') return -1
+  if (b.status === 'created' && a.status !== 'created') return 1
+  // Order by a "frozen recency" anchor: a manual drag-reorder (sortOrder) sets
+  // a timestamp that holds the thread's position, but any thread with genuinely
+  // newer activity (a larger lastActivity) sorts above it, and can be dragged
+  // back above again. Unanchored threads fall back to their last activity.
+  const aKey = a.sortOrder ?? a.lastActivity
+  const bKey = b.sortOrder ?? b.lastActivity
+  if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
 }
 
