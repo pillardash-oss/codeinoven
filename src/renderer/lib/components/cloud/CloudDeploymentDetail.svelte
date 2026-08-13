@@ -49,6 +49,31 @@
     deployments.find((deployment) => deployment.id === selectedDeploymentId) ?? null
   )
 
+  /** The build log split into lines for readable, top-to-bottom rendering. */
+  const logLines = $derived(log.split(/\r?\n/u).filter((line) => line.trim() !== ''))
+
+  /**
+   * Find the contiguous range of lines that represent the failure region.
+   * We look for an explicit failure marker (error/fatal/failed/exit code), then
+   * span forward until the next clear success/step boundary, so the user can
+   * see exactly where the build went wrong.
+   */
+  const failureRange = $derived.by((): { start: number; end: number } | null => {
+    if (selectedDeployment?.status !== 'failed') return null
+    const failureMarkers =
+      /(^|[^a-z])(error|fatal|failed|failure|exit code|nonzero|exception|panic|killed|denied|not found|permission denied|command failed)/iu
+    const boundaryMarkers =
+      /success|finished|completed|done|passed|step \d+ completed|^[a-z0-9]+:\s*$\s*$/iu
+    const start = logLines.findIndex((line) => failureMarkers.test(line))
+    if (start === -1) return null
+    let end = start
+    for (let i = start + 1; i < logLines.length; i += 1) {
+      if (boundaryMarkers.test(logLines[i])) break
+      end = i
+    }
+    return { start, end }
+  })
+
   const cachedStatus = $derived(
     cloudDeployState.containerStatuses[
       CloudDeployState.containerKey(projectId, container.providerKind, container.id)
@@ -174,7 +199,7 @@
         {container.label}
       </span>
       <StatusPill tone={tone(status.status)}>{label(status.status)}</StatusPill>
-      {#if status.status === 'failed' && !selectedDeployment}
+      {#if selectedDeployment?.status === 'failed'}
         <button
           type="button"
           class="flex h-7 cursor-pointer items-center gap-1 rounded-lg border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -259,10 +284,21 @@
           <Loader2 size={13} class="animate-spin" />
           Loading log
         </div>
-      {:else if log}
+      {:else if logLines.length > 0}
         <div class="p-3">
-          <pre
-            class="overflow-auto rounded-md bg-elevated p-3 font-mono text-[10px] leading-relaxed text-muted">{log}</pre>
+          <div class="space-y-0.5 font-mono text-[10px] leading-relaxed">
+            {#each logLines as line, index (index)}
+              {@const inFailure =
+                failureRange !== null && index >= failureRange.start && index <= failureRange.end}
+              <div
+                class="rounded px-2 py-0.5 whitespace-pre-wrap break-words {inFailure
+                  ? 'bg-danger/10 text-danger'
+                  : 'text-muted'}"
+              >
+                {line}
+              </div>
+            {/each}
+          </div>
         </div>
       {:else if logError}
         <div class="flex flex-col items-center gap-3 px-6 py-8 text-center">
