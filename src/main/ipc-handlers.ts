@@ -3432,11 +3432,35 @@ export function registerIpcHandlers(
         base: safeBase,
         head: safeHead
       }
+      // Warn when an open PR already exists for this exact head→base pair —
+      // GitHub would reject a duplicate creation with a 422. The lookup is
+      // advisory and never allowed to block the compare itself.
+      let existing = null
+      try {
+        const openPrs = await provider.listPullRequestPage({
+          owner: input.owner,
+          repo: input.repo,
+          state: 'open',
+          page: 1,
+          perPage: 100
+        })
+        const match = openPrs.items.find(
+          (pr) =>
+            canonicalGitHubBranch(pr.headRef) === safeHead &&
+            canonicalGitHubBranch(pr.baseRef) === safeBase
+        )
+        if (match) {
+          existing = { number: match.number, url: match.url, title: match.title }
+        }
+      } catch {
+        existing = null
+      }
       let remoteCompare = null
       let missingRemoteHead: ProviderHttpError | null = null
       try {
         remoteCompare = await provider.comparePullRequests(input)
-        if (remoteCompare.hasChanges) return remoteCompare
+        if (remoteCompare.hasChanges)
+          return existing ? { ...remoteCompare, existing } : remoteCompare
       } catch (error) {
         // A branch that has never been pushed cannot be compared by GitHub yet.
         if (!(error instanceof ProviderHttpError) || error.status !== 404) throw error
@@ -3447,9 +3471,9 @@ export function registerIpcHandlers(
         safeBase,
         safeHead
       )
-      if (localCompare?.hasChanges) return localCompare
+      if (localCompare?.hasChanges) return existing ? { ...localCompare, existing } : localCompare
       const fallback = remoteCompare ?? localCompare
-      if (fallback) return fallback
+      if (fallback) return existing ? { ...fallback, existing } : fallback
       throw missingRemoteHead ?? new Error('Could not compare these branches')
     }
   )

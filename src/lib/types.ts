@@ -3130,6 +3130,12 @@ export interface PullRequestCompare {
   filesChanged: number
   /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
   hasChanges: boolean
+  /**
+   * An already-open pull request for the exact head→base pair, when one exists.
+   * GitHub rejects a second open PR for the same pair with a 422, so the form
+   * can warn and offer to open the existing PR instead of hitting that error.
+   */
+  existing?: PullRequestReference | null
 }
 
 /** Full pull request view, loaded when one is opened in the sidebar. */
