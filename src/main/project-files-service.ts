@@ -5,6 +5,7 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
   Project,
+  ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
   ProjectFileTransferMode,
@@ -346,6 +347,97 @@ export class ProjectFilesService {
       this.invalidateProject(projectId)
       return imported
     })
+  }
+
+  /**
+   * Handle native filesystem paths dropped on the project tree. Entries that
+   * already belong to this project are moved; paths from elsewhere are copied in.
+   */
+  async dropPaths(
+    projectId: string,
+    sourcePaths: string[],
+    destinationDirectory: string
+  ): Promise<ProjectFileDropResult[]> {
+    return this.runMutationExclusive(async () => {
+      const root = await this.projectRoot(projectId)
+      const destination = await this.resolveExistingPath(root, destinationDirectory, true)
+      const dropped: ProjectFileDropResult[] = []
+      const candidates: string[] = []
+
+      for (const sourcePath of sourcePaths) {
+        if (!isAbsolute(sourcePath)) throw new Error('Dropped paths must be absolute')
+        const metadata = await lstat(sourcePath)
+        if (metadata.isSymbolicLink()) throw new Error('Symbolic links cannot be dropped')
+        const source = await realpath(sourcePath)
+        if (!candidates.includes(source)) candidates.push(source)
+      }
+
+      const sources = candidates.filter(
+        (candidate) =>
+          !candidates.some((other) => other !== candidate && isWithinRoot(other, candidate))
+      )
+
+      for (const source of sources) {
+        if (isWithinRoot(root, source) && source !== root) {
+          const relativePath = toPosixPath(relative(root, source))
+          dropped.push({
+            entry: await this.moveWithinProject(root, relativePath, destinationDirectory),
+            movedFrom: relativePath
+          })
+        } else {
+          dropped.push({ entry: await this.importOne(root, destination, source) })
+        }
+      }
+
+      this.invalidateProject(projectId)
+      return dropped
+    })
+  }
+
+  async resolveForDrag(projectId: string, relativePaths: string[]): Promise<string[]> {
+    const root = await this.projectRoot(projectId)
+    const resolved: string[] = []
+    const uniquePaths = [...new Set(relativePaths)].filter(
+      (candidate) =>
+        !relativePaths.some((other) => other !== candidate && candidate.startsWith(`${other}/`))
+    )
+    for (const relativePath of uniquePaths) {
+      const entry = await this.resolveExistingEntry(root, relativePath)
+      resolved.push(entry.absolutePath)
+    }
+    return resolved
+  }
+
+  private async moveWithinProject(
+    root: string,
+    sourcePath: string,
+    destinationDirectory: string
+  ): Promise<ProjectFileEntry> {
+    const source = await this.resolveExistingEntry(root, sourcePath)
+    const sourceDirectory = toPosixPath(dirname(sourcePath))
+    if ((sourceDirectory === '.' ? '' : sourceDirectory) === destinationDirectory) {
+      return { name: basename(sourcePath), path: sourcePath, kind: source.kind }
+    }
+    if (source.kind === 'directory') {
+      const destination = toPosixPath(destinationDirectory)
+      if (destination === sourcePath || destination.startsWith(`${sourcePath}/`)) {
+        throw new Error('A folder cannot be moved into itself')
+      }
+    }
+
+    const target = await this.resolveNewPath(root, destinationDirectory, basename(sourcePath))
+    if (source.kind === 'directory') {
+      await this.pasteDirectory(source.absolutePath, target.absolutePath, 'move')
+    } else {
+      await link(source.absolutePath, target.absolutePath)
+      try {
+        await rm(source.absolutePath)
+      } catch (error) {
+        await rm(target.absolutePath, { force: true }).catch(() => undefined)
+        throw error
+      }
+    }
+    return { name: basename(sourcePath), path: target.relativePath, kind: source.kind }
   }
 
   private async importOne(

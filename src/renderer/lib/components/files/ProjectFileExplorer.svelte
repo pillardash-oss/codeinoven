@@ -478,6 +478,33 @@
     }
   }
 
+  async function dropInto(directory: string, paths: string[]): Promise<void> {
+    if (paths.length === 0) return
+    try {
+      const results = await projectFilesWorkspace.dropExternalPaths(projectId, paths, directory)
+      toast.success(
+        results.length === 1
+          ? `Dropped ${results[0].entry.name}`
+          : `Dropped ${results.length} items`
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The files could not be dropped')
+    }
+  }
+
+  function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
+    const paths = selectionPathsFor(entry)
+    if (!projectState.selectedPaths.includes(entry.path)) {
+      projectFilesWorkspace.setSelection(projectId, paths)
+      projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+    }
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
+    event.preventDefault()
+    void invoke('projectFiles:beginDrag', projectId, paths).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : 'The drag could not be started')
+    })
+  }
+
   /** Resolve absolute paths for OS-dropped File objects (folder/file). */
   function droppedFilePaths(files: FileList | null): string[] {
     if (!files) return []
@@ -616,7 +643,7 @@
         ? target
         : parentDirectory(target)
       : activeDirectory()
-    void importInto(directory, paths)
+    void dropInto(directory, paths)
   }
 
   function dropTargetIsDirectory(path: string): boolean {
@@ -793,6 +820,7 @@
         <button
           type="button"
           data-tree-path={entry.path}
+          draggable
           class={[
             'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
             isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
@@ -803,6 +831,7 @@
           onclick={(event: MouseEvent) => handleRowClick(entry, event)}
           ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
           oncontextmenu={() => handleRowContextMenu(entry)}
+          ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
         >
           <div
             class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===

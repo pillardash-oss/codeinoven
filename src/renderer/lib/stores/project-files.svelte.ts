@@ -1,4 +1,5 @@
 import type {
+  ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
   ProjectFileTransferMode,
@@ -304,6 +305,22 @@ class ProjectFilesWorkspace {
     )
     await this.loadDirectory(projectId, destinationDirectory, true)
     return entries
+  }
+
+  async dropExternalPaths(
+    projectId: string,
+    sourcePaths: string[],
+    destinationDirectory: string
+  ): Promise<ProjectFileDropResult[]> {
+    if (sourcePaths.length === 0) return []
+    const results = await this.runFileOperation(() =>
+      invoke('projectFiles:dropPaths', projectId, sourcePaths, destinationDirectory)
+    )
+    for (const result of results) {
+      if (result.movedFrom) this.remapMovedFile(projectId, result.movedFrom, result.entry.path)
+    }
+    await this.refresh(projectId)
+    return results
   }
 
   async fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
