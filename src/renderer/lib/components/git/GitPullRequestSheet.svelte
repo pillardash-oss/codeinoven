@@ -112,6 +112,8 @@
   const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
   const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
+  /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
+  const existingPr = $derived(compare?.existing ?? null)
 
   /**
    * Whether the local head has commits the remote lacks — a push is only
@@ -132,6 +134,7 @@
       Boolean(title.trim()) &&
       hasChangesToPublish &&
       (compare?.source !== 'local' || pushLocal) &&
+      existingPr === null &&
       !creating &&
       !submitting &&
       recoverMode === null
@@ -726,6 +729,31 @@
             </span>
           {/if}
         </div>
+        {#if existingPr}
+          <div class="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+            <div class="flex items-start gap-2">
+              <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
+              <div class="min-w-0 flex-1">
+                <p class="text-[10px] font-medium text-warning">
+                  A pull request already exists for {head} into {base}
+                </p>
+                <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+                  #{existingPr.number} — {existingPr.title} GitHub won't allow a second open PR for the
+                  same branches, so creation is disabled.
+                </p>
+                <button
+                  type="button"
+                  class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+                  title="Open the existing pull request on GitHub"
+                  onclick={() => void openInBrowser(existingPr.url)}
+                >
+                  <ExternalLink size={11} />
+                  Open PR #{existingPr.number}
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div>
@@ -879,11 +907,13 @@
         type="button"
         class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         disabled={!canCreate}
-        title={!canCreate && compare?.source === 'local' && !pushLocal
-          ? 'Push local changes to create this pull request'
-          : !canCreate && compare !== null && !hasChangesToPublish
-            ? 'There isn\u2019t anything to compare'
-            : undefined}
+        title={!canCreate && existingPr
+          ? 'A pull request already exists for these branches'
+          : !canCreate && compare?.source === 'local' && !pushLocal
+            ? 'Push local changes to create this pull request'
+            : !canCreate && compare !== null && !hasChangesToPublish
+              ? 'There isn\u2019t anything to compare'
+              : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}

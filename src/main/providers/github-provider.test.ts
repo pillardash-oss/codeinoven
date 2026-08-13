@@ -104,6 +104,37 @@ describe('GitHubProvider', () => {
     expect(retryHeaders['Authorization']).toBe('Bearer ghu_refreshed')
   })
 
+  it('surfaces the specific error from errors[] instead of the generic Validation Failed', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          message: 'Validation Failed',
+          errors: [
+            {
+              resource: 'PullRequest',
+              code: 'custom',
+              message: 'A pull request already exists for acme:feature-x.'
+            }
+          ]
+        },
+        422
+      )
+    )
+    const provider = new GitHubProvider('ghp_secret_token')
+
+    await expect(
+      provider.createPullRequest({
+        owner: 'acme',
+        repo: 'app',
+        title: 'Duplicate',
+        head: 'feature/x',
+        base: 'main'
+      })
+    ).rejects.toThrow(
+      'Provider returned HTTP 422: A pull request already exists for acme:feature-x.'
+    )
+  })
+
   it('maps pull requests, workflow runs, and deployments into provider models', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'Not Found' }, 404))
     fetchMock.mockResolvedValueOnce(
