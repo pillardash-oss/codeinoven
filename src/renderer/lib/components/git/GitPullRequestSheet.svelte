@@ -1,10 +1,23 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { DropdownMenu } from 'bits-ui'
   import { gitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import { APP_SLUG } from '$shared/brand'
-  import type { PullRequestCompare, PullRequestReference } from '$shared/types'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
+  import type {
+    PullRequestCompare,
+    PullRequestReference,
+    ProviderCatalog,
+    ThreadSettings
+  } from '$shared/types'
   import {
     ArrowRight,
     CheckCircle2,
@@ -14,6 +27,7 @@
     Eye,
     GitPullRequest,
     Loader2,
+    Sparkles,
     TriangleAlert
   } from '@lucide/svelte'
 
@@ -57,6 +71,28 @@
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while the panel is collapsed into the bottom-right dock. */
   let minimized = $state(false)
+
+  // ─── Compose with agent ────────────────────────────────────────────────────
+  /** True while the compose dropdown is open. */
+  let composeOpen = $state(false)
+  /** Phase of the compose flow, drives the dropdown's button label. */
+  let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
+  /** Model used for the compose agent — seeded from the last thread model. */
+  let composeSettings = $state<ThreadSettings>({ ...threadSettings.lastUsed })
+  /** Thread the compose prompt runs on (created lazily on first compose). */
+  let composeThreadId = $state<string | null>(null)
+  /** Directory where the compose agent writes its `compose.json`. */
+  let composeDirectory = $state<string | null>(null)
+  /** Latest compose error, shown inline in the dropdown. */
+  let composeError = $state('')
+  /** Timer that flips "Complete" → "Recompose" after a short pause. */
+  let composeCompleteTimer: ReturnType<typeof setTimeout> | null = null
+  /** Poller that waits for the agent's `compose.json` to appear. */
+  let composePollTimer: ReturnType<typeof setInterval> | null = null
+
+  const composeProviders = $derived<ProviderCatalog[]>(
+    providerCatalog.cached(projectId) ?? providerCatalog.allCached()
+  )
 
   const branch = $derived(gitState.status?.branch ?? null)
   const branches = $derived(gitState.branches.map((b) => b.name))
@@ -240,6 +276,131 @@
     onClose()
   }
 
+  // ─── Compose with agent ────────────────────────────────────────────────────
+
+  function composePrompt(directory: string): string {
+    return [
+      `Compose a pull request title and description for merging \`${head}\` into \`${base}\` in this repository.`,
+      '',
+      'Find the last set of commits on the head branch that are not yet part of the base branch:',
+      `1. \`git fetch origin\``,
+      `2. \`git log --oneline origin/${base}..origin/${head}\` (fall back to \`${base}..${head}\` if the refs are local-only).`,
+      '',
+      'Then write a concise, human-readable pull request title (one line, imperative mood) and a',
+      'description that summarizes what changed, why, and anything a reviewer should know. Do not',
+      'overstate scope — only cover the changes in those commits.',
+      '',
+      `Write the result as JSON to \`${directory}/compose.json\` with exactly this shape:`,
+      '{',
+      '  "title": "The pull request title",',
+      '  "description": "The pull request description"',
+      '}',
+      '',
+      'Only write that file. Do not create the pull request, do not commit, and do not push.'
+    ].join('\n')
+  }
+
+  function recomposePrompt(directory: string): string {
+    return [
+      `The user is not satisfied with the composed title and description for merging \`${head}\` into \`${base}\`.`,
+      'Improve on it: re-read the same commit range, make the title sharper and the description',
+      'clearer and more complete, then overwrite the JSON at',
+      `\`${directory}/compose.json\` with the same shape.`,
+      'Only write that file — do not create the pull request, commit, or push.'
+    ].join('\n')
+  }
+
+  function clearComposeTimers(): void {
+    if (composeCompleteTimer !== null) {
+      clearTimeout(composeCompleteTimer)
+      composeCompleteTimer = null
+    }
+    if (composePollTimer !== null) {
+      clearInterval(composePollTimer)
+      composePollTimer = null
+    }
+  }
+
+  /** Poll for the agent's `compose.json` until it appears, then fill the form. */
+  function pollForComposeResult(): void {
+    clearComposeTimers()
+    if (!composeThreadId) return
+    const threadId = composeThreadId
+    composePollTimer = setInterval(async () => {
+      const report = await gitState.loadComposeReport(projectId, threadId)
+      if (!report || !report.title.trim()) return
+      clearComposeTimers()
+      title = report.title
+      body = report.description
+      composeError = ''
+      composePhase = 'complete'
+      composeCompleteTimer = setTimeout(() => {
+        composePhase = 'recompose'
+        composeCompleteTimer = null
+      }, 2000)
+    }, 1500)
+  }
+
+  /** Kick off the compose agent (or recompose on the same thread). */
+  async function runCompose(): Promise<void> {
+    if (!originIdentity || !head || !base || composePhase === 'working') return
+    composeError = ''
+    composePhase = 'working'
+    try {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project?.path) throw new Error('Could not resolve the project directory')
+
+      if (!composeThreadId) {
+        const thread = await invoke('thread:create', {
+          projectId,
+          providerId: composeSettings.harnessId,
+          title: `Compose PR: ${head} → ${base}`,
+          workingDirectory: project.path,
+          settings: { ...composeSettings }
+        }).catch(() => null)
+        if (!thread) throw new Error('Could not create the compose thread')
+        composeThreadId = thread.id
+        composeDirectory = await gitState.createComposeWorkspace(projectId, thread.id)
+        if (!composeDirectory) throw new Error('Could not prepare the compose workspace')
+        await threadMessages.send(
+          projectId,
+          thread.id,
+          composeSettings,
+          composePrompt(composeDirectory),
+          [],
+          undefined
+        )
+      } else {
+        if (!composeDirectory) throw new Error('Compose workspace is missing')
+        await threadMessages.send(
+          projectId,
+          composeThreadId,
+          composeSettings,
+          recomposePrompt(composeDirectory),
+          [],
+          undefined
+        )
+      }
+      pollForComposeResult()
+    } catch (reason) {
+      composeError =
+        reason instanceof Error ? reason.message : 'The compose agent could not be started'
+      composePhase = 'idle'
+    }
+  }
+
+  function chooseComposeModel(providerId: string, modelId: string, harnessId: string): void {
+    composeSettings = {
+      ...composeSettings,
+      harnessId,
+      providerId,
+      modelId
+    }
+    threadSettings.commit(composeSettings)
+  }
+
+  onDestroy(clearComposeTimers)
+
   $effect(() => {
     void loadOrigin()
   })
@@ -412,6 +573,89 @@
         </div>
       </div>
 
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
+        <DropdownMenu.Root bind:open={composeOpen}>
+          <DropdownMenu.Trigger
+            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            aria-label="Compose with agent"
+            title="Compose the title and description with an agent"
+            disabled={!originIdentity || !head || !base || sameBranch}
+          >
+            {#if composePhase === 'working'}
+              <Loader2 size={11} class="animate-spin" />
+              <span>Composing…</span>
+            {:else if composePhase === 'complete'}
+              <CircleCheck size={11} class="text-success" />
+              <span>Complete</span>
+            {:else}
+              <Sparkles size={11} />
+              <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
+            {/if}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+            >
+              <div class="space-y-1.5">
+                <div>
+                  <p
+                    class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                  >
+                    Compose model
+                  </p>
+                  <ModelPicker
+                    providers={composeProviders}
+                    {projectId}
+                    harnessId={composeSettings.harnessId}
+                    providerId={composeSettings.providerId}
+                    modelId={composeSettings.modelId}
+                    favoriteModels={rendererRecovery.favoriteModels}
+                    recentModels={rendererRecovery.recentModels}
+                    side="top"
+                    label="Change"
+                    variant="action"
+                    onSelect={chooseComposeModel}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  />
+                </div>
+                {#if composeError}
+                  <p
+                    class="rounded-lg border border-danger/20 bg-danger/10 px-2 py-1 text-[9px] leading-relaxed text-danger"
+                  >
+                    {composeError}
+                  </p>
+                {/if}
+                <button
+                  type="button"
+                  class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  disabled={composePhase === 'working'}
+                  onclick={() => void runCompose()}
+                >
+                  {#if composePhase === 'working'}
+                    <Loader2 size={12} class="animate-spin" />
+                    <span>Composing…</span>
+                  {:else if composePhase === 'complete'}
+                    <CircleCheck size={12} />
+                    <span>Complete</span>
+                  {:else}
+                    <Sparkles size={12} />
+                    <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
+                  {/if}
+                </button>
+              </div>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+
       <div>
         <label
           class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
@@ -426,7 +670,6 @@
           bind:value={title}
         />
       </div>
-
       <div>
         <label
           class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"

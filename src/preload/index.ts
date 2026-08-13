@@ -219,6 +219,8 @@ const INVOKE_CHANNELS = [
   'pr:comment',
   'pr:review',
   'pr:reviewWorkspace',
+  'pr:composeWorkspace',
+  'pr:composeReport',
   'github:authStatus',
   'github:startDeviceFlow',
   'github:poll',
