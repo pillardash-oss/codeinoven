@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FolderKanban, FolderOpen, GitFork, Pencil, Pin, PinOff } from '@lucide/svelte'
+  import { FolderKanban, FolderOpen, GitBranch, GitFork, Pencil, Pin, PinOff } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -11,6 +11,7 @@
   interface Props {
     project: Project
     iconUrl?: string | null
+    branch?: string | null
     onPinToggled?: (updated: Project) => void
     onEdit?: (projectId: string) => void
     onError?: (message: string) => void
@@ -24,6 +25,7 @@
   let {
     project,
     iconUrl = null,
+    branch = null,
     onPinToggled = () => {},
     onEdit = () => {},
     onError = () => {},
@@ -110,9 +112,21 @@
           {#if repoLabel}
             <div class="flex min-w-0 items-center gap-2">
               <GitFork size={13} class="shrink-0 text-dimmed" />
-              <span class="truncate text-xs text-muted" title={remoteOriginUrl ?? repoLabel}>
+              <span
+                class="min-w-0 flex-1 truncate text-xs text-muted"
+                title={remoteOriginUrl ?? repoLabel}
+              >
                 {repoLabel}
               </span>
+              {#if branch}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted"
+                  title={branch}
+                >
+                  <GitBranch size={10} class="shrink-0" />
+                  <span class="max-w-24 truncate">{branch}</span>
+                </span>
+              {/if}
             </div>
           {/if}
           {#if location}

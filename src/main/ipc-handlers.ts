@@ -79,6 +79,7 @@ import {
   validateThreadSettings,
   validateThreadStatus,
   validateThreadUpdateInput,
+  validateSortOrder,
   PrivilegedIpcValidator,
   isMissingScopedPathError
 } from './ipc-validation'
@@ -4485,6 +4486,15 @@ export function registerIpcHandlers(
       validateEntityId(projectId, 'Project ID'),
       validateStringArray(orderedIds, 'Ordered IDs')
     )
+  )
+  ipcMain.handle(
+    'thread:setSortOrder',
+    (_, projectId: unknown, threadId: unknown, sortOrder: unknown) =>
+      threadManager.setSortOrder(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateSortOrder(sortOrder)
+      )
   )
   ipcMain.handle('thread:reorderPinned', (_, projectId: unknown, orderedPinnedIds: unknown) =>
     threadManager.reorderPinnedThreads(

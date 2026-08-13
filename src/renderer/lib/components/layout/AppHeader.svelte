@@ -850,6 +850,7 @@
                   <ProjectInfoDropdown
                     project={headerProject}
                     iconUrl={resolvedProjectIcon}
+                    branch={thread.branch ?? null}
                     class="group/icon relative h-5 w-5"
                     onPinToggled={handleProjectPinToggled}
                     onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
