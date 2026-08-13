@@ -17,7 +17,6 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
-  import { cloudAccountsState } from '$lib/stores/cloud-accounts.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -258,48 +257,18 @@
     selectedContainer = container
   }
 
-  /** The exact failing log for the selected container, from the store cache. */
-  function selectedFailingLog(): string {
-    const container = selectedContainer
-    if (!container) return ''
-    const cached =
-      cloudDeployState.containerLogs[
-        CloudDeployState.containerKey(projectId, container.providerKind, container.id)
-      ]
-    return cached?.value.log ?? container.log ?? ''
-  }
-
-  /** The provider context (label, id, provider, base URL) for the selected container. */
-  function selectedProviderContext(): string {
-    const container = selectedContainer
-    if (!container) return ''
-    const providerAccounts = config?.project.providerAccounts?.[container.providerKind]
-    const activeAccountId = providerAccounts?.activeAccountId ?? null
-    const activeAccount = activeAccountId
-      ? cloudAccountsState.accountById(activeAccountId)
-      : undefined
-    return [
-      `Container: ${container.label}`,
-      `Container ID: ${container.id}`,
-      `Provider: ${PROVIDER_LABELS[container.providerKind]} (${container.providerKind})`,
-      ...(activeAccount?.baseUrl ? [`Base URL: ${activeAccount.baseUrl}`] : []),
-      ...(container.url ? [`Deployed URL: ${container.url}`] : [])
-    ].join('\n')
-  }
-
   /**
    * Hand the selected failing deployment to an agent for diagnosis and proposed
    * fix. v1 is strictly read-only: the thread is preloaded with the failing log
    * and provider context, and the prompt asks the agent to diagnose and propose
    * a fix — never to redeploy, trigger, or auto-fix.
    */
-  async function startAgentRemediation(): Promise<void> {
+  async function startAgentRemediation(logText: string): Promise<void> {
     const container = selectedContainer
     if (!container) return
     const project = await invoke('project:get', projectId).catch(() => null)
     if (!project) return
 
-    const log = selectedFailingLog()
     const thread = await invoke('thread:create', {
       projectId,
       providerId: 'opencode',
@@ -309,34 +278,18 @@
     }).catch(() => null)
     if (!thread) return
 
-    rendererRecovery.setDraft(
-      projectId,
-      thread.id,
-      remediationPrompt(container, log, selectedProviderContext()),
-      [],
-      []
-    )
+    rendererRecovery.setDraft(projectId, thread.id, remediationPrompt(container, logText), [], [])
     workspaceState.openThread(thread, project)
   }
 
   /** Read-only diagnosis prompt given to the agent, explicitly no auto-fix. */
-  function remediationPrompt(
-    container: CloudDeploymentContainer,
-    log: string,
-    providerContext: string
-  ): string {
+  function remediationPrompt(container: CloudDeploymentContainer, log: string): string {
+    const provider = PROVIDER_LABELS[container.providerKind] ?? container.providerKind
     return [
-      `Diagnose the failed deployment of "${container.label}" and propose a fix.`,
+      `This project failed to deploy on ${provider}, and below is the deployment log.`,
+      'Help me diagnose and fix it. When you are done, give me a summary report of what happened.',
       '',
-      'PROVIDER CONTEXT',
-      providerContext,
-      '',
-      'FAILING DEPLOYMENT LOG',
-      log || '(no log text was available)',
-      '',
-      'Analyze why this deployment failed and propose a concrete fix. Diagnose only:',
-      'do not redeploy, trigger, or modify anything — report your diagnosis and proposed',
-      'fix for review.'
+      log.trim() || '(no deployment log text was available)'
     ].join('\n')
   }
 </script>
@@ -348,7 +301,7 @@
       container={selectedContainer}
       onBack={() => (selectedContainer = null)}
       onUpdated={(updated) => cloudDeployState.setContainerStatus(projectId, updated)}
-      onRemediate={() => void startAgentRemediation()}
+      onRemediate={(logText) => void startAgentRemediation(logText)}
     />
   {:else}
     <!-- Header -->
