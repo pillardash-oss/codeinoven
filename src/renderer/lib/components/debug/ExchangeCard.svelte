@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { DebugExchange, DebugEvent } from '$lib/stores/agent-debug.svelte'
+  import { copyText } from '$lib/copy-text'
   import {
     ChevronDown,
     ChevronRight,
@@ -36,7 +37,7 @@
   async function copyExchange(): Promise<void> {
     const json = JSON.stringify(formatExchange(ex), null, 2)
     try {
-      await navigator.clipboard.writeText(json)
+      await copyText(json)
       copiedId = ex.id
       setTimeout(() => (copiedId = null), 1500)
     } catch {

@@ -1,5 +1,24 @@
 import type { ProviderConnectionInfo } from '../lib/types'
 
+/** The schema version of `HarnessManifest`. Bump when behaviors are added or renamed. */
+export const HARNESS_MANIFEST_SCHEMA_VERSION = 1
+
+/** Stable behavior keys every harness manifest can declare. Extend to grow. */
+export type HarnessManifestBehavior = 'loadsAgentsMd'
+
+/**
+ * Declarative, versioned behavior manifest for one harness. This is the
+ * reliable default: what the harness is known to do. Runtime observations —
+ * probing the installed CLI, user confirmation in Settings — are stored by
+ * `HarnessManifestService` and override these declarations without mutating
+ * them, keeping reliability (declared baseline) and flexibility (confirmed
+ * reality) separate.
+ */
+export interface HarnessManifest {
+  schemaVersion: typeof HARNESS_MANIFEST_SCHEMA_VERSION
+  behaviors: Record<HarnessManifestBehavior, boolean>
+}
+
 /**
  * Canonical identity of a coding harness CodeInOven can detect and drive.
  * This is the single source of truth for which harnesses exist, how they are
@@ -14,6 +33,20 @@ export interface HarnessDescriptor {
   integration: ProviderConnectionInfo['integration']
   /** Whether this harness driver can inject custom base-URL providers. */
   supportsCustomProviders: boolean
+  /**
+   * Declarative behavior manifest. The declared `loadsAgentsMd` value is the
+   * reliable baseline; a runtime-confirmed override (when the harness is
+   * actually used) takes precedence via `HarnessManifestService`.
+   */
+  manifest: HarnessManifest
+}
+
+/**
+ * Build the versioned manifest for a harness with the given declared behaviors.
+ * Every descriptor must declare every known behavior so resolution is total.
+ */
+function manifest(behaviors: Record<HarnessManifestBehavior, boolean>): HarnessManifest {
+  return { schemaVersion: HARNESS_MANIFEST_SCHEMA_VERSION, behaviors }
 }
 
 /** The canonical ordered harness manifest. Cline is deliberately last. */
@@ -24,7 +57,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'opencode',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: true
+    supportsCustomProviders: true,
+    manifest: manifest({ loadsAgentsMd: true })
   },
   {
     id: 'codex',
@@ -32,7 +66,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'codex',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: true
+    supportsCustomProviders: true,
+    manifest: manifest({ loadsAgentsMd: true })
   },
   {
     id: 'claude-code',
@@ -40,7 +75,10 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'claude',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: true
+    supportsCustomProviders: true,
+    // Claude Code reads CLAUDE.md natively, not AGENTS.md — the app injects
+    // AGENTS.md so the project rules reach it deterministically.
+    manifest: manifest({ loadsAgentsMd: false })
   },
   {
     id: 'pi',
@@ -48,7 +86,9 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'pi',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: true
+    supportsCustomProviders: true,
+    // Pi has no native AGENTS.md/CLAUDE.md instruction loading.
+    manifest: manifest({ loadsAgentsMd: false })
   },
   {
     id: 'cline',
@@ -56,7 +96,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'cline',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: true
+    supportsCustomProviders: true,
+    manifest: manifest({ loadsAgentsMd: true })
   },
   {
     id: 'antigravity',
@@ -64,7 +105,19 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'agy',
     versionArgs: ['--version'],
     integration: 'ready',
-    supportsCustomProviders: false
+    supportsCustomProviders: false,
+    // Antigravity reads AGENTS.md and GEMINI.md rule files natively.
+    manifest: manifest({ loadsAgentsMd: true })
+  },
+  {
+    id: 'muse',
+    name: 'Muse Code',
+    command: 'muse',
+    versionArgs: ['--version'],
+    integration: 'ready',
+    supportsCustomProviders: false,
+    // Muse reads AGENTS.md natively, falling back to CLAUDE.md.
+    manifest: manifest({ loadsAgentsMd: true })
   }
 ]
 
@@ -76,4 +129,21 @@ export function listHarnesses(): readonly HarnessDescriptor[] {
 /** Look up a harness descriptor by id. */
 export function findHarness(id: string): HarnessDescriptor | undefined {
   return HARNESSES.find((harness) => harness.id === id)
+}
+
+/** The declared manifest for a harness, or the behavior-safe default when unknown. */
+export function harnessManifestFor(id: string): HarnessManifest | undefined {
+  return findHarness(id)?.manifest
+}
+
+/**
+ * Declared (manifest) value of whether the harness CLI natively loads the
+ * project's AGENTS.md into the model context by itself. This is the reliable
+ * baseline; `HarnessManifestService.resolveLoadsAgentsMd` layers a confirmed
+ * runtime override on top. Unknown harnesses default to `false` so the app
+ * keeps the deterministic injection guarantee for harnesses it does not yet
+ * recognize.
+ */
+export function harnessLoadsAgentsMd(id: string): boolean {
+  return harnessManifestFor(id)?.behaviors['loadsAgentsMd'] ?? false
 }

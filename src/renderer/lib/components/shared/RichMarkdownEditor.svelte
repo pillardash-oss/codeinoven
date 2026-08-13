@@ -10,7 +10,8 @@
     renderRichMarkdown,
     selectedBlockTag,
     serializeRichMarkdown,
-    syncCodeBlockLanguages
+    syncCodeBlockLanguages,
+    unlistListItem
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
 
@@ -73,11 +74,21 @@
   let lastHistoryInputType: string | null = null
   let lastHistoryAt = 0
 
+  /** Length a non-editable inline token occupies in serialized markdown — inline
+   *  badges keep their stored value, footnote superscripts their `[^label]`. */
+  function inlineTokenLength(node: HTMLElement): number | null {
+    if (node.dataset.editorInlineBadge === 'true') return node.dataset.editorValue?.length ?? 0
+    const footnote = node.dataset.editorFootnoteRef
+    if (footnote !== undefined) return footnote.length + 3
+    return null
+  }
+
   function nodeLength(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0
     if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
-      return node.dataset.editorValue?.length ?? 0
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
     }
     return Array.from(node.childNodes).reduce((total, child) => total + nodeLength(child), 0)
   }
@@ -132,10 +143,10 @@
         remaining = Math.max(0, remaining - 1)
         return null
       }
-      if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
+      if (node instanceof HTMLElement && inlineTokenLength(node) !== null) {
         const parent = node.parentNode
         const index = parent ? Array.from(parent.childNodes).indexOf(node) : -1
-        const length = node.dataset.editorValue?.length ?? 0
+        const length = inlineTokenLength(node) ?? 0
         if (parent && index >= 0 && remaining <= length) {
           return { node: parent, offset: index + (remaining === 0 ? 0 : 1) }
         }
@@ -175,6 +186,84 @@
     const anchor = pointAtOffset(editor, bookmark.anchor)
     const focus = pointAtOffset(editor, bookmark.focus)
     selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset)
+  }
+
+  /** Visible characters in a text node — zero-width caret anchors are stripped by
+   *  serialization, so they must never shift a bookmark across a serialize → re-render
+   *  round trip (which always drops them from the DOM). */
+  function visibleTextLength(text: string | null | undefined): number {
+    return (text ?? '').replace(/\u200b/g, '').length
+  }
+
+  /** Characters of a node up to an offset, ignoring zero-width anchors. */
+  function visibleCharsBefore(text: string, offset: number): number {
+    let count = 0
+    const length = Math.min(offset, text.length)
+    for (let index = 0; index < length; index += 1) {
+      if (text.charCodeAt(index) !== 0x200b) count += 1
+    }
+    return count
+  }
+
+  function nodeVisibleLength(node: Node): number {
+    if (node.nodeType === Node.TEXT_NODE) return visibleTextLength(node.textContent)
+    if (node instanceof HTMLBRElement) return 1
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
+    }
+    return Array.from(node.childNodes).reduce((total, child) => total + nodeVisibleLength(child), 0)
+  }
+
+  /** Caret position measured in the same coordinates a freshly re-rendered editor
+   *  will use (zero-width anchors are absent there), so a bookmark taken on the old
+   *  DOM lands exactly where the caret belongs after `replaceEditorContent`. */
+  function pointVisibleOffset(root: Node, target: Node, targetOffset: number): number | null {
+    let offset = 0
+
+    function visit(node: Node): boolean {
+      if (node === target) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          offset += visibleCharsBefore(node.textContent ?? '', targetOffset)
+        } else {
+          const children = Array.from(node.childNodes).slice(0, targetOffset)
+          offset += children.reduce((total, child) => total + nodeVisibleLength(child), 0)
+        }
+        return true
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        offset += visibleTextLength(node.textContent)
+        return false
+      }
+      if (node instanceof HTMLBRElement) {
+        offset += 1
+        return false
+      }
+      for (const child of Array.from(node.childNodes)) {
+        if (visit(child)) return true
+      }
+      return false
+    }
+
+    return visit(root) ? offset : null
+  }
+
+  /** Bookmarks the current caret in visible coordinates so it survives a full
+   *  re-render of the editor content. */
+  function captureVisibleSelection(): SelectionBookmark | null {
+    if (!editor) return null
+    const selection = window.getSelection()
+    if (
+      !selection?.anchorNode ||
+      !selection.focusNode ||
+      !editor.contains(selection.anchorNode) ||
+      !editor.contains(selection.focusNode)
+    ) {
+      return null
+    }
+    const anchor = pointVisibleOffset(editor, selection.anchorNode, selection.anchorOffset)
+    const focus = pointVisibleOffset(editor, selection.focusNode, selection.focusOffset)
+    return anchor === null || focus === null ? null : { anchor, focus }
   }
 
   function captureHistoryEntry(): HistoryEntry | null {
@@ -298,7 +387,7 @@
         ? selection.anchorNode
         : selection.anchorNode.parentElement
     const supportsCommands = !anchorElement?.closest(
-      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-special], table, pre, code'
+      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-footnote-ref], [data-editor-special], table, pre, code'
     )
     const range = document.createRange()
     range.selectNodeContents(editor)
@@ -511,6 +600,15 @@
         deleteCodeBlock(prevSibling)
         return
       }
+      if (paragraph.tagName === 'LI' && isCursorAtBoundary(paragraph, true)) {
+        const historyEntry = captureHistoryEntry()
+        if (unlistListItem(editor, paragraph)) {
+          event.preventDefault()
+          emitEditorValue()
+          commitHistory(historyEntry)
+          publishCaretText()
+        }
+      }
     }
 
     if (event.key === 'Enter') {
@@ -648,15 +746,21 @@
     if (!editor) return
     const target = event.target as HTMLElement | null
     const deleteButton = target?.closest<HTMLElement>('[data-editor-codeblock-delete]')
-    if (!deleteButton) {
+    if (deleteButton) {
+      event.preventDefault()
+      event.stopPropagation()
+      const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
+      if (!codeBlock || !editor.contains(codeBlock)) return
+      deleteCodeBlock(codeBlock)
       publishCaretText()
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
-    const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
-    if (!codeBlock || !editor.contains(codeBlock)) return
-    deleteCodeBlock(codeBlock)
+    // Links render for recognition but must never navigate while editing.
+    if (target?.closest('a[data-editor-link]')) {
+      event.preventDefault()
+      publishCaretText()
+      return
+    }
     publishCaretText()
   }
 
@@ -682,8 +786,13 @@
       return
     }
     const markdown = serializeRichMarkdown(editor)
+    // `insertPlainText` leaves the caret right after the pasted text. Re-rendering
+    // the whole editor would otherwise drop that caret to the end of the document,
+    // so bookmark it first and restore it onto the freshly rendered content.
+    const bookmark = captureVisibleSelection()
     replaceEditorContent(markdown)
-    placeCaretAtEnd(editor)
+    if (bookmark) restoreSelection(bookmark)
+    else placeCaretAtEnd(editor)
     if (markdown !== value) {
       value = markdown
       onValueChange?.(markdown)

@@ -187,4 +187,18 @@ describe('DiagnosticsService', () => {
     await symlink(target, link)
     await expect(service.writeReport(link, metadata)).rejects.toThrow('regular file')
   })
+
+  it('reports auxiliary memory/title token and cost totals by feature', async () => {
+    const { database } = await createTestEnvironment()
+    const service = new DiagnosticsService(database, () => ({
+      memory: { calls: 2, inputChars: 6_000, inputTokens: 1_500, estimatedCost: 0.000225 },
+      title: { calls: 1, inputChars: 800, inputTokens: 200, estimatedCost: 0.00003 }
+    }))
+
+    const report = await service.createReport(metadata)
+    expect(report.auxiliaryUsage).toEqual({
+      memory: { calls: 2, inputChars: 6_000, inputTokens: 1_500, estimatedCost: 0.000225 },
+      title: { calls: 1, inputChars: 800, inputTokens: 200, estimatedCost: 0.00003 }
+    })
+  })
 })

@@ -11,6 +11,16 @@ interface EncryptedSecretRecord {
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 
 /**
+ * Deterministic SecretVault ref under which a provider account's token is
+ * stored. The ref is keyed by the global account id only, so one account's
+ * token is shared by every project that attaches it — a provider account is
+ * created once and reused across projects, not duplicated per project.
+ */
+function providerTokenRef(accountId: string): string {
+  return `deployment_provider_${accountId}`
+}
+
+/**
  * Main-process-only credential vault.
  *
  * Ciphertext is stored under CodeInOven's config root. Callers persist only
@@ -42,6 +52,49 @@ export class SecretVault {
     }
     await this.storage.write(this.storePath, store)
     return ref
+  }
+
+  /**
+   * Store (or rotate) a provider account's token, encrypted via `safeStorage`.
+   *
+   * This mirrors the GitHub token storage mechanism: the token is stored under a
+   * deterministic, account-keyed ref inside the secure vault and only ciphertext
+   * is persisted beneath the CodeInOven config root. The plaintext token is never
+   * written to a repo or project file.
+   *
+   * Keychain-unavailable fallback: when the OS keychain (`safeStorage`) is
+   * unavailable, this throws and the account is left unconfigured. The vault
+   * deliberately does not degrade to plaintext storage, so a provider token can
+   * never be persisted outside the secure store.
+   *
+   * The ref is keyed by the global `accountId`, so one account's token is shared
+   * across every project that attaches it.
+   *
+   * @returns the opaque ref under which the encrypted token was persisted.
+   */
+  async saveProviderToken(accountId: string, token: string): Promise<string> {
+    return this.save(token, providerTokenRef(accountId))
+  }
+
+  /**
+   * Resolve a provider account's token from the secure vault.
+   *
+   * Keychain-unavailable fallback: when the OS keychain is unavailable this
+   * throws rather than exposing stored ciphertext, keeping token access bound to
+   * a working secure store.
+   */
+  async resolveProviderToken(accountId: string): Promise<string> {
+    return this.resolve(providerTokenRef(accountId))
+  }
+
+  /** Whether a provider account token is stored in the vault. */
+  async hasProviderToken(accountId: string): Promise<boolean> {
+    return this.exists(providerTokenRef(accountId))
+  }
+
+  /** Remove the stored provider account token from the vault. */
+  async removeProviderToken(accountId: string): Promise<void> {
+    await this.remove(providerTokenRef(accountId))
   }
 
   async resolve(ref: string): Promise<string> {

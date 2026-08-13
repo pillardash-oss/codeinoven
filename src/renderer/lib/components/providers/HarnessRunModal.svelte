@@ -80,7 +80,6 @@
 <DockableModal
   open
   title={panelTitle()}
-  size="lg"
   minimized={store.minimized}
   closable={store.hasFinished}
   onMinimize={() => store.minimize()}

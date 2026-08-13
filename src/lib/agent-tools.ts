@@ -1,6 +1,7 @@
 import type { ApplicationAgentToolDefinition } from './types'
 import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
+import { GATEWAY_TOOLS } from './gateway-tools'
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
@@ -209,6 +210,65 @@ export const AUDIT_REPORT_SCHEMA: Record<string, unknown> = {
         required: ['id', 'title', 'severity', 'description', 'evidence']
       }
     },
+    auditedFiles: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 }
+        },
+        required: ['path', 'reason']
+      }
+    },
+    verification: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        repositoryRevision: { type: 'string', minLength: 1 },
+        scope: { type: 'string', minLength: 1 },
+        checks: {
+          type: 'array',
+          minItems: 4,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              kind: {
+                type: 'string',
+                enum: ['format', 'lint', 'typecheck', 'test', 'build', 'other']
+              },
+              command: { type: 'string' },
+              files: { type: 'array', items: { type: 'string', minLength: 1 } },
+              status: { type: 'string', enum: ['passed', 'failed', 'not_applicable'] },
+              exitCode: { type: 'number' },
+              evidence: { type: 'string', minLength: 1 },
+              findingIds: { type: 'array', items: { type: 'string', minLength: 1 } }
+            },
+            required: ['id', 'kind', 'command', 'files', 'status', 'evidence', 'findingIds']
+          }
+        },
+        utilities: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              status: { type: 'string', enum: ['used', 'unavailable', 'not_applicable'] },
+              evidence: { type: 'string', minLength: 1 }
+            },
+            required: ['name', 'status', 'evidence']
+          }
+        },
+        limitations: { type: 'array', items: { type: 'string', minLength: 1 } }
+      },
+      required: ['repositoryRevision', 'scope', 'checks', 'utilities', 'limitations']
+    },
     resolutionRecommendation: { type: 'string', minLength: 1 },
     conclusion: { type: 'string', minLength: 1 }
   },
@@ -259,7 +319,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     },
     scope: {
       type: 'string',
-      enum: ['global', 'project', 'thread', 'chat'],
+      enum: ['global', 'projects', 'project', 'thread', 'chat'],
       description: 'Where the memory should apply. The extraction prompt supplies valid scopes.'
     }
   },
@@ -276,59 +336,13 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     source: 'application',
     sentWhen: 'An isolated agent decision after each completed user-and-assistant turn'
   },
-  {
-    name: 'utility_search',
-    description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when the current toolset is insufficient.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Capability or task to search for.' },
-        kinds: {
-          type: 'array',
-          items: {
-            type: 'string',
-            enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider']
-          }
-        },
-        limit: { type: 'number', minimum: 1, maximum: 20 }
-      },
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'Every agent turn; used only when current tools are insufficient'
-  },
-  {
-    name: 'utility_activate',
-    description:
-      'Activate one installed utility for the current turn and inspect the operations it exposes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string', description: 'Installed utility identifier.' }
-      },
-      required: ['utility_id'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After utility_search selects an installed capability'
-  },
-  {
-    name: 'utility_invoke',
-    description: 'Invoke an operation on a utility activated for the current turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string' },
-        operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
-      },
-      required: ['utility_id', 'operation'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After a utility has been activated for the current turn'
-  },
+  ...GATEWAY_TOOLS.map(({ name, description, inputSchema, sentWhen }) => ({
+    name,
+    description,
+    inputSchema,
+    source: 'application' as const,
+    sentWhen
+  })),
   {
     name: BRAINSTORM_DOCUMENT_TOOL_NAME,
     transportName: 'StructuredOutput',

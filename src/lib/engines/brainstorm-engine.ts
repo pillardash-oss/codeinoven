@@ -122,6 +122,21 @@ export class BrainstormEngine {
     return { ...workflow, entryChoice: choice, stage, updatedAt: now }
   }
 
+  /**
+   * Remove the workflow row entirely, returning the thread to a state with no
+   * planning choice recorded. Used to abandon a failed planning attempt (e.g.
+   * the retry card's Cancel action) so reconcile no longer shows a retry prompt
+   * and no skipped/finalized stage triggers automatic generation resume.
+   */
+  resetWorkflow(projectId: string, threadId: string): void {
+    this.assertScope(projectId, threadId)
+    this.db.run(
+      'DELETE FROM brainstorm_workflow WHERE project_id=? AND thread_id=?',
+      projectId,
+      threadId
+    )
+  }
+
   getWorkflowState(projectId: string, threadId: string): BrainstormWorkflowState | null {
     this.assertScope(projectId, threadId)
     const row = this.db.get<{

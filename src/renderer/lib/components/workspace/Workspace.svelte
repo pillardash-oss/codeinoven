@@ -12,11 +12,12 @@
     Trash2,
     X,
     MessageSquare,
-    Settings,
     SquarePen,
     Pencil,
     Copy,
-    FolderKanban
+    FolderKanban,
+    ArrowUpDown,
+    Check
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -24,7 +25,7 @@
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import FolderRow from './FolderRow.svelte'
-  import ProjectSearchDropdown from './ProjectSearchDropdown.svelte'
+  import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
@@ -47,37 +48,65 @@
   import StatusBadge from '../shared/StatusBadge.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
+  import SidebarAccountControls from './SidebarAccountControls.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { hasProjectNameCollision } from '$lib/project-location'
   import { chatDraft } from '$lib/stores/chat-draft'
-  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatSettings,
+    chatEffectiveSettings
+  } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
+  import {
+    contextSidebarState,
+    type ContextSidebarTab,
+    type TemporaryChatContextTab
+  } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
-  import { threadSort, findEmptyNewThread, threadVisitKey } from '$lib/stores/workspace.svelte'
+  import { modelKey } from '$lib/model-keys'
+  import { reportError } from '$lib/stores/app-errors.svelte'
+  import {
+    threadSort,
+    pinnedThreadSort,
+    threadStatusSort,
+    findEmptyNewThread,
+    threadVisitKey
+  } from '$lib/stores/workspace.svelte'
+  import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
+  import { threadSortState } from '$lib/stores/thread-sort.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
-  import { timelinePins } from '$lib/stores/timeline-pins.svelte'
-  import { INBOX_PROJECT_ID, DEFAULT_THREAD_TITLE, DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
-  import { APP_NAME } from '$shared/brand'
+  import {
+    coordinatorHasActiveDelegates,
+    INBOX_PROJECT_ID,
+    DEFAULT_THREAD_TITLE,
+    DEFAULT_SCOPE_BUCKET_ID,
+    isThreadWorking,
+    isOrchestrationChildThread
+  } from '$shared/types'
+  import { APP_NAME, APP_SLUG } from '$shared/brand'
   import type {
     AgentPart,
+    AppConfig,
+    AppConfigPatch,
     Project,
     PromptAttachment,
     ScopeBucket,
     Thread,
     ThreadSearchResult
   } from '$shared/types'
-  import { updaterState } from '$lib/stores/updater.svelte'
-  import { Download, CheckCircle2, Loader2, Clock, RefreshCw, AlertCircle } from '@lucide/svelte'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -85,13 +114,24 @@
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
     navigate: (view: MainView) => void
+    /** Global app config — drives the image-descriptor default + ask-again flag. */
+    config?: AppConfig
+    updateConfig?: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { mode, active = true, navigate }: Props = $props()
+  let { mode, active = true, navigate, config, updateConfig }: Props = $props()
+
+  const INITIAL_THREAD_LIMIT = 100
+  const HISTORY_PAGE_LIMIT = 50
 
   let projects = $state<Project[]>([])
   let allThreads = $state<Thread[]>([])
   let loading = $state(true)
+  let historyOffset = $state(0)
+  let historyLoading = $state(false)
+  let hasMoreHistory = $state(true)
+  /** Remounts the empty-state chats composer to restore a failed first send. */
+  let chatsComposerRestoreKey = $state(0)
 
   // ─── Sidebar focus-follow ────────────────────────────────────────────────
   // While a thread is selected, the sidebar keeps its row (and thus its
@@ -106,7 +146,16 @@
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
     const root = sidebarScroller ?? document
-    return root.querySelector<HTMLElement>(`[data-thread-row="${threadId}"]`)
+    // All three sidebar modes stay mounted (the inactive ones are `display:none`),
+    // so the same thread id can match several rows. Only the rendered one can be
+    // scrolled to — a hidden row has no layout box and scrollIntoView is a no-op
+    // on it, which is why Projects mode never followed the selection while the
+    // flat Threads list (earlier in the DOM) always matched first.
+    const rows = root.querySelectorAll<HTMLElement>(`[data-thread-row="${threadId}"]`)
+    for (const row of rows) {
+      if (row.offsetParent !== null || row.getClientRects().length > 0) return row
+    }
+    return null
   }
 
   function isThreadRowVisible(threadId: string): boolean {
@@ -124,9 +173,48 @@
     )
   }
 
-  function revealThreadInSidebar(threadId: string): void {
-    const row = findThreadRow(threadId)
-    row?.scrollIntoView({ block: 'nearest' })
+  function nextAnimationFrame(): Promise<void> {
+    return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+  }
+
+  function scrollThreadRowIntoView(threadId: string): void {
+    // Native scrollIntoView scrolls the sidebar scroller (and any intermediate
+    // containers) the minimal amount to bring the row fully into view. Manual
+    // scrollTop math here is fragile: measuring the row before the expanded
+    // folder's layout settles produced wrong offsets and jumped to the top.
+    findThreadRow(threadId)?.scrollIntoView({ block: 'nearest' })
+  }
+
+  async function revealThreadInSidebar(threadId: string): Promise<void> {
+    const active = selectedThread
+    // In Projects mode the target thread may sit in a collapsed folder and/or
+    // past the per-folder "show more" cutoff. Expand its folder and raise the
+    // row budget so the row actually renders. We intentionally don't gate this
+    // on the current mode: when Ctrl+Tab crosses modes (e.g. Chats → Projects)
+    // the mode prop may not have propagated yet, but expanding is harmless and
+    // ensures the folder is open by the time the scroll step runs. In Threads
+    // mode the flat list always renders every row, so only the scroll applies.
+    if (active && active.projectId !== INBOX_PROJECT_ID) {
+      expandedFolders.add(active.projectId)
+      const folderThreads = threadsByProject.get(active.projectId) ?? []
+      const threadIndex = folderThreads.findIndex((candidate) => candidate.id === threadId)
+      if (threadIndex >= 0) {
+        const needed = threadIndex + 1
+        const current = threadShowCount.get(active.projectId) ?? THREADS_PER_PAGE
+        if (needed > current) threadShowCount.set(active.projectId, needed)
+      }
+    }
+    // Flush Svelte's DOM update (folder expansion / mode switch / re-sort), then
+    // wait frames so the browser has final layout, then scroll. Retry over a few
+    // frames because the folder's rows can mount a tick later than expected —
+    // in Projects mode the row only appears once the folder has expanded and the
+    // per-folder row budget has grown to include it.
+    await tick()
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await nextAnimationFrame()
+      scrollThreadRowIntoView(threadId)
+      if (findThreadRow(threadId)) break
+    }
   }
 
   function handleSidebarUserScroll(): void {
@@ -155,7 +243,11 @@
   // Intentional initial-value capture — the map is keyed by the mode prop.
   // svelte-ignore state_referenced_locally
   let previousMode = mode
-  let sidebarRevealSuppressed = false
+  // Reactive so the focus-follow effect re-runs (and re-reveals the active
+  // thread) the moment the mode-switch suppression window closes. As a plain
+  // `let` the reveal would be skipped forever whenever a mode switch coincided
+  // with the active thread falling out of view.
+  let sidebarRevealSuppressed = $state(false)
   let sidebarRevealSuppressTimer: ReturnType<typeof setTimeout> | undefined
 
   // Runs before the DOM swaps: capture the outgoing mode's scrollTop while its
@@ -182,7 +274,7 @@
     })
   })
 
-  const THREADS_PER_PAGE = 10
+  const THREADS_PER_PAGE = 5
 
   const threadShowCount = new SvelteMap<string, number>()
 
@@ -241,6 +333,9 @@
       ? (providerCatalog.cached(chatInboxId) ?? providerCatalog.allCached())
       : providerCatalog.allCached()
   )
+  /** Effective chat settings — the chat's own model when one has been picked,
+   *  else the last project model so a fresh chat starts on the model in use. */
+  let chatComposerSettings = $derived(chatEffectiveSettings())
   $effect(() => {
     if (mode !== 'chats') return
     let alive = true
@@ -411,7 +506,10 @@
         void invoke('threads:search', safeQuery, { projectId, limit: 50 })
           .then((results) => {
             if (projectSearchRequestIds.get(projectId) !== requestId) return
-            projectSearchResults.set(projectId, results)
+            projectSearchResults.set(
+              projectId,
+              results.filter((r) => !isOrchestrationChildThread(r.thread))
+            )
             projectSearching.delete(projectId)
           })
           .catch(() => {
@@ -427,6 +525,68 @@
     const q = query.trim().toLowerCase()
     if (!q) return threads
     return threads.filter((t) => t.title.toLowerCase().includes(q))
+  }
+
+  function threadHasVisibleWork(thread: Thread): boolean {
+    return (
+      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+    )
+  }
+
+  // Threads-view global search (activation + query), mirroring the per-project
+  // search above: the popover only hosts the input, results render in the sidebar
+  // and stay put until the search is explicitly dismissed (Escape / re-click / X).
+  let threadsSearchOpen = $state(false)
+  let threadsSearchQuery = $state('')
+  let threadsSearchResults = $state<ThreadSearchResult[]>([])
+  let threadsSearching = $state(false)
+  let threadsSearchTimer: ReturnType<typeof setTimeout> | undefined
+  let threadsSearchRequestId = 0
+
+  function openThreadsSearch(): void {
+    threadsSearchOpen = true
+    if (threadsSearchQuery.trim()) runThreadsSearch(threadsSearchQuery)
+  }
+
+  function closeThreadsSearch(): void {
+    threadsSearchOpen = false
+    threadsSearchQuery = ''
+    threadsSearchResults = []
+    threadsSearching = false
+    threadsSearchRequestId++
+    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
+    threadsSearchTimer = undefined
+  }
+
+  function runThreadsSearch(raw: string): void {
+    threadsSearchQuery = raw
+    const safeQuery = raw.trim()
+    if (threadsSearchTimer) clearTimeout(threadsSearchTimer)
+    const requestId = ++threadsSearchRequestId
+    if (!safeQuery) {
+      threadsSearchResults = []
+      threadsSearching = false
+      return
+    }
+    threadsSearching = true
+    threadsSearchTimer = setTimeout(() => {
+      void invoke('threads:search', safeQuery, { limit: 50 })
+        .then((results) => {
+          if (requestId !== threadsSearchRequestId) return
+          threadsSearchResults = results.filter(
+            (r) =>
+              !isOrchestrationChildThread(r.thread) &&
+              r.thread.projectId !== INBOX_PROJECT_ID &&
+              !r.thread.archived
+          )
+          threadsSearching = false
+        })
+        .catch(() => {
+          if (requestId !== threadsSearchRequestId) return
+          threadsSearchResults = []
+          threadsSearching = false
+        })
+    }, 120)
   }
 
   /** Project icon data URLs keyed by project id. */
@@ -479,11 +639,19 @@
 
   function openSourcesTab(): void {
     if (!selectedThread) return
-    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'sources') {
+    if (
+      contextSidebarState.sidebarVisible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'sources'
+    ) {
       contextSidebarState.hide()
       return
     }
     contextSidebarState.openSources(selectedThread.projectId, selectedThread.id)
+  }
+
+  function openCloudDeploymentsTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
   }
 
   let sidebarActions = $derived.by(() => {
@@ -512,6 +680,12 @@
           ]
         : []),
       {
+        id: 'cloud-deployments',
+        label: 'Cloud Deployments',
+        description: 'Monitor your cloud deployments',
+        onSelect: openCloudDeploymentsTab
+      },
+      {
         id: 'terminal',
         label: 'Terminal',
         description: 'Open a shell',
@@ -539,19 +713,29 @@
     )
   }
 
+  /** Actions offered inside the bottom terminal dock — only new shells belong there. */
+  let terminalDockActions = $derived.by(() => {
+    if (!selectedThread) return []
+    return [
+      {
+        id: 'terminal',
+        label: 'Terminal',
+        description: 'Open a shell',
+        onSelect: openNewTerminal
+      }
+    ]
+  })
+
   let terminalFullscreenTabId = $state<string | null>(null)
-  let terminalDockedBottom = $derived(
-    contextSidebarState.visible &&
-      contextSidebarState.activeTab?.kind === 'terminal' &&
-      contextSidebarState.terminalPlacement === 'bottom'
-  )
+  let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
+  let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
   let contextPanelColumns = $derived(
-    contextSidebarState.visible && !terminalDockedBottom
+    sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
   let contextPanelRows = $derived(
-    terminalDockedBottom
+    terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
       : 'minmax(0, 1fr)'
   )
@@ -560,12 +744,74 @@
     terminalFullscreenTabId = tabId
   }
 
+  /** A files tab with unsaved changes waiting on a save/discard decision. */
+  let closeTabTarget = $state<{
+    sidebarTabId: string
+    projectId: string
+    fileTabId: string
+    path: string
+  } | null>(null)
+
   function closeContextTab(id: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'files' && tab.fileTabId) {
+      const pending = pendingFileCloseTarget(tab)
+      if (pending) {
+        closeTabTarget = pending
+        return
+      }
+    }
+    closeContextTabNow(id, tab)
+  }
+
+  function pendingFileCloseTarget(
+    tab: ContextSidebarTab
+  ): { sidebarTabId: string; projectId: string; fileTabId: string; path: string } | null {
+    if (tab.kind !== 'files' || !tab.fileTabId) return null
+    try {
+      const fileState = projectFilesWorkspace.getState(tab.projectId)
+      const fileTab = fileState.tabs.find((candidate) => candidate.id === tab.fileTabId)
+      const session = fileTab ? fileState.sessions[fileTab.path] : undefined
+      if (!fileTab || !session || session.draft === session.source.content) return null
+      return {
+        sidebarTabId: tab.id,
+        projectId: tab.projectId,
+        fileTabId: tab.fileTabId,
+        path: fileTab.path
+      }
+    } catch {
+      return null
+    }
+  }
+
+  function closeContextTabNow(id: string, tab: ContextSidebarTab): void {
+    if (tab.kind === 'files' && tab.fileTabId) {
+      projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
+    }
     contextSidebarState.close(id)
-    if (tab?.kind === 'temporary-chat') {
+    if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
     }
+  }
+
+  async function saveAndCloseTab(): Promise<void> {
+    const target = closeTabTarget
+    if (!target) return
+    closeTabTarget = null
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === target.sidebarTabId)
+    if (!tab || tab.kind !== 'files') return
+    await projectFilesWorkspace.save(target.projectId, target.path)
+    closeContextTabNow(target.sidebarTabId, tab)
+  }
+
+  function discardCloseTab(): void {
+    const target = closeTabTarget
+    if (!target) return
+    closeTabTarget = null
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === target.sidebarTabId)
+    if (!tab || tab.kind !== 'files') return
+    closeContextTabNow(target.sidebarTabId, tab)
   }
 
   // ─── Derived ─────────────────────────────────────────────────────────────
@@ -573,7 +819,7 @@
   let pinnedThreads = $derived(
     allThreads
       .filter((t) => t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID)
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
   /** User-facing projects only — hidden ones (e.g. the chats inbox) stay out of the tree. */
@@ -607,11 +853,11 @@
     return map
   })
 
-  /** Pinned standalone chats (inbox project), sorted by activity. */
+  /** Pinned standalone chats (inbox project), ordered newest-pinned first. */
   let pinnedInboxThreads = $derived(
     allThreads
       .filter((t) => t.projectId === INBOX_PROJECT_ID && !t.archived && t.pinned)
-      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
   )
 
   /** Non-pinned standalone chats (inbox project), working first then by activity. */
@@ -621,17 +867,22 @@
       .sort((a, b) => threadSort(a, b, draftThreadKeys))
   )
 
-  /** Threads mode: all non-archived threads sorted by lastActivity descending, timeline-pinned first. */
-  let allThreadsFlat = $derived(
-    allThreads
-      .filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
-      .sort((a, b) => {
-        const aPinned = timelinePins.isPinned(a.id)
-        const bPinned = timelinePins.isPinned(b.id)
-        if (aPinned !== bPinned) return aPinned ? -1 : 1
-        return b.lastActivity - a.lastActivity
-      })
-  )
+  /** Threads mode: all active threads sorted by the selected mode, persisted pins first. */
+  let allThreadsFlat = $derived.by(() => {
+    const list = allThreads.filter((t) => !t.archived && t.projectId !== INBOX_PROJECT_ID)
+    // Pinned threads keep one shared pin-time order regardless of the sort mode;
+    // the chosen mode only applies to unpinned threads.
+    const pinned = list
+      .filter((t) => t.pinned)
+      .sort((a, b) => pinnedThreadSort(a, b, draftThreadKeys))
+    const unpinned = list.filter((t) => !t.pinned)
+    if (threadSortState.mode === 'status') {
+      unpinned.sort((a, b) => threadStatusSort(a, b, draftThreadKeys))
+    } else {
+      unpinned.sort((a, b) => b.lastActivity - a.lastActivity)
+    }
+    return [...pinned, ...unpinned]
+  })
 
   let recentThreads = $derived.by(() => {
     const availableThreads = allThreads.filter((thread) => !thread.archived)
@@ -667,8 +918,34 @@
     void ensureRecentScopeBoards(projectIds)
   })
 
-  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => timelinePins.isPinned(t.id)))
-  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((t) => !timelinePins.isPinned(t.id)))
+  let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
+  let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
+
+  async function migrateTimelinePins(): Promise<void> {
+    const key = `${APP_SLUG}.timelinePins.v1`
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) {
+        window.localStorage.removeItem(key)
+        return
+      }
+      const ids = new Set(parsed.filter((id): id is string => typeof id === 'string'))
+      const persistedThreads = await invoke('thread:listAll')
+      for (const thread of persistedThreads) {
+        if (!ids.has(thread.id) || thread.pinned || thread.archived) continue
+        const updated = await invoke('thread:setPinned', thread.projectId, thread.id, true)
+        upsertThreadInList(updated)
+        scopeState.updateThread(updated)
+        if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
+      }
+      window.localStorage.removeItem(key)
+    } catch {
+      // Keep the legacy IDs so a transient IPC/storage failure cannot remove
+      // cleanup protection before the persisted-pin migration succeeds.
+    }
+  }
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -676,7 +953,78 @@
     return getProjectIcon(project, projectIcons.get(project.id))
   }
 
+  const THREAD_SORT_OPTIONS: { id: ThreadSortMode; label: string }[] = [
+    { id: 'default', label: 'Default' },
+    { id: 'status', label: 'Status' },
+    { id: 'time', label: 'Time' }
+  ]
+
+  const threadSortLabel = $derived(
+    threadSortState.mode === 'status'
+      ? 'Sort by status'
+      : threadSortState.mode === 'time'
+        ? 'Sort by time'
+        : 'Default order'
+  )
+
+  function setThreadSortMode(id: ThreadSortMode): void {
+    threadSortState.setMode(id)
+  }
+
   // ─── Data loading ────────────────────────────────────────────────────────
+
+  /** Keep keyed sidebar rows safe even when hydration and live updates overlap. */
+  function uniqueThreadList(threads: Thread[]): Thread[] {
+    const seen = new SvelteSet<string>()
+    return threads.filter((thread) => {
+      if (seen.has(thread.id)) return false
+      seen.add(thread.id)
+      return true
+    })
+  }
+
+  /** Insert or refresh a thread in the sidebar list. The bounded hydration
+   *  query only loads recent threads, so a thread opened from the scope board
+   *  or history — or one the harness just started working on — must be added
+   *  on first sighting instead of silently dropped. */
+  function upsertThreadInList(thread: Thread): void {
+    const index = allThreads.findIndex((candidate) => candidate.id === thread.id)
+    if (index < 0) {
+      allThreads = [thread, ...allThreads]
+      return
+    }
+    const existing = allThreads[index]
+    const hasDuplicate = allThreads.some(
+      (candidate, candidateIndex) => candidateIndex !== index && candidate.id === thread.id
+    )
+    if (
+      !hasDuplicate &&
+      existing.updatedAt === thread.updatedAt &&
+      existing.lastActivity === thread.lastActivity &&
+      existing.status === thread.status &&
+      existing.title === thread.title &&
+      existing.pinned === thread.pinned &&
+      existing.read === thread.read
+    ) {
+      return
+    }
+    let replaced = false
+    allThreads = allThreads.flatMap((candidate) => {
+      if (candidate.id !== thread.id) return [candidate]
+      if (replaced) return []
+      replaced = true
+      return [thread]
+    })
+  }
+
+  // Any thread the user lands on (notification click, cache restore, scope
+  // board, switcher) must be visible in the regular sidebar even when it sits
+  // beyond the bounded recent hydration list — otherwise its row never appears
+  // and its live status transitions are lost.
+  $effect(() => {
+    const selected = workspaceState.selectedThread
+    if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
+  })
 
   // Live thread updates pushed from the main process (status/read changes
   // during agent runs) — keeps the sidebar indicators in sync without polling.
@@ -685,15 +1033,23 @@
   $effect(() => {
     return subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
-      if (!allThreads.some((t) => t.id === updated.id)) return
-      allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
       scopeState.updateThread(updated)
+      if (isOrchestrationChildThread(updated)) return
+      upsertThreadInList(updated)
       if (workspaceState.selectedThread?.id === updated.id) {
         workspaceState.updateThread(updated)
         if (!updated.read) {
           void invoke('thread:markRead', updated.projectId, updated.id)
         }
       }
+    })
+  })
+
+  $effect(() => {
+    return subscribe('thread:deleted', (_projectId, threadId) => {
+      allThreads = allThreads.filter((thread) => thread.id !== threadId)
+      scopeState.removeThread(threadId)
+      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
   })
 
@@ -730,10 +1086,15 @@
     }
   })
 
+  /** Whether the sidebar is showing the scope-board project view. That view has
+   *  its own per-stage lists and inner scrolling; the focus-follow reveal below
+   *  is only for the regular Projects/Threads/Chats views. */
+  let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
+
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
   // suppression; list changes re-reveal the row if background activity pushed
-  // it out of view.
+  // it out of view. The scope-board view is left untouched.
   $effect(() => {
     const thread = selectedThread
     if (!thread) return
@@ -744,6 +1105,11 @@
     if (thread.id !== lastFocusedThreadId) {
       lastFocusedThreadId = thread.id
       sidebarFocusSuppressed = false
+      // A deliberate selection of a new thread overrides the mode-switch
+      // suppression window so the chosen thread is always revealed, even right
+      // after navigating across sidebar modes.
+      sidebarRevealSuppressed = false
+      clearTimeout(sidebarRevealSuppressTimer)
       if (thread.projectId !== INBOX_PROJECT_ID) {
         expandedFolders.add(thread.projectId)
         // Ensure the folder shows enough rows for the focused thread so its
@@ -758,16 +1124,26 @@
         if (!sidebarRevealSuppressed) {
           void tick().then(() => revealThreadInSidebar(thread.id))
         }
+      } else if (!sidebarRevealSuppressed) {
+        // Standalone chats (inbox) have no folder to expand — reveal directly
+        // once the mode's list has rendered the row.
+        void tick().then(() => revealThreadInSidebar(thread.id))
       }
     }
     if (sidebarFocusSuppressed || sidebarRevealSuppressed) return
+    if (isScopeBoardView) return
     revealThreadInSidebar(thread.id)
   })
 
   // Keep the header icon in sync with the active project and icon cache.
+  // Reading activeProjectIconUrl also re-syncs after a thread switch: openThread
+  // resets the URL to null when the project has no custom icon, and switching
+  // between threads of the same project leaves activeProject unchanged, so this
+  // effect must re-run on the reset to restore the resolved fallback icon.
   $effect(() => {
     const project = workspaceState.activeProject
     if (project) {
+      void workspaceState.activeProjectIconUrl
       const storedUrl = projectIcons.get(project.id)
       workspaceState.setActiveProjectIconUrl(getProjectIcon(project, storedUrl))
     }
@@ -781,9 +1157,7 @@
       return
     }
     const projectThreads = allThreads.filter((t) => t.projectId === projectId && !t.archived)
-    const working = projectThreads.filter(
-      (t) => t.status === 'planning' || t.status === 'executing'
-    ).length
+    const working = projectThreads.filter((thread) => threadHasVisibleWork(thread)).length
     workspaceState.setActiveProjectStats(projectThreads.length, working)
   })
 
@@ -810,7 +1184,7 @@
     const newThread = workspaceState.pendingMoveThread
     if (count && oldId && newThread) {
       allThreads = allThreads.filter((t) => t.id !== oldId)
-      allThreads = [newThread, ...allThreads]
+      upsertThreadInList(newThread)
     }
   })
 
@@ -818,21 +1192,28 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listAll')
+        invoke('thread:listRecent', {
+          projectId: rendererRecovery.selectedProjectId ?? undefined,
+          limit: INITIAL_THREAD_LIMIT
+        })
       ])
       projects = projectList
-      allThreads = threadList
-      notificationPanelState.hydrateFromThreads(threadList)
+      const uniqueThreads = uniqueThreadList(threadList)
+      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      historyOffset = threadList.length
+      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      await migrateTimelinePins()
+      notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(threadList)
+      scopeState.setThreads(uniqueThreads)
       initExpandedFolders(projectList.filter((p) => !p.hidden))
       const saved = rendererRecovery.selectedThread
       const restoredThread = saved
-        ? threadList.find(
+        ? uniqueThreads.find(
             (candidate) =>
               candidate.id === saved.threadId &&
               candidate.projectId === saved.projectId &&
@@ -846,7 +1227,22 @@
         )
         void scopeState.ensureBoardLoaded(restoredThread.projectId)
       } else if (saved) {
-        rendererRecovery.clearSelectedThread()
+        // The saved thread may sit beyond the bounded recent hydration list
+        // (e.g. it was manually reordered below the cut). Fetch it directly so
+        // the workspace restores onto the same thread instead of clearing it.
+        try {
+          const savedThread = await invoke('thread:get', saved.projectId, saved.threadId)
+          const project = projectList.find((candidate) => candidate.id === saved.projectId) ?? null
+          if (savedThread && !savedThread.archived) {
+            upsertThreadInList(savedThread)
+            workspaceState.openThread(savedThread, project)
+            void scopeState.ensureBoardLoaded(saved.projectId)
+          } else {
+            rendererRecovery.clearSelectedThread()
+          }
+        } catch {
+          rendererRecovery.clearSelectedThread()
+        }
       }
 
       // Restore the last active project even without a thread
@@ -857,6 +1253,9 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
+      // App-start git check: async — the store ensures the GitHub connection
+      // before the PR indicator check runs, with or without a restored thread.
+      gitState.notifyAppStarted(workspaceState.activeProject)
     } catch {
       projects = []
       allThreads = []
@@ -875,17 +1274,23 @@
     try {
       const [projectList, threadList] = await Promise.all([
         invoke('project:list'),
-        invoke('thread:listAll')
+        invoke('thread:listRecent', {
+          projectId: workspaceState.activeProject?.id ?? undefined,
+          limit: INITIAL_THREAD_LIMIT
+        })
       ])
       projects = projectList
-      allThreads = threadList
-      notificationPanelState.hydrateFromThreads(threadList)
+      const uniqueThreads = uniqueThreadList(threadList)
+      allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
+      historyOffset = threadList.length
+      hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
+      notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
       }
       scopeState.setScopesFromProjects(projectList, projectIcons)
-      scopeState.setThreads(threadList)
+      scopeState.setThreads(uniqueThreads)
     } catch {
       // Non-fatal — keep the current lists on failure.
     }
@@ -899,6 +1304,34 @@
     }
     wasActive = nowActive
   })
+
+  /** Explicit timeline expansion. The initial shell intentionally carries
+   * only a bounded recent slice; older tasks remain paged and deduped. */
+  async function loadHistoryPage(): Promise<void> {
+    if (historyLoading || !hasMoreHistory) return
+    historyLoading = true
+    try {
+      const page = await invoke('thread:listHistoryPage', {
+        limit: HISTORY_PAGE_LIMIT,
+        offset: historyOffset
+      })
+      historyOffset += page.length
+      hasMoreHistory = page.length === HISTORY_PAGE_LIMIT
+      const uniqueCurrentThreads = uniqueThreadList(allThreads)
+      const known = new Set(uniqueCurrentThreads.map((thread) => thread.id))
+      const additions = uniqueThreadList(page).filter(
+        (thread) => !known.has(thread.id) && !isOrchestrationChildThread(thread)
+      )
+      for (const thread of page) {
+        if (!thread.archived) scopeState.updateThread(thread)
+      }
+      if (additions.length > 0 || uniqueCurrentThreads.length !== allThreads.length) {
+        allThreads = [...uniqueCurrentThreads, ...additions]
+      }
+    } finally {
+      historyLoading = false
+    }
+  }
 
   // ─── Folder interactions ─────────────────────────────────────────────────
 
@@ -924,6 +1357,8 @@
       // Still add an entry so the iconUrl check resolves correctly
       projectIcons.delete(project.id)
     }
+    // Land the user in a fresh thread with the new project selected.
+    await createThreadInProject(project)
   }
 
   function handleExistingProject(project: Project): void {
@@ -944,7 +1379,7 @@
     const project = projects.find((p) => p.id === projectId)
     if (!project?.path) return
     try {
-      await navigator.clipboard.writeText(project.path)
+      await copyText(project.path)
     } catch {
       // Clipboard not available
     }
@@ -1137,7 +1572,7 @@
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const orderedIds = projects.filter((p) => !p.hidden).map((p) => p.id)
+    const orderedIds = visibleProjects.map((p) => p.id)
     const fromIdx = orderedIds.indexOf(draggedId)
     const toIdx = orderedIds.indexOf(targetId)
     if (fromIdx === -1 || toIdx === -1) return
@@ -1162,19 +1597,112 @@
   ): Promise<void> {
     const projectThreads = allThreads
       .filter((t) => t.projectId === projectId && !t.archived && (includePinned || !t.pinned))
-      .map((t) => t.id)
-    const fromIdx = projectThreads.indexOf(draggedId)
-    const toIdx = projectThreads.indexOf(targetId)
+      .sort((a, b) => threadSort(a, b, draftThreadKeys))
+    const fromIdx = projectThreads.findIndex((t) => t.id === draggedId)
+    const toIdx = projectThreads.findIndex((t) => t.id === targetId)
     if (fromIdx === -1 || toIdx === -1) return
 
+    const dragged = projectThreads[fromIdx]
     projectThreads.splice(fromIdx, 1)
-    const adjustedTo = projectThreads.indexOf(targetId)
+    const adjustedTo = projectThreads.findIndex((t) => t.id === targetId)
     if (adjustedTo === -1) return
-    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, draggedId)
+    projectThreads.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, dragged)
 
-    const updated = await invoke('thread:reorder', projectId, projectThreads)
+    // Assign a "frozen recency" anchor between the dragged thread's new
+    // neighbours' effective keys, so it holds position while newer activity
+    // can still bubble above it. The dragged thread's index in the new list is
+    // where its anchor must sit.
+    const idx = projectThreads.findIndex((t) => t.id === draggedId)
+    const above = projectThreads[idx - 1]
+    const below = projectThreads[idx + 1]
+    const aboveKey = above ? (above.sortOrder ?? above.lastActivity) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? (below.sortOrder ?? below.lastActivity) : 0
+    let sortOrder: number
+    if (above && below) {
+      sortOrder = (aboveKey + belowKey) / 2
+    } else if (above) {
+      sortOrder = Math.max(aboveKey - 1, 0)
+    } else if (below) {
+      sortOrder = belowKey + 1
+    } else {
+      sortOrder = Date.now()
+    }
+
+    // Optimistic: anchor immediately so the sidebar reorders on drop.
+    allThreads = allThreads.map((t) => (t.id === draggedId ? { ...t, sortOrder } : t))
+    const persisted = await invoke('thread:setSortOrder', projectId, draggedId, sortOrder)
+    upsertThreadInList(persisted)
+  }
+
+  /**
+   * Manual reorder of a project's pinned threads. Rewrites pinned_at so the
+   * first thread is most-recently pinned (top), applied optimistically so the
+   * section reorders the moment the user drops. This is the only thing that
+   * changes pin order.
+   */
+  async function handlePinnedThreadMove(
+    projectId: string,
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    const pinnedIds = pinnedThreads.filter((t) => t.projectId === projectId).map((t) => t.id)
+    const fromIdx = pinnedIds.indexOf(draggedId)
+    const toIdx = pinnedIds.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) return
+
+    pinnedIds.splice(fromIdx, 1)
+    const adjustedTo = pinnedIds.indexOf(targetId)
+    if (adjustedTo === -1) return
+    pinnedIds.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, draggedId)
+
+    // Optimistic: assign new pinned_at immediately so the pinned section
+    // reorders on drop, before the persisted result returns.
+    const base = Date.now()
+    allThreads = allThreads.map((t) => {
+      const index = t.pinned && t.projectId === projectId ? pinnedIds.indexOf(t.id) : -1
+      return index !== -1 ? { ...t, pinnedAt: base - index } : t
+    })
+
+    const updated = await invoke('thread:reorderPinned', projectId, pinnedIds)
     for (const t of updated) {
-      allThreads = allThreads.map((th) => (th.id === t.id ? t : th))
+      upsertThreadInList(t)
+    }
+  }
+
+  /**
+   * Manual reorder of the global pinned section in Threads view. Rewrites
+   * pinned_at across every project so the first thread is most-recently
+   * pinned, applied optimistically so the section reorders the moment the
+   * user drops. This is the only thing that changes pin order.
+   */
+  async function handleTimelinePinnedMove(
+    draggedId: string,
+    targetId: string,
+    position: 'before' | 'after'
+  ): Promise<void> {
+    const pinnedIds = pinnedTimelineThreads.map((t) => t.id)
+    const fromIdx = pinnedIds.indexOf(draggedId)
+    const toIdx = pinnedIds.indexOf(targetId)
+    if (fromIdx === -1 || toIdx === -1) return
+
+    pinnedIds.splice(fromIdx, 1)
+    const adjustedTo = pinnedIds.indexOf(targetId)
+    if (adjustedTo === -1) return
+    pinnedIds.splice(position === 'before' ? adjustedTo : adjustedTo + 1, 0, draggedId)
+
+    // Optimistic: assign new pinned_at immediately so the pinned section
+    // reorders on drop, before the persisted result returns.
+    const base = Date.now()
+    allThreads = allThreads.map((t) => {
+      const index =
+        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID ? pinnedIds.indexOf(t.id) : -1
+      return index !== -1 ? { ...t, pinnedAt: base - index } : t
+    })
+
+    const updated = await invoke('thread:reorderPinnedGlobal', pinnedIds)
+    for (const t of updated) {
+      upsertThreadInList(t)
     }
   }
 
@@ -1202,7 +1730,7 @@
       settings: { ...threadSettings.lastUsed },
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
-    allThreads = [thread, ...allThreads]
+    upsertThreadInList(thread)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
       scopeState.updateThread(thread)
@@ -1224,33 +1752,54 @@
     const msg = message.trim()
     if (!msg && files.length === 0) return
 
-    const inbox = await invoke('project:ensureInbox')
-    const thread = await invoke('thread:create', {
-      projectId: inbox.id,
-      providerId: 'opencode',
-      title: DEFAULT_THREAD_TITLE,
-      workingDirectory: '',
-      settings: { ...threadSettings.lastUsed, engineeringMode: false }
-    })
-    allThreads = [thread, ...allThreads]
-    chatDraft.message = msg
-    chatDraft.attachments = files
-    workspaceState.openThread(thread, inbox)
+    try {
+      const inbox = await invoke('project:ensureInbox')
+      const thread = await invoke('thread:create', {
+        projectId: inbox.id,
+        providerId: 'opencode',
+        title: DEFAULT_THREAD_TITLE,
+        workingDirectory: '',
+        settings: chatEffectiveSettings()
+      })
+      upsertThreadInList(thread)
+      chatDraft.message = msg
+      chatDraft.attachments = files
+      workspaceState.openThread(thread, inbox)
+    } catch (error) {
+      // The thread was never created, so the message cannot appear anywhere.
+      // Put it back in the composer so the user doesn't lose their first message.
+      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', msg, files)
+      chatsComposerRestoreKey += 1
+      reportError(error, 'The chat could not be started.')
+    }
   }
 
   async function openThread(thread: Thread): Promise<void> {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
+    // Reveal immediately (guaranteed even if the markRead round-trip is slow),
+    // and again once the list re-sorts from the updated activity.
+    revealThreadInSidebar(thread.id)
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     workspaceState.updateThread(updated)
     scopeState.updateThread(updated)
+    revealThreadInSidebar(thread.id)
   }
 
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
     await openThread(thread)
+    // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
+    // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
+    // window and restores the incoming mode's saved scroll, which would keep the
+    // chosen thread out of view. Cancel that suppression and reveal the row once
+    // the restore + folder expansion have settled.
+    sidebarRevealSuppressed = false
+    clearTimeout(sidebarRevealSuppressTimer)
+    if (thread.projectId !== INBOX_PROJECT_ID) expandedFolders.add(thread.projectId)
+    void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
   async function openProjectFileFromCommand(projectId: string, path: string): Promise<void> {
@@ -1317,13 +1866,13 @@
       title: newName,
       titleSource: 'manual'
     })
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     workspaceState.updateThread(updated)
   }
 
   async function togglePin(thread: Thread): Promise<void> {
     const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
-    allThreads = allThreads.map((t) => (t.id === updated.id ? updated : t))
+    upsertThreadInList(updated)
     scopeState.updateThread(updated)
     workspaceState.updateThread(updated)
   }
@@ -1342,7 +1891,7 @@
       thread.id,
       `${thread.title} (fork)`
     )
-    allThreads = [forked, ...allThreads]
+    upsertThreadInList(forked)
     scopeState.updateThread(forked)
     if (scopeState.sidebarContext?.projectId === forked.projectId) {
       scopeState.showSidebarForThread(forked, scopeState.sidebarContext.bucketId)
@@ -1352,8 +1901,50 @@
 
   /** A message-level fork succeeded inside the thread view — surface and open it. */
   function handleForkedThread(forked: Thread): void {
-    allThreads = [forked, ...allThreads]
+    upsertThreadInList(forked)
     workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
+  /** A chat was continued into a project — register the thread and open it there. */
+  function handleContinuedInProject(forked: Thread): void {
+    upsertThreadInList(forked)
+    scopeState.updateThread(forked)
+    if (forked.projectId === INBOX_PROJECT_ID) navigate('chats')
+    else if (mode === 'chats') navigate('projects')
+    workspaceState.openThread(forked, projects.find((p) => p.id === forked.projectId) ?? null)
+  }
+
+  /** Register a freshly added project without landing in a new thread — used by
+   *  the continue-chat-in-project flow which creates its own thread. */
+  async function handleChatProjectCreated(project: Project): Promise<void> {
+    projects = [project, ...projects]
+    expandedFolders.add(project.id)
+    if (project.icon) {
+      const url = await invoke('project:getIcon', project.id)
+      if (url) projectIcons.set(project.id, url)
+    } else {
+      projectIcons.delete(project.id)
+    }
+  }
+
+  /**
+   * Promote a side chat (quick chat) into a regular thread: the conversation
+   * is persisted as a new thread and opened so the user can keep prompting.
+   */
+  async function handleContinueInThread(tab: TemporaryChatContextTab): Promise<void> {
+    const converted = await invoke(
+      'temporary-chat:convertToThread',
+      tab.projectId,
+      tab.threadId,
+      tab.temporaryChatId,
+      tab.settings
+    )
+    contextSidebarState.close(tab.id)
+    upsertThreadInList(converted)
+    scopeState.updateThread(converted)
+    if (converted.projectId === INBOX_PROJECT_ID) navigate('chats')
+    else if (mode === 'chats') navigate('projects')
+    workspaceState.openThread(converted, projects.find((p) => p.id === converted.projectId) ?? null)
   }
 
   loadData()
@@ -1400,6 +1991,45 @@
           </div>
         {:else if mode === 'threads'}
           <div class="flex items-center gap-0.5">
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 w-6 items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {threadSortState.mode ===
+                'default'
+                  ? 'text-muted'
+                  : 'text-primary'}"
+                aria-label="Sort threads"
+                title="Sort threads — {threadSortLabel}"
+              >
+                <ArrowUpDown size={14} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={6}
+                  collisionPadding={8}
+                  class="z-50 w-44 overflow-hidden rounded-md border bg-surface p-1 shadow-lg"
+                >
+                  {#each THREAD_SORT_OPTIONS as option (option.id)}
+                    {@const isSelected = threadSortState.mode === option.id}
+                    <DropdownMenu.Item
+                      class={[
+                        'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+                        isSelected
+                          ? 'text-foreground'
+                          : 'text-muted hover:bg-elevated focus:bg-elevated'
+                      ]}
+                      onSelect={() => setThreadSortMode(option.id)}
+                    >
+                      <span class="flex-1 truncate">{option.label}</span>
+                      {#if isSelected}
+                        <Check size={14} class="text-primary" />
+                      {/if}
+                    </DropdownMenu.Item>
+                  {/each}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
             {#if activeProject}
               <button
                 class="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -1410,12 +2040,18 @@
                 <Plus size={14} />
               </button>
             {/if}
-            <ThreadSearchControl
-              threads={allThreads.filter((t) => t.projectId !== INBOX_PROJECT_ID)}
-              contextLabel="threads"
+            <SidebarSearchControl
+              open={threadsSearchOpen}
+              query={threadsSearchQuery}
+              onOpenChange={(open) => {
+                if (open) openThreadsSearch()
+                else closeThreadsSearch()
+              }}
+              onQueryChange={runThreadsSearch}
+              ariaLabel="Search threads"
               title="Search threads"
-              onOpen={openThread}
-              fts={{ filter: (t) => t.projectId !== INBOX_PROJECT_ID && !t.archived }}
+              placeholder="Search threads…"
+              size="md"
             />
           </div>
         {:else}
@@ -1439,82 +2075,7 @@
 
       {#snippet footer()}
         {#if !workspaceState.specStudioOpen}
-          <div class="flex items-center gap-1 px-2 py-1.5">
-            <button
-              class="flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Open settings (⌘,)"
-              onclick={() => navigate('settings')}
-            >
-              <Settings size={14} />
-              Settings
-            </button>
-
-            <!-- Update indicator pill -->
-            {#if updaterState.status.canAutoUpdate}
-              {#if updaterState.status.state === 'checking'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-dimmed"
-                  disabled
-                  title="Checking for updates"
-                >
-                  <Loader2 size={12} class="animate-spin" />
-                </button>
-              {:else if updaterState.status.state === 'available'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-primary transition-colors hover:bg-elevated"
-                  title="Update {updaterState.status
-                    .availableVersion} available — click to download"
-                  onclick={() => void updaterState.downloadUpdate()}
-                >
-                  <Download size={12} />
-                </button>
-              {:else if updaterState.status.state === 'downloading'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted"
-                  disabled
-                  title="Downloading… {updaterState.status.downloadProgress}%"
-                >
-                  <Loader2 size={12} class="animate-spin" />
-                  <span class="tabular-nums">{updaterState.status.downloadProgress}%</span>
-                </button>
-              {:else if updaterState.status.state === 'downloaded'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-primary transition-colors hover:bg-elevated"
-                  title="Update ready — click to restart and install"
-                  onclick={() => void updaterState.installUpdate()}
-                >
-                  <RefreshCw size={12} />
-                </button>
-              {:else if updaterState.status.state === 'waiting'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-accent"
-                  disabled
-                  title="Waiting for {updaterState.waitingForThreads} active thread{updaterState.waitingForThreads !==
-                  1
-                    ? 's'
-                    : ''} to finish"
-                >
-                  <Clock size={12} />
-                </button>
-              {:else if updaterState.status.state === 'error'}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-danger"
-                  title="Update error: {updaterState.status.errorMessage}"
-                  onclick={() => navigate('settings')}
-                >
-                  <AlertCircle size={12} />
-                </button>
-              {:else}
-                <button
-                  class="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-dimmed"
-                  title="Up to date"
-                  onclick={() => navigate('settings')}
-                >
-                  <CheckCircle2 size={12} />
-                </button>
-              {/if}
-            {/if}
-          </div>
+          <SidebarAccountControls {active} {navigate} />
         {/if}
       {/snippet}
 
@@ -1731,6 +2292,7 @@
                       {thread}
                       selected={selectedThread?.id === thread.id}
                       compact
+                      hideScope
                       onOpen={openScopedThread}
                       onRename={handleRename}
                       onTogglePin={togglePin}
@@ -1803,51 +2365,80 @@
           {/if}
         </div>
         <div class={mode === 'threads' ? '' : 'hidden'}>
-          <!-- Threads mode: pinned section then flat list -->
-          {#if pinnedTimelineThreads.length > 0}
-            <div class="mb-3 pb-3 border-b">
-              <div class="flex items-center gap-1.5 px-2 py-1.5">
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                  >Pinned</span
-                >
-              </div>
+          {#if threadsSearchOpen && threadsSearchQuery.trim()}
+            <!-- Threads search: results render inline in the sidebar so the user
+                 can open several results without the search dismissing. -->
+            {#if threadsSearching && threadsSearchResults.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">Searching…</p>
+            {:else if threadsSearchResults.length === 0}
+              <p class="px-2 py-6 text-center text-xs text-dimmed">No matching threads</p>
+            {:else}
               <div class="space-y-px" role="list">
-                {#each pinnedTimelineThreads as thread (thread.id)}
-                  <ThreadRow
-                    {thread}
-                    compact
-                    projectIconUrl={getThreadIcon(thread)}
-                    selected={selectedThread?.id === thread.id}
-                    pinnedOverride={true}
+                {#each threadsSearchResults as result (result.thread.id)}
+                  <ThreadSearchResultRow
+                    {result}
+                    selected={selectedThread?.id === result.thread.id}
                     onOpen={openThread}
-                    onRename={handleRename}
-                    onTogglePin={() => timelinePins.toggle(thread.id)}
-                    onDelete={handleDelete}
-                    onFork={forkThread}
                   />
                 {/each}
               </div>
-            </div>
-          {/if}
-          <div class="space-y-px" role="list">
-            {#each unpinnedTimelineThreads as thread (thread.id)}
-              <ThreadRow
-                {thread}
-                projectIconUrl={getThreadIcon(thread)}
-                selected={selectedThread?.id === thread.id}
-                pinnedOverride={timelinePins.isPinned(thread.id)}
-                onOpen={openThread}
-                onRename={handleRename}
-                onTogglePin={() => timelinePins.toggle(thread.id)}
-                onDelete={handleDelete}
-                onFork={forkThread}
-              />
-            {:else}
-              <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-                <p class="text-xs text-muted">No threads yet</p>
+            {/if}
+          {:else}
+            <!-- Threads mode: pinned section then flat list -->
+            {#if pinnedTimelineThreads.length > 0}
+              <div class="mb-3 pb-3 border-b">
+                <div class="flex items-center gap-1.5 px-2 py-1.5">
+                  <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                    >Pinned</span
+                  >
+                </div>
+                <div class="space-y-px" role="list">
+                  {#each pinnedTimelineThreads as thread (thread.id)}
+                    <ThreadRow
+                      {thread}
+                      compact
+                      projectIconUrl={getThreadIcon(thread)}
+                      selected={selectedThread?.id === thread.id}
+                      onOpen={openThread}
+                      onRename={handleRename}
+                      onTogglePin={togglePin}
+                      onDelete={handleDelete}
+                      onFork={forkThread}
+                      onMoveThread={(draggedId, targetId, pos) =>
+                        handleTimelinePinnedMove(draggedId, targetId, pos)}
+                    />
+                  {/each}
+                </div>
               </div>
-            {/each}
-          </div>
+            {/if}
+            <div class="space-y-px" role="list">
+              {#each unpinnedTimelineThreads as thread (thread.id)}
+                <ThreadRow
+                  {thread}
+                  projectIconUrl={getThreadIcon(thread)}
+                  selected={selectedThread?.id === thread.id}
+                  onOpen={openThread}
+                  onRename={handleRename}
+                  onTogglePin={togglePin}
+                  onDelete={handleDelete}
+                  onFork={forkThread}
+                />
+              {:else}
+                <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
+                  <p class="text-xs text-muted">No threads yet</p>
+                </div>
+              {/each}
+            </div>
+            {#if hasMoreHistory}
+              <button
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+                disabled={historyLoading}
+                onclick={() => void loadHistoryPage()}
+              >
+                {historyLoading ? 'Loading history…' : 'Load older threads'}
+              </button>
+            {/if}
+          {/if}
         </div>
         <div class={mode === 'projects' ? '' : 'hidden'}>
           <!-- Pinned threads above everything -->
@@ -1861,7 +2452,7 @@
             onDelete={handleDelete}
             onFork={forkThread}
             onMovePinnedThread={(projectId, draggedId, targetId, pos) =>
-              handleThreadMove(projectId, draggedId, targetId, pos, true)}
+              handlePinnedThreadMove(projectId, draggedId, targetId, pos)}
           />
 
           <!-- Pinned projects -->
@@ -1877,9 +2468,7 @@
                   {@const folderThreads = threadsByProject.get(project.id) ?? []}
                   {@const expanded =
                     expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                  {@const working = folderThreads.some(
-                    (t) => t.status === 'planning' || t.status === 'executing'
-                  )}
+                  {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
                   <DropdownMenu.Root
                     open={openProjectMenuId === project.id}
                     onOpenChange={(o) => {
@@ -1903,19 +2492,20 @@
                       >
                         {#snippet actions()}
                           <span class="flex shrink-0 items-center gap-0.5">
-                            <ProjectSearchDropdown
-                              projectId={project.id}
-                              projectName={project.name}
+                            <SidebarSearchControl
                               open={projectSearchOpen.has(project.id)}
                               query={projectSearchQueries.get(project.id) ?? ''}
                               onOpenChange={(open) => {
                                 if (open) openProjectSearch(project.id)
                                 else closeProjectSearch(project.id)
                               }}
-                              onQueryChange={(id, value) => {
-                                projectSearchQueries.set(id, value)
-                                runProjectSearch(id, value)
+                              onQueryChange={(value) => {
+                                projectSearchQueries.set(project.id, value)
+                                runProjectSearch(project.id, value)
                               }}
+                              ariaLabel="Search threads in {project.name}"
+                              title="Search threads"
+                              placeholder="Search threads in {project.name}…"
                             />
                             <button
                               class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -2078,9 +2668,7 @@
                 {@const folderThreads = threadsByProject.get(project.id) ?? []}
                 {@const expanded =
                   expandedFolders.has(project.id) || projectSearchOpen.has(project.id)}
-                {@const working = folderThreads.some(
-                  (t) => t.status === 'planning' || t.status === 'executing'
-                )}
+                {@const working = folderThreads.some((thread) => threadHasVisibleWork(thread))}
                 <DropdownMenu.Root
                   open={openProjectMenuId === project.id}
                   onOpenChange={(o) => {
@@ -2104,19 +2692,20 @@
                     >
                       {#snippet actions()}
                         <span class="flex shrink-0 items-center gap-0.5">
-                          <ProjectSearchDropdown
-                            projectId={project.id}
-                            projectName={project.name}
+                          <SidebarSearchControl
                             open={projectSearchOpen.has(project.id)}
                             query={projectSearchQueries.get(project.id) ?? ''}
                             onOpenChange={(open) => {
                               if (open) openProjectSearch(project.id)
                               else closeProjectSearch(project.id)
                             }}
-                            onQueryChange={(id, value) => {
-                              projectSearchQueries.set(id, value)
-                              runProjectSearch(id, value)
+                            onQueryChange={(value) => {
+                              projectSearchQueries.set(project.id, value)
+                              runProjectSearch(project.id, value)
                             }}
+                            ariaLabel="Search threads in {project.name}"
+                            title="Search threads"
+                            placeholder="Search threads in {project.name}…"
                           />
                           <button
                             class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
@@ -2278,7 +2867,7 @@
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
-      <div class="min-w-0 flex-1 overflow-hidden">
+      <div class="min-h-0 min-w-0 overflow-hidden" style:grid-column="1" style:grid-row="1">
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}
@@ -2286,6 +2875,10 @@
                 thread={selectedThread}
                 chatMode={mode === 'chats'}
                 onForked={handleForkedThread}
+                projects={visibleProjects}
+                {projectIcons}
+                onContinueInProject={handleContinuedInProject}
+                onProjectCreated={handleChatProjectCreated}
               />
             {/key}
           </div>
@@ -2301,26 +2894,58 @@
             </div>
             <div class="shrink-0 px-6 pb-6">
               <div class="mx-auto w-full max-w-2xl">
-                <ChatComposer
-                  placeholder="What do you want to work on?"
-                  autofocus
-                  showEngineeringMode={false}
-                  showChatModes
-                  settings={threadSettings.lastUsed}
-                  onSettingsChange={(settings) => threadSettings.commit(settings)}
-                  providers={chatProviders}
-                  projectId={chatInboxId}
-                  harnessId={threadSettings.lastUsed.harnessId}
-                  favoriteModels={rendererRecovery.favoriteModels}
-                  onToggleFavorite={(providerId, modelId) =>
-                    rendererRecovery.toggleFavorite(`${providerId}:${modelId}`)}
-                  recentModels={rendererRecovery.recentModels}
-                  onModelUsed={(modelKey) => rendererRecovery.addRecentModel(modelKey)}
-                  initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
-                  onValueChange={(value) =>
-                    rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
-                  onSend={(msg, files) => void createStandaloneChat(msg, files)}
-                />
+                {#key chatsComposerRestoreKey}
+                  <ChatComposer
+                    placeholder="What do you want to work on?"
+                    autofocus
+                    showEngineeringMode={false}
+                    showChatModes
+                    hidePermissionSelector
+                    settings={chatComposerSettings}
+                    onSettingsChange={(settings) => chatSettings.commit(settings)}
+                    providers={chatProviders}
+                    projectId={chatInboxId}
+                    attachmentStorage={{
+                      kind: 'chat',
+                      projectId: INBOX_PROJECT_ID,
+                      threadId: 'new-chat'
+                    }}
+                    harnessId={chatComposerSettings.harnessId}
+                    favoriteModels={rendererRecovery.chatFavoriteModels}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+                    recentModels={rendererRecovery.chatRecentModels}
+                    onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+                    imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
+                    imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}
+                    onImageDescriptorDefaultChange={(selection) =>
+                      void updateConfig?.({
+                        agentDefaults: {
+                          ...(config?.agentDefaults ?? { syncFromThreadChanges: false }),
+                          imageDescriptor: selection
+                        }
+                      })}
+                    onImageDescriptorAskAgainChange={(value) =>
+                      void updateConfig?.({ imageDescriptorAskAgain: value })}
+                    initialValue={rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat')}
+                    onValueChange={(value) =>
+                      rendererRecovery.setDraft(INBOX_PROJECT_ID, 'new-chat', value)}
+                    initialAttachments={rendererRecovery.attachmentsFor(
+                      INBOX_PROJECT_ID,
+                      'new-chat'
+                    )}
+                    onAttachmentsChange={(files) =>
+                      rendererRecovery.setDraft(
+                        INBOX_PROJECT_ID,
+                        'new-chat',
+                        rendererRecovery.draftFor(INBOX_PROJECT_ID, 'new-chat'),
+                        files
+                      )}
+                    onSend={(msg, files) => void createStandaloneChat(msg, files)}
+                  />
+                {/key}
               </div>
             </div>
           </div>
@@ -2334,9 +2959,9 @@
         {/if}
       </div>
 
-      {#if contextSidebarState.visible}
+      {#if sidebarVisible}
         {#snippet contextSidebarContent()}
-          {@const activeContextTab = contextSidebarState.activeTab}
+          {@const activeContextTab = contextSidebarState.sidebarActiveTab}
           {#if activeContextTab}
             {#key activeContextTab.id}
               {#if activeContextTab.kind === 'files'}
@@ -2350,7 +2975,6 @@
               {:else if activeContextTab.kind === 'diff'}
                 <DiffSidebarPanel
                   projectId={activeContextTab.projectId}
-                  projectName={activeProject?.name ?? 'Project'}
                   threadId={activeContextTab.threadId}
                   checkpointId={activeContextTab.checkpointId}
                 />
@@ -2373,8 +2997,25 @@
                   projectId={activeContextTab.projectId}
                   threadId={activeContextTab.threadId}
                 />
+              {:else if activeContextTab.kind === 'git'}
+                {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+                  <GitStatusPanel
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
+              {:else if activeContextTab.kind === 'cloud-deployment'}
+                {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
+                  <CloudDeploymentPanel
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
-                <TemporaryChatView tab={activeContextTab} />
+                <TemporaryChatView
+                  tab={activeContextTab}
+                  onContinueInThread={handleContinueInThread}
+                />
               {:else if activeContextTab.kind === 'notifications'}
                 <NotificationPanel />
               {:else if activeContextTab.kind === 'memory'}
@@ -2390,24 +3031,60 @@
             {/key}
           {/if}
         {/snippet}
-        <ContextSidebar
-          tabs={contextSidebarState.tabs}
-          activeTabId={contextSidebarState.activeTabId}
-          width={contextSidebarState.width}
-          height={contextSidebarState.terminalHeight}
-          placement={terminalDockedBottom ? 'bottom' : 'right'}
-          content={contextSidebarContent}
-          actions={sidebarActions}
-          onSelect={(id) => contextSidebarState.focus(id)}
-          onClose={closeContextTab}
-          onFullscreenTab={openTabFullscreen}
-          onMoveTab={(id, targetId, position) =>
-            contextSidebarState.reorder(id, targetId, position)}
-          onWidthChange={(width) => contextSidebarState.setWidth(width)}
-          onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
-          onTerminalPlacementChange={(placement) =>
-            contextSidebarState.setTerminalPlacement(placement)}
-        />
+        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+          <ContextSidebar
+            tabs={contextSidebarState.sidebarTabs}
+            activeTabId={contextSidebarState.sidebarActiveTabId}
+            width={contextSidebarState.width}
+            height={contextSidebarState.terminalHeight}
+            placement="right"
+            content={contextSidebarContent}
+            actions={sidebarActions}
+            hideAddButton={mode === 'chats'}
+            onSelect={(id) => contextSidebarState.focus(id)}
+            onClose={closeContextTab}
+            onFullscreenTab={openTabFullscreen}
+            onMoveTab={(id, targetId, position) =>
+              contextSidebarState.reorder(id, targetId, position)}
+            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+            onTerminalPlacementChange={(placement) =>
+              contextSidebarState.setTerminalPlacement(placement)}
+          />
+        </div>
+      {/if}
+      {#if terminalDockVisible}
+        {#snippet terminalDockContent()}
+          {@const activeDockTab = contextSidebarState.terminalActiveTab}
+          {#if activeDockTab}
+            {#key activeDockTab.id}
+              <TerminalPanel
+                terminalId={activeDockTab.terminalId}
+                projectId={activeDockTab.projectId}
+              />
+            {/key}
+          {/if}
+        {/snippet}
+        <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
+          <ContextSidebar
+            tabs={contextSidebarState.terminalTabs}
+            activeTabId={contextSidebarState.terminalActiveTabId}
+            width={contextSidebarState.width}
+            height={contextSidebarState.terminalHeight}
+            placement="bottom"
+            content={terminalDockContent}
+            actions={terminalDockActions}
+            onSelect={(id) => contextSidebarState.focus(id)}
+            onClose={closeContextTab}
+            onFullscreenTab={openTabFullscreen}
+            onMoveTab={(id, targetId, position) =>
+              contextSidebarState.reorder(id, targetId, position)}
+            onWidthChange={(width) => contextSidebarState.setWidth(width)}
+            onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
+            onTerminalPlacementChange={(placement) =>
+              contextSidebarState.setTerminalPlacement(placement)}
+          />
+        </div>
       {/if}
     </div>
   </section>
@@ -2665,7 +3342,8 @@
           onEscapeKeydown={(e) => e.preventDefault()}
         >
           <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3 pl-24"
+            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+            style={trafficLightInsetStyle()}
           >
             <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {terminalTab.title}
@@ -2685,3 +3363,42 @@
     </Dialog.Root>
   {/if}
 {/if}
+
+<!-- Closing a files tab with unsaved changes -->
+<Dialog.Root bind:open={() => closeTabTarget !== null, (open) => !open && (closeTabTarget = null)}>
+  <Dialog.Portal>
+    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+    <Dialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <Dialog.Title class="text-sm font-semibold text-foreground">Unsaved changes</Dialog.Title>
+      <Dialog.Description class="mt-2 text-xs leading-5 text-muted">
+        <span class="font-mono text-foreground">{closeTabTarget?.path}</span> has unsaved changes. Save
+        them before closing the tab?
+      </Dialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <Dialog.Close
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </Dialog.Close>
+        <button
+          type="button"
+          class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          title="Close the tab and discard unsaved changes"
+          onclick={discardCloseTab}
+        >
+          Discard changes
+        </button>
+        <button
+          type="button"
+          class="h-8 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          title="Save the file and close the tab"
+          onclick={() => void saveAndCloseTab()}
+        >
+          Save &amp; close
+        </button>
+      </div>
+    </Dialog.Content>
+  </Dialog.Portal>
+</Dialog.Root>

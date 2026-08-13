@@ -28,3 +28,45 @@ export const STANDARD_THINKING_PRESETS: ThinkingPreset[] = [
 
 /** Default reasoning effort applied when the thread has no explicit choice. */
 export const DEFAULT_THINKING_LEVEL: ThinkingLevel = 'medium'
+
+/** Thinking levels ordered from lowest to highest reasoning effort. */
+export const THINKING_LEVEL_ORDER: readonly ThinkingLevel[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra'
+]
+
+/**
+ * Resolve the thinking level applied when a model is first selected.
+ *
+ * The previously used thinking level is inherited whenever the newly selected
+ * model still offers it — that keeps continuity for the same model and for
+ * models that share its reasoning levels. Only when the last-used level is not
+ * offered does the model's explicitly declared `defaultThinkingLevel` apply,
+ * and as a final fallback the lowest preset the model offers is used, so a
+ * switch never leaves a stale level the new model doesn't support. Models with
+ * no presets yield `undefined` and leave the current level untouched.
+ */
+export function resolveDefaultThinkingLevel(
+  thinkingPresets: ThinkingPreset[] | undefined,
+  defaultThinkingLevel: ThinkingLevel | undefined,
+  previousThinkingLevel?: ThinkingLevel
+): ThinkingLevel | undefined {
+  const presets = thinkingPresets ?? []
+  if (previousThinkingLevel && presets.some((preset) => preset.id === previousThinkingLevel)) {
+    return previousThinkingLevel
+  }
+  if (defaultThinkingLevel) return defaultThinkingLevel
+  if (presets.length === 0) return undefined
+  let lowest = presets[0]
+  for (const preset of presets) {
+    const index = THINKING_LEVEL_ORDER.indexOf(preset.id as ThinkingLevel)
+    const lowestIndex = THINKING_LEVEL_ORDER.indexOf(lowest.id as ThinkingLevel)
+    if (index !== -1 && (lowestIndex === -1 || index < lowestIndex)) lowest = preset
+  }
+  return lowest.id as ThinkingLevel
+}

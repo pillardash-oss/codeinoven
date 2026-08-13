@@ -2,7 +2,7 @@ name: Nightly
 
 on:
   schedule:
-    - cron: "0 4 * * *"
+    - cron: '0 4 * * *'
   push:
     branches:
       - nightly
@@ -20,6 +20,9 @@ jobs:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,16 +32,19 @@ jobs:
             target: mac
             arch: --arm64
             artifact: mac-arm64
+            app_dir: dist/mac-arm64
           - name: Windows (x64)
             os: windows-latest
             target: win
             arch: --x64
             artifact: win-x64
+            app_dir: dist/win-unpacked
           - name: Linux (x64)
             os: ubuntu-latest
             target: linux
             arch: --x64
             artifact: linux-x64
+            app_dir: dist/linux-unpacked
 
     steps:
       - name: Check out repository
@@ -64,16 +70,31 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          flags=()
-          if [ -z "$CSC_LINK" ]; then
-            flags+=(-c.forceCodeSigning=false)
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
+            exit 1
           fi
           if [ "${{ matrix.target }}" = "mac" ]; then
-            if [ -z "$APPLE_ID" ]; then
-              flags+=(-c.mac.identity=null -c.mac.notarize=false)
+            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
+              exit 1
             fi
           fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly "${flags[@]}"
+          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly -c.forceCodeSigning=true
+
+      - name: Verify packaged artifacts
+        run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
+
+      - name: Launch packaged application through workspace readiness
+        shell: bash
+        run: |
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          if [ "${{ matrix.target }}" = "linux" ]; then
+            xvfb-run -a "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -86,6 +107,7 @@ jobs:
             dist/*.deb
             dist/*.blockmap
             dist/latest*.yml
+            agent-out/startup-smoke-*.json
           if-no-files-found: error
 
   publish:

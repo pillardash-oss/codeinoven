@@ -13,6 +13,19 @@
   }
 
   let { entries, activeIndex, query, onSelect }: Props = $props()
+  let listboxElement: HTMLDivElement
+
+  $effect(() => {
+    const selectedIndex = activeIndex
+    const entryCount = entries.length
+    const frame = requestAnimationFrame(() => {
+      if (selectedIndex < 0 || selectedIndex >= entryCount) return
+      listboxElement
+        ?.querySelector<HTMLElement>('[aria-selected="true"]')
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
+    return () => cancelAnimationFrame(frame)
+  })
 
   function parentPath(entry: ProjectFileEntry): string {
     const separator = entry.path.lastIndexOf('/')
@@ -25,6 +38,7 @@
 </script>
 
 <div
+  bind:this={listboxElement}
   class="absolute bottom-full left-3 right-3 z-40 mb-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-lg"
   role="listbox"
   aria-label="Composer references"
@@ -65,11 +79,9 @@
             </span>
           {:else}
             <span class="block truncate">{mention.entry.name}</span>
-            {#if mention.entry.kind === 'file'}
-              <span class="block truncate text-[10px] text-dimmed">
-                {parentPath(mention.entry)}
-              </span>
-            {/if}
+            <span class="block truncate text-[10px] text-dimmed">
+              {parentPath(mention.entry)}
+            </span>
           {/if}
         </span>
         {#if mention.type === 'project' && mention.entry.kind === 'directory'}

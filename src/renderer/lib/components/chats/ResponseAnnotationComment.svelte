@@ -27,7 +27,7 @@
   let left = $derived(
     Math.max(12, Math.min(x - POPOVER_WIDTH / 2, window.innerWidth - POPOVER_WIDTH - 12))
   )
-  let top = $derived(Math.max(12, Math.min(y + 36, window.innerHeight - POPOVER_HEIGHT - 12)))
+  let top = $derived(Math.max(12, Math.min(y + 41, window.innerHeight - POPOVER_HEIGHT - 12)))
 
   onMount(() => {
     textarea.focus()

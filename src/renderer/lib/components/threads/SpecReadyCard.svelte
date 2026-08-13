@@ -18,7 +18,12 @@
     onGenerateAssignment?: () => void
     onOpenAssignment?: () => void
     onModelChange?: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -36,7 +41,8 @@
     onGenerateAssignment,
     onOpenAssignment,
     onModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
@@ -104,6 +110,7 @@
           variant="action"
           onSelect={chooseModel}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       {:else}
         <button

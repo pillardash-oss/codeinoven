@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mapOpenCodeEvent, mapOpenCodePart, parseOpenCodeModels } from './opencode-driver'
+import {
+  mapOpenCodeEvent,
+  mapOpenCodePart,
+  opencodePermissionTools,
+  parseOpenCodeModels
+} from './opencode-driver'
 
 vi.mock('child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }))
 
@@ -250,6 +255,149 @@ describe('mapOpenCodePart', () => {
   })
 })
 
+describe('OpenCode token usage normalization', () => {
+  it('maps reported categories into normalized usage and preserves the raw total', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 100, output: 30, reasoning: 10, total: 130, cache: { read: 40, write: 5 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: {
+        input: 100,
+        output: 30,
+        reasoning: 10,
+        cacheRead: 40,
+        cacheWrite: 5,
+        total: 130
+      },
+      normalizedUsage: {
+        uncachedInput: 100,
+        cachedInput: 40,
+        cacheWrite: 5,
+        output: 30,
+        reasoning: 10,
+        rawProviderUsage: {
+          input: 100,
+          output: 30,
+          reasoning: 10,
+          total: 130,
+          cache: { read: 40, write: 5 }
+        },
+        rawTotal: 130,
+        totalSemantics: 'provider_defined'
+      }
+    })
+  })
+
+  it('does not synthesize a comparable total when the provider reports none', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 100, output: 30, cache: { read: 40 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      normalizedUsage: {
+        uncachedInput: 100,
+        cachedInput: 40,
+        cacheWrite: null,
+        output: 30,
+        reasoning: null,
+        rawProviderUsage: { input: 100, output: 30, cache: { read: 40 } },
+        rawTotal: null,
+        totalSemantics: 'unavailable'
+      }
+    })
+  })
+
+  it('keeps unreported categories null while preserving a reported total', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 50, total: 50 }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: { input: 50, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 50 },
+      normalizedUsage: {
+        uncachedInput: 50,
+        cachedInput: null,
+        cacheWrite: null,
+        output: null,
+        reasoning: null,
+        rawProviderUsage: { input: 50, total: 50 },
+        rawTotal: 50,
+        totalSemantics: 'provider_defined'
+      }
+    })
+  })
+
+  it('keeps uncached input separate when cache reads and writes exceed it', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: { input: 10, output: 5, total: 15, cache: { read: 8, write: 9 } }
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop',
+      tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 8, cacheWrite: 9, total: 15 },
+      normalizedUsage: {
+        uncachedInput: 10,
+        cachedInput: 8,
+        cacheWrite: 9,
+        output: 5,
+        reasoning: null,
+        rawProviderUsage: { input: 10, output: 5, total: 15, cache: { read: 8, write: 9 } },
+        rawTotal: 15,
+        totalSemantics: 'provider_defined'
+      }
+    })
+  })
+
+  it('attaches no usage metadata when the provider reports no tokens', () => {
+    expect(
+      mapOpenCodePart({
+        type: 'step-finish',
+        id: 'part-finish',
+        messageID: 'message-1',
+        reason: 'stop',
+        tokens: {}
+      })
+    ).toEqual({
+      type: 'step-finish',
+      id: 'part-finish',
+      messageID: 'message-1',
+      reason: 'stop'
+    })
+  })
+})
+
 describe('mapOpenCodeEvent', () => {
   it('maps updated parts and derives the session ID from the part', () => {
     expect(
@@ -447,5 +595,56 @@ describe('mapOpenCodeEvent', () => {
         reply: 'reject'
       }
     ])
+  })
+})
+
+describe('opencodePermissionTools', () => {
+  const settings = (permissionLevel: 'auto_review' | 'full_access') =>
+    ({
+      harnessId: 'opencode',
+      providerId: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+      thinkingLevel: 'medium',
+      permissionLevel,
+      engineeringMode: false
+    }) as const
+
+  it('maps full_access to an allow-all bypass so nothing is asked or denied', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('full_access'), allowedTools: undefined })
+    ).toEqual({
+      '*': true
+    })
+    expect(
+      opencodePermissionTools({ settings: settings('full_access'), allowedTools: ['read', 'bash'] })
+    ).toEqual({ '*': true })
+  })
+
+  it('auto-approves external directories while keeping the app allow-list restrictive', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: ['read', 'glob'] })
+    ).toEqual({
+      '*': false,
+      read: true,
+      glob: true,
+      external_directory: true
+    })
+  })
+
+  it('auto-approves external directories when no tool allow-list is set', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: undefined })
+    ).toEqual({
+      external_directory: true
+    })
+  })
+
+  it('keeps an empty allow-list fully restrictive for auto_review', () => {
+    expect(
+      opencodePermissionTools({ settings: settings('auto_review'), allowedTools: [] })
+    ).toEqual({
+      '*': false,
+      external_directory: true
+    })
   })
 })

@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../lib/utils'
 import type { AppConfig } from '../lib/types'
+import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../lib/types'
 import type { Project } from '../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../lib/project-artifacts'
 import {
@@ -32,11 +33,15 @@ const DEFAULT_CONFIG: AppConfig = {
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
-  memory: { enabled: true, entries: [] },
+  memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
-  keepAwakeWhileWorking: false
+  updateChannel: 'stable',
+  keepAwakeWhileWorking: false,
+  imageDescriptorAskAgain: false,
+  autoRetryAfterReset: true,
+  resumeWorkOnRestart: true
 }
 
 /**
@@ -91,6 +96,11 @@ export class StorageEngine {
       agentDefaults: {
         ...DEFAULT_CONFIG.agentDefaults,
         ...(config?.agentDefaults ?? {})
+      },
+      memory: {
+        ...DEFAULT_CONFIG.memory,
+        ...(config?.memory ?? {}),
+        entries: config?.memory?.entries ?? []
       }
     }
   }
@@ -270,5 +280,61 @@ export class StorageEngine {
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null
       throw error
     }
+  }
+
+  /**
+   * Resolve the per-project cloud deployment config path, always under the
+   * CodeInOven config directory — never inside the user's repository.
+   */
+  private cloudDeploymentConfigPath(projectId: string): string {
+    return join('projects', projectId, 'cloud-deployment.json')
+  }
+
+  /** Read a project's cloud deployment config, or null when none exists. */
+  async getCloudDeploymentConfig(projectId: string): Promise<CloudDeploymentConfig | null> {
+    return this.read<CloudDeploymentConfig>(this.cloudDeploymentConfigPath(projectId))
+  }
+
+  /** Persist a project's cloud deployment config atomically under the config dir. */
+  async saveCloudDeploymentConfig(projectId: string, config: CloudDeploymentConfig): Promise<void> {
+    await this.write(this.cloudDeploymentConfigPath(projectId), config)
+  }
+
+  /**
+   * Whether a project has at least one configured provider. Mirrors the
+   * `setHasDeployments` precedent so a project without configured providers is
+   * flagged and the Cloud Deployments panel stays hidden.
+   */
+  async hasCloudDeployments(projectId: string): Promise<boolean> {
+    const config = await this.getCloudDeploymentConfig(projectId)
+    return config !== null && config.project.providers.length > 0
+  }
+
+  /** Remove a project's cloud deployment config, flagging it as having none. */
+  async clearCloudDeploymentConfig(projectId: string): Promise<void> {
+    await this.remove(this.cloudDeploymentConfigPath(projectId))
+  }
+
+  /**
+   * Resolve the global cloud deployment account registry path, always under the
+   * CodeInOven config directory — never inside the user's repository, and
+   * independent of any single project.
+   */
+  private cloudDeploymentAccountsPath(): string {
+    return join('cloud-deployments', 'accounts.json')
+  }
+
+  /** Read the global provider account registry, or an empty one when absent. */
+  async getCloudDeploymentAccounts(): Promise<CloudDeploymentAccountRegistry> {
+    return (
+      (await this.read<CloudDeploymentAccountRegistry>(this.cloudDeploymentAccountsPath())) ?? {
+        accounts: []
+      }
+    )
+  }
+
+  /** Persist the global provider account registry atomically under the config dir. */
+  async saveCloudDeploymentAccounts(registry: CloudDeploymentAccountRegistry): Promise<void> {
+    await this.write(this.cloudDeploymentAccountsPath(), registry)
   }
 }

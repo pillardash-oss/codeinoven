@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpillardash-oss%2Fcodeinoven%2Fmain%2Fpackage.json&query=version&label=version)](package.json)
 
-CodeInOven is a control plane that sits on top of your existing AI coding CLIs — OpenCode, Claude Code, Codex, Pi, Cline, and Antigravity — and coordinates them through a clear, reviewable lifecycle:
+CodeInOven is a control plane that sits on top of the AI coding CLIs you already use — OpenCode, Codex, Claude Code, Pi, Cline, Antigravity, Muse Code, and more — and coordinates them through a clear, reviewable lifecycle:
 
 ```
 specify → review → approve → implement
@@ -21,7 +21,7 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 
 ## Features
 
-- **Multi-harness support.** One interface over OpenCode, Codex CLI, Claude Code, Pi, Cline, and Antigravity. Pick a provider/model per thread.
+- **Multi-harness support.** One interface over OpenCode, Codex CLI, Claude Code, Pi, Cline, Antigravity, Muse Code, and any other coding harness. Pick a provider/model per thread.
 - **Engineering specs.** Structured, versioned specifications (`Problem`, `Resolution` with phases, `Success Criteria`, `Test Strategy`, `Documentation`, `Commit Pattern`, `Constraints & Risks`). Annotate sections inline and via comments; nothing implements until you approve.
 - **Approval gate.** Specs require explicit approval before any agent work starts.
 - **Plan engine.** Approved specs become executable plans with per-phase checkpoints and file operations.
@@ -45,6 +45,7 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 
 - **Operating system:** macOS, Windows, or Linux (see [Packaging](#packaging) for supported targets).
 - **A coding harness CLI** installed and on your `PATH` (at least one of the supported harnesses below).
+- **Git** installed and on your `PATH` — required for the in-app Git panel (status, diff, stage/commit, push, pull requests, and merge/rebase). Git-less machines get a clear empty state pointing to the official Git install for the OS.
 - **Node.js ≥ 22.13.0 and Bun ≥ 1.3.10** are only required to build from source — released binaries run standalone.
 
 ### Supported harnesses
@@ -57,8 +58,9 @@ It is not a chat toy and not another IDE plugin. CodeInOven treats agent runs as
 | Pi          | `pi`        | Supports custom base-URL providers |
 | Cline       | `cline`     | Supports custom base-URL providers |
 | Antigravity | `agy`       |                                    |
+| Muse Code   | `muse`      |                                    |
 
-Each harness has its own install channel (npm, Homebrew, or a native installer). CodeInOven's **Providers** page links to the official install docs for each harness and offers interactive login terminals.
+CodeInOven is harness-agnostic: this list is the currently shipped set, and new harnesses plug in through the driver contract (`driver.interface.ts`) without changing the app. Each harness has its own install channel (npm, Homebrew, or a native installer). CodeInOven's **Providers** page links to the official install docs for each harness and offers interactive login terminals.
 
 ---
 
@@ -85,6 +87,28 @@ bun run dev
 
 The development build opens the app from source. See [Development](#development) for the full toolchain and [Packaging](#packaging) to produce installers.
 
+### Remote connection
+
+CodeInOven ships a remote-connection capability so you can keep working from your phone while away from your computer. Connectivity is **LAN-first**: the phone client connects over the local network when the desktop peer is reachable, and only falls back to a cloud relay for remote networks.
+
+**Connecting is designed for humans — it's one QR scan.**
+
+1. Open **Settings → Remote** on your desktop. A QR code appears (the LAN gateway starts automatically).
+2. Point your phone camera at the code — your phone just needs to be on the same Wi-Fi network.
+3. The phone opens the app already configured and connects automatically. No account, no typing, nothing to install by hand.
+
+Once connected, the phone shows a **full chat client**: a hideable sidebar with a Projects/Threads switcher and threads grouped by status, a composer with model/permission/thinking/fast-mode controls and attachments, and live context usage (context %, tokens, cost) in the chat header. Messages stream in real time over the encrypted connection. For now this is LAN-first — the cloud relay stays a documented deployment-time option.
+
+The phone client is an **installable PWA** served by the desktop's LAN gateway over HTTPS. The desktop starts a gateway on `LAN_PORT` that serves the phone client at `https://<your-desktop-ip>:<LAN_PORT>/remote.html` using a self-signed certificate. The gateway's certificate is available at `https://<your-desktop-ip>:<LAN_PORT>/cert.pem` for downloading and installing as a trust profile. The gateway and the renderer both use the same authenticated, AES-GCM-encrypted WebSocket protocol, so the phone reaches the desktop over the LAN — with the cloud relay as an automatic fallback for remote networks.
+
+**Self-signed certificate trust.** For the service worker to register and install to be offered, the client must run in a secure context:
+- **Android (Chrome):** open the URL, tap through the certificate warning, and the install prompt appears after the page loads. You can also download `cert.pem` and install it as a CA so the warning goes away.
+- **iOS (Safari):** open the URL and tap through the warning, then to fully trust the certificate: download `cert.pem`, go to **Settings → General → VPN & Device Management** and install the profile, then **Settings → General → About → Certificate Trust Settings** and enable full trust for it. Once trusted, the service worker registers and **Share → Add to Home Screen** installs the PWA.
+
+While remote mode is on, the desktop lives in the system Tray: closing the window hides it instead of quitting, it accepts incoming phone sessions, and a full quit is refused while a session is live (see `agent-out/tray-contract.md`).
+
+All connection settings come from **public environment variables** — never hardcoded endpoints or credentials. **On the LAN nothing needs to be configured**: when `PEER_SECRET_AUTH` is unset, the desktop generates one and delivers it to your phone through the QR pairing URL. The **cloud relay is a deployment-time option** — in production it only activates when `RELAY_URL`/`RELAY_TOKEN` (and MQTT credentials, when used) are provisioned; otherwise the client stays LAN-only and never invents a domain. See `agent-out/config.md` for the full variable reference.
+
 ---
 
 ## Quick Start
@@ -94,7 +118,7 @@ The development build opens the app from source. See [Development](#development)
 Make sure at least one supported CLI is installed and working in your shell:
 
 ```bash
-opencode --version   # or: codex --version | claude --version | pi --version | cline --version | agy --version
+opencode --version   # or: codex --version | claude --version | pi --version | cline --version | agy --version | muse --version
 ```
 
 Open **Settings → Providers** (or the **Providers** view) in CodeInOven. If a harness isn't detected, the UI links to its official install instructions. Authenticate the harness either in your terminal (`opencode auth login`, `codex login`, `claude`, etc.) or through the app's interactive login terminal.
@@ -191,14 +215,17 @@ The IPC contract (`src/lib/ipc-contract.ts`) is a hard boundary — the renderer
 
 | Trigger             | Behavior                                                                                       |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
-| Tag `v0.2.2` pushed | Builds macOS (universal), Windows, and Linux, then creates/publishes a GitHub Release `v0.2.2` |
+| Tag `v0.2.2` pushed | Builds macOS (Apple Silicon arm64), Windows, and Linux, then creates/publishes a GitHub Release `v0.2.2` |
 | Manual dispatch     | Builds all three platforms; creates a Release when `publish` is checked (default)              |
 
 Artifacts produced per platform:
 
-- **macOS:** `.dmg` + `.zip` (Apple Silicon, arm64)
+- **macOS:** `.dmg` + `.zip` (Apple Silicon, arm64 only)
 - **Windows:** NSIS `.exe`
 - **Linux:** `.AppImage` + `.deb`
+
+The Git panel shells out to the system `git` binary, so the app does not bundle
+a Git runtime — installers stay OS-native and macOS packaging remains arm64-only.
 
 Code signing and macOS notarization are used automatically when the `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` repository secrets are configured; otherwise installers are built unsigned so the workflow stays runnable on a fresh fork.
 

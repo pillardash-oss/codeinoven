@@ -30,6 +30,11 @@ export function classifyProviderIssue(
     statusCode === 403 ||
     normalized.includes('unauthorized') ||
     normalized.includes('authentication') ||
+    normalized.includes('authenticate') ||
+    normalized.includes('oauth') ||
+    normalized.includes('sign in') ||
+    normalized.includes('login required') ||
+    normalized.includes('session expired') ||
     normalized.includes('api key')
   ) {
     return 'authentication'
@@ -51,7 +56,16 @@ export function classifyProviderIssue(
   if (
     normalized.includes('network') ||
     normalized.includes('connection') ||
-    normalized.includes('timeout')
+    normalized.includes('disconnected') ||
+    normalized.includes('timeout') ||
+    normalized.includes('timed out') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('enotfound') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('dns') ||
+    normalized.includes('offline')
   ) {
     return 'network'
   }

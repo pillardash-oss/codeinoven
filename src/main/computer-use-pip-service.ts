@@ -4,9 +4,11 @@ import { CuaBridgeService } from './cua-bridge-service'
 import { StdioMcpClient, type McpClient } from './mcp-stdio-client'
 import type { StorageEngine } from './storage-engine'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
 
 const POLL_INTERVAL_MS = 1_000
 const MAX_MISSES = 6
+const AUTO_DISMISS_GRACE_MS = 3_000
 
 interface WindowRecord {
   window_id: number
@@ -32,14 +34,22 @@ export class ComputerUsePipService {
   private timer: ReturnType<typeof setInterval> | null = null
   private active = false
   private misses = 0
+  private ownerThreadId: string | null = null
+  private dismissedThreadId: string | null = null
+  private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly storage: StorageEngine) {
     this.cuaBridge = new CuaBridgeService(storage)
   }
 
-  /** Latch onto the app (pid) an agent is currently driving. */
-  async track(pid: number): Promise<void> {
+  /** Latch onto the app (pid) a thread's agent is currently driving. */
+  async track(pid: number, threadId: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
+    this.clearAutoDismiss()
+    // The user closed the overlay this turn — keep it hidden for the rest of
+    // the turn; only the next agent turn (after a new user message) re-enables it.
+    if (this.dismissedThreadId === threadId) return
+    this.ownerThreadId = threadId
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
     this.misses = 0
@@ -57,24 +67,69 @@ export class ComputerUsePipService {
     await client.callTool('bring_to_front', { pid })
   }
 
-  /** Stop tracking and hide the PiP. */
+  /** Stop tracking and hide the PiP (user-requested close). */
   async dismiss(): Promise<void> {
+    this.dismissedThreadId = this.ownerThreadId
+    this.hide()
+  }
+
+  /**
+   * Called when a thread's agent turn begins (a user message was accepted).
+   * Clears the user's close so the next turn may show the PiP again if CUA is
+   * used, and cancels a pending auto-dismiss from a just-finished turn.
+   */
+  notifyTurnStarted(threadId: string): void {
+    if (this.dismissedThreadId === threadId) this.dismissedThreadId = null
+    if (this.ownerThreadId === threadId) this.clearAutoDismiss()
+  }
+
+  /**
+   * Called when a thread's utility turn ends. If that thread owns the PiP,
+   * hide the overlay shortly after so it never lingers past the run.
+   */
+  notifyTurnEnded(threadId: string): void {
+    if (!this.active || this.ownerThreadId !== threadId) return
+    this.clearAutoDismiss()
+    this.autoDismissTimer = setTimeout(() => {
+      this.autoDismissTimer = null
+      this.hide()
+    }, AUTO_DISMISS_GRACE_MS)
+  }
+
+  /** Tear down the overlay without touching the user's per-turn close marker. */
+  private hide(): void {
+    const wasActive = this.active
     this.active = false
     this.targetPid = null
     this.appName = ''
     this.windowId = null
     this.misses = 0
+    this.ownerThreadId = null
+    this.clearAutoDismiss()
     this.clearLoop()
-    this.broadcastState()
+    if (wasActive) this.broadcastState()
+  }
+
+  private clearAutoDismiss(): void {
+    if (this.autoDismissTimer) {
+      clearTimeout(this.autoDismissTimer)
+      this.autoDismissTimer = null
+    }
   }
 
   getState(): ComputerUsePipState {
     return this.active && this.targetPid !== null
-      ? { active: true, pid: this.targetPid, appName: this.appName }
+      ? {
+          active: true,
+          pid: this.targetPid,
+          appName: this.appName,
+          threadId: this.ownerThreadId ?? undefined
+        }
       : { active: false }
   }
 
   async dispose(): Promise<void> {
+    this.clearAutoDismiss()
     this.active = false
     this.clearLoop()
     const client = this.client
@@ -121,7 +176,7 @@ export class ComputerUsePipService {
       const window = await this.frontmostWindow(client, pid)
       if (!window) {
         this.misses += 1
-        if (this.misses >= MAX_MISSES) await this.dismiss()
+        if (this.misses >= MAX_MISSES) this.hide()
         return
       }
       this.misses = 0
@@ -135,6 +190,9 @@ export class ComputerUsePipService {
       })
       const image = extractImage(result)
       if (!image) return
+      // The overlay may have been dismissed (or re-targeted) while we awaited
+      // the driver — never resurrect it with a stale frame.
+      if (!this.active || this.targetPid !== pid) return
       const frame: ComputerUsePipFrame = {
         pid,
         appName: this.appName,
@@ -147,11 +205,12 @@ export class ComputerUsePipService {
       this.broadcast('computerUse:pipFrame', frame)
     } catch (error) {
       Logger.error('computer-use PiP capture failed:', error)
+      if (!this.active || this.targetPid !== pid) return
       this.misses += 1
       if (this.misses >= MAX_MISSES) {
         await this.client?.close().catch(() => undefined)
         this.client = null
-        await this.dismiss()
+        this.hide()
       }
     }
   }
@@ -181,7 +240,7 @@ export class ComputerUsePipService {
   ): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send(channel, payload)
+        sendToRenderer(win.webContents, channel, payload)
       }
     }
   }

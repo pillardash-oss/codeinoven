@@ -25,6 +25,8 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import StudioSelectionActions from './StudioSelectionActions.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import {
@@ -33,6 +35,8 @@
     rangeForAnnotation,
     waitForScrollSettle
   } from './studio-annotation-anchors'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
+  import { compactViewport } from '$lib/compact-viewport.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     CapturableSpecContextType,
@@ -60,6 +64,7 @@
     x: number
     y: number
     sectionLevel: boolean
+    selectionActions: boolean
   }
 
   interface Props {
@@ -73,6 +78,7 @@
     assignmentAvailable?: boolean
     assignmentMode?: boolean
     auditAvailable?: boolean
+    history: StudioDocumentHistory<EngineeringSpec>
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
     onRevealInAppFile: (spec: EngineeringSpec) => CallbackResult
@@ -90,6 +96,8 @@
     ) => Promise<EngineeringSpec | null>
     onUpdateAnnotation: (annotationId: string, body: string) => Promise<EngineeringSpec | null>
     onResolveAnnotation: (annotationId: string) => Promise<EngineeringSpec | null>
+    onExplainSelection?: (selection: string, documentContext: string) => void
+    onQuickChatSelection?: (selection: string, documentContext: string) => void
     onDismissValidationIssue: (issue: SpecValidationIssue) => CallbackResult
     onSearchContext: (
       type: Exclude<CapturableSpecContextType, 'attachment'>,
@@ -162,6 +170,7 @@
     assignmentAvailable = false,
     assignmentMode = false,
     auditAvailable = false,
+    history,
     onBack,
     onOpenInEditor,
     onRevealInAppFile,
@@ -175,6 +184,8 @@
     onAddAnnotation,
     onUpdateAnnotation,
     onResolveAnnotation,
+    onExplainSelection,
+    onQuickChatSelection,
     onDismissValidationIssue,
     onSearchContext,
     onAddContext,
@@ -186,9 +197,11 @@
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
 
   let selectedSection = $state<SpecSectionId>('problem')
+  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  let sectionsOpen = $state(false)
   // The effect below reconciles later prop versions; these are intentional local edit buffers.
   // svelte-ignore state_referenced_locally
-  let draft = $state<EngineeringSpec>($state.snapshot(spec))
+  let draft = $state<EngineeringSpec>(history.attach($state.snapshot(spec)))
   const sections = $derived(
     allSections.filter(
       (section) => section.id !== 'additional_info' || draft.content.additionalInfo !== undefined
@@ -197,7 +210,8 @@
   const decisionComments = $derived(draft.decisionComments ?? [])
   // svelte-ignore state_referenced_locally
   let loadedSpecKey = $state(`${spec.id}:${spec.version}:${spec.updatedAt}`)
-  let dirty = $state(false)
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let savePending = $state(false)
   let pendingAction = $state<SpecDecisionAction | null>(null)
   let additionalNotes = $state('')
@@ -254,8 +268,10 @@
   $effect(() => {
     const nextKey = `${spec.id}:${spec.version}:${spec.updatedAt}`
     if (nextKey !== loadedSpecKey) {
-      draft = $state.snapshot(spec)
       loadedSpecKey = nextKey
+      if (history.dirty) return
+      history.markSaved($state.snapshot(spec))
+      draft = $state.snapshot(spec)
       dirty = false
       pendingAnnotation = null
       editingAnnotation = null
@@ -274,8 +290,31 @@
   })
 
   function markDirty(): void {
-    dirty = true
     draft.updatedAt = Date.now()
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
+    void refreshAnnotationMarkers()
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = $state.snapshot(previous)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    closeContextPicker()
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = $state.snapshot(next)
+    dirty = history.dirty
+    closePendingAnnotation()
+    editingAnnotation = null
+    closeContextPicker()
     void refreshAnnotationMarkers()
   }
 
@@ -466,6 +505,7 @@
 
   async function selectAndScroll(sectionId: SpecSectionId): Promise<void> {
     selectedSection = sectionId
+    sectionsOpen = false
     await tick()
     const target = document.getElementById(`spec-section-${sectionId}`)
     if (!target || !documentScroller) return
@@ -544,7 +584,7 @@
   }
 
   function captureDocumentSelection(): void {
-    if (!canDecide) return
+    if (!canDecide && (!onExplainSelection || !onQuickChatSelection)) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
     const range = selection.getRangeAt(0)
@@ -568,9 +608,10 @@
       quote,
       ...lines,
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
-      sectionLevel: false
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      sectionLevel: false,
+      selectionActions: true
     }
     annotationBody = ''
   }
@@ -591,9 +632,10 @@
       quote,
       ...markdownLineForQuote(quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
-      sectionLevel: true
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      sectionLevel: true,
+      selectionActions: false
     }
     annotationBody = ''
   }
@@ -613,9 +655,10 @@
       quote,
       ...markdownLineForQuote(quote, sectionId),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
-      sectionLevel: false
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      sectionLevel: false,
+      selectionActions: false
     }
     annotationBody = ''
   }
@@ -636,9 +679,10 @@
       quote,
       ...markdownLineForQuote(quote, issue.section),
       ...offsetsForQuote(sectionElement, quote),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
-      sectionLevel: true
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
+      sectionLevel: true,
+      selectionActions: false
     }
     annotationBody = `Please address this validation gap: ${issue.message}`
   }
@@ -675,6 +719,7 @@
   }
 
   function applySpec(updated: EngineeringSpec): void {
+    history.markSaved($state.snapshot(updated))
     draft = $state.snapshot(updated)
     loadedSpecKey = `${updated.id}:${updated.version}:${updated.updatedAt}`
     dirty = false
@@ -751,6 +796,15 @@
     annotationBody = ''
   }
 
+  function openSelectionChat(mode: 'explain' | 'quick'): void {
+    const selection = pendingAnnotation
+    if (!selection || !selection.selectionActions) return
+    const documentContext = exportEngineeringSpecMarkdown(draft)
+    if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
+    else onQuickChatSelection?.(selection.quote, documentContext)
+    closePendingAnnotation()
+  }
+
   async function saveAnnotationEdit(): Promise<void> {
     const annotation = editingAnnotation
     const body = editingAnnotationBody.trim()
@@ -799,7 +853,9 @@
     if (!dirty || busy || savePending) return null
     savePending = true
     try {
-      return await onSave($state.snapshot(draft))
+      const saved = await onSave($state.snapshot(draft))
+      if (saved) applySpec(saved)
+      return saved
     } finally {
       savePending = false
     }
@@ -878,21 +934,30 @@
   aria-label="Specification studio"
 >
   <header class="shrink-0 border-b bg-surface">
-    <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3">
-      <StudioDocumentNavigation
-        active="spec"
-        {brainstormAvailable}
-        {assignmentAvailable}
-        {auditAvailable}
-        {agentMessagesOpen}
-        {onBack}
-        {onToggleAgentMessages}
-        {onOpenBrainstorm}
-        {onOpenAssignment}
-        {onOpenAudit}
-      />
+    <div
+      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <StudioDocumentNavigation
+          active="spec"
+          {brainstormAvailable}
+          {assignmentAvailable}
+          {auditAvailable}
+          {agentMessagesOpen}
+          {onBack}
+          {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="spec sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
+          {onOpenBrainstorm}
+          {onOpenAssignment}
+          {onOpenAudit}
+        />
+      </div>
 
-      <div class="flex items-center justify-center gap-2 text-[11px] text-muted">
+      <div
+        class="flex items-center gap-2 text-[11px] text-muted max-md:flex-wrap md:justify-center"
+      >
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
             class="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-elevated hover:text-foreground"
@@ -930,6 +995,12 @@
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         <span>Updated {formatDate(draft.updatedAt)}</span>
         <span
           class="rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide {statusClass(
@@ -951,10 +1022,10 @@
         {/if}
       </div>
 
-      <div class="flex items-center justify-end gap-1.5">
+      <div class="flex items-center gap-1.5 md:justify-end">
         {#if canDecide}
           <button
-            class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
+            class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
             disabled={busy}
             title="Review this specification with the agent"
             onclick={() => {
@@ -971,7 +1042,7 @@
         {/if}
         {#if isLatestVersion && assignmentMode}
           <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
             disabled={busy || (!assignmentAvailable && !currentValidation.valid)}
             title={assignmentAvailable
               ? 'Open the Assignment'
@@ -983,7 +1054,7 @@
           </button>
         {:else if canDecide}
           <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
             disabled={busy || !currentValidation.valid}
             title="Sign off and implement this specification"
             onclick={() => {
@@ -1003,7 +1074,7 @@
     </div>
 
     {#if pendingAction && canDecide && (!assignmentMode || pendingAction === 'review')}
-      <div class="flex items-end gap-2 border-t px-4 py-2.5">
+      <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
@@ -1014,21 +1085,23 @@
             onSubmit={() => pendingAction && void submitAction(pendingAction, additionalNotes)}
           />
         </label>
-        <button
-          class="rounded-lg px-3 py-2 text-xs text-muted hover:bg-overlay"
-          title="Cancel"
-          onclick={() => (pendingAction = null)}
-        >
-          Cancel
-        </button>
-        <button
-          class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-          disabled={busy || (pendingAction === 'implement' && !currentValidation.valid)}
-          title={`${pendingAction === 'review' ? 'Review' : 'Implement'} with these notes`}
-          onclick={() => pendingAction && void submitAction(pendingAction, additionalNotes)}
-        >
-          {pendingAction === 'review' ? 'Review' : 'Implement'}
-        </button>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            class="flex-1 rounded-lg px-3 py-2 text-xs text-muted max-md:h-10 md:flex-none hover:bg-overlay"
+            title="Cancel"
+            onclick={() => (pendingAction = null)}
+          >
+            Cancel
+          </button>
+          <button
+            class="flex-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none disabled:opacity-50"
+            disabled={busy || (pendingAction === 'implement' && !currentValidation.valid)}
+            title={`${pendingAction === 'review' ? 'Review' : 'Implement'} with these notes`}
+            onclick={() => pendingAction && void submitAction(pendingAction, additionalNotes)}
+          >
+            {pendingAction === 'review' ? 'Review' : 'Implement'}
+          </button>
+        </div>
       </div>
     {/if}
 
@@ -1043,13 +1116,37 @@
     {/if}
   </header>
 
-  <div class="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden">
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
+  >
+    {#if sectionsOpen}
+      <div
+        class="fixed inset-0 z-40 bg-black/50 md:hidden"
+        role="presentation"
+        onclick={() => (sectionsOpen = false)}
+      ></div>
+    {/if}
     <aside
-      class="relative flex min-h-0 flex-col border-r bg-surface"
+      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
+        ? ''
+        : 'max-md:hidden'}"
       aria-label="Specification sections"
     >
       <StudioSidebarResizeHandle sidebarLabel="Specification sections" />
-      <div class="min-h-0 flex-1 overflow-y-auto">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          Specification
+        </p>
+        <button
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
+          aria-label="Close sections"
+          title="Close sections"
+          onclick={() => (sectionsOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div
           class="space-y-0.5 p-2"
           role="tablist"
@@ -1063,7 +1160,7 @@
             ).length}
             {@const annotationCount = annotationsFor(section.id).length}
             <button
-              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors {selectedSection ===
+              class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
               section.id
                 ? 'bg-elevated font-semibold text-foreground'
                 : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
@@ -1212,8 +1309,8 @@
     >
       {#each annotationMarkers as marker (marker.annotation.id)}
         <button
-          class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md hover:bg-elevated"
-          style:left={`${marker.x}px`}
+          class="absolute z-20 flex h-7 w-7 items-center justify-center rounded-full border border-primary/30 bg-surface text-primary shadow-md max-md:right-2 hover:bg-elevated"
+          style:left={compactViewport.matches ? undefined : `${marker.x}px`}
           style:top={`${marker.y}px`}
           data-spec-annotation-marker={marker.annotation.id}
           title="Open anchored comment"
@@ -1223,7 +1320,7 @@
           <MessageSquare size={13} />
         </button>
       {/each}
-      <div class="mx-auto max-w-4xl px-8 py-8">
+      <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
         <article class="space-y-12 text-sm leading-7">
           <section id="spec-section-problem" data-spec-section="problem" class="scroll-mt-5">
             <button
@@ -1234,7 +1331,7 @@
               <span class="text-xl font-semibold tracking-tight">Problem</span>
               <MessageSquarePlus
                 size={14}
-                class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />
             </button>
             <EditableMarkdown
@@ -1259,7 +1356,7 @@
                 <span class="text-xl font-semibold tracking-tight">Resolution & phases</span>
                 <MessageSquarePlus
                   size={14}
-                  class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                  class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
                 />
               </button>
               <button
@@ -1456,7 +1553,7 @@
               <span class="text-xl font-semibold tracking-tight">Test strategy</span>
               <MessageSquarePlus
                 size={14}
-                class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />
             </button>
             <EditableMarkdown
@@ -1497,7 +1594,7 @@
                 <span class="text-xl font-semibold tracking-tight">Additional info</span>
                 <MessageSquarePlus
                   size={14}
-                  class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                  class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
                 />
               </button>
               <EditableMarkdown
@@ -1528,7 +1625,7 @@
               <span class="text-xl font-semibold tracking-tight">Commit pattern</span>
               <MessageSquarePlus
                 size={14}
-                class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />
             </button>
             <EditableMarkdown
@@ -1556,7 +1653,7 @@
               <span class="text-xl font-semibold tracking-tight">Constraints & risks</span>
               <MessageSquarePlus
                 size={14}
-                class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+                class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
               />
             </button>
             <div class="mt-4 grid gap-5 sm:grid-cols-2">
@@ -1773,48 +1870,68 @@
 
 {#if pendingAnnotation}
   <div
-    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl"
-    style:left={`${pendingAnnotation.x}px`}
-    style:top={`${pendingAnnotation.y}px`}
+    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
+    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
-    aria-label={pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+    aria-label={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : canDecide
+        ? 'Comment on selection'
+        : 'Actions for selection'}
   >
     <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+      {pendingAnnotation.sectionLevel
+        ? 'Annotate section'
+        : canDecide
+          ? 'Comment on selection'
+          : 'Selection'}
     </p>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
       “{pendingAnnotation.quote}”
     </blockquote>
-    <RichMarkdownEditor
-      class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-      bind:value={annotationBody}
-      placeholder="Leave your review note…"
-      ariaLabel="Annotation"
-      onSubmit={() => void submitAnnotation()}
-    />
-    <div class="mt-2 flex justify-end gap-1.5">
-      <button
-        class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-        title="Cancel annotation"
-        onclick={closePendingAnnotation}>Cancel</button
-      >
-      <button
-        class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={busy || !annotationBody.trim()}
-        title="Add annotation"
-        onclick={() => void submitAnnotation()}>Comment</button
-      >
+    {#if canDecide}
+      <RichMarkdownEditor
+        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
+        bind:value={annotationBody}
+        placeholder="Leave your review note…"
+        ariaLabel="Annotation"
+        onSubmit={() => void submitAnnotation()}
+      />
+    {/if}
+    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+      {#if pendingAnnotation.selectionActions && onExplainSelection && onQuickChatSelection}
+        <StudioSelectionActions
+          onExplain={() => openSelectionChat('explain')}
+          onQuickChat={() => openSelectionChat('quick')}
+        />
+      {/if}
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
+          title="Cancel annotation"
+          onclick={closePendingAnnotation}>Cancel</button
+        >
+        {#if canDecide}
+          <button
+            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+            disabled={busy || !annotationBody.trim()}
+            title="Add annotation"
+            onclick={() => void submitAnnotation()}>Comment</button
+          >
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
 
 {#if editingAnnotation && editingAnnotationPosition}
   <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl"
-    style:left={`${editingAnnotationPosition.x}px`}
-    style:top={`${editingAnnotationPosition.y}px`}
+    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
+    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Anchored annotation"
   >
@@ -1918,7 +2035,7 @@
         <span class="text-xl font-semibold tracking-tight">{props.title}</span>
         <MessageSquarePlus
           size={14}
-          class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+          class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
         />
       </button>
       <button

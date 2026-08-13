@@ -1,34 +1,57 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte'
-  import { Clock3, FileText, Loader2, MessageSquare, RotateCcw, X } from '@lucide/svelte'
+  import {
+    AudioLines,
+    Check,
+    Clock3,
+    Copy,
+    FileText,
+    GitFork,
+    Loader2,
+    MessageSquare,
+    RotateCcw,
+    Video,
+    X,
+    Zap
+  } from '@lucide/svelte'
   import ChatComposer from './ChatComposer.svelte'
-  import ImagePreview from './ImagePreview.svelte'
+  import MediaPreview from './MediaPreview.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import { messageId } from '$shared/id'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
-  import { isImageMime } from '$lib/mime'
+  import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
   import {
     contextSidebarState,
     type TemporaryChatContextTab
   } from '$lib/stores/context-sidebar.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { INBOX_PROJECT_ID } from '$shared/types'
   import type {
     AgentMessage,
     AgentEvent,
     AgentPart,
     PromptAttachment,
     PromptReference,
+    ProviderCatalog,
     ThreadSettings
   } from '$shared/types'
 
   interface Props {
     tab: TemporaryChatContextTab
+    /** Promote the side chat into a regular thread, then open it. */
+    onContinueInThread?: (tab: TemporaryChatContextTab) => void | Promise<void>
   }
 
-  let { tab }: Props = $props()
+  let { tab, onContinueInThread }: Props = $props()
   /** Reactive provider catalog for the tab's project — seeded from the cache
    *  and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
@@ -36,9 +59,11 @@
   let previewFile = $state<Extract<AgentPart, { type: 'file' }> | null>(null)
   let imageUrls = new FileBlobUrlManager()
   let references = $derived<PromptReference[]>(
-    tab.selectionAttached
-      ? [{ id: `${tab.id}:selection`, label: 'Selection 1', text: tab.selection }]
-      : []
+    tab.selections.map((selection, index) => ({
+      id: `${tab.id}:selection:${index}`,
+      label: `Selection ${index + 1}`,
+      text: selection
+    }))
   )
   let modelLabel = $derived.by((): string | null => {
     const modelId = tab.settings.modelId
@@ -75,6 +100,101 @@
 
   function workingParts(message: AgentMessage): AgentPart[] {
     return message.parts.filter((part) => part.type !== 'text' && part.type !== 'question')
+  }
+
+  // ─── Turn footer actions (Copy / Continue in a new thread) ─────────────
+
+  let copiedMessageId = $state<string | null>(null)
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+  let convertingMessageId = $state<string | null>(null)
+  let continueError = $state('')
+
+  /** A turn footer is shown on finished assistant turns only — the active
+   *  streaming turn has no output to copy yet. */
+  function turnFinished(message: AgentMessage): boolean {
+    return !tab.busy || message.completedAt != null
+  }
+
+  async function copyMessage(message: AgentMessage): Promise<void> {
+    try {
+      await copyText(textFor(message))
+      copiedMessageId = message.id
+      clearTimeout(copyResetTimer)
+      copyResetTimer = setTimeout(() => (copiedMessageId = null), 1500)
+    } catch {
+      tab.error = 'The message could not be copied to the clipboard.'
+    }
+  }
+
+  async function continueInThread(message: AgentMessage): Promise<void> {
+    if (!onContinueInThread || convertingMessageId) return
+    convertingMessageId = message.id
+    continueError = ''
+    try {
+      await onContinueInThread(tab)
+    } catch (error) {
+      continueError =
+        error instanceof Error ? error.message : 'The side chat could not be continued.'
+    } finally {
+      convertingMessageId = null
+    }
+  }
+
+  // ─── Turn attribution (harness / model / time) ─────────────────────────
+
+  let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /** Provider catalog entry for the message, falling back to the chat's model. */
+  function messageProvider(message: AgentMessage): ProviderCatalog | undefined {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return undefined
+    return providers.find((p) => p.models.some((m) => m.id === modelId))
+  }
+
+  /** Human model name for the message, falling back to the chat's model. */
+  function messageModelLabel(message: AgentMessage): string | null {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) => m.id === modelId && (!message.providerId || m.providerId === message.providerId)
+      ) ?? allModels.find((m) => m.id === modelId)
+    if (model) return model.name
+    return fastVariantForModelId(modelId)?.label ?? modelId
+  }
+
+  /** Harness that produced the message — falls back to the chat's harness. */
+  function messageHarnessId(message: AgentMessage): string {
+    return message.harnessId ?? tab.settings.harnessId ?? 'opencode'
+  }
+
+  function messageHarnessName(message: AgentMessage): string {
+    return getAgentIcon(messageHarnessId(message))?.name ?? messageHarnessId(message)
+  }
+
+  function formatTime(ts: number): string {
+    if (!ts) return ''
+    return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function formatDuration(ms: number): string {
+    if (ms < 1000) return '<1s'
+    const total = Math.round(ms / 1000)
+    if (total < 60) return `${total}s`
+    const m = Math.floor(total / 60)
+    const s = total % 60
+    return s > 0 ? `${m}m ${s}s` : `${m}m`
+  }
+
+  /** Duration from the preceding user prompt to this assistant message's completion. */
+  function turnDuration(messageIndex: number): number | null {
+    const assistant = tab.messages[messageIndex]
+    if (assistant?.role !== 'assistant' || !assistant.completedAt) return null
+    let start = messageIndex - 1
+    while (start >= 0 && tab.messages[start]?.role === 'assistant') start--
+    const userMsg = tab.messages[start]
+    if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
+    return assistant.completedAt - userMsg.createdAt
   }
 
   /** When the agent started working on the turn an assistant message belongs to. */
@@ -218,7 +338,7 @@
 
   function sendElaboratePrompt(): Promise<void> {
     return send(
-      'Explain this selection in detail. Do not perform any execution, do not make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
+      'Explain this selection in detail. Be clear and explain in simple terms, ensure you do not overwhelm the user with so much jargons, unless explicitly asked to. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
       [],
       '*Elaborate.*'
     )
@@ -233,22 +353,19 @@
     if (!prompt || tab.busy || tab.expired) return
     touch()
     const temporaryChatId = tab.temporaryChatId
-    const attachedSelection = tab.selectionAttached ? tab.selection : undefined
+    const attachedSelections = tab.selectionAttached ? [...tab.selections] : []
     const outgoing = userMessage(
       presentationText,
       attachments,
-      attachedSelection
-        ? [
-            {
-              id: `${temporaryChatId}:selection`,
-              label: 'Selection 1',
-              text: attachedSelection
-            }
-          ]
-        : []
+      attachedSelections.map((selection, index) => ({
+        id: `${temporaryChatId}:selection:${index}`,
+        label: `Selection ${index + 1}`,
+        text: selection
+      }))
     )
     tab.messages = [...tab.messages, outgoing]
-    if (attachedSelection) tab.selectionMessageId = outgoing.id
+    if (attachedSelections.length > 0) tab.selectionMessageId = outgoing.id
+    tab.selections = []
     tab.selectionAttached = false
     tab.draft = ''
     tab.busy = true
@@ -263,7 +380,7 @@
         tab.settings,
         prompt,
         attachments,
-        attachedSelection,
+        attachedSelections,
         tab.messages.length === 1 ? tab.initialContext : undefined
       )
       if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
@@ -337,12 +454,16 @@
       })
   })
 
-  // Convert file:// attachment URLs to blob: Object URLs so attached images
-  // render reliably in the Electron renderer.
+  // Convert file:// attachment URLs to blob: Object URLs so attached images and
+  // media render reliably in the Electron renderer.
   $effect(() => {
     for (const message of tab.messages) {
       for (const part of message.parts) {
-        if (part.type === 'file' && isImageMime(part.mime) && part.url.startsWith('file://')) {
+        if (
+          part.type === 'file' &&
+          (isImageMime(part.mime) || isVideoMime(part.mime) || isAudioMime(part.mime)) &&
+          part.url.startsWith('file://')
+        ) {
           void imageUrls.load(part.url, part.mime)
         }
       }
@@ -354,10 +475,15 @@
 
 <div class="flex h-full min-h-0 flex-col bg-app">
   {#if previewFile}
-    <ImagePreview
+    <MediaPreview
       src={imageUrls.getUrl(previewFile.url)}
-      filename={previewFile.filename ?? 'image'}
+      filename={previewFile.filename ?? 'file'}
+      mime={previewFile.mime}
       onClose={() => (previewFile = null)}
+      onLoadError={(el) => {
+        const target = previewFile
+        if (target) void imageUrls.bindMedia(target.url, target.mime, el)
+      }}
     />
   {/if}
   {#if tab.expired}
@@ -462,6 +588,23 @@
                           Preview
                         </span>
                       </button>
+                    {:else if isVideoMime(part.mime) || isAudioMime(part.mime)}
+                      <button
+                        type="button"
+                        class="flex max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted transition-colors hover:bg-elevated/80 hover:text-foreground"
+                        title="Preview {part.filename ?? 'media'}"
+                        aria-label="Preview {part.filename ?? 'media'}"
+                        onclick={() => (previewFile = part)}
+                      >
+                        {#if isVideoMime(part.mime)}
+                          <Video size={11} class="shrink-0" />
+                        {:else}
+                          <AudioLines size={11} class="shrink-0" />
+                        {/if}
+                        <span class="max-w-32 truncate"
+                          >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
+                        >
+                      </button>
                     {:else}
                       <span
                         class="flex max-w-full items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted"
@@ -482,7 +625,7 @@
             </div>
           {:else if textFor(message)}
             {@const traceParts = workingParts(message)}
-            <div class="flex min-w-0 flex-col gap-2.5 text-sm text-foreground">
+            <div class="group flex min-w-0 flex-col gap-2.5 text-sm text-foreground">
               {#if traceParts.length > 0}
                 <WorkingTrace
                   parts={traceParts}
@@ -496,22 +639,28 @@
                   {harnessName}
                 />
               {/if}
-              {#if textFor(message)}
-                <MarkdownView text={textFor(message)} />
+              <MarkdownView text={textFor(message)} />
+              {#if tab.mode !== 'audit' && turnFinished(message)}
+                {@render turnFooter(message, messageIndex)}
               {/if}
             </div>
           {:else if workingParts(message).length > 0}
-            <WorkingTrace
-              parts={workingParts(message)}
-              open={tab.busy}
-              busy={tab.busy}
-              latest={tab.busy}
-              startTime={turnStartTime(messageIndex)}
-              {modelLabel}
-              {providerName}
-              harnessId={tab.settings.harnessId}
-              {harnessName}
-            />
+            <div class="group flex min-w-0 flex-col gap-2.5">
+              <WorkingTrace
+                parts={workingParts(message)}
+                open={tab.busy}
+                busy={tab.busy}
+                latest={tab.busy}
+                startTime={turnStartTime(messageIndex)}
+                {modelLabel}
+                {providerName}
+                harnessId={tab.settings.harnessId}
+                {harnessName}
+              />
+              {#if tab.mode !== 'audit' && turnFinished(message)}
+                {@render turnFooter(message, messageIndex)}
+              {/if}
+            </div>
           {/if}
         {/each}
 
@@ -538,6 +687,23 @@
             </button>
           </div>
         {/if}
+
+        {#if continueError}
+          <div
+            class="flex items-start justify-between gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
+          >
+            <span>{continueError}</span>
+            <button
+              type="button"
+              class="shrink-0 rounded p-0.5 transition-colors hover:bg-danger/10"
+              title="Dismiss error"
+              aria-label="Dismiss continue-in-thread error"
+              onclick={() => (continueError = '')}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -551,12 +717,31 @@
             onSettingsChange={updateSettings}
             {providers}
             projectId={tab.projectId}
+            attachmentStorage={{
+              kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
+              projectId: tab.projectId,
+              threadId: tab.threadId
+            }}
             harnessId={tab.settings.harnessId}
             showEngineeringMode={false}
             readOnlyMode
             allowAttachments
+            hidePermissionSelector
+            enableImageDescriptorGate={false}
+            favoriteModels={rendererRecovery.chatFavoriteModels}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+            recentModels={rendererRecovery.chatRecentModels}
+            onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
             {references}
-            onRemoveReference={() => (tab.selectionAttached = false)}
+            onRemoveReference={(id) => {
+              const index = references.findIndex((reference) => reference.id === id)
+              if (index < 0) return
+              tab.selections = tab.selections.filter((_, i) => i !== index)
+              tab.selectionAttached = tab.selections.length > 0
+            }}
             initialValue={tab.draft}
             onValueChange={(value) => {
               tab.draft = value
@@ -569,3 +754,72 @@
     {/if}
   {/if}
 </div>
+
+{#snippet turnFooter(message: AgentMessage, messageIndex: number)}
+  {@const msgModelLabel = messageModelLabel(message)}
+  {@const msgFastVariant = fastVariantForModelId(message.modelId ?? tab.settings.modelId)}
+  {@const msgDuration = turnDuration(messageIndex)}
+  <div class="flex items-center gap-1.5">
+    <div class="flex items-center gap-0.5">
+      <button
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Copy message"
+        title="Copy"
+        onclick={() => copyMessage(message)}
+      >
+        {#if copiedMessageId === message.id}
+          <Check size={12} class="text-success" />
+        {:else}
+          <Copy size={12} />
+        {/if}
+      </button>
+      <button
+        class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="Continue in a new thread"
+        title="Continue in a new thread"
+        disabled={convertingMessageId !== null}
+        onclick={() => continueInThread(message)}
+      >
+        {#if convertingMessageId === message.id}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <GitFork size={12} />
+        {/if}
+      </button>
+    </div>
+    <div
+      class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+    >
+      <span class="flex items-center gap-1 text-[10px] text-dimmed">
+        <AgentIcon agentId={messageHarnessId(message)} size={14} />
+        {messageHarnessName(message)}
+      </span>
+      {#if msgModelLabel}
+        <span class="text-[10px] text-dimmed">·</span>
+        <span class="flex items-center gap-1 text-[10px] text-dimmed">
+          <VendorIcon name={messageProvider(message)?.name ?? msgModelLabel} size={12} />
+          {msgModelLabel}
+          {#if msgFastVariant}
+            <Zap
+              size={10}
+              class="text-accent"
+              fill="currentColor"
+              aria-label="Fast inference"
+              title={`Fast inference — ~${msgFastVariant.multiplier}× usage`}
+            />
+          {/if}
+        </span>
+      {/if}
+      <span class="text-[10px] text-dimmed"
+        >· {formatTime(message.completedAt ?? message.createdAt)}</span
+      >
+      {#if msgDuration !== null}
+        <span class="text-[10px] text-dimmed tabular-nums">· {formatDuration(msgDuration)}</span>
+      {:else if message.completedAt && message.createdAt}
+        <span class="text-[10px] text-dimmed tabular-nums"
+          >· {formatDuration(message.completedAt - message.createdAt)}</span
+        >
+      {/if}
+    </div>
+  </div>
+{/snippet}

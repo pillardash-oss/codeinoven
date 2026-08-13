@@ -42,9 +42,11 @@ const PRIORITY_KEYWORDS: Record<string, MemoryPriority> = {
 
 const SCOPE_KEYWORDS: Record<string, MemoryScope> = {
   global: 'global',
+  projects: 'projects',
   project: 'project',
   thread: 'thread',
-  chat: 'chat'
+  chat: 'chat',
+  chats: 'chat'
 }
 
 /**

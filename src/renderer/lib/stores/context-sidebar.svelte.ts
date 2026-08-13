@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { gitState } from './git.svelte'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -65,6 +66,22 @@ export interface SourcesContextTab {
   threadId: string
 }
 
+export interface GitContextTab {
+  id: string
+  kind: 'git'
+  title: string
+  projectId: string
+  threadId: string
+}
+
+export interface CloudDeploymentContextTab {
+  id: string
+  kind: 'cloud-deployment'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface NotificationContextTab {
   id: string
   kind: 'notifications'
@@ -93,7 +110,7 @@ export interface TemporaryChatContextTab {
   temporaryChatId: string
   sessionId: string | null
   mode: TemporaryChatMode
-  selection: string
+  selections: string[]
   initialContext: string
   settings: ThreadSettings
   messages: AgentMessage[]
@@ -115,6 +132,8 @@ export type ContextSidebarTab =
   | SubagentContextTab
   | DebuggerContextTab
   | SourcesContextTab
+  | GitContextTab
+  | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
   | MemoryContextTab
@@ -124,7 +143,17 @@ interface ThreadSidebarContext {
   threadId: string
   tabs: ContextSidebarTab[]
   activeTabId: string | null
+  /** Last active non-terminal tab — kept so the sidebar keeps a focused tab
+   * while a terminal (docked at the bottom) holds the global active tab. */
+  sidebarActiveTabId: string | null
+  /** Last active terminal tab — kept so the bottom dock keeps a focused tab
+   * while a sidebar tab holds the global active tab. */
+  terminalActiveTabId: string | null
   visible: boolean
+  /** Whether the bottom terminal dock is open. Only meaningful while
+   * `terminalPlacement === 'bottom'`; lets the dock hide independently of the
+   * sidebar (e.g. from the header terminal toggle). */
+  terminalDockOpen: boolean
   terminalSequence: number
 }
 
@@ -177,6 +206,122 @@ class ContextSidebarState {
 
   get activeTab(): ContextSidebarTab | null {
     return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
+  }
+
+  /**
+   * Tabs shown in the right sidebar. When the terminal is docked at the
+   * bottom, terminal tabs live in the dock and are excluded here; otherwise
+   * every tab (including terminals) renders in the sidebar.
+   */
+  get sidebarTabs(): ContextSidebarTab[] {
+    const tabs = this.activeContext?.tabs ?? EMPTY_TABS
+    return this.terminalPlacement === 'bottom'
+      ? tabs.filter((tab) => tab.kind !== 'terminal')
+      : tabs
+  }
+
+  /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
+  get terminalTabs(): TerminalContextTab[] {
+    if (this.terminalPlacement !== 'bottom') return EMPTY_TABS as TerminalContextTab[]
+    return (this.activeContext?.tabs ?? EMPTY_TABS).filter(
+      (tab): tab is TerminalContextTab => tab.kind === 'terminal'
+    )
+  }
+
+  /**
+   * Whether the right sidebar should render at all. Independent of the bottom
+   * terminal dock: when the sidebar has no non-terminal tabs it still renders
+   * its empty/actions state so the user can add files, git, sources, etc.
+   */
+  get sidebarVisible(): boolean {
+    return this.visible
+  }
+
+  /**
+   * Whether the bottom terminal dock should render at all. Fully independent
+   * of the right sidebar — hiding the sidebar never hides the dock.
+   */
+  get terminalDockVisible(): boolean {
+    return (
+      this.terminalPlacement === 'bottom' &&
+      this.activeContext?.terminalDockOpen !== false &&
+      this.terminalTabs.length > 0
+    )
+  }
+
+  /** Toggle the bottom terminal dock without touching the sidebar. */
+  toggleTerminalDock(): void {
+    const context = this.activeContext
+    if (!context || this.terminalPlacement !== 'bottom') return
+    context.terminalDockOpen = !context.terminalDockOpen
+  }
+
+  /** Move terminals between the sidebar and the bottom dock. */
+  setTerminalPlacement(placement: TerminalPlacement): void {
+    this.terminalPlacement = placement
+    const context = this.activeContext
+    if (!context) return
+    if (placement === 'bottom') {
+      context.terminalDockOpen = true
+      const sidebarTabs = context.tabs.filter((tab) => tab.kind !== 'terminal')
+      if (sidebarTabs.length === 0) {
+        // Nothing else lives in the sidebar — close it; only the dock stays.
+        context.visible = false
+      } else {
+        // Bring the remaining (last active non-terminal) tab into focus.
+        const focusId =
+          context.sidebarActiveTabId &&
+          sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
+            ? context.sidebarActiveTabId
+            : (sidebarTabs.at(-1)?.id ?? null)
+        if (focusId) {
+          context.activeTabId = focusId
+          context.sidebarActiveTabId = focusId
+        }
+        context.visible = true
+      }
+    } else {
+      // Terminals rejoin the sidebar — reveal it so the shell stays visible.
+      context.visible = true
+    }
+  }
+
+  /** Active tab id for the right sidebar (ignores terminal tabs). */
+  get sidebarActiveTabId(): string | null {
+    if (this.terminalPlacement === 'right') return this.activeTabId
+    const context = this.activeContext
+    if (!context) return null
+    if (
+      context.sidebarActiveTabId &&
+      this.sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
+    ) {
+      return context.sidebarActiveTabId
+    }
+    return this.sidebarTabs.at(-1)?.id ?? null
+  }
+
+  /** Active tab id for the bottom terminal dock. */
+  get terminalActiveTabId(): string | null {
+    if (this.terminalPlacement !== 'bottom') return null
+    const context = this.activeContext
+    if (!context) return null
+    if (
+      context.terminalActiveTabId &&
+      this.terminalTabs.some((tab) => tab.id === context.terminalActiveTabId)
+    ) {
+      return context.terminalActiveTabId
+    }
+    return this.terminalTabs.at(-1)?.id ?? null
+  }
+
+  /** The tab the sidebar content should render for. */
+  get sidebarActiveTab(): ContextSidebarTab | null {
+    return this.sidebarTabs.find((tab) => tab.id === this.sidebarActiveTabId) ?? null
+  }
+
+  /** The terminal the dock content should render for. */
+  get terminalActiveTab(): TerminalContextTab | null {
+    return this.terminalTabs.find((tab) => tab.id === this.terminalActiveTabId) ?? null
   }
 
   threadIdForProject(projectId: string): string | null {
@@ -289,12 +434,15 @@ class ContextSidebarState {
     }
   }
 
+  /** Rewrite a sidebar tab's file mapping. Returns whether any tab was remapped
+   *  so callers can fall back to opening a fresh sidebar tab when the workspace
+   *  tab has no matching sidebar tab anymore (e.g. after the tab was closed). */
   remapProjectFile(
     projectId: string,
     previousFileTabId: string,
     nextFileTabId: string,
     nextPath: string
-  ): void {
+  ): boolean {
     for (const context of Object.values(this.contexts)) {
       const index = context.tabs.findIndex(
         (tab) =>
@@ -312,6 +460,25 @@ class ContextSidebarState {
         path: nextPath
       }
       if (context.activeTabId === previous.id) context.activeTabId = nextId
+      return true
+    }
+    return false
+  }
+
+  /** Stop rendering a file tab as a preview (italicised) — used when the user
+   *  starts editing it, which pins the tab. */
+  pinProjectFile(projectId: string, fileTabId: string): void {
+    for (const context of Object.values(this.contexts)) {
+      for (const tab of context.tabs) {
+        if (
+          tab.kind === 'files' &&
+          tab.projectId === projectId &&
+          tab.fileTabId === fileTabId &&
+          tab.preview
+        ) {
+          tab.preview = false
+        }
+      }
     }
   }
 
@@ -386,6 +553,44 @@ class ContextSidebarState {
     })
   }
 
+  openGit(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `git:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+    } else {
+      this.open(context, {
+        id,
+        kind: 'git',
+        title: 'Git',
+        projectId,
+        threadId
+      })
+    }
+    // Opening the git panel is an event-driven refresh trigger: the store
+    // re-reads local status and the connection-gated PR indicators so the
+    // panel never shows data older than the moment it was opened.
+    gitState.notifyGitPanelOpened(projectId)
+  }
+
+  openCloudDeployments(projectId: string, threadId: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `cloud-deployment:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'cloud-deployment',
+      title: 'Cloud Deployments',
+      projectId,
+      threadId
+    })
+  }
+
   openMemory(projectId: string, threadId: string, section?: MemorySection): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `memory:${projectId}:${threadId}`
@@ -435,7 +640,10 @@ class ContextSidebarState {
         threadId: '',
         tabs: [],
         activeTabId: null,
+        sidebarActiveTabId: null,
+        terminalActiveTabId: null,
         visible: false,
+        terminalDockOpen: false,
         terminalSequence: 0
       }
       this.contexts[globalKey] = global
@@ -460,9 +668,32 @@ class ContextSidebarState {
     mode: TemporaryChatMode,
     selection: string,
     initialContext: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    selectionAttached = true
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
+
+    // Combine repeated "Quick chat" selections into the same tab as long as it
+    // has not yet sent its first message, so a user can build up one quick chat
+    // with multiple selections and ask across all of them. Once the tab has a
+    // message, further selections open a fresh tab.
+    if (mode === 'quick' && selectionAttached) {
+      const existing = context.tabs.find(
+        (tab): tab is TemporaryChatContextTab =>
+          tab.kind === 'temporary-chat' &&
+          tab.mode === 'quick' &&
+          !tab.expired &&
+          !tab.busy &&
+          tab.messages.length === 0
+      )
+      if (existing) {
+        existing.selections = [...existing.selections, selection]
+        this.focusInContext(context, existing.id)
+        this.touchTemporaryChat(existing)
+        return existing
+      }
+    }
+
     const temporaryChatId = crypto.randomUUID()
     const tab: TemporaryChatContextTab = {
       id: `temporary-chat:${temporaryChatId}`,
@@ -473,14 +704,14 @@ class ContextSidebarState {
       temporaryChatId,
       sessionId: null,
       mode,
-      selection,
+      selections: selectionAttached ? [selection] : [],
       initialContext,
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
       messages: [],
       busy: false,
       error: '',
       draft: '',
-      selectionAttached: true,
+      selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
       sessionStarted: false,
@@ -518,7 +749,7 @@ class ContextSidebarState {
       temporaryChatId,
       sessionId: null,
       mode: 'audit',
-      selection: '',
+      selections: [],
       initialContext: '',
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
       messages: [],
@@ -570,7 +801,9 @@ class ContextSidebarState {
     tab.busy = false
     tab.error = ''
     tab.draft = ''
-    tab.selectionAttached = true
+    // Re-attach the selections on restart only when there are any — a quick chat
+    // opened from the last agent turn has no selection attached.
+    tab.selectionAttached = tab.selections.length > 0
     tab.selectionMessageId = null
     tab.autoPromptSent = false
     tab.sessionStarted = false
@@ -717,10 +950,20 @@ class ContextSidebarState {
     if (tab.kind === 'temporary-chat') {
       this.clearTemporaryChatExpiry(tab.temporaryChatId)
     }
+    const closedKind = tab.kind
     context.tabs = context.tabs.filter((tab) => tab.id !== id)
     if (context.activeTabId === id) {
       const replacement = context.tabs[Math.min(index, context.tabs.length - 1)]
       context.activeTabId = replacement?.id ?? null
+    }
+    if (closedKind === 'terminal') {
+      if (context.terminalActiveTabId === id) {
+        const replacement = context.tabs.filter((t) => t.kind === 'terminal').at(-1)
+        context.terminalActiveTabId = replacement?.id ?? null
+      }
+    } else if (context.sidebarActiveTabId === id) {
+      const replacement = context.tabs.filter((t) => t.kind !== 'terminal').at(-1)
+      context.sidebarActiveTabId = replacement?.id ?? null
     }
     if (context.tabs.length === 0) {
       context.visible = false
@@ -751,10 +994,6 @@ class ContextSidebarState {
     )
   }
 
-  setTerminalPlacement(placement: TerminalPlacement): void {
-    this.terminalPlacement = placement
-  }
-
   private get activeContext(): ThreadSidebarContext | null {
     return this.activeKey ? (this.contexts[this.activeKey] ?? null) : null
   }
@@ -780,7 +1019,10 @@ class ContextSidebarState {
       threadId,
       tabs: [],
       activeTabId: null,
+      sidebarActiveTabId: null,
+      terminalActiveTabId: null,
       visible: false,
+      terminalDockOpen: false,
       terminalSequence: 0
     }
     this.contexts[key] = context
@@ -790,7 +1032,8 @@ class ContextSidebarState {
   private focusInContext(context: ThreadSidebarContext, id: string): void {
     if (!context.tabs.some((tab) => tab.id === id)) return
     context.activeTabId = id
-    context.visible = true
+    this.trackRegionActiveTab(context, id)
+    this.revealRegion(context, id, false)
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
@@ -802,7 +1045,37 @@ class ContextSidebarState {
       context.tabs = [...context.tabs, tab]
     }
     context.activeTabId = tab.id
-    context.visible = true
+    this.trackRegionActiveTab(context, tab.id)
+    this.revealRegion(context, tab.id, true)
+  }
+
+  /** Remember which area (sidebar vs bottom dock) owns the focused tab. */
+  private trackRegionActiveTab(context: ThreadSidebarContext, id: string): void {
+    const tab = context.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'terminal') {
+      context.terminalActiveTabId = id
+    } else {
+      context.sidebarActiveTabId = id
+    }
+  }
+
+  /**
+   * Reveal only the region the tab belongs to, keeping the two regions
+   * independent:
+   * - Terminal tabs docked at the bottom open the dock; on a brand-new open
+   *   the sidebar is revealed too so its add-actions stay reachable.
+   * - Everything else reveals the sidebar. The dock is never touched.
+   */
+  private revealRegion(context: ThreadSidebarContext, id: string, opening: boolean): void {
+    const tab = context.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
+      context.terminalDockOpen = true
+      if (opening) context.visible = true
+    } else {
+      context.visible = true
+    }
   }
 
   private scheduleTemporaryChatExpiry(tab: TemporaryChatContextTab): void {

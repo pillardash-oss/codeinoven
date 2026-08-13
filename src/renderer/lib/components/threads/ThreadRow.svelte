@@ -7,16 +7,27 @@
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
-  import { projectIdentityTitle, remoteOriginLabel } from '$lib/project-location'
-  import { projectRemotes } from '$lib/stores/project-remotes.svelte'
-  import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
+  import { longPress } from '$lib/long-press.svelte'
+  import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import {
+    coordinatorHasActiveDelegates,
+    DEFAULT_SCOPE_BUCKET_ID,
+    isThreadWorking,
+    isOrchestrationChildThread,
+    type ScopeBucket
+  } from '$shared/types'
   import type { Thread } from '$shared/types'
 
   interface Props {
@@ -28,10 +39,10 @@
     picker?: boolean
     /** Project icon URL to show before the status indicator. */
     projectIconUrl?: string | null
-    /** Override the displayed pin state (e.g. for timeline pins). */
-    pinnedOverride?: boolean
     /** Whether "Change Scope" appears in the actions menu. */
     showChangeScope?: boolean
+    /** Hide the scope chip — used when the surrounding view is already scoped. */
+    hideScope?: boolean
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
@@ -49,8 +60,8 @@
     compact = false,
     picker = false,
     projectIconUrl = null,
-    pinnedOverride = undefined,
     showChangeScope = true,
+    hideScope = false,
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
@@ -63,12 +74,15 @@
   const componentId = $props.id()
   let renameThreadFormId = $derived(`${componentId}-thread-${thread.id}-rename-form`)
 
+  /** Title shown in the UI — the real title once generated, else a draft label. */
+  let displayTitle = $derived(effectiveThreadTitle(thread))
+
   /** How long the "todo" dot is held after a draft is cleared on send, so the
    *  badge does not flash to the thread's stale status before the harness
    *  confirms the new working state. */
   const DRAFT_GRACE_MS = 2000
 
-  let effectivePinned = $derived(pinnedOverride ?? thread.pinned)
+  let effectivePinned = $derived(thread.pinned)
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
 
@@ -109,12 +123,87 @@
   }
 
   let hovered = $state(false)
+  /** The ellipsis was revealed by a long press, so closing the menu hides it again. */
+  let touchRevealed = $state(false)
   let showMenu = $state(false)
   let showPopover = $state(false)
   let rowEl = $state<HTMLDivElement>()
   let popoverEl = $state<HTMLDivElement>()
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
+
+  /** Distinct harnesses used in this thread's session, newest first. */
+  let harnessIds = $derived.by((): string[] => {
+    // Defensive dedupe: a harness may appear more than once in the source data
+    // (legacy rows before the usage table grouped by harness), and a keyed each
+    // block over it must never see the same key twice.
+    const ids = Array.from(new Set(thread.usedHarnessIds ?? []))
+    if (thread.settings?.harnessId && !ids.includes(thread.settings.harnessId)) {
+      return [...ids, thread.settings.harnessId]
+    }
+    return ids
+  })
+
+  /** How many harness icons fit on the single bottom line before the +n chip. */
+  let visibleHarnessCount = $state(0)
+  let harnessRowEl = $state<HTMLSpanElement>()
+
+  const captureHarnessRowElement: Attachment<HTMLSpanElement> = (element) => {
+    harnessRowEl = element
+    return () => {
+      if (harnessRowEl === element) harnessRowEl = undefined
+    }
+  }
+
+  function harnessName(id: string): string {
+    return getAgentIcon(id)?.name ?? id
+  }
+
+  /** Provider name for the thread's current model, resolved for its vendor icon. */
+  let currentModelProviderName = $derived.by((): string | null => {
+    const providerId = thread.settings?.providerId
+    if (!providerId) return null
+    const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
+    return providers.find((provider) => provider.id === providerId)?.name ?? null
+  })
+
+  $effect(() => {
+    const row = harnessRowEl
+    if (!row) return
+    let frame = 0
+    const measure = (): void => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const total = harnessIds.length
+        if (total === 0) {
+          visibleHarnessCount = 0
+          return
+        }
+        // Each icon is 14px with a 4px gap. Show as many harness icons as fit,
+        // favouring icons over a +n number; only reserve space for the +n chip
+        // once something actually overflows. Never render more icons than fit
+        // so overflow-hidden can't clip a partial icon off the edge.
+        const ICON = 14
+        const GAP = 4
+        const PLUS = 22
+        const perIcon = ICON + GAP
+        let count = Math.floor((row.clientWidth + GAP) / perIcon)
+        count = Math.min(total, count)
+        if (count < total) {
+          const withPlus = Math.floor((row.clientWidth - PLUS + GAP) / perIcon)
+          count = Math.max(1, Math.min(total, withPlus))
+        }
+        visibleHarnessCount = count
+      })
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(row)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  })
 
   const captureRowElement: Attachment<HTMLDivElement> = (element) => {
     rowEl = element
@@ -179,7 +268,7 @@
   ] as MenuItem[])
 
   const POPOVER_WIDTH = 256
-  const POPOVER_ESTIMATED_HEIGHT = 230
+  const POPOVER_ESTIMATED_HEIGHT = 290
   const POPOVER_GAP = 8
   const VIEWPORT_MARGIN = 8
 
@@ -198,8 +287,18 @@
   /** Threads with any unsent composer content read as "todo" (filled gray dot). */
   let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
 
+  /** Orchestration worker/auditor threads stay silent: never presented as unread. */
+  let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
+
   /** Whether the harness is processing a turn for this thread right now. */
   let isBusy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+
+  /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
+  let delegatedWorkActive = $derived(
+    coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+  )
+
+  let isWorking = $derived(isThreadWorking(thread) || delegatedWorkActive)
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -233,18 +332,15 @@
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
-    if (thread.status === 'planning' || thread.status === 'executing') return 'working'
+    if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
-    if (!thread.read) return 'unread'
+    if (!effectiveRead) return 'unread'
     if (thread.status === 'completed') return 'completed'
     if (isBusy) return 'working'
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
-
-  /** Whether the agent is actively working — controls the pulsing row border. */
-  let isWorking = $derived(thread.status === 'planning' || thread.status === 'executing')
 
   /** Human-readable stage label, only meaningful when isWorking is true. */
   let stageLabel = $derived.by((): string => {
@@ -254,7 +350,7 @@
       case 'executing':
         return 'Working'
       default:
-        return ''
+        return delegatedWorkActive ? 'Coordinating delegated work' : ''
     }
   })
 
@@ -264,13 +360,9 @@
     return scopeState.bucketFor(thread.projectId, bucketId)
   })
 
-  /** Project (repo) that owns this thread, resolved for the hover popover. */
-  let project = $derived(
-    scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-  )
-
-  /** Git remote origin URL for the thread's project, resolved lazily on hover. */
-  let remoteOriginUrl = $derived(projectRemotes.get(thread.projectId) ?? null)
+  /** Whether the bottom line (scope/harness/time) is shown. Single harness on
+   *  the default scope collapses to a one-line row with the time on the top. */
+  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1)
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -332,13 +424,6 @@
     return `${years}y`
   }
 
-  function formatDate(ts: number): string {
-    return new Date(ts).toLocaleString(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short'
-    })
-  }
-
   // ─── Hover interactions ──────────────────────────────────────────────────
 
   function calculatePopoverPosition(
@@ -382,7 +467,6 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
-    if (project) void projectRemotes.ensure(thread.projectId, project.path)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -392,6 +476,18 @@
     hovered = false
     clearTimeout(popoverTimer)
     showPopover = false
+  }
+
+  /**
+   * Touch has no hover and no right click, so a long press stands in for both:
+   * it reveals the row's ellipsis and opens the same actions menu.
+   */
+  function openActionsByTouch(): void {
+    touchRevealed = true
+    hovered = true
+    showPopover = false
+    clearTimeout(popoverTimer)
+    showMenu = true
   }
 
   /** Right-click anywhere on the row opens the actions menu. */
@@ -434,55 +530,104 @@
 
 {#if picker}
   <div
-    class="flex min-h-11 w-full items-center gap-2 border-l-2 px-2.5 py-2 text-left transition-colors {selected
-      ? 'border-foreground bg-elevated'
+    class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
+      ? 'border-foreground bg-selected'
       : isWorking
         ? 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
-    title={thread.title}
+    title={displayTitle}
   >
-    {#if projectIconUrl}
-      <img src={projectIconUrl} alt="" class="h-4 w-4 shrink-0 rounded object-contain" />
-    {/if}
-    <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
-      {#if badgeProps}
-        <StatusBadge
-          stage={badgeProps.stage}
-          kind={badgeProps.kind}
-          variant={badgeProps.variant ?? 'dot'}
-          animated={badgeProps.animated}
-          size="md"
-          title={isWorking ? stageLabel : threadState}
-        />
-      {:else}
-        <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
+    <span class="flex w-full min-w-0 items-center gap-2">
+      {#if projectIconUrl}
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
       {/if}
-    </span>
-    <span class="min-w-0 flex-1">
-      <span
-        class="block truncate text-[13px] {threadState === 'approval' || threadState === 'unread'
-          ? 'font-medium text-foreground'
-          : 'text-foreground'}"
-      >
-        {threadState === 'approval' ? 'Needs Attention' : thread.title}
+      <span class="flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+        {#if badgeProps}
+          <StatusBadge
+            stage={badgeProps.stage}
+            kind={badgeProps.kind}
+            variant={badgeProps.variant ?? 'dot'}
+            animated={badgeProps.animated}
+            size="md"
+            title={isWorking ? stageLabel : threadState}
+          />
+        {:else}
+          <span
+            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+            aria-label={threadState}
+            title={threadState}
+          ></span>
+        {/if}
       </span>
-      {#if thread.branch}
-        <span class="mt-0.5 block truncate font-mono text-[10px] text-dimmed">
-          {thread.branch}
+      <span
+        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+          ? 'font-medium text-warning'
+          : threadState === 'unread'
+            ? 'font-medium text-foreground'
+            : 'text-foreground'}"
+      >
+        {displayTitle}
+      </span>
+      {#if !showBottomRow}
+        <span class="whitespace-nowrap text-[10px] text-dimmed">
+          {relativeTime(thread.createdAt)}
+        </span>
+      {:else if currentModelProviderName}
+        <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+          <VendorIcon name={currentModelProviderName} size={13} />
         </span>
       {/if}
+      {#if selected}
+        <Check size={13} class="shrink-0 text-primary" />
+      {/if}
     </span>
-    <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
-      {relativeTime(thread.createdAt)}
-    </span>
-    {#if selected}
-      <Check size={13} class="shrink-0 text-primary" />
+
+    {#if showBottomRow}
+      <span class="grid w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+        {#if harnessIds.length > 0}
+          <span class="flex min-w-0 items-center gap-1 overflow-hidden">
+            {#each harnessIds.slice(0, 3) as harnessId (harnessId)}
+              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+            {/each}
+            {#if harnessIds.length > 3}
+              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+                +{harnessIds.length - 3}
+              </span>
+            {/if}
+          </span>
+        {/if}
+
+        {#if scopeBucket}
+          <span
+            class="relative flex min-w-0 items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            title={scopeBucket.name}
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
+          >
+            {#if scopeIconUrl}
+              <img
+                src={scopeIconUrl}
+                alt=""
+                class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
+                draggable="false"
+              />
+            {/if}
+            <span class="truncate">{scopeBucket.name}</span>
+          </span>
+        {/if}
+
+        <span class="flex min-w-0 justify-end">
+          <span class="whitespace-nowrap text-[10px] text-dimmed">
+            {relativeTime(thread.createdAt)}
+          </span>
+        </span>
+      </span>
     {/if}
   </div>
 {/if}
 
 <div
   {@attach captureRowElement}
+  {@attach longPress({ onLongPress: openActionsByTouch, enabled: !picker })}
   class="relative {picker ? 'hidden' : ''}"
   role="listitem"
   data-thread-row={thread.id}
@@ -509,14 +654,14 @@
       : 'opacity-0'}"
   ></div>
   <button
-    class="flex w-full items-center gap-2 border-l-2 text-left transition-colors {compact
+    class="relative mb-1 flex w-full flex-col gap-1 border-l-2 text-left transition-colors {compact
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
-      ? 'border-foreground bg-elevated'
+      ? 'border-foreground bg-selected'
       : isWorking
         ? 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
-    title={thread.title}
+    title={displayTitle}
     onclick={() => {
       showPopover = false
       clearTimeout(popoverTimer)
@@ -524,96 +669,179 @@
     }}
     oncontextmenu={openContextMenu}
   >
-    <!-- Project icon -->
-    {#if projectIconUrl}
-      <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
-    {/if}
+    <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
+    <span
+      class="pointer-events-none absolute inset-x-0 bottom-0 h-px"
+      aria-hidden="true"
+      style="background: linear-gradient(to right, transparent, var(--color-border-strong), transparent);"
+    ></span>
+    <span class="flex w-full min-w-0 items-center gap-2">
+      <!-- Project icon -->
+      {#if projectIconUrl}
+        <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
+      {/if}
 
-    <!-- State indicator / pin toggle — fixed slot, opacity crossfade, zero layout shift -->
-    <span class="relative h-4 w-4 shrink-0">
-      <span
-        class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
-          ? 'opacity-0'
-          : 'opacity-100'}"
-        aria-hidden={pinVisible}
-      >
-        {#if badgeProps}
-          <StatusBadge
-            stage={badgeProps.stage}
-            kind={badgeProps.kind}
-            variant={badgeProps.variant ?? 'dot'}
-            animated={badgeProps.animated}
-            size="md"
-            title={isWorking ? stageLabel : threadState}
-          />
-        {:else}
-          <span
-            class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
-            aria-label={threadState}
-            title={threadState}
-          ></span>
-        {/if}
-      </span>
-      <span
-        role="button"
-        tabindex={-1}
-        class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
-          ? 'opacity-100'
-          : 'pointer-events-none opacity-0'}"
-        aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
-        aria-hidden={!pinVisible}
-        title={effectivePinned ? 'Unpin' : 'Pin'}
-        onclick={(e: MouseEvent) => {
-          e.stopPropagation()
-          onTogglePin(thread)
-        }}
-        onkeydown={(e: KeyboardEvent) => {
-          if (e.key === 'Enter') {
+      <!-- State indicator / pin toggle — fixed slot, opacity crossfade, zero layout shift -->
+      <span class="relative h-4 w-4 shrink-0">
+        <span
+          class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 {pinVisible
+            ? 'opacity-0'
+            : 'opacity-100'}"
+          aria-hidden={pinVisible}
+        >
+          {#if badgeProps}
+            <StatusBadge
+              stage={badgeProps.stage}
+              kind={badgeProps.kind}
+              variant={badgeProps.variant ?? 'dot'}
+              animated={badgeProps.animated}
+              size="md"
+              title={isWorking ? stageLabel : threadState}
+            />
+          {:else}
+            <span
+              class="h-2 w-2 rounded-full border border-border-strong bg-transparent"
+              aria-label={threadState}
+              title={threadState}
+            ></span>
+          {/if}
+        </span>
+        <span
+          role="button"
+          tabindex={-1}
+          class="absolute inset-0 flex items-center justify-center rounded transition-opacity duration-150 hover:bg-overlay {pinVisible
+            ? 'opacity-100'
+            : 'pointer-events-none opacity-0'}"
+          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
+          aria-hidden={!pinVisible}
+          title={effectivePinned ? 'Unpin' : 'Pin'}
+          onclick={(e: MouseEvent) => {
             e.stopPropagation()
             onTogglePin(thread)
-          }
-        }}
-      >
-        <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
-      </span>
-    </span>
-
-    <!-- Title -->
-    <span
-      class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
-        ? 'font-medium text-warning'
-        : threadState === 'unread'
-          ? 'font-medium text-foreground'
-          : 'text-foreground'}"
-    >
-      {threadState === 'approval' ? 'Needs Attention' : thread.title}
-    </span>
-
-    <!-- Time ↔ ellipsis — auto-width slot, time never wraps, opacity crossfade -->
-    <span class="relative flex h-5 min-w-6 shrink-0 items-center justify-end">
-      <span
-        class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
-          ? 'opacity-0'
-          : 'opacity-100'}"
-        aria-hidden={hovered}
-      >
-        {relativeTime(thread.createdAt)}
-      </span>
-      <span
-        class="absolute inset-0 flex items-center justify-end transition-opacity duration-150 {hovered
-          ? 'opacity-100'
-          : 'pointer-events-none opacity-0'}"
-        aria-hidden={!hovered}
-      >
-        <ThreadDropdown
-          bind:open={showMenu}
-          items={menuItems}
-          onOpen={() => {
-            showPopover = false
-            clearTimeout(popoverTimer)
           }}
-        />
+          onkeydown={(e: KeyboardEvent) => {
+            if (e.key === 'Enter') {
+              e.stopPropagation()
+              onTogglePin(thread)
+            }
+          }}
+        >
+          <Pin size={11} class={effectivePinned ? 'text-accent' : 'text-dimmed'} />
+        </span>
       </span>
+
+      <!-- Title -->
+      <span
+        class="min-w-0 flex-1 truncate text-[13px] {threadState === 'approval'
+          ? 'font-medium text-warning'
+          : threadState === 'unread'
+            ? 'font-medium text-foreground'
+            : 'text-foreground'}"
+      >
+        {displayTitle}
+      </span>
+
+      <!-- Single-line default: time rides on the top line -->
+      {#if !showBottomRow}
+        <span
+          class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+            ? 'opacity-0'
+            : 'opacity-100'}"
+          aria-hidden={hovered}
+        >
+          {relativeTime(thread.createdAt)}
+        </span>
+      {:else}
+        <!-- Current working / last worked model — provider icon alone -->
+        {#if currentModelProviderName}
+          <span
+            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={thread.settings?.modelId ?? 'Model'}
+          >
+            <VendorIcon name={currentModelProviderName} size={13} />
+          </span>
+        {/if}
+      {/if}
+    </span>
+
+    {#if showBottomRow}
+      <!-- Bottom line: harnesses (left), scope (center), time (right) -->
+      <span
+        class="grid w-full min-w-0 items-center gap-3 {harnessIds.length > 0
+          ? 'grid-cols-[minmax(3.2rem,1fr)_auto_minmax(0,1fr)]'
+          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]'}"
+      >
+        {#if harnessIds.length > 0}
+          <span
+            {@attach captureHarnessRowElement}
+            class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
+          >
+            {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
+              <AgentIcon agentId={harnessId} label={harnessName(harnessId)} size={14} />
+            {/each}
+            {#if visibleHarnessCount < harnessIds.length}
+              <span class="shrink-0 text-[10px] tabular-nums text-dimmed">
+                +{harnessIds.length - visibleHarnessCount}
+              </span>
+            {/if}
+          </span>
+        {/if}
+
+        {#if scopeBucket && !hideScope}
+          <span
+            class="relative col-start-2 flex min-w-0 max-w-[7rem] items-center gap-1 border-b px-1 pb-1 pt-0.5 text-[9px] text-muted"
+            title={scopeBucket.name}
+            style="border-bottom-color: color-mix(in srgb, {scopeColor} 20%, var(--color-muted));"
+          >
+            {#if scopeIconUrl}
+              <img
+                src={scopeIconUrl}
+                alt=""
+                class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
+                draggable="false"
+              />
+            {/if}
+            <span class="truncate">{scopeBucket.name}</span>
+          </span>
+        {/if}
+
+        <span class="col-start-3 flex min-w-0 justify-end">
+          <span
+            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+          >
+            {relativeTime(thread.createdAt)}
+          </span>
+        </span>
+      </span>
+    {/if}
+
+    <!-- Ellipsis — far right, vertically centered across the whole row, shown on hover -->
+    <span
+      class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center transition-opacity duration-150 {hovered
+        ? 'opacity-100'
+        : 'pointer-events-none opacity-0'}"
+      aria-hidden={!hovered}
+    >
+      <ThreadDropdown
+        bind:open={showMenu}
+        items={menuItems}
+        vertical={showBottomRow}
+        onOpen={() => {
+          showPopover = false
+          clearTimeout(popoverTimer)
+        }}
+        onClose={() => {
+          if (!touchRevealed) return
+          touchRevealed = false
+          hovered = false
+        }}
+      />
     </span>
   </button>
 
@@ -625,64 +853,7 @@
         class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
         style="left: {popoverPos.x}px; top: {popoverPos.y}px"
       >
-        <p class="mb-2 break-words text-sm font-medium text-foreground">{thread.title}</p>
-        <dl class="space-y-1.5 text-[11px]">
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Repo</dt>
-            <dd
-              class="truncate text-muted"
-              title={remoteOriginUrl ?? (project ? projectIdentityTitle(project) : undefined)}
-            >
-              {remoteOriginUrl ? remoteOriginLabel(remoteOriginUrl) : (project?.name ?? '—')}
-            </dd>
-          </div>
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Branch</dt>
-            <dd class="truncate text-muted">{thread.branch ?? '—'}</dd>
-          </div>
-          {#if scopeBucket}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Scope</dt>
-              <dd class="flex items-center gap-1 truncate text-muted">
-                {#if scopeIconUrl}
-                  <img
-                    src={scopeIconUrl}
-                    alt=""
-                    class="h-3 w-3 shrink-0 object-contain"
-                    draggable="false"
-                  />
-                {/if}
-                <span>{scopeBucket.name}</span>
-              </dd>
-            </div>
-          {/if}
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Created</dt>
-            <dd class="text-muted">{formatDate(thread.createdAt)}</dd>
-          </div>
-          <div class="flex gap-2">
-            <dt class="w-16 shrink-0 text-dimmed">Updated</dt>
-            <dd class="text-muted">{formatDate(thread.updatedAt)}</dd>
-          </div>
-          {#if isWorking}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
-              <dd class="flex items-center gap-1 text-muted">
-                <StatusBadge stage="working" animated size="sm" title={stageLabel} />
-                {stageLabel}
-              </dd>
-            </div>
-          {/if}
-          {#if threadState === 'approval'}
-            <div class="flex gap-2">
-              <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
-              <dd class="flex items-center gap-1 text-warning">
-                <StatusBadge kind="attention" animated size="sm" title="Needs Attention" />
-                Needs Attention
-              </dd>
-            </div>
-          {/if}
-        </dl>
+        <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
       </div>
     </Portal>
   {/if}

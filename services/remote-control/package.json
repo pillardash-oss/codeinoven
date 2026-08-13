@@ -1,0 +1,9 @@
+{
+  "name": "@codeinoven/remote-control",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "better-auth": "1.6.26",
+    "jose": "^6.2.8"
+  }
+}

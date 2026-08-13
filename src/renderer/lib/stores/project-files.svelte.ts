@@ -5,8 +5,11 @@ import type {
   ProjectTextFile,
   TurnCheckpointFileDiff
 } from '$shared/types'
+import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
 export type ProjectFileView = 'diff' | 'preview' | 'source'
@@ -54,17 +57,18 @@ export interface ProjectFileClipboard {
   mode: ProjectFileTransferMode
 }
 
-export function createProjectFilesState(): ProjectFilesState {
+export function createProjectFilesState(projectId: string): ProjectFilesState {
+  const explorer = fileExplorerStore.project(projectId)
   return {
     entriesByDirectory: {},
     loadingDirectories: {},
     directoryErrors: {},
-    expandedDirectories: {},
+    expandedDirectories: { ...explorer.expandedDirectories },
     tabs: [],
     activeTabId: null,
-    explorerVisible: true,
-    revealedPath: null,
-    selectedPaths: [],
+    explorerVisible: explorer.explorerVisible,
+    revealedPath: explorer.revealedPath,
+    selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
     sessions: {}
@@ -81,10 +85,17 @@ function errorMessage(error: unknown): string {
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
   private directoryLoads = new Map<string, Promise<void>>()
+  /** Fresh project states whose persisted expansion still needs to be populated. */
+  private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
 
   ensureState(projectId: string): ProjectFilesState {
-    return (this.projects[projectId] ??= createProjectFilesState())
+    const existing = this.projects[projectId]
+    if (existing) return existing
+    const state = createProjectFilesState(projectId)
+    this.projects[projectId] = state
+    this.pendingRestores.add(projectId)
+    return state
   }
 
   getState(projectId: string): ProjectFilesState {
@@ -109,6 +120,13 @@ class ProjectFilesWorkspace {
           projectId,
           directory
         )
+        // The first time the root is listed for a freshly hydrated project,
+        // populate the previously expanded directories so the restored tree is
+        // actually visible (and the reveal/scroll logic can land on the path).
+        if (directory === '' && this.pendingRestores.has(projectId)) {
+          this.pendingRestores.delete(projectId)
+          await this.restoreExpandedDirectories(projectId, state)
+        }
       } catch (error) {
         state.directoryErrors[directory] = errorMessage(error)
       } finally {
@@ -123,13 +141,40 @@ class ProjectFilesWorkspace {
     }
   }
 
+  /** Load the persisted expanded directories so the restored tree is populated. */
+  private async restoreExpandedDirectories(
+    projectId: string,
+    state: ProjectFilesState
+  ): Promise<void> {
+    const expanded = Object.keys(state.expandedDirectories)
+      .filter((candidate) => candidate && !state.entriesByDirectory[candidate])
+      .sort((left, right) => left.split('/').length - right.split('/').length)
+    for (const directory of expanded) {
+      await this.loadDirectory(projectId, directory)
+    }
+  }
+
+  /** Persist a project's file-explorer position through the single explorer store. */
+  private persistExplorer(projectId: string): void {
+    const state = this.projects[projectId]
+    if (!state) return
+    fileExplorerStore.update(projectId, {
+      expandedDirectories: { ...state.expandedDirectories },
+      revealedPath: state.revealedPath,
+      selectedPaths: [...state.selectedPaths],
+      explorerVisible: state.explorerVisible
+    })
+  }
+
   async toggleDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
     if (state.expandedDirectories[directory]) {
       delete state.expandedDirectories[directory]
+      this.persistExplorer(projectId)
       return
     }
     state.expandedDirectories[directory] = true
+    this.persistExplorer(projectId)
     await this.loadDirectory(projectId, directory)
   }
 
@@ -139,12 +184,14 @@ class ProjectFilesWorkspace {
 
   setSelection(projectId: string, paths: string[]): void {
     this.ensureState(projectId).selectedPaths = paths
+    this.persistExplorer(projectId)
   }
 
   clearSelection(projectId: string): void {
     const state = this.ensureState(projectId)
     state.selectedPaths = []
     state.selectionAnchor = null
+    this.persistExplorer(projectId)
   }
 
   toggleSelection(projectId: string, path: string): void {
@@ -152,6 +199,7 @@ class ProjectFilesWorkspace {
     state.selectedPaths = state.selectedPaths.includes(path)
       ? state.selectedPaths.filter((candidate) => candidate !== path)
       : [...state.selectedPaths, path]
+    this.persistExplorer(projectId)
   }
 
   setSelectionAnchor(projectId: string, path: string | null): void {
@@ -193,7 +241,9 @@ class ProjectFilesWorkspace {
     }
     this.removePathsFromState(state, projectId, ordered)
     const parents = new Set(ordered.map((path) => this.parentDirectory(path)))
-    await Promise.all([...parents].map((directory) => this.loadDirectory(projectId, directory, true)))
+    await Promise.all(
+      [...parents].map((directory) => this.loadDirectory(projectId, directory, true))
+    )
   }
 
   async pasteFile(projectId: string, destinationDirectory: string): Promise<void> {
@@ -370,7 +420,7 @@ class ProjectFilesWorkspace {
     const existingTab = state.tabs.find((t) => t.id === nextTabId)
     if (existingTab) {
       state.activeTabId = nextTabId
-      contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+      this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, existingTab.preview)
       return
     }
 
@@ -386,7 +436,7 @@ class ProjectFilesWorkspace {
     if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
     state.activeTabId = nextTabId
 
-    contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+    this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, tab.preview)
 
     if (state.sessions[nextPath]) return
     if (this.isPreviewableBinary(nextMime)) return
@@ -435,7 +485,11 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const index = state.tabs.findIndex((tab) => tab.id === tabId)
     if (index === -1) return
+    const closed = state.tabs[index]
     state.tabs.splice(index, 1)
+    if (!state.tabs.some((tab) => tab.path === closed.path)) {
+      delete state.sessions[closed.path]
+    }
     if (state.activeTabId !== tabId) return
     state.activeTabId = state.tabs[index]?.id ?? state.tabs[index - 1]?.id ?? null
   }
@@ -443,6 +497,7 @@ class ProjectFilesWorkspace {
   toggleExplorer(projectId: string): void {
     const state = this.ensureState(projectId)
     state.explorerVisible = !state.explorerVisible
+    this.persistExplorer(projectId)
   }
 
   async revealDirectory(projectId: string, directory: string): Promise<void> {
@@ -455,6 +510,7 @@ class ProjectFilesWorkspace {
       state.expandedDirectories[ancestor] = true
       await this.loadDirectory(projectId, ancestor)
     }
+    this.persistExplorer(projectId)
   }
 
   async revealFile(projectId: string, path: string): Promise<void> {
@@ -464,16 +520,19 @@ class ProjectFilesWorkspace {
     await this.revealDirectory(projectId, this.parentDirectory(path))
     state.revealedPath = path
     state.selectedPaths = [path]
+    this.persistExplorer(projectId)
   }
 
   setRevealedPath(projectId: string, path: string | null): void {
     const state = this.ensureState(projectId)
     state.revealedPath = path
+    this.persistExplorer(projectId)
   }
 
   markDirectoryExpanded(projectId: string, directory: string): void {
     const state = this.ensureState(projectId)
     state.expandedDirectories[directory] = true
+    this.persistExplorer(projectId)
   }
 
   setView(projectId: string, tabId: string, view: ProjectFileView): void {
@@ -483,8 +542,20 @@ class ProjectFilesWorkspace {
   }
 
   updateDraft(projectId: string, path: string, content: string): void {
-    const session = this.ensureState(projectId).sessions[path]
-    if (session) session.draft = content
+    const state = this.ensureState(projectId)
+    const session = state.sessions[path]
+    if (!session) return
+    session.draft = content
+    // Editing a preview tab pins it — the user is actively working on the file.
+    if (session.draft !== session.source.content) {
+      const tab = state.tabs.find(
+        (candidate) => candidate.origin === 'working' && candidate.path === path
+      )
+      if (tab && tab.preview) {
+        tab.preview = false
+        contextSidebarState.pinProjectFile(projectId, tab.id)
+      }
+    }
   }
 
   async save(projectId: string, path: string): Promise<void> {
@@ -505,11 +576,24 @@ class ProjectFilesWorkspace {
       )
       session.source = source
       if (session.draft === submittedDraft) session.draft = source.content
+      await this.reconcileConflictAfterSave(projectId, path)
     } catch (error) {
       session.error = errorMessage(error)
     } finally {
       session.saving = false
     }
+  }
+
+  /**
+   * After a successful editor save, mark the path resolved in git when it was
+   * a conflicted file and no conflict markers remain. The main side stages it
+   * (`git add`), which clears the unmerged index entry and lets the git panel
+   * drop it from the conflicted list.
+   */
+  private async reconcileConflictAfterSave(projectId: string, path: string): Promise<void> {
+    if (gitState.activeProjectId !== projectId) return
+    if (!gitState.conflicted.includes(path)) return
+    await gitState.resolveConflicted(projectId, path)
   }
 
   async reload(projectId: string, path: string): Promise<void> {
@@ -620,7 +704,7 @@ class ProjectFilesWorkspace {
     const existingTab = state.tabs.find((candidate) => candidate.id === nextTabId)
     if (existingTab) {
       state.activeTabId = nextTabId
-      contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+      this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
       return
     }
 
@@ -636,7 +720,7 @@ class ProjectFilesWorkspace {
     if (isPdfMime(nextMime) || isImageMime(nextMime)) tab.view = 'preview'
     state.activeTabId = nextTabId
 
-    contextSidebarState.remapProjectFile(projectId, currentTabId, nextTabId, nextPath)
+    this.remapOrOpenContextTab(projectId, currentTabId, nextTabId, nextPath, preview)
 
     if (state.sessions[nextPath]) return
     if (this.isPreviewableBinary(nextMime)) return
@@ -665,6 +749,81 @@ class ProjectFilesWorkspace {
     }
   }
 
+  /** Repoint a sidebar tab at a different file tab, or create one when the
+   *  workspace tab has no matching sidebar tab (its tab may have been closed).
+   *  Prevents a single file click from silently failing to show a preview. */
+  private remapOrOpenContextTab(
+    projectId: string,
+    previousTabId: string,
+    nextTabId: string,
+    nextPath: string,
+    preview: boolean
+  ): void {
+    const remapped = contextSidebarState.remapProjectFile(
+      projectId,
+      previousTabId,
+      nextTabId,
+      nextPath
+    )
+    if (remapped) return
+    const threadId = contextSidebarState.threadIdForProject(projectId)
+    if (threadId)
+      contextSidebarState.openProjectFile(projectId, threadId, nextTabId, nextPath, preview)
+  }
+
+  /** Pin an open file tab (stop showing it as an italic preview) — used when
+   *  the user starts editing the file. */
+  pinTab(projectId: string, tabId: string): void {
+    const state = this.ensureState(projectId)
+    const tab = state.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || !tab.preview) return
+    tab.preview = false
+    contextSidebarState.pinProjectFile(projectId, tab.id)
+  }
+
+  /** Files with unsaved edits across every prepared project. */
+  getUnsavedFiles(): CloseConfirmationFile[] {
+    const files: CloseConfirmationFile[] = []
+    for (const projectId of Object.keys(this.projects)) {
+      const state = this.projects[projectId]
+      for (const session of Object.values(state.sessions)) {
+        if (session.draft !== session.source.content) {
+          files.push({ projectId, path: session.source.path })
+        }
+      }
+    }
+    return files
+  }
+
+  /** Save every unsaved file across all projects. Returns false if any save
+   *  failed (the caller should keep the app open). */
+  async saveAllUnsaved(): Promise<boolean> {
+    let saved = true
+    for (const projectId of Object.keys(this.projects)) {
+      const state = this.projects[projectId]
+      for (const path of Object.keys(state.sessions)) {
+        const session = state.sessions[path]
+        if (session.draft === session.source.content || session.saving) continue
+        const submittedDraft = session.draft
+        try {
+          const source = await invoke(
+            'projectFiles:save',
+            projectId,
+            path,
+            submittedDraft,
+            session.source.revision
+          )
+          session.source = source
+          if (session.draft === submittedDraft) session.draft = source.content
+        } catch {
+          session.error = 'The file could not be saved'
+          saved = false
+        }
+      }
+    }
+    return saved
+  }
+
   private parentDirectory(path: string): string {
     const segments = path.split('/')
     segments.pop()
@@ -677,11 +836,7 @@ class ProjectFilesWorkspace {
 
   /** Clear all explorer state for the given paths (files or folders) and their
    *  subtrees: sessions, tabs, expansion, cache, reveal, and selection. */
-  private removePathsFromState(
-    state: ProjectFilesState,
-    projectId: string,
-    paths: string[]
-  ): void {
+  private removePathsFromState(state: ProjectFilesState, projectId: string, paths: string[]): void {
     const isWithin = (candidate: string): boolean =>
       paths.some((path) => candidate === path || candidate.startsWith(`${path}/`))
     for (const candidate of Object.keys(state.sessions)) {
@@ -704,6 +859,7 @@ class ProjectFilesWorkspace {
     }
     if (state.revealedPath && isWithin(state.revealedPath)) state.revealedPath = null
     state.selectedPaths = state.selectedPaths.filter((candidate) => !isWithin(candidate))
+    this.persistExplorer(projectId)
   }
 
   private remapMovedFile(projectId: string, previousPath: string, nextPath: string): void {
@@ -769,6 +925,7 @@ class ProjectFilesWorkspace {
     if (state.revealedPath && isWithin(state.revealedPath)) {
       state.revealedPath = translate(state.revealedPath)
     }
+    this.persistExplorer(projectId)
   }
 
   private async runFileOperation<T>(operation: () => Promise<T>): Promise<T> {

@@ -8,6 +8,13 @@ interface AssignmentWorkflowRow {
   status: AssignmentStatus
 }
 
+export interface AssignmentApiCapabilityRow {
+  role: 'coordinator' | 'worker'
+  assignmentId: string
+  threadId: string
+  taskId?: string
+}
+
 export class AssignmentRepo {
   constructor(private readonly db: Database) {}
 
@@ -153,5 +160,92 @@ export class AssignmentRepo {
       assignmentId,
       snapshotHash
     )
+  }
+
+  // ─── Assignment API durability ────────────────────────────────────────────
+
+  /** Persist the loopback port so a restart can rebind the same Assignment API. */
+  saveApiPort(port: number): void {
+    this.db.run(
+      'INSERT INTO db_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+      'assignment_api_port',
+      String(port)
+    )
+  }
+
+  loadApiPort(): number | null {
+    const row = this.db.get<{ value: string }>(
+      "SELECT value FROM db_meta WHERE key = 'assignment_api_port'"
+    )
+    const port = Number(row?.value)
+    return Number.isSafeInteger(port) && port > 0 ? port : null
+  }
+
+  /** Persist a capability token so in-flight sessions survive app restarts. */
+  saveApiCapability(token: string, capability: AssignmentApiCapabilityRow): void {
+    this.db.run(
+      `INSERT INTO assignment_api_capabilities(
+        token, role, assignment_id, thread_id, task_id, created_at
+      ) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(token) DO UPDATE SET
+        role=excluded.role,
+        assignment_id=excluded.assignment_id,
+        thread_id=excluded.thread_id,
+        task_id=excluded.task_id`,
+      token,
+      capability.role,
+      capability.assignmentId,
+      capability.threadId,
+      capability.taskId ?? null,
+      Date.now()
+    )
+  }
+
+  /** Load every persisted capability token, keyed by token. */
+  loadApiCapabilities(): Map<string, AssignmentApiCapabilityRow> {
+    const rows = this.db.all<{
+      token: string
+      role: 'coordinator' | 'worker'
+      assignment_id: string
+      thread_id: string
+      task_id: string | null
+    }>('SELECT token, role, assignment_id, thread_id, task_id FROM assignment_api_capabilities')
+    const capabilities = new Map<string, AssignmentApiCapabilityRow>()
+    for (const row of rows) {
+      capabilities.set(row.token, {
+        role: row.role,
+        assignmentId: row.assignment_id,
+        threadId: row.thread_id,
+        ...(row.task_id ? { taskId: row.task_id } : {})
+      })
+    }
+    return capabilities
+  }
+
+  /** Drop every capability token when an Assignment is explicitly stopped. */
+  removeApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.db.run('DELETE FROM assignment_api_capabilities WHERE assignment_id=?', assignmentId)
+  }
+
+  /** Drop completed workers while preserving the coordinator through the audit lifecycle. */
+  removeWorkerApiCapabilitiesForAssignment(assignmentId: string): void {
+    this.db.run(
+      "DELETE FROM assignment_api_capabilities WHERE assignment_id=? AND role='worker'",
+      assignmentId
+    )
+  }
+
+  /** Drop every capability issued to one worker thread after it is replaced. */
+  removeApiCapabilitiesForThread(assignmentId: string, threadId: string): void {
+    this.db.run(
+      'DELETE FROM assignment_api_capabilities WHERE assignment_id=? AND thread_id=?',
+      assignmentId,
+      threadId
+    )
+  }
+
+  /** Drop one capability that no longer matches the persisted Assignment graph. */
+  removeApiCapability(token: string): void {
+    this.db.run('DELETE FROM assignment_api_capabilities WHERE token=?', token)
   }
 }

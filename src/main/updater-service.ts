@@ -3,22 +3,33 @@ import { BrowserWindow, app } from 'electron'
 import { Logger } from './logger'
 import type { UpdaterStatus } from '../lib/ipc-contract'
 import type { StorageEngine } from './storage-engine'
-import type { ChatEngine } from './chat-engine'
+import { sendToRenderer } from './renderer-delivery'
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
-const DEFERRED_MAX_WAIT_MS = 30 * 60 * 1000
 const DEFERRED_POLL_MS = 5_000
+const PENDING_INSTALL_FILE = 'updater/install-pending.json'
 const { autoUpdater } = electronUpdater
+
+/** Anything that can report how much interactive work would be interrupted by a restart. */
+export interface SessionActivitySource {
+  activeSessionCount(): number
+}
+
+interface PendingInstallState {
+  pending: boolean
+  approved: boolean
+}
 
 export class UpdaterService {
   private storage: StorageEngine
-  private chatEngine: ChatEngine | null = null
+  private chatEngine: SessionActivitySource | null = null
+  private activitySources: SessionActivitySource[] = []
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
-  private deferredInstallTimer: ReturnType<typeof setTimeout> | null = null
   private deferredInstallPoll: ReturnType<typeof setInterval> | null = null
   private installPending = false
+  private installApproved = false
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -85,8 +96,13 @@ export class UpdaterService {
     })
   }
 
-  setChatEngine(engine: ChatEngine | null): void {
+  setChatEngine(engine: SessionActivitySource | null): void {
     this.chatEngine = engine
+  }
+
+  /** Register an extra activity source (terminal sessions, remote sessions, …). */
+  addActivitySource(source: SessionActivitySource): void {
+    this.activitySources.push(source)
   }
 
   get status(): UpdaterStatus {
@@ -104,13 +120,14 @@ export class UpdaterService {
     const status = this.status
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('updater:status', status)
+        sendToRenderer(win.webContents, 'updater:status', status)
       }
     }
   }
 
   start(): void {
-    if (this.timer) return
+    if (this.timer || !this._status.canAutoUpdate) return
+    void this.resumePendingInstall()
     void this.checkForUpdates()
     this.timer = setInterval(() => {
       void this.checkForUpdates()
@@ -123,10 +140,16 @@ export class UpdaterService {
       this.timer = null
     }
     this.clearDeferredInstall()
+    // Persist a still-pending install so the next launch resumes it.
+    if (this.installPending) {
+      void this.persistPendingInstall()
+    }
   }
 
   async checkForUpdates(): Promise<UpdaterStatus> {
+    if (!this._status.canAutoUpdate) return this.status
     try {
+      await this.applyConfiguredChannel()
       autoUpdater.checkForUpdates().catch((error: unknown) => {
         Logger.error('Updater: check failed', error)
         if (this._status.state !== 'downloaded' && this._status.state !== 'downloading') {
@@ -148,6 +171,24 @@ export class UpdaterService {
     return this.status
   }
 
+  /**
+   * Point the auto-updater at the configured release channel before checking.
+   * `nightly` resolves the GitHub provider's `latest-nightly.yml` feed; the
+   * default (stable) uses the published release feed.
+   */
+  private async applyConfiguredChannel(): Promise<void> {
+    try {
+      const config = await this.storage.getConfig()
+      const channel = config.updateChannel === 'nightly' ? 'nightly' : null
+      if (autoUpdater.channel !== channel) {
+        autoUpdater.channel = channel
+        Logger.dev('Updater: channel set to', channel ?? 'latest')
+      }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read update channel', error)
+    }
+  }
+
   async downloadUpdate(): Promise<void> {
     if (this._status.state !== 'available') return
     try {
@@ -167,10 +208,27 @@ export class UpdaterService {
     }
   }
 
+  /**
+   * Explicit user approval to install. Never interrupts active sessions: the
+   * install runs once every session and child process has finished.
+   */
   quitAndInstall(): void {
     if (this._status.state !== 'downloaded') return
+    this.installApproved = true
+    void this.persistPendingInstall()
+    void this.installWhenIdle()
+  }
+
+  /**
+   * Install once all sessions are idle — the safe, non-forced install path.
+   * Keeps waiting (polling) until every activity source reports idle, then
+   * installs exactly once. There is no timeout and no forced quit.
+   */
+  async installWhenIdle(): Promise<void> {
+    if (this._status.state !== 'downloaded') return
     this.installPending = true
-    void this.performDeferredInstall()
+    await this.persistPendingInstall()
+    this.performDeferredInstall()
   }
 
   private async handleAutoDownload(): Promise<void> {
@@ -181,62 +239,93 @@ export class UpdaterService {
   }
 
   private async handleAutoInstall(): Promise<void> {
-    const config = await this.storage.getConfig()
-    if (!config.autoInstallUpdates) return
-    this.installPending = true
-    void this.performDeferredInstall()
-  }
-
-  private async performDeferredInstall(): Promise<void> {
-    if (!this.chatEngine) {
-      this.quitAndInstallNow()
+    if (this.installPending) {
+      await this.installWhenIdle()
       return
     }
+    const config = await this.storage.getConfig()
+    if (!config.autoInstallUpdates) return
+    await this.installWhenIdle()
+  }
 
-    const activeCount = this.chatEngine.activeSessionCount()
+  /** Resume an install that was pending when the previous launch shut down. */
+  private async resumePendingInstall(): Promise<void> {
+    try {
+      const pending = await this.storage.read<PendingInstallState>(PENDING_INSTALL_FILE)
+      if (!pending?.pending) return
+      this.installPending = true
+      this.installApproved = pending.approved === true
+      if (this._status.state === 'downloaded') {
+        this.performDeferredInstall()
+      }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to resume pending install', error)
+    }
+  }
+
+  private async persistPendingInstall(): Promise<void> {
+    try {
+      await this.storage.write(PENDING_INSTALL_FILE, {
+        pending: this.installPending,
+        approved: this.installApproved
+      })
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to persist pending install', error)
+    }
+  }
+
+  private performDeferredInstall(): void {
+    if (!this.installPending) return
+    const activeCount = this.activeSessionCount()
     if (activeCount === 0) {
       this.quitAndInstallNow()
       return
     }
 
     this.updateState({ state: 'waiting' })
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        win.webContents.send('updater:waiting-for-threads', activeCount)
-      }
-    }
+    this.broadcastWaitingForThreads(activeCount)
 
-    const startTime = Date.now()
+    this.clearDeferredInstall()
     this.deferredInstallPoll = setInterval(() => {
-      const elapsed = Date.now() - startTime
-      if (elapsed >= DEFERRED_MAX_WAIT_MS) {
-        this.clearDeferredInstall()
-        this.quitAndInstallNow()
-        return
-      }
-      if (!this.chatEngine) {
-        this.clearDeferredInstall()
-        this.quitAndInstallNow()
-        return
-      }
-      const remaining = this.chatEngine.activeSessionCount()
+      const remaining = this.activeSessionCount()
       if (remaining === 0) {
         this.clearDeferredInstall()
         this.quitAndInstallNow()
+        return
       }
+      this.broadcastWaitingForThreads(remaining)
     }, DEFERRED_POLL_MS)
   }
 
+  private activeSessionCount(): number {
+    let count = this.chatEngine?.activeSessionCount() ?? 0
+    for (const source of this.activitySources) {
+      count += source.activeSessionCount()
+    }
+    return count
+  }
+
+  private broadcastWaitingForThreads(count: number): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+        sendToRenderer(win.webContents, 'updater:waiting-for-threads', count)
+      }
+    }
+  }
+
   private quitAndInstallNow(): void {
+    this.installPending = false
+    this.installApproved = false
     this.updateState({ state: 'idle' })
+    void this.storage
+      .write(PENDING_INSTALL_FILE, { pending: false, approved: false })
+      .catch((error: unknown) => {
+        Logger.error('Updater: failed to clear pending install', error)
+      })
     autoUpdater.quitAndInstall(false)
   }
 
   private clearDeferredInstall(): void {
-    if (this.deferredInstallTimer) {
-      clearTimeout(this.deferredInstallTimer)
-      this.deferredInstallTimer = null
-    }
     if (this.deferredInstallPoll) {
       clearInterval(this.deferredInstallPoll)
       this.deferredInstallPoll = null

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Ellipsis } from '@lucide/svelte'
+  import { Ellipsis, MoreVertical } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import type { Component } from 'svelte'
 
@@ -17,7 +17,11 @@
     title?: string
     ariaLabel?: string
     onOpen?: () => void
+    /** Fired when the menu closes — lets a touch reveal undo itself. */
+    onClose?: () => void
     open?: boolean
+    /** Use a vertical ellipsis for multi-row thread rows; horizontal otherwise. */
+    vertical?: boolean
   }
 
   let {
@@ -25,7 +29,9 @@
     title = 'Thread actions',
     ariaLabel = 'Thread actions',
     onOpen = () => undefined,
-    open = $bindable(false)
+    onClose = () => undefined,
+    open = $bindable(false),
+    vertical = false
   }: Props = $props()
 </script>
 
@@ -33,6 +39,7 @@
   bind:open
   onOpenChange={(o) => {
     if (o) onOpen()
+    else onClose()
   }}
 >
   <DropdownMenu.Trigger
@@ -45,7 +52,11 @@
       onOpen()
     }}
   >
-    <Ellipsis size={13} />
+    {#if vertical}
+      <MoreVertical size={13} />
+    {:else}
+      <Ellipsis size={13} />
+    {/if}
   </DropdownMenu.Trigger>
 
   <DropdownMenu.Portal>
@@ -63,7 +74,7 @@
           <DropdownMenu.Item
             disabled={item.disabled}
             class={[
-              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors',
+              'flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors max-md:py-2.5',
               item.danger
                 ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
                 : 'text-foreground hover:bg-elevated focus:bg-elevated',

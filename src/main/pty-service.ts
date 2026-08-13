@@ -1,10 +1,12 @@
-import { ipcMain, type WebContents } from 'electron'
+import type { WebContents } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { basename } from 'path'
 import * as pty from 'node-pty'
 import { APP_NAME } from '../lib/brand'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
 import { ProjectManager } from '../lib/engines/project-manager'
 import type { Database } from './database/database'
 import type { StorageEngine } from './storage-engine'
@@ -143,12 +145,12 @@ export class PtyService {
     })
 
     proc.onData((data) => {
-      this.sender?.send(`pty:data:${id}`, data)
+      sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
 
     proc.onExit(({ exitCode }) => {
       this.sessions.delete(id)
-      this.sender?.send(`pty:exit:${id}`, exitCode)
+      sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
         type: 'exit',
         terminalId: id,
@@ -211,6 +213,7 @@ export class PtyService {
       'cline',
       'pi',
       'agy',
+      'muse',
       'npm',
       'bun',
       'brew',
@@ -234,12 +237,12 @@ export class PtyService {
     })
 
     proc.onData((data) => {
-      this.sender?.send(`pty:data:${id}`, data)
+      sendToRenderer(this.sender, `pty:data:${id}`, data)
     })
 
     proc.onExit(({ exitCode }) => {
       this.sessions.delete(id)
-      this.sender?.send(`pty:exit:${id}`, exitCode)
+      sendToRenderer(this.sender, `pty:exit:${id}`, exitCode)
       void this.recordEvent({
         type: 'exit',
         terminalId: id,
@@ -300,5 +303,10 @@ export class PtyService {
     for (const id of this.sessions.keys()) {
       this.destroy(id)
     }
+  }
+
+  /** Number of live terminal sessions — any of which a forced restart would kill. */
+  activeSessionCount(): number {
+    return this.sessions.size
   }
 }

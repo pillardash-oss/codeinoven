@@ -325,6 +325,8 @@ function normalizeModels(
     const reasoning = typeof raw.reasoning === 'boolean' ? raw.reasoning : false
     const thinkingPresets = normalizeThinkingPresets(raw.thinkingPresets)
     const defaultThinkingLevel = normalizeThinkingLevel(raw.defaultThinkingLevel)
+    const vision =
+      raw.vision === undefined ? undefined : typeof raw.vision === 'boolean' ? raw.vision : false
     return {
       id: modelId,
       name,
@@ -333,6 +335,7 @@ function normalizeModels(
       reasoning,
       ...(thinkingPresets === undefined ? {} : { thinkingPresets }),
       ...(defaultThinkingLevel === undefined ? {} : { defaultThinkingLevel }),
+      ...(vision === undefined ? {} : { vision }),
       providerId
     } satisfies BaseUrlProviderModel
   })
@@ -485,6 +488,12 @@ function parseModels(value: unknown, providerId: string): BaseUrlProviderModel[]
     )
     const thinkingPresets = parseThinkingPresets(raw['thinkingPresets'])
     const defaultThinkingLevel = parseDefaultThinkingLevel(raw['defaultThinkingLevel'])
+    const vision =
+      raw['vision'] === undefined
+        ? undefined
+        : typeof raw['vision'] === 'boolean'
+          ? raw['vision']
+          : false
     return {
       id,
       name,
@@ -493,7 +502,8 @@ function parseModels(value: unknown, providerId: string): BaseUrlProviderModel[]
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       ...(thinkingPresets === undefined ? {} : { thinkingPresets }),
-      ...(defaultThinkingLevel === undefined ? {} : { defaultThinkingLevel })
+      ...(defaultThinkingLevel === undefined ? {} : { defaultThinkingLevel }),
+      ...(vision === undefined ? {} : { vision })
     } satisfies BaseUrlProviderModel
   })
 }

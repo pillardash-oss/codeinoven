@@ -62,7 +62,14 @@
   let canSignIn = $derived(
     authStatus !== null &&
       authStatus.capabilities !== null &&
-      authStatus.capabilities.loginHandoff !== false
+      authStatus.capabilities.loginHandoff !== false &&
+      !(harness.id === 'antigravity' && authStatus.state === 'authenticated')
+  )
+
+  /** Antigravity has one keyring-backed Google account and no explicit login
+   * command. Its bare `agy` launch is only a login handoff while signed out. */
+  let antigravityConnected = $derived(
+    harness.id === 'antigravity' && authStatus?.state === 'authenticated'
   )
 
   /**
@@ -263,6 +270,10 @@
           Add any OpenAI-compatible endpoint by base URL — Ollama, LM Studio, llama.cpp, or a hosted
           gateway. Models appear in the picker after the next agent turn.
         </p>
+      {:else if antigravityConnected}
+        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+          Antigravity is already connected through the Google account in your system keyring.
+        </p>
       {:else if pickerLogin}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Runs {harness.name}’s own interactive provider picker in a built-in terminal — choose any
@@ -295,6 +306,14 @@
             onclick={cancelConnection}
           >
             <X size={13} /> Cancel connection
+          </button>
+        {:else if antigravityConnected}
+          <button
+            class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-muted"
+            type="button"
+            disabled
+          >
+            <CheckCircle2 size={13} /> Already connected
           </button>
         {:else if canSignIn}
           <button
