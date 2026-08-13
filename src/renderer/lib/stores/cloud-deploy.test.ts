@@ -312,17 +312,20 @@ describe('CloudDeployState store', () => {
     expect(invoke).toHaveBeenCalledTimes(3)
   })
 
-  it('ensureProject re-scopes the store to one project, dropping other projects data', async () => {
+  it('keeps every project cached when switching, so re-opening a project is instant', async () => {
     invoke.mockResolvedValue(overview)
     await cloudDeployState.ensureOverview('project-1', providerKind)
     await cloudDeployState.ensureOverview('project-2', providerKind)
     expect(invoke).toHaveBeenCalledTimes(2)
 
+    // Switching to project-2 must not drop project-1's cache.
     cloudDeployState.ensureProject('project-2')
-    // project-2 keeps its hot cache; project-1 was dropped and refetches on demand.
     await cloudDeployState.ensureOverview('project-2', providerKind)
     expect(invoke).toHaveBeenCalledTimes(2)
+
+    // Switching back to project-1 serves its cached overview without re-fetching.
+    cloudDeployState.ensureProject('project-1')
     await cloudDeployState.ensureOverview('project-1', providerKind)
-    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(invoke).toHaveBeenCalledTimes(2)
   })
 })

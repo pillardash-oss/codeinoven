@@ -116,19 +116,6 @@ export class CloudDeployState {
     return next
   }
 
-  /** Keep only the entries whose key starts with the given project prefix. */
-  private static keepByProjectPrefix<T>(
-    record: Record<string, T>,
-    projectId: string
-  ): Record<string, T> {
-    const prefix = `${projectId}/`
-    const next: Record<string, T> = {}
-    for (const [key, value] of Object.entries(record)) {
-      if (key.startsWith(prefix)) next[key] = value
-    }
-    return next
-  }
-
   /** True while a key is inside its post-failure cooldown. */
   private coolingDown(key: string): boolean {
     const failedAt = this.failures[key]
@@ -472,15 +459,9 @@ export class CloudDeployState {
     // references each run and feeds an infinite effect-update loop.
     if (this.scopedProjectId === projectId) return
     this.scopedProjectId = projectId
-    this.overviews = CloudDeployState.keepByProjectPrefix(this.overviews, projectId)
-    this.containerStatuses = CloudDeployState.keepByProjectPrefix(this.containerStatuses, projectId)
-    this.containerLogs = CloudDeployState.keepByProjectPrefix(this.containerLogs, projectId)
-    this.containerDeployments = CloudDeployState.keepByProjectPrefix(
-      this.containerDeployments,
-      projectId
-    )
-    this.failures = CloudDeployState.keepByProjectPrefix(this.failures, projectId)
-    this.requests = CloudDeployState.keepByProjectPrefix(this.requests, projectId)
+    // All cache keys are project-scoped, so there is no risk of cross-project
+    // collision. Keep every project's cached data so switching between projects
+    // with the panel open renders instantly instead of re-fetching.
     this.error = null
   }
 }
