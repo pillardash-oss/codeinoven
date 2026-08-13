@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    ArrowDown,
     ArrowLeft,
     Bot,
     ChevronDown,
@@ -53,6 +54,12 @@
   let activeMatch = $state(0)
   let searchInputEl = $state<HTMLInputElement | null>(null)
   let logScrollerEl = $state<HTMLElement | null>(null)
+
+  // Refreshing + tailing state for the log detail.
+  let refreshing = $state(false)
+  let tail = $state(false)
+  /** Used to auto-tail only when the log content actually grows. */
+  let lastLogLength = $state(0)
 
   const logKey = $derived(
     selectedDeploymentId
@@ -169,8 +176,51 @@
     }
   }
 
+  /**
+   * Force a full refresh of everything shown on the current screen:
+   * the deployment list, the container status, and — when a single deployment
+   * is open — that deployment's log. The refresh button spins while this runs.
+   */
+  async function refresh(): Promise<void> {
+    if (refreshing) return
+    refreshing = true
+    error = ''
+    logError = ''
+    try {
+      const list = await cloudDeployState.ensureDeployments(
+        projectId,
+        container.providerKind,
+        container.id,
+        true
+      )
+      if (list) deployments = list
+      const fresh = await cloudDeployState.ensureContainerStatus(
+        projectId,
+        container.providerKind,
+        container.id,
+        true
+      )
+      if (fresh) onUpdated(fresh)
+      if (selectedDeploymentId) {
+        await cloudDeployState.ensureContainerLog(
+          projectId,
+          container.providerKind,
+          container.id,
+          selectedDeploymentId,
+          true
+        )
+      }
+    } catch (reason) {
+      error = message(reason)
+    } finally {
+      refreshing = false
+    }
+  }
+
   async function selectDeployment(deployment: CloudDeploymentDeployment): Promise<void> {
     selectedDeploymentId = deployment.id
+    tail = false
+    lastLogLength = 0
     logError = ''
     logLoading = true
     try {
@@ -184,6 +234,44 @@
       logError = message(reason)
     } finally {
       logLoading = false
+    }
+  }
+
+  /**
+   * Auto-refresh the open deployment's log every 5 seconds while its status is
+   * `building`. The interval is torn down whenever the deployment stops being
+   * `building` (success/failed), the user navigates back to the list, or this
+   * component unmounts (sidebar closed, thread switched, app closed). The store
+   * dedupes concurrent requests, and the `refreshing` guard prevents clashing
+   * refreshes when a poll overlaps a manual refresh.
+   */
+  $effect(() => {
+    const status = selectedDeployment?.status
+    if (status !== 'building') {
+      tail = false
+      return
+    }
+    const timer = setInterval(() => void refresh(), 5_000)
+    return () => clearInterval(timer)
+  })
+
+  /** When tailing, keep the view pinned to the newest lines as the log grows. */
+  $effect(() => {
+    if (!tail) return
+    const length = logLines.length
+    if (length <= lastLogLength) return
+    lastLogLength = length
+    requestAnimationFrame(() => {
+      logScrollerEl?.scrollTo({ top: logScrollerEl.scrollHeight })
+    })
+  })
+
+  function toggleTail(): void {
+    tail = !tail
+    if (tail) {
+      requestAnimationFrame(() => {
+        logScrollerEl?.scrollTo({ top: logScrollerEl.scrollHeight })
+      })
     }
   }
 
@@ -223,7 +311,10 @@
           class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
           title="Back to deployments"
           aria-label="Back to deployments"
-          onclick={() => (selectedDeploymentId = null)}
+          onclick={() => {
+            selectedDeploymentId = null
+            tail = false
+          }}
         >
           <ArrowLeft size={13} />
         </button>
@@ -266,12 +357,23 @@
       <button
         type="button"
         class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Refresh deployments"
-        aria-label="Refresh deployments"
-        onclick={() => void loadDeployments(true)}
+        title="Refresh deployment log"
+        aria-label="Refresh deployment log"
+        onclick={() => void refresh()}
       >
-        <RefreshCw size={12} />
+        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
       </button>
+      {#if selectedDeployment}
+        <button
+          type="button"
+          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          title="Jump to the latest log lines"
+          aria-label="Jump to the latest log lines"
+          onclick={toggleTail}
+        >
+          <ArrowDown size={12} class={tail ? 'text-foreground' : ''} />
+        </button>
+      {/if}
       {#if container.url}
         <button
           type="button"

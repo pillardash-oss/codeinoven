@@ -179,14 +179,23 @@
     }
   }
 
+  /** True while the home screen refresh is running (spins the icon). */
+  let refreshingAll = $state(false)
+
   async function refreshAll(): Promise<void> {
-    for (const kind of providers) {
-      try {
-        await cloudDeployState.ensureOverview(projectId, kind, true)
-      } catch {
-        // The store surfaces a tailored message via its error channel; the
-        // panel keeps stale cached data (if any) on screen.
+    if (refreshingAll) return
+    refreshingAll = true
+    try {
+      for (const kind of providers) {
+        try {
+          await cloudDeployState.ensureOverview(projectId, kind, true)
+        } catch {
+          // The store surfaces a tailored message via its error channel; the
+          // panel keeps stale cached data (if any) on screen.
+        }
       }
+    } finally {
+      refreshingAll = false
     }
   }
 
@@ -324,7 +333,7 @@
           aria-label="Refresh deployments"
           onclick={() => void refreshAll()}
         >
-          <RefreshCw size={12} />
+          <RefreshCw size={12} class={refreshingAll ? 'animate-spin' : ''} />
         </button>
       {/if}
       <button
