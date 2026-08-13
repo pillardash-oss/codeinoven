@@ -51,6 +51,7 @@ import type {
   Plan,
   Project,
   ProjectFileEntry,
+  ProjectFileDropResult,
   ProjectFileInfo,
   ProjectFileTransferMode,
   ProjectTextFile,
@@ -1112,6 +1113,11 @@ export interface IpcInvokeContract {
     [projectId: string, sourcePaths: string[], destinationDirectory: string],
     ProjectFileEntry[]
   >
+  'projectFiles:dropPaths': Contract<
+    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    ProjectFileDropResult[]
+  >
+  'projectFiles:beginDrag': Contract<[projectId: string, relativePaths: string[]], void>
   'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
   'projectFiles:rename': Contract<
     [projectId: string, relativePath: string, name: string],

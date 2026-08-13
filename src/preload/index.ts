@@ -272,6 +272,8 @@ const INVOKE_CHANNELS = [
   'projectFiles:saveAs',
   'projectFiles:paste',
   'projectFiles:importPaths',
+  'projectFiles:dropPaths',
+  'projectFiles:beginDrag',
   'projectFiles:read',
   'projectFiles:rename',
   'projectFiles:save',

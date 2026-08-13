@@ -2973,6 +2973,27 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
+    'projectFiles:dropPaths',
+    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+      projectFilesService.dropPaths(
+        validateEntityId(projectId, 'Project ID'),
+        validateStringArray(sourcePaths, 'Dropped paths'),
+        requireString(destinationDirectory, 'Destination directory', true)
+      )
+  )
+  ipcMain.handle(
+    'projectFiles:beginDrag',
+    async (event, projectId: unknown, relativePaths: unknown) => {
+      const paths = await projectFilesService.resolveForDrag(
+        validateEntityId(projectId, 'Project ID'),
+        validateStringArray(relativePaths, 'Dragged paths')
+      )
+      if (paths.length === 0) return
+      const icon = await app.getFileIcon(paths[0], { size: 'normal' })
+      event.sender.startDrag({ file: paths[0], files: paths, icon })
+    }
+  )
+  ipcMain.handle(
     'projectFiles:save',
     (_, projectId: unknown, relativePath: unknown, content: unknown, expectedRevision: unknown) => {
       const revision = requireString(expectedRevision, 'Project file revision')

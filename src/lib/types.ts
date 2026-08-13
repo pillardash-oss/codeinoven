@@ -104,6 +104,12 @@ export interface ProjectFileInfo extends ProjectFileEntry {
 
 export type ProjectFileTransferMode = 'copy' | 'move'
 
+export interface ProjectFileDropResult {
+  entry: ProjectFileEntry
+  /** Previous project-relative path when the drop moved an existing project entry. */
+  movedFrom?: string
+}
+
 export interface ProjectTextFile {
   path: string
   content: string
