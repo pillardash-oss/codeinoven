@@ -146,11 +146,19 @@
       remoteStatus = status
       loading = false
     })
+    const unsubAccount = subscribe('account:profileChanged', (state) => {
+      accountState = state
+      accountError = ''
+      if (state.status === 'signed-in' && !remoteStatus?.cloud.desktopId) {
+        void beginCloudEnrollment()
+      }
+    })
     const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
       pendingApprovals = approvals
     })
     return () => {
       unsubStatus()
+      unsubAccount()
       unsubStepUp()
     }
   })
@@ -319,8 +327,8 @@
           <div>
             <p class="text-xs font-semibold text-foreground">Finish signing in in your browser</p>
             <p class="mt-1 text-xs leading-relaxed text-muted">
-              After Google or Apple returns you to the remote page, come back here and continue to
-              desktop enrollment.
+              CodeInOven will detect the secure callback and create your desktop connection code
+              automatically.
             </p>
           </div>
         </div>
@@ -330,7 +338,7 @@
           disabled={busy}
           onclick={() => void beginCloudEnrollment()}
         >
-          I’ve signed in — enroll desktop
+          Check sign-in and enroll desktop
         </button>
       </div>
     {:else}

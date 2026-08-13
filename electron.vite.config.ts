@@ -23,6 +23,11 @@ export default defineConfig(({ mode }) => {
         // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
           env.MAIN_VITE_REMOTE_API_ORIGIN ?? 'https://mobile.codeinoven.com'
+        ),
+        // Keep interactive account authentication on the dedicated account host.
+        // The API origin above remains the mobile/relay service boundary.
+        __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
+          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://auth.codeinoven.com'
         )
       },
       build: {
