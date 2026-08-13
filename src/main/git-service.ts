@@ -37,6 +37,13 @@ interface GitCommandError extends Error {
 
 const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
 
+function isUnbornBranchLogError(failure: unknown): boolean {
+  if (!(failure instanceof Error)) return false
+  const error = failure as GitCommandError
+  const message = error.gitError ?? error.message
+  return message.includes('does not have any commits yet')
+}
+
 /**
  * Main-process git runtime built on `simple-git` — the same thin wrapper over
  * the system `git` binary the app already execs in `repository-service`,
@@ -333,7 +340,13 @@ export class GitService {
           maxCount: Math.max(1, Math.min(limit, 200))
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
-        const history = await git.log(options)
+        let history
+        try {
+          history = await git.log(options)
+        } catch (failure) {
+          if (isUnbornBranchLogError(failure)) return []
+          throw failure
+        }
         return history.all.map((entry): GitCommitInfo => ({
           hash: entry.hash,
           shortHash: entry.hash.slice(0, 7),
