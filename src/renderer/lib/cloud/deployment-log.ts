@@ -4,15 +4,17 @@
  * Coolify deployment records carry their log as a JSON-encoded array of
  * entries shaped `{ command, output, type, timestamp, hidden, batch, order }`.
  * We render each entry as a timestamp line followed by its output line(s), and
- * mark lines emitted on `stderr` as errors so the UI can tint them destructively.
- * Anything that is not that JSON-array shape is treated as plain text and split
- * on newlines.
+ * mark lines that carry an explicit failure marker so the UI can tint them
+ * destructively. Build tools write progress and even success messages to
+ * `stderr`, so the stream is not used on its own to decide "error" — only the
+ * line text does. Anything that is not that JSON-array shape is treated as
+ * plain text and split on newlines.
  */
 
 export interface DeploymentLogLine {
   /** Human-readable text for this line. */
   text: string
-  /** True when this line came from `stderr` (a build/step error). */
+  /** True when this line represents an actual build/step failure. */
   isError: boolean
 }
 
@@ -21,6 +23,15 @@ interface CoolifyLogEntry {
   type?: unknown
   timestamp?: unknown
 }
+
+/**
+ * Strong failure indicators — a line carrying any of these is treated as an
+ * error regardless of which stream Coolify reported it on. This stops benign
+ * stderr progress/info (e.g. "Service ... built", which build tools write to
+ * stderr) from being tinted destructively.
+ */
+const FAILURE_MARKERS =
+  /(error|fatal|failed|failure|exit code|nonzero|exception|panic|killed|denied|permission denied|command not found|not found|could not|unable to|cannot|no such file|tsc: error|npm err|yarn error|make: \*\*\*)/iu
 
 const MONTH_NAMES = [
   'Jan',
@@ -69,11 +80,10 @@ export function parseDeploymentLog(raw: string): DeploymentLogLine[] {
       if (timestamp) {
         lines.push({ text: formatCoolifyTimestamp(timestamp), isError: false })
       }
-      const isError = entry.type === 'stderr'
       const outputLines = output.split(/\r?\n/u)
       for (const line of outputLines) {
         const trimmed = line.trim()
-        if (trimmed) lines.push({ text: line, isError })
+        if (trimmed) lines.push({ text: line, isError: isFailureLine(line) })
       }
     }
     return lines
@@ -82,7 +92,17 @@ export function parseDeploymentLog(raw: string): DeploymentLogLine[] {
   return source
     .split(/\r?\n/u)
     .filter((line) => line.trim() !== '')
-    .map((line) => ({ text: line, isError: false }))
+    .map((line) => ({ text: line, isError: isFailureLine(line) }))
+}
+
+/**
+ * Decide whether a single log line is a genuine failure. Coolify's build tools
+ * write progress and even success messages to `stderr`, so we only mark a line
+ * as an error when its text carries an explicit failure marker — never merely
+ * because it was emitted on stderr.
+ */
+function isFailureLine(line: string): boolean {
+  return FAILURE_MARKERS.test(line)
 }
 
 /** Serialize parsed lines back to a single readable string (e.g. for copying). */
