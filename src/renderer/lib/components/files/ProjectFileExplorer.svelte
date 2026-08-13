@@ -822,7 +822,7 @@
         <button
           type="button"
           data-tree-path={entry.path}
-          draggable
+          draggable="true"
           class={[
             'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
             isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
