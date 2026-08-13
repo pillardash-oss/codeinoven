@@ -259,7 +259,7 @@
         <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
           Deployment log
         </span>
-        {#if selectedDeployment.status}
+        {#if selectedDeployment.status && selectedDeployment.status !== 'unknown'}
           <span class="ml-1">
             <StatusPill tone={tone(selectedDeployment.status)}>
               {label(selectedDeployment.status)}
@@ -380,7 +380,9 @@
                   {deployment.updatedAt ? relativeTime(deployment.updatedAt) : '—'}
                 </span>
               </span>
-              <StatusPill tone={tone(deployment.status)}>{label(deployment.status)}</StatusPill>
+              {#if deployment.status !== 'unknown'}
+                <StatusPill tone={tone(deployment.status)}>{label(deployment.status)}</StatusPill>
+              {/if}
             </button>
           {/each}
         </div>

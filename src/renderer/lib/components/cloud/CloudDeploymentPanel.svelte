@@ -508,9 +508,11 @@
                             <p class="truncate text-[11px] font-medium text-foreground">
                               {container.label}
                             </p>
-                            <StatusPill tone={statusTone(container.status)}>
-                              {statusLabel(container.status)}
-                            </StatusPill>
+                            {#if container.status !== 'unknown'}
+                              <StatusPill tone={statusTone(container.status)}>
+                                {statusLabel(container.status)}
+                              </StatusPill>
+                            {/if}
                           </div>
                           <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
                             <span class="font-mono">{container.id}</span>
