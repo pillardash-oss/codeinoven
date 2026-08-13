@@ -66,6 +66,17 @@
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
   const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
+  const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
+
+  /**
+   * Whether the local head has commits the remote lacks — a push is only
+   * meaningful (and only possible) when this is true. When the head already
+   * exists on GitHub and the local copy is up to date (or behind it), pushing
+   * would be a pointless non-fast-forward rejection, so creation skips it.
+   */
+  const hasUnpushedHeadCommits = $derived(
+    willCreateCommit || headInfo === null || headInfo.remote === null || headInfo.ahead > 0
+  )
 
   /** Local-only commits must be pushed before GitHub can create the PR. */
   const canCreate = $derived(
@@ -124,7 +135,9 @@
       if (sequence !== compareSequence) return
       if (snapshot) {
         compare = snapshot
-        if (snapshot.source === 'local') pushLocal = true
+        // Local-only heads must be pushed (GitHub can't see them yet); remote
+        // heads only need a push when the local copy is ahead of the remote.
+        pushLocal = snapshot.source === 'local' || hasUnpushedHeadCommits
       } else {
         compare = null
         compareError = 'Could not compare these branches.'
@@ -142,13 +155,21 @@
     if (!originIdentity || !head || !base || !canCreate || submitting) return
     submitting = true
     try {
+      // Decided up front: after the commit below, the refreshed status clears
+      // staged changes, which would make hasUnpushedHeadCommits flip to false.
+      const commitMade = willCreateCommit
+      const shouldPush = pushLocal && (commitMade || hasUnpushedHeadCommits)
       // 1. Commit staged files first, using the PR title as the message.
-      if (commitLocal && hasStagedChanges) {
+      if (commitMade) {
         await gitState.commit(projectId, `commit: ${title.trim()}`)
         if (gitState.error) return
       }
-      // 2. Push committed local changes so they land in the pull request.
-      if (pushLocal) {
+      // 2. Push local commits only when the head actually has something the
+      //    remote doesn't — when the branch already exists on GitHub (and the
+      //    local copy is behind it, e.g. a remote-to-remote PR), there is
+      //    nothing to push and GitHub builds the PR from the remote refs, so
+      //    skipping the push avoids a spurious non-fast-forward rejection.
+      if (shouldPush) {
         const hasUpstream =
           gitState.branches.find((candidate) => candidate.name === head)?.remote != null
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
