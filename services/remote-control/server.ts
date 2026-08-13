@@ -1,17 +1,24 @@
 import { serve, type Server, type ServerWebSocket } from 'bun'
 import { isIP } from 'node:net'
 import { auth, authDatabasePath, closeAuthDatabase, remoteAuthSession } from './auth'
-import { RemoteControlDatabase } from './database'
+import { EnrollmentClaimConflictError, RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import { RelayHub } from './relay-hub'
 import { remoteBrowserOrigin, trustRemoteProxy } from './runtime-config'
-import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
+import type {
+  AuthenticatedSession,
+  DesktopRecord,
+  EnrollmentRecord,
+  RelaySocketData
+} from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
+const MAX_MEMORY_CLOCK_SKEW_MS = 5 * 60_000
+const SESSION_PERSIST_INTERVAL_MS = 5 * 60_000
 
 const port = positiveInteger(process.env['PORT'], 8877)
 const allowedOrigins = new Set([remoteBrowserOrigin])
@@ -23,6 +30,7 @@ const relayHub = new RelayHub({
 })
 const sessionSockets = new Map<string, Set<ServerWebSocket<RelaySocketData>>>()
 const rateBuckets = new Map<string, { count: number; resetAt: number }>()
+const persistedSessions = new Map<string, { identity: string; persistedAt: number }>()
 
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10)
@@ -93,20 +101,37 @@ async function sessionFromRequest(request: Request): Promise<AuthenticatedSessio
     userId: remoteSession.userId,
     expiresAt: remoteSession.expiresAt
   }
-  database.upsertOAuthUser({
-    id: remoteSession.userId,
-    email: remoteSession.email,
-    displayName: remoteSession.displayName,
-    image: remoteSession.image
-  })
-  database.rememberOAuthSession(session)
+  const now = Date.now()
+  const identity = JSON.stringify([
+    remoteSession.userId,
+    remoteSession.email,
+    remoteSession.displayName,
+    remoteSession.image,
+    remoteSession.expiresAt
+  ])
+  const persisted = persistedSessions.get(session.id)
+  if (
+    !persisted ||
+    persisted.identity !== identity ||
+    now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS
+  ) {
+    database.upsertOAuthUser({
+      id: remoteSession.userId,
+      email: remoteSession.email,
+      displayName: remoteSession.displayName,
+      image: remoteSession.image
+    })
+    database.rememberOAuthSession(session)
+    if (persistedSessions.size >= 10_000) persistedSessions.clear()
+    persistedSessions.set(session.id, { identity, persistedAt: now })
+  }
   return session
 }
 
-function desktopUserFromRequest(request: Request): string | null {
+function profileDesktopFromRequest(request: Request): DesktopRecord | null {
   const token = bearerToken(request)
   if (!token) return null
-  return database.findDesktopByTokenHash(tokenHash(token))?.user_id ?? null
+  return database.findDesktopByProfileTokenHash(tokenHash(token))
 }
 
 function emptyUsageSummary(): Record<string, unknown> {
@@ -132,7 +157,7 @@ function parseStoredJson(value: string, fallback: unknown): unknown {
   }
 }
 
-function nonnegativeNumber(value: unknown): boolean {
+function nonnegativeNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
@@ -170,7 +195,7 @@ interface ValidGlobalMemory extends Record<string, unknown> {
   updatedAt: number
 }
 
-function validGlobalMemory(value: unknown): value is ValidGlobalMemory {
+function validGlobalMemory(value: unknown, now = Date.now()): value is ValidGlobalMemory {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const entry = value as Record<string, unknown>
   return (
@@ -179,6 +204,7 @@ function validGlobalMemory(value: unknown): value is ValidGlobalMemory {
     typeof entry['content'] === 'string' &&
     typeof entry['enabled'] === 'boolean' &&
     nonnegativeNumber(entry['updatedAt']) &&
+    entry['updatedAt'] <= now + MAX_MEMORY_CLOCK_SKEW_MS &&
     typeof entry['category'] === 'string' &&
     typeof entry['priority'] === 'string' &&
     entry['scope'] === 'global' &&
@@ -189,10 +215,11 @@ function validGlobalMemory(value: unknown): value is ValidGlobalMemory {
 }
 
 function mergeGlobalMemories(storedJson: string | null, incoming: unknown[]): unknown[] {
+  const now = Date.now()
   const stored = storedJson ? parseStoredJson(storedJson, []) : []
   const merged = new Map<string, Record<string, unknown>>()
   for (const item of [...(Array.isArray(stored) ? stored : []), ...incoming]) {
-    if (!validGlobalMemory(item)) continue
+    if (!validGlobalMemory(item, now)) continue
     const entry = item
     const previous = merged.get(entry['id'])
     if (!previous || Number(previous['updatedAt'] ?? 0) <= entry['updatedAt']) {
@@ -215,7 +242,7 @@ function accountProfile(userId: string): Response {
       displayName: user.display_name,
       image: user.image_url,
       usage: stored ? parseStoredJson(stored.usage_json, emptyUsageSummary()) : emptyUsageSummary(),
-      globalMemories: stored ? parseStoredJson(stored.global_memories_json, []) : [],
+      globalMemories: stored ? mergeGlobalMemories(stored.global_memories_json, []) : [],
       updatedAt: stored?.updated_at ?? user.created_at
     }
   })
@@ -225,7 +252,12 @@ async function saveAccountProfile(request: Request, userId: string): Promise<Res
   const body = await readJsonObject(request, 512 * 1_024)
   const usage = body?.['usage']
   const memories = body?.['globalMemories']
-  if (!validUsageSummary(usage) || !Array.isArray(memories) || !memories.every(validGlobalMemory)) {
+  const now = Date.now()
+  if (
+    !validUsageSummary(usage) ||
+    !Array.isArray(memories) ||
+    !memories.every((memory) => validGlobalMemory(memory, now))
+  ) {
     return json({ error: 'invalid-profile' }, 400)
   }
   const usageJson = JSON.stringify(usage)
@@ -306,9 +338,13 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
   if (presentedToken && !existing) return json({ error: 'unauthorized' }, 401)
   const desktopId = existing?.id ?? crypto.randomUUID()
   const deviceToken = existing ? null : randomToken()
+  const profileToken = randomToken()
   const now = Date.now()
   if (existing) {
     database.deleteEnrollmentForDesktop(existing.id)
+    if (!database.rotateDesktopProfileToken(existing.id, tokenHash(profileToken))) {
+      return json({ error: 'unauthorized' }, 401)
+    }
   } else if (deviceToken) {
     database.createDesktop({
       id: desktopId,
@@ -317,6 +353,7 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
       platform,
       lan_endpoint: lanEndpoint,
       token_hash: tokenHash(deviceToken),
+      profile_token_hash: tokenHash(profileToken),
       control_secret_cipher: '',
       created_at: now,
       last_seen_at: null,
@@ -343,6 +380,7 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
       enrollmentId: enrollment.id,
       desktopId,
       deviceToken,
+      profileToken,
       code,
       expiresAt: enrollment.expires_at
     },
@@ -366,13 +404,20 @@ async function handleEnrollmentClaim(
   if (!withinRateLimit(request, `claim:${session.userId}`, 20)) {
     return json({ error: 'rate-limited' }, 429)
   }
-  const claimed = database.claimEnrollment({
-    codeHash: tokenHash(rawCode),
-    userId: session.userId,
-    mobileDeviceId,
-    mobileName,
-    mobilePublicKey
-  })
+  let claimed: { desktopId: string } | null
+  try {
+    claimed = database.claimEnrollment({
+      codeHash: tokenHash(rawCode),
+      userId: session.userId,
+      mobileDeviceId,
+      mobileName,
+      mobilePublicKey
+    })
+  } catch (error) {
+    if (!(error instanceof EnrollmentClaimConflictError)) throw error
+    database.audit('desktop.enrollment-conflict', session.userId, error.desktopId)
+    return json({ error: 'enrollment-conflict' }, 409)
+  }
   if (!claimed) return json({ error: 'invalid-enrollment-code' }, 400)
   database.audit('desktop.claimed', session.userId, claimed.desktopId)
   return json({ desktopId: claimed.desktopId })
@@ -578,10 +623,20 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
 
   if (url.pathname === '/v1/profile') {
     const session = await sessionFromRequest(request)
-    const userId = session?.userId ?? desktopUserFromRequest(request)
+    const profileDesktop = session ? null : profileDesktopFromRequest(request)
+    const userId = session?.userId ?? profileDesktop?.user_id ?? null
     if (!userId) return json({ error: 'unauthorized' }, 401)
     if (request.method === 'GET') return accountProfile(userId)
-    if (request.method === 'PUT') return saveAccountProfile(request, userId)
+    if (request.method === 'PUT') {
+      if (profileDesktop && !withinRateLimit(request, `profile:${profileDesktop.id}`, 12)) {
+        return json({ error: 'rate-limited' }, 429)
+      }
+      const response = await saveAccountProfile(request, userId)
+      if (profileDesktop && response.ok) {
+        database.audit('desktop.profile-synced', userId, profileDesktop.id)
+      }
+      return response
+    }
     return json({ error: 'method-not-allowed' }, 405)
   }
 

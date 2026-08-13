@@ -316,6 +316,7 @@ const CURRENT_SPEC_GENERATION_VERSION = 1
 const SPEC_GENERATION_FAILURE_USER_MESSAGE =
   'Spec generation failed, model returned an invalid spec.'
 const SPEC_MEMORY_MAX_LESSONS = 12
+const MAX_SPEC_INSTRUCTIONS_LENGTH = 200_000
 const MUTATING_FILE_TOOLS = new Set([
   'applypatch',
   'edit',
@@ -3103,8 +3104,6 @@ export class ChatEngine {
     this.sessionStatuses.set(sessionId, { state: 'working' })
     this.handledIdleSessions.delete(sessionId)
     this.broadcast({ type: 'session.status', sessionId, status: { state: 'working' } })
-    this.startSessionWatchdog(sessionId)
-    this.startOwningParentWatchdog(owner)
     try {
       await driver.sendPrompt(owner.projectPath, {
         sessionId,
@@ -3124,7 +3123,6 @@ export class ChatEngine {
         retryable: true
       }
       this.sessionStatuses.set(sessionId, { state: 'error', issue })
-      this.clearSessionWatchdog(sessionId)
       this.broadcast({ type: 'session.error', sessionId, error: message, issue })
       throw error
     }
@@ -3290,10 +3288,8 @@ export class ChatEngine {
     if (!driver) throw new Error(`Harness driver is unavailable: ${owner.driverId}`)
     this.userAbortedSessions.add(sessionId)
     await driver.abort(owner.projectPath, sessionId)
-    this.clearSessionWatchdog(sessionId)
     this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.broadcast({ type: 'session.status', sessionId, status: { state: 'idle' } })
-    this.startOwningParentWatchdog(owner)
   }
 
   private captureChildSession(
@@ -3766,7 +3762,6 @@ export class ChatEngine {
         this.toolTimes.delete(sessionId)
         this.handledIdleSessions.delete(sessionId)
         this.outboundMessageIdsBySession.delete(sessionId)
-        this.clearSessionWatchdog(sessionId)
       }
     }
   }
@@ -4764,7 +4759,6 @@ export class ChatEngine {
         await driver.sendPrompt(projectPath, prompt)
         void scheduleAutoTitle()
         promptDispatched = true
-        this.startSessionWatchdog(sessionId)
       } catch (error) {
         this.pendingMemoryDecisions.delete(sessionId)
         await this.cleanupTurnUtilities(sessionId)
@@ -4849,7 +4843,6 @@ export class ChatEngine {
         }
       }
       this.preparedImplementationSessions.delete(sessionId)
-      this.startSessionWatchdog(sessionId)
       // Proactively sync the driver's transcript into the mirror so the next
       // thread load reads it from disk instead of relying on a live sync.
       this.loadMessages(projectId, threadId).catch(() => {})
@@ -5266,7 +5259,6 @@ export class ChatEngine {
       this.clearCompletionWaiter(temporary.sessionId)
       completion.reject(new Error('Temporary chat closed'))
     }
-    this.clearSessionWatchdog(temporary.sessionId)
     this.sessionRegistry.delete(temporary.sessionId)
     this.sessionStatuses.delete(temporary.sessionId)
     this.reasoningTimes.delete(temporary.sessionId)
@@ -6326,7 +6318,6 @@ export class ChatEngine {
       }
       await this.cleanupTurnUtilities(activeBrainstorm.sessionId)
       this.sessionStatuses.set(activeBrainstorm.sessionId, { state: 'idle' })
-      this.clearSessionWatchdog(activeBrainstorm.sessionId)
       await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
       clearNotificationAborting(projectId, threadId)
       return
@@ -6367,7 +6358,6 @@ export class ChatEngine {
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
-    this.clearSessionWatchdog(thread.sessionId)
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
     // The user stopped this run deliberately — reflect it immediately so the
@@ -6517,8 +6507,8 @@ export class ChatEngine {
     // instruction to the harness as corrective feedback (`message`), so the
     // model continues the SAME turn seeing what to do instead. The harness
     // fails the blocked tool call with that feedback and keeps streaming — no
-    // abort and no re-prompt, both of which used to leave the session silent
-    // until the inactivity watchdog killed it as "stopped responding".
+    // abort and no re-prompt, both of which used to interrupt the harness's
+    // continuation of the current turn.
     const resolvedReply = alternativeInstruction !== undefined ? 'reject' : reply
     await driver.replyPermission(
       pending.session.projectPath,
@@ -6535,7 +6525,6 @@ export class ChatEngine {
       // finalizes this interrupted turn's checkpoint.
       this.userAbortedSessions.add(pending.request.sessionId)
       await driver.abort(pending.session.projectPath, pending.request.sessionId)
-      this.clearSessionWatchdog(pending.request.sessionId)
       this.clearPendingQuestionsForSession(pending.request.sessionId)
       this.clearPendingPermissionsForSession(pending.request.sessionId)
       await this.threadManager.setStatus(
@@ -6579,7 +6568,6 @@ export class ChatEngine {
       )
       this.loadMessages(pending.session.projectId, pending.session.threadId).catch(() => {})
     }
-    this.startSessionWatchdog(pending.request.sessionId)
   }
 
   /** List unresolved permission requests for renderer reconnect recovery. */
@@ -8869,7 +8857,7 @@ export class ChatEngine {
       request.instructions,
       'Specification instructions',
       1,
-      20_000
+      MAX_SPEC_INSTRUCTIONS_LENGTH
     )
     if (request.mode !== 'problem' && request.mode !== 'conversation') {
       throw new TypeError('Invalid specification generation mode')
@@ -10663,7 +10651,6 @@ export class ChatEngine {
           allowedTools: utilityRuntimeAvailable ? undefined : AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
-        this.startSessionWatchdog(sessionId)
         const streamed = await completion
         if (this.stoppedAssignmentAuditRuns.has(auditRunKey)) {
           throw new Error('Assignment audit stopped by user')
@@ -10896,7 +10883,6 @@ export class ChatEngine {
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
-        this.startSessionWatchdog(sessionId)
         const streamed = await completion
         let content: AuditReportContent
         if (streamed !== undefined) {
@@ -12335,7 +12321,6 @@ export class ChatEngine {
     }
     this.pendingQuestions.set(request.requestId, pending)
     this.schedulePendingQuestion(pending)
-    this.clearSessionWatchdog(request.sessionId)
     this.markProjectActive(projectId)
     return pending
   }
@@ -12478,7 +12463,6 @@ export class ChatEngine {
     const finalResolution = pending.resolution ?? resolution
     const finalAnswers = pending.answers ?? answers
     this.clearPendingQuestion(requestId)
-    this.startSessionWatchdog(pending.request.sessionId)
     void this.threadManager
       .setStatus(pending.request.projectId, pending.request.threadId, pending.resumeStatus)
       .catch((error) => Logger.error('Question resolution status update failed:', error))
@@ -12637,10 +12621,7 @@ export class ChatEngine {
     if (stoppedSessionEvent && !stoppedSessionTerminalEvent) return
     this.updateCompletionWaiter(event)
     this.observeChildSession(driverId, event)
-    this.updateOwningParentWatchdog(event)
 
-    // A scheduled provider retry can legitimately be hours or days away.
-    // Never let the generic inactivity watchdog turn that wait into a failure.
     if (event.type === 'session.status') {
       const currentStatus = this.sessionStatuses.get(event.sessionId)
       if (event.status.state !== 'idle' || currentStatus?.state !== 'error') {
@@ -12665,7 +12646,6 @@ export class ChatEngine {
       if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
         this.handledIdleSessions.delete(event.sessionId)
       }
-      this.resetSessionWatchdog(event.sessionId)
     }
 
     const confirmsActiveWork =
@@ -12764,7 +12744,6 @@ export class ChatEngine {
         void this.threadManager
           .setStatus(pending.session.projectId, pending.session.threadId, pending.resumeStatus)
           .catch((error) => Logger.error('Permission resolution status update failed:', error))
-        this.startSessionWatchdog(event.sessionId)
       }
     }
     if (event.type === 'question.asked') {
@@ -12778,7 +12757,7 @@ export class ChatEngine {
       return
     }
 
-    // Terminal events — clear the watchdog and trigger state transitions.
+    // Terminal events trigger state transitions.
     if (
       event.type === 'session.idle' ||
       (event.type === 'session.status' && event.status.state === 'idle')
@@ -12786,7 +12765,6 @@ export class ChatEngine {
       if (this.sessionStatuses.get(event.sessionId)?.state !== 'error') {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
-      this.clearSessionWatchdog(event.sessionId)
       this.handleSessionIdleSignal(event.sessionId)
     }
     if (event.type === 'session.error') {
@@ -13012,30 +12990,6 @@ export class ChatEngine {
       void this.captureCompletedChildSession(owner, event.sessionId).catch((error) =>
         Logger.dev('Sub-agent transcript capture unavailable:', error)
       )
-    }
-  }
-
-  /** Keep a root turn alive while any provider-native descendant is active. */
-  private updateOwningParentWatchdog(event: SessionAgentEvent): void {
-    const owner = this.childSessionOwners.get(event.sessionId)
-    if (!owner) return
-    const parentSessionId = owner.parentSessionId
-    if (!parentSessionId || !this.sessionRegistry.has(parentSessionId)) return
-
-    if (event.type === 'session.status' && event.status.state === 'waiting') {
-      // Provider-controlled backoff is legitimate and may exceed five minutes.
-      this.clearSessionWatchdog(parentSessionId)
-      return
-    }
-
-    // Active child events refresh the root. Terminal child events also grant
-    // a fresh window for OpenCode to hand the result back to the parent.
-    this.startSessionWatchdog(parentSessionId)
-  }
-
-  private startOwningParentWatchdog(owner: ChildSessionInfo): void {
-    if (owner.parentSessionId && this.sessionRegistry.has(owner.parentSessionId)) {
-      this.startSessionWatchdog(owner.parentSessionId)
     }
   }
 
@@ -13346,7 +13300,6 @@ export class ChatEngine {
       await this.replyPermissionRaw(pending, 'once', `policy:${level}`)
       return
     }
-    this.clearSessionWatchdog(sessionId)
     await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
       read: false
     })

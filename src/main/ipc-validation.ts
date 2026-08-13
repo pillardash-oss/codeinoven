@@ -446,6 +446,19 @@ export function validateBoundedInteger(
   return value
 }
 
+/** A manual drag-reorder anchor: a finite, non-negative epoch timestamp (may be fractional). */
+export function validateSortOrder(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TypeError('Sort order must be a finite non-negative number')
+  }
+  return value
+}
+
 export function validateBoundedString(
   value: unknown,
   label: string,

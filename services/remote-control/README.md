@@ -35,6 +35,7 @@ terminal contents, desktop control payloads, OAuth tokens, or relay frame conten
 event set is:
 
 - `desktop.enrollment-created`, `desktop.claimed`, and `desktop.control-grant-created`
+- `desktop.enrollment-conflict` and `desktop.profile-synced`
 - `desktop.renamed`, `desktop.revoked`, and `desktop.revoked-by-device`
 - `relay.desktop-connected` and `relay.desktop-disconnected`
 
@@ -63,22 +64,25 @@ client-secret JWT at runtime, with a 180-day expiry, whenever an Apple authoriza
 
 Required production variables:
 
+- `TRUST_PROXY=1` — enable only when the service is reachable exclusively through the trusted
+  reverse proxy shown in `compose.example.yml`.
 - `BETTER_AUTH_SECRET` — generate with `openssl rand -base64 32`.
 - `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET` — Google Cloud OAuth web client.
 - `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` — Apple Service
   ID and Sign in with Apple key credentials.
 
 The production service has one canonical public origin: `https://mobile.codeinoven.com`. Better
-Auth callbacks, browser-origin validation, secure cookies, and proxy trust are derived from the
-production deployment mode. SQLite is stored at `/data/remote-control.sqlite` on the named
-`remote-data` volume. None of those fixed deployment details are operator variables. Do not put
-OAuth client secrets, the Better Auth secret, or the Apple private key in the PWA container.
+Auth callbacks, browser-origin validation, and secure cookies are derived from the production
+deployment mode. Proxy-header trust is explicitly enabled with `TRUST_PROXY=1`; leave it disabled
+when the service can be reached directly. SQLite is stored at `/data/remote-control.sqlite` on the
+named `remote-data` volume. Do not put OAuth client secrets, the Better Auth secret, or the Apple
+private key in the PWA container.
 
 - Deploy `compose.example.yml` as a Docker Compose resource.
 - Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
   the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
   `/healthz` over the private Compose network. Coolify terminates public TLS.
-- Set `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
+- Set `TRUST_PROXY=1`, `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
   `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` in Coolify.
   Generate `BETTER_AUTH_SECRET` with `openssl rand -base64 32`.
 - Keep one replica of the SQLite service. The named `remote-data` volume persists the database;
@@ -107,7 +111,8 @@ runtime override for development or self-hosting; it is not a production setup v
 
 1. The user signs into the PWA with Google or Apple. Better Auth creates the account when needed
    and stores the session in an HttpOnly cookie.
-2. A desktop requests an enrollment and receives a one-time claim code plus a device token.
+2. A desktop requests an enrollment and receives a one-time claim code, a relay token, and a
+   separate profile-sync token.
 3. The signed-in user enters/scans the claim code in the PWA. Codes expire after ten minutes, and
    the PWA binds the claim to a non-extractable P-256 key stored in IndexedDB.
 4. The desktop polls enrollment status, creates an ephemeral ECDH grant for that PWA key, stores
