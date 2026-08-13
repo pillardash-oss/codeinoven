@@ -273,7 +273,7 @@ const INVOKE_CHANNELS = [
   'projectFiles:paste',
   'projectFiles:importPaths',
   'projectFiles:dropPaths',
-  'projectFiles:beginDrag',
+  'projectFiles:prepareDrag',
   'projectFiles:read',
   'projectFiles:rename',
   'projectFiles:save',
@@ -486,6 +486,8 @@ export interface AppBridge {
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
   /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
   getPathForFile: (file: File) => string
+  /** Begin a previously prepared native filesystem drag synchronously. */
+  startFileDrag: (token: string) => void
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
@@ -549,7 +551,8 @@ const bridge: AppBridge = {
     const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
     return typeof registered === 'string' ? registered : ''
   },
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  startFileDrag: (token: string): void => ipcRenderer.send('projectFiles:startDrag', token)
 }
 
 contextBridge.exposeInMainWorld('api', bridge)

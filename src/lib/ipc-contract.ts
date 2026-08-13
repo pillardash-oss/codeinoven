@@ -1117,7 +1117,7 @@ export interface IpcInvokeContract {
     [projectId: string, sourcePaths: string[], destinationDirectory: string],
     ProjectFileDropResult[]
   >
-  'projectFiles:beginDrag': Contract<[projectId: string, relativePaths: string[]], void>
+  'projectFiles:prepareDrag': Contract<[projectId: string, relativePaths: string[]], string>
   'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
   'projectFiles:rename': Contract<
     [projectId: string, relativePath: string, name: string],
