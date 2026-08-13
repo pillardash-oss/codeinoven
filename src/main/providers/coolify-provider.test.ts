@@ -76,11 +76,34 @@ describe('CoolifyProvider', () => {
           providerKind: 'coolify',
           status: 'success',
           url: 'https://app.example.dev',
+          urls: ['https://app.example.dev'],
           project: 'Marketing',
           createdAt: Date.parse('2024-01-01T00:00:00.000Z'),
           updatedAt: Date.parse('2024-01-02T00:00:00.000Z')
         }
       ])
+    })
+
+    it('collects multiple domains from fqdns and a comma-separated fqdn, deduped', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse([
+            {
+              uuid: 'app-1',
+              name: 'My App',
+              status: 'running',
+              fqdns: ['https://app.example.dev/', 'https://app.example.dev'],
+              fqdn: 'https://app.example.dev,https://admin.example.dev',
+              created_at: '2024-01-01T00:00:00.000Z',
+              updated_at: '2024-01-02T00:00:00.000Z'
+            }
+          ])
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
+
+      const containers = await makeProvider().listContainers()
+
+      expect(containers[0].urls).toEqual(['https://app.example.dev', 'https://admin.example.dev'])
     })
 
     it('resolves the project name from the projects endpoint when the app only carries a project_uuid', async () => {

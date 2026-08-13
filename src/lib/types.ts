@@ -3458,6 +3458,9 @@ export interface CloudDeploymentContainer {
   status: CloudDeploymentStatus
   /** Live URL of the deployed application, when known. */
   url?: string
+  /** All known live URLs/domains for the deployed application, when the
+   *  provider exposes more than one (e.g. multiple Coolify FQDNs). */
+  urls?: string[]
   /** Coolify project (or provider grouping) this container belongs to, when known. */
   project?: string
   /** Epoch ms the container was first seen. */
