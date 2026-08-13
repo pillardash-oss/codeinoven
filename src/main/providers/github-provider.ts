@@ -163,6 +163,23 @@ export class GitHubProvider implements GitProvider {
     return this.toReference(response)
   }
 
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    input: PullRequestTarget & {
+      title?: string
+      body?: string
+    }
+  ): Promise<PullRequestReference> {
+    const patch: Record<string, unknown> = {}
+    if (input.title !== undefined) patch['title'] = input.title
+    if (input.body !== undefined) patch['body'] = input.body
+    const response = await this.request(`${this.pullPath(input)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    })
+    return this.toReference(response)
+  }
+
   async listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]> {
     const query = input.state ? `?state=${encodeURIComponent(input.state)}` : ''
     const response = await this.request(

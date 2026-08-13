@@ -806,6 +806,17 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number],
     GitHubMutationResult<PullRequestReference>
   >
+  'pr:update': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      title: string | undefined,
+      body: string | undefined
+    ],
+    GitHubMutationResult<PullRequestReference>
+  >
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage

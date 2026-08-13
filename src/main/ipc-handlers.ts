@@ -3470,6 +3470,28 @@ export function registerIpcHandlers(
     }
   )
 
+  ipcMain.handle(
+    'pr:update',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      title: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.updatePullRequest({
+          ...target,
+          title: title === undefined ? undefined : validatePrCommentBody(title, true),
+          body: body === undefined ? undefined : validatePrCommentBody(body, true)
+        })
+      )
+    }
+  )
+
   /** Shared preamble for every single-PR channel: provider + validated target. */
   const pullRequestTarget = async (
     projectId: unknown,

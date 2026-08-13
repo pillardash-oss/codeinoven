@@ -69,6 +69,7 @@ export type GitOperation =
   | 'pr-detail'
   | 'pr-reopen'
   | 'pr-close'
+  | 'pr-update'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -1057,6 +1058,30 @@ export class GitState {
       return null
     } finally {
       this.markBusy('pr-close', false)
+    }
+  }
+
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    title: string | undefined,
+    body: string | undefined
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-update', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return this.resolveGitHubMutation(
+        await invoke('pr:update', projectId, owner, repo, pullNumber, title, body)
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be updated')
+      return null
+    } finally {
+      this.markBusy('pr-update', false)
     }
   }
 
