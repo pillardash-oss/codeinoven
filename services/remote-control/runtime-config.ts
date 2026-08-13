@@ -8,4 +8,4 @@ export const remoteBrowserOrigin = remoteProduction ? remotePublicOrigin : 'http
 export const remoteDatabasePath = resolve(
   remoteProduction ? '/data/remote-control.sqlite' : 'data/remote-control.sqlite'
 )
-export const trustRemoteProxy = remoteProduction
+export const trustRemoteProxy = process.env['TRUST_PROXY'] === '1'

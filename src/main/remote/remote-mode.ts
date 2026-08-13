@@ -101,6 +101,7 @@ interface CloudAccessConfig {
   desktopId: string
   enrollmentId: string
   tokenRef: string
+  profileTokenRef?: string
   enrollmentExpiresAt: number
 }
 
@@ -108,6 +109,7 @@ interface EnrollmentResponse {
   enrollmentId: string
   desktopId: string
   deviceToken: string | null
+  profileToken: string
   code: string
   expiresAt: number
 }
@@ -215,6 +217,7 @@ function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
     typeof record['enrollmentId'] !== 'string' ||
     typeof record['desktopId'] !== 'string' ||
     (record['deviceToken'] !== null && typeof record['deviceToken'] !== 'string') ||
+    typeof record['profileToken'] !== 'string' ||
     typeof record['code'] !== 'string' ||
     typeof record['expiresAt'] !== 'number'
   ) {
@@ -224,6 +227,7 @@ function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
     enrollmentId: record['enrollmentId'],
     desktopId: record['desktopId'],
     deviceToken: record['deviceToken'] as string | null,
+    profileToken: record['profileToken'],
     code: record['code'],
     expiresAt: record['expiresAt']
   }
@@ -973,7 +977,7 @@ export class RemoteModeController {
     const config =
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
     if (!config || !this.vault) return null
-    const token = await this.vault.resolve(config.tokenRef)
+    const token = await this.vault.resolve(config.profileTokenRef ?? config.tokenRef)
     return fetchWithDeadline(
       new URL('/v1/profile', config.apiOrigin),
       {
@@ -1125,11 +1129,13 @@ export class RemoteModeController {
     const deviceToken = payload.deviceToken ?? existingToken
     if (!deviceToken) throw new Error('Cloud service did not issue a desktop credential')
     const tokenRef = await this.vault.save(deviceToken, previous?.tokenRef)
+    const profileTokenRef = await this.vault.save(payload.profileToken, previous?.profileTokenRef)
     this.cloudConfig = {
       apiOrigin: this.cloudApiOrigin,
       desktopId: payload.desktopId,
       enrollmentId: payload.enrollmentId,
       tokenRef,
+      profileTokenRef,
       enrollmentExpiresAt: payload.expiresAt
     }
     await this.storage.write(CLOUD_CONFIG_PATH, this.cloudConfig)
@@ -1166,6 +1172,9 @@ export class RemoteModeController {
     this.stopCloudAccess()
     if (config?.tokenRef && this.vault) {
       await this.vault.remove(config.tokenRef)
+      if (config.profileTokenRef && config.profileTokenRef !== config.tokenRef) {
+        await this.vault.remove(config.profileTokenRef)
+      }
     }
     if (this.storage) await this.storage.remove(CLOUD_CONFIG_PATH)
     this.cloudConfig = null
@@ -1236,6 +1245,9 @@ export class RemoteModeController {
     if (config?.tokenRef && this.vault) {
       try {
         await this.vault.remove(config.tokenRef)
+        if (config.profileTokenRef && config.profileTokenRef !== config.tokenRef) {
+          await this.vault.remove(config.profileTokenRef)
+        }
       } catch (error) {
         Logger.error('Could not remove rejected remote cloud credential:', error)
       }
