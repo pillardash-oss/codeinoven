@@ -661,6 +661,10 @@ export class GitState {
     this.error = null
     try {
       this.status = await invoke('git:fetch', projectId)
+      // Branch tracking (ahead/behind) changes with every fetch — refresh it so
+      // push decisions (like the PR sheet's "is there anything to push?") are
+      // made against freshly fetched remote refs, not the last panel refresh.
+      await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Fetch failed')
     } finally {
