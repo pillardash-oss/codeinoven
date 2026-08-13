@@ -404,6 +404,7 @@ void allInvokeChannelsRegistered
 const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
 const EVENT_CHANNELS = [
   'app:featuresReady',
+  'account:profileChanged',
   'agent:event',
   'agent:processesChanged',
   'agent:temporaryChatExpired',

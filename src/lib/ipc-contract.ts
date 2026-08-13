@@ -1645,6 +1645,8 @@ export interface RemoteAuditEventInfo {
 export interface IpcEventContract {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': []
+  /** Emitted after browser sign-in changes the shared desktop account. */
+  'account:profileChanged': [state: import('./types').AccountProfileState]
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
