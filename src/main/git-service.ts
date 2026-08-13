@@ -776,7 +776,7 @@ export class GitService {
     })
   }
 
-  /** Add paths to `.gitignore` (directories get a trailing slash). */
+  /** Stop tracking paths, preserve them on disk, and add them to `.gitignore`. */
   async ignore(projectPath: string, paths: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -797,12 +797,26 @@ export class GitService {
           const pattern = isDirectory ? `${path}/` : path
           if (!lines.includes(pattern)) patterns.push(pattern)
         }
-        if (patterns.length === 0) return
-        const separator = lines.length > 0 && lines[lines.length - 1]?.trim() !== '' ? '\n' : ''
-        const additions =
-          lines.length > 0 ? `${separator}${patterns.join('\n')}` : patterns.join('\n')
-        const content = existing ? `${existing}${additions}\n` : `${patterns.join('\n')}\n`
-        await writeFile(gitignorePath, content, 'utf-8')
+        if (patterns.length > 0) {
+          const separator = lines.length > 0 && lines[lines.length - 1]?.trim() !== '' ? '\n' : ''
+          const additions =
+            lines.length > 0 ? `${separator}${patterns.join('\n')}` : patterns.join('\n')
+          const content = existing ? `${existing}${additions}\n` : `${patterns.join('\n')}\n`
+          await writeFile(gitignorePath, content, 'utf-8')
+        }
+
+        // An ignore rule has no effect on files that are already tracked. Remove
+        // the selected paths from the index while keeping their working-tree
+        // contents intact so the requested ignore operation fully takes effect.
+        await this.client(directory).raw([
+          'rm',
+          '-r',
+          '--cached',
+          '--force',
+          '--ignore-unmatch',
+          '--',
+          ...safePaths
+        ])
       })
       return this.readStatus(directory)
     })
