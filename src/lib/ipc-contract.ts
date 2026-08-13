@@ -1667,6 +1667,13 @@ export interface IpcEventContract {
    * and only fall back to closing the window when nothing is active.
    */
   'window:closeShortcut': []
+  /**
+   * Emitted when the user presses Cmd/Ctrl+T while a terminal holds focus. The
+   * main process intercepts the key (so ghostty-web never feeds it to the
+   * shell) and asks the renderer to open a new terminal tab in the terminal
+   * panel — right sidebar or bottom dock, whichever is active.
+   */
+  'window:newTerminalShortcut': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
