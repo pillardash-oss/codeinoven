@@ -4,8 +4,9 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { simpleGit } from 'simple-git'
 
-const { handlers, showOpenDialog, showSaveDialog, safeStorage } = vi.hoisted(() => ({
+const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  listeners: new Map<string, (...args: unknown[]) => unknown>(),
   showOpenDialog: vi.fn(),
   showSaveDialog: vi.fn(),
   safeStorage: {
@@ -32,6 +33,9 @@ vi.mock('electron', () => ({
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       handlers.set(channel, handler)
+    }),
+    on: vi.fn((channel: string, listener: (...args: unknown[]) => unknown) => {
+      listeners.set(channel, listener)
     })
   }
 }))
@@ -95,6 +99,7 @@ const defaultConfig: AppConfig = {
 
 beforeEach(async () => {
   handlers.clear()
+  listeners.clear()
   vi.restoreAllMocks()
   showOpenDialog.mockReset()
   showSaveDialog.mockReset()

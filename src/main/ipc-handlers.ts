@@ -1290,6 +1290,10 @@ export function registerIpcHandlers(
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
+  const preparedFileDrags = new Map<
+    string,
+    { paths: string[]; icon: Electron.NativeImage; expiresAt: number }
+  >()
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const threadManager = new ThreadManager(
@@ -2982,17 +2986,30 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.handle(
-    'projectFiles:beginDrag',
-    async (event, projectId: unknown, relativePaths: unknown) => {
+    'projectFiles:prepareDrag',
+    async (_event, projectId: unknown, relativePaths: unknown) => {
       const paths = await projectFilesService.resolveForDrag(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(relativePaths, 'Dragged paths')
       )
-      if (paths.length === 0) return
+      if (paths.length === 0) throw new Error('No files are available to drag')
       const icon = await app.getFileIcon(paths[0], { size: 'normal' })
-      event.sender.startDrag({ file: paths[0], files: paths, icon })
+      const now = Date.now()
+      for (const [token, prepared] of preparedFileDrags) {
+        if (prepared.expiresAt <= now) preparedFileDrags.delete(token)
+      }
+      const token = randomUUID()
+      preparedFileDrags.set(token, { paths, icon, expiresAt: now + 10_000 })
+      return token
     }
   )
+  ipcMain.on('projectFiles:startDrag', (event, token: unknown) => {
+    if (typeof token !== 'string') return
+    const prepared = preparedFileDrags.get(token)
+    preparedFileDrags.delete(token)
+    if (!prepared || prepared.expiresAt <= Date.now()) return
+    event.sender.startDrag({ file: prepared.paths[0], files: prepared.paths, icon: prepared.icon })
+  })
   ipcMain.handle(
     'projectFiles:save',
     (_, projectId: unknown, relativePath: unknown, content: unknown, expectedRevision: unknown) => {
