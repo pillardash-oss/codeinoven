@@ -23,6 +23,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
   PrState,
@@ -1408,6 +1409,24 @@ export class GitState {
       const report = await invoke('pr:agentReport', projectId, pullNumber)
       this.prAgentReports = { ...this.prAgentReports, [String(pullNumber)]: report }
       return report
+    } catch {
+      return null
+    }
+  }
+
+  /** Create `.cio/git/compose/<threadId>/` for the PR-compose agent. */
+  async createComposeWorkspace(projectId: string, threadId: string): Promise<string | null> {
+    try {
+      return await invoke('pr:composeWorkspace', projectId, threadId)
+    } catch {
+      return null
+    }
+  }
+
+  /** Read the agent's composed PR title/description, if it has written one. */
+  async loadComposeReport(projectId: string, threadId: string): Promise<PrComposeReport | null> {
+    try {
+      return await invoke('pr:composeReport', projectId, threadId)
     } catch {
       return null
     }

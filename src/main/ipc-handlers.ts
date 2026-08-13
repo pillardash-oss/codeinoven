@@ -4191,6 +4191,47 @@ export function registerIpcHandlers(
     }
   )
 
+  ipcMain.handle('pr:composeWorkspace', async (_, projectId: unknown, threadId: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const directory = join(
+      projectPath,
+      '.cio',
+      'git',
+      'compose',
+      validateEntityId(threadId, 'Thread ID')
+    )
+    await mkdir(directory, { recursive: true })
+    return directory
+  })
+
+  ipcMain.handle('pr:composeReport', async (_, projectId: unknown, threadId: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const reportPath = join(projectPath, '.cio', 'git', 'compose', safeThreadId, 'compose.json')
+    try {
+      const [raw, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
+      const parsed: unknown = JSON.parse(raw)
+      const record = isRecord(parsed) ? parsed : {}
+      const title = typeof record['title'] === 'string' ? record['title'] : ''
+      const description = typeof record['description'] === 'string' ? record['description'] : ''
+      return {
+        path: reportPath,
+        title,
+        description,
+        updatedAt: stats.mtimeMs,
+        threadId: safeThreadId
+      }
+    } catch {
+      return {
+        path: reportPath,
+        title: '',
+        description: '',
+        updatedAt: null,
+        threadId: safeThreadId
+      }
+    }
+  })
+
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
   ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
