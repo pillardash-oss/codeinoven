@@ -285,9 +285,9 @@ ipcMain.handle('app:rendererReady', async () => {
 })
 
 /**
- * Whether a terminal in the renderer currently holds focus (Windows-only
- * concern). While true, Ctrl+W is left to the shell's delete-word binding
- * instead of closing the active surface.
+ * Whether a terminal in the renderer currently holds focus. While true, the
+ * shell owns keys that would otherwise be app shortcuts: Ctrl+W is left to
+ * the shell's delete-word binding, and Cmd/Ctrl+T opens a new terminal tab.
  */
 let terminalFocused = false
 
@@ -302,6 +302,20 @@ function isCloseShortcut(input: Electron.Input): boolean {
     (process.platform === 'darwin' ? input.meta : input.control) &&
     !input.alt &&
     input.key.toLowerCase() === 'w'
+  )
+}
+
+/**
+ * Whether the shortcut opens a new terminal tab while a terminal is focused.
+ * macOS uses Cmd+T; other platforms use Ctrl+T.
+ */
+function isNewTerminalShortcut(input: Electron.Input): boolean {
+  return (
+    input.type === 'keyDown' &&
+    !input.isAutoRepeat &&
+    (process.platform === 'darwin' ? input.meta : input.control) &&
+    !input.alt &&
+    input.key.toLowerCase() === 't'
   )
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
@@ -775,6 +789,13 @@ function createWindow(): BrowserWindow {
     if (isCloseShortcut(input) && !(terminalFocused && process.platform !== 'darwin')) {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:closeShortcut')
+    }
+    // Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
+    // renderer. Intercept here so ghostty-web never swallows the key and feeds
+    // its WASM-encoded sequence to the shell.
+    if (isNewTerminalShortcut(input) && terminalFocused) {
+      event.preventDefault()
+      sendToRenderer(window.webContents, 'window:newTerminalShortcut')
     }
   })
 

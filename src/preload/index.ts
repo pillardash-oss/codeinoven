@@ -418,6 +418,7 @@ const EVENT_CHANNELS = [
   'window:beforeQuit',
   'window:confirmClose',
   'window:closeShortcut',
+  'window:newTerminalShortcut',
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
