@@ -24,6 +24,7 @@
   } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
   import { gitState, GitState } from '$lib/stores/git.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -398,6 +399,15 @@
     const owner = identity.owner
     const repo = identity.repo
     void gitState.ensurePullRequestBundle(projectId, owner, repo, number)
+  })
+
+  // Seed the merge method from the configured default (squash by default).
+  $effect(() => {
+    void invoke('config:get')
+      .then((config) => {
+        if (config?.defaultMergeMethod) method = config.defaultMergeMethod
+      })
+      .catch(() => undefined)
   })
 
   $effect(() => {

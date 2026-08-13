@@ -2861,6 +2861,8 @@ export interface AppConfig {
   /** Resume regular and Sr. Engineer threads that were interrupted by an app
    *  closure or unknown issue when the app restarts. */
   resumeWorkOnRestart: boolean
+  /** Default PR merge method used by the Git panel, pre-selected when merging. */
+  defaultMergeMethod: PrMergeMethod
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2889,6 +2891,7 @@ export type AppConfigPatch = Partial<
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
+    | 'defaultMergeMethod'
   >
 >
 

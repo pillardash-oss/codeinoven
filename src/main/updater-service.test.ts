@@ -61,7 +61,8 @@ function defaultConfig(): AppConfig {
     keepAwakeWhileWorking: false,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
-    resumeWorkOnRestart: true
+    resumeWorkOnRestart: true,
+    defaultMergeMethod: 'squash'
   }
 }
 

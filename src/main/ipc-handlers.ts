@@ -262,7 +262,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'keepAwakeWhileWorking',
   'imageDescriptorAskAgain',
   'autoRetryAfterReset',
-  'resumeWorkOnRestart'
+  'resumeWorkOnRestart',
+  'defaultMergeMethod'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -1028,6 +1029,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('defaultMergeMethod' in value) {
+    patch.defaultMergeMethod = validateMergeMethod(value.defaultMergeMethod)
   }
 
   return patch

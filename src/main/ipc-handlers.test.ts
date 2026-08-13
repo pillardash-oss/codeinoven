@@ -89,7 +89,8 @@ const defaultConfig: AppConfig = {
   keepAwakeWhileWorking: false,
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: false,
-  resumeWorkOnRestart: true
+  resumeWorkOnRestart: true,
+  defaultMergeMethod: 'squash'
 }
 
 beforeEach(async () => {
@@ -141,6 +142,7 @@ describe('validateAppConfigPatch', () => {
         imageDescriptorAskAgain: true,
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
+        defaultMergeMethod: 'rebase',
         memory
       })
     ).toMatchObject({
@@ -164,6 +166,7 @@ describe('validateAppConfigPatch', () => {
       imageDescriptorAskAgain: true,
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
+      defaultMergeMethod: 'rebase',
       memory: {
         enabled: true,
         entries: [
