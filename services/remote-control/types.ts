@@ -23,6 +23,7 @@ export interface DesktopRecord {
   platform: string
   lan_endpoint: string | null
   token_hash: string
+  profile_token_hash: string
   control_secret_cipher: string
   created_at: number
   last_seen_at: number | null
