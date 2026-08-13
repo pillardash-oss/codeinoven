@@ -47,14 +47,26 @@ describe('parseDeploymentLog', () => {
     ])
   })
 
-  it('marks stderr lines as errors and stdout as normal', () => {
+  it('marks lines carrying a failure marker as errors', () => {
     const lines = parseDeploymentLog(
       JSON.stringify([
         { output: 'ok', type: 'stdout', timestamp: '2026-08-11T06:49:50.202938Z' },
-        { output: 'bad', type: 'stderr', timestamp: '2026-08-11T06:49:51.202938Z' }
+        {
+          output: 'npm ERR! something failed',
+          type: 'stderr',
+          timestamp: '2026-08-11T06:49:51.202938Z'
+        },
+        {
+          output: 'Service built successfully',
+          type: 'stderr',
+          timestamp: '2026-08-11T06:49:52.202938Z'
+        }
       ])
     )
-    expect(lines.filter((line) => line.isError).map((line) => line.text)).toEqual(['bad'])
+    // Only the explicit failure marker is an error; benign stderr progress is not.
+    expect(lines.filter((line) => line.isError).map((line) => line.text)).toEqual([
+      'npm ERR! something failed'
+    ])
   })
 
   it('splits multi-line output across separate lines', () => {
@@ -82,6 +94,14 @@ describe('parseDeploymentLog', () => {
     expect(lines).toEqual([
       { text: 'plain line one', isError: false },
       { text: 'plain line two', isError: false }
+    ])
+  })
+
+  it('flags failure markers in the plain-text fallback', () => {
+    const lines = parseDeploymentLog('Step 1 ok\nERROR: build failed')
+    expect(lines).toEqual([
+      { text: 'Step 1 ok', isError: false },
+      { text: 'ERROR: build failed', isError: true }
     ])
   })
 
