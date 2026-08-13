@@ -6272,7 +6272,7 @@
     <!-- Scrollable conversation area -->
     <div
       bind:this={scrollEl}
-      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-40"
+      class="conversation-gutter relative min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-6 pb-20"
       onscroll={onScroll}
       onwheel={onWheel}
       onpointerup={captureResponseSelection}
