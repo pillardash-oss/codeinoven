@@ -1,4 +1,4 @@
-import { constants } from 'node:fs'
+import { constants, lstatSync, realpathSync } from 'node:fs'
 import { copyFile, link, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -53,6 +53,7 @@ function decodeText(content: Uint8Array): string {
 
 export class ProjectFilesService {
   private readonly writeQueues = new Map<string, Promise<void>>()
+  private readonly projectRoots = new Map<string, string>()
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()
 
@@ -394,16 +395,34 @@ export class ProjectFilesService {
     })
   }
 
-  async resolveForDrag(projectId: string, relativePaths: string[]): Promise<string[]> {
-    const root = await this.projectRoot(projectId)
+  resolveForDragSync(projectId: string, relativePaths: string[]): string[] {
+    const root = this.projectRoots.get(projectId)
+    if (!root) throw new Error('Project files must be loaded before they can be dragged')
     const resolved: string[] = []
     const uniquePaths = [...new Set(relativePaths)].filter(
       (candidate) =>
         !relativePaths.some((other) => other !== candidate && candidate.startsWith(`${other}/`))
     )
     for (const relativePath of uniquePaths) {
-      const entry = await this.resolveExistingEntry(root, relativePath)
-      resolved.push(entry.absolutePath)
+      const segments = this.validateRelativePath(relativePath, false)
+      let current = root
+      for (const segment of segments) {
+        current = resolve(current, segment)
+        if (!isWithinRoot(root, current))
+          throw new Error('Project file path escapes the project root')
+        const metadata = lstatSync(current)
+        if (metadata.isSymbolicLink()) {
+          throw new Error('Symbolic links are not available in the sidebar')
+        }
+      }
+      const metadata = lstatSync(current)
+      if (!metadata.isFile() && !metadata.isDirectory()) {
+        throw new Error('Project path is not a regular file or directory')
+      }
+      const canonical = realpathSync(current)
+      if (!isWithinRoot(root, canonical))
+        throw new Error('Project file path escapes the project root')
+      resolved.push(canonical)
     }
     return resolved
   }
@@ -634,6 +653,7 @@ export class ProjectFilesService {
     if (!metadata.isDirectory()) {
       throw new Error('Project root is not a directory')
     }
+    this.projectRoots.set(projectId, root)
     return root
   }
 

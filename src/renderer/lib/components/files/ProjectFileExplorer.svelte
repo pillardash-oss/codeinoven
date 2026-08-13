@@ -67,10 +67,6 @@
   let dropIndicator = $state<{ path: string; position: 'before' | 'after' } | null>(null)
   let dropFolder = $state<string | null>(null)
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
-  let preparedDragToken: string | null = null
-  let preparedDragKey = ''
-  let pendingDragKey = ''
-  let dragPreparationId = 0
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
 
   /** Flattened, depth-first list of the tree rows currently visible, matching the
@@ -496,44 +492,19 @@
     }
   }
 
-  function prepareFileDrag(entry: ProjectFileEntry, updateSelection = false): void {
+  function handleFilePointerDown(entry: ProjectFileEntry): void {
     const paths = selectionPathsFor(entry)
-    const key = paths.join('\0')
-    if (updateSelection && !projectState.selectedPaths.includes(entry.path)) {
+    if (!projectState.selectedPaths.includes(entry.path)) {
       projectFilesWorkspace.setSelection(projectId, paths)
       projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
     }
-    if ((preparedDragToken && preparedDragKey === key) || pendingDragKey === key) return
-    const preparationId = ++dragPreparationId
-    preparedDragToken = null
-    preparedDragKey = ''
-    pendingDragKey = key
-    void invoke('projectFiles:prepareDrag', projectId, paths)
-      .then((token) => {
-        if (preparationId !== dragPreparationId) return
-        pendingDragKey = ''
-        preparedDragKey = key
-        preparedDragToken = token
-      })
-      .catch(() => {
-        if (preparationId !== dragPreparationId) return
-        pendingDragKey = ''
-        preparedDragKey = ''
-        preparedDragToken = null
-      })
   }
 
-  function handleFileDragStart(event: DragEvent): void {
+  function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
+    const paths = selectionPathsFor(entry)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
     event.preventDefault()
-    const token = preparedDragToken
-    preparedDragToken = null
-    preparedDragKey = ''
-    if (!token) {
-      toast.error('The file was not ready to drag. Try again.')
-      return
-    }
-    window.api.startFileDrag(token)
+    window.api.startFileDrag(projectId, paths)
   }
 
   /** Resolve absolute paths for OS-dropped File objects (folder/file). */
@@ -862,9 +833,8 @@
           onclick={(event: MouseEvent) => handleRowClick(entry, event)}
           ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
           oncontextmenu={() => handleRowContextMenu(entry)}
-          onpointerenter={() => prepareFileDrag(entry)}
-          onpointerdown={() => prepareFileDrag(entry, true)}
-          ondragstart={handleFileDragStart}
+          onpointerdown={() => handleFilePointerDown(entry)}
+          ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
         >
           <div
             class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
