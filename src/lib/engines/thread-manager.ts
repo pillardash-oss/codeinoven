@@ -294,6 +294,25 @@ export class ThreadManager {
   }
 
   /**
+   * Persist a single thread's manual drag-reorder anchor.
+   *
+   * `sortOrder` acts as a "frozen recency" anchor: it stores a timestamp placed
+   * between the dragged thread's new neighbors. The renderer orders threads by
+   * `sortOrder ?? lastActivity` descending, so a dragged thread holds its
+   * position, while any thread that receives genuinely newer activity (a
+   * larger `lastActivity`, since epoch time only grows) naturally sorts above
+   * it — and can be dragged back above again. Unlike the batch reorder, this
+   * touches only the dragged thread and never wipes other threads' anchors.
+   */
+  async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    this.threadRepo.setSortOrder(threadId, sortOrder)
+    const updated: Thread = { ...existing, sortOrder, updatedAt: Date.now() }
+    this.onChange?.(updated)
+    return updated
+  }
+
+  /**
    * Manual reorder of the pinned threads for a project. This is the single way
    * pin order changes: the first id becomes most-recently pinned (top). Only
    * pinned_at is rewritten — nothing else, so it stays consistent across every
