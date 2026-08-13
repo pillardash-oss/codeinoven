@@ -188,6 +188,7 @@ export class CoolifyProvider implements DeploymentProvider {
     const uuid = this.readString(record, 'uuid')
     if (!uuid) return null
     const fqdn = this.readString(record, 'fqdn')
+    const urls = this.readDomains(record)
     const rawStatus = this.readString(record, 'status')
     const projectUuid = this.readString(record, 'project_uuid')
     const environmentId =
@@ -201,10 +202,43 @@ export class CoolifyProvider implements DeploymentProvider {
       providerKind: 'coolify',
       status: mapApplicationStatus(rawStatus),
       url: fqdn ?? undefined,
+      ...(urls.length > 0 ? { urls } : {}),
       ...(project ? { project } : {}),
       createdAt: this.parseEpochMs(this.readString(record, 'created_at')),
       updatedAt: this.parseEpochMs(this.readString(record, 'updated_at'))
     }
+  }
+
+  /**
+   * Collect every domain Coolify reports for an application. Coolify may expose
+   * them as a single `fqdn` (occasionally comma-separated) and/or an array in
+   * `fqdns`/`domains`. Each entry is trimmed of whitespace and a trailing
+   * slash, and the list is deduplicated while preserving order.
+   */
+  private readDomains(record: Record<string, unknown>): string[] {
+    const collected: string[] = []
+    const push = (value: unknown): void => {
+      if (typeof value !== 'string') return
+      for (const raw of value.split(',')) {
+        const domain = raw.trim().replace(/\/+$/u, '')
+        if (domain) collected.push(domain)
+      }
+    }
+    const arrayValue = record['fqdns'] ?? record['domains']
+    if (Array.isArray(arrayValue)) {
+      for (const item of arrayValue) push(item)
+    }
+    const single = this.readString(record, 'fqdn')
+    if (single) push(single)
+    const seen = new Set<string>()
+    const unique: string[] = []
+    for (const domain of collected) {
+      if (!seen.has(domain)) {
+        seen.add(domain)
+        unique.push(domain)
+      }
+    }
+    return unique
   }
 
   /**

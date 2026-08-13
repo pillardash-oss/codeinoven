@@ -4,7 +4,6 @@
     CircleX,
     Clock3,
     Cloud,
-    ExternalLink,
     Loader2,
     Pencil,
     Plus,
@@ -14,7 +13,6 @@
     Trash2
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -28,6 +26,7 @@
   import Switch from '../ui/Switch.svelte'
   import CloudDeploymentConfigSheet from './CloudDeploymentConfigSheet.svelte'
   import CloudDeploymentDetail from './CloudDeploymentDetail.svelte'
+  import ContainerLinksMenu from './ContainerLinksMenu.svelte'
   import {
     type CloudDeploymentConfig,
     type CloudDeploymentContainer,
@@ -111,7 +110,8 @@
         updatedAt: container.updatedAt,
         createdAt: container.createdAt,
         log: container.log,
-        url: container.url
+        url: container.url,
+        urls: container.urls
       }
     }
     return Object.values(byKey)
@@ -239,6 +239,19 @@
 
   function statusLabel(status: CloudDeploymentContainer['status']): string {
     return status === 'unknown' ? 'unknown' : status
+  }
+
+  /** Deduped, non-empty URLs for a container, preferring the provider's list. */
+  function containerUrls(container: CloudDeploymentContainer): string[] {
+    const result: string[] = []
+    const push = (value: string | undefined): void => {
+      if (!value) return
+      const trimmed = value.trim()
+      if (trimmed && !result.includes(trimmed)) result.push(trimmed)
+    }
+    for (const url of container.urls ?? []) push(url)
+    push(container.url)
+    return result
   }
 
   $effect(() => {
@@ -485,16 +498,12 @@
                           </div>
                         </div>
                       </button>
-                      {#if container.url}
-                        <button
-                          type="button"
-                          class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                          title="Open deployed site"
-                          aria-label="Open deployed site"
-                          onclick={() => void openInBrowser(container.url ?? '')}
-                        >
-                          <ExternalLink size={11} />
-                        </button>
+                      {#if containerUrls(container).length > 0}
+                        <ContainerLinksMenu
+                          urls={containerUrls(container)}
+                          title="Open {container.label} deployed sites"
+                          size={11}
+                        />
                       {/if}
                       <button
                         type="button"

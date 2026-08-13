@@ -11,13 +11,11 @@
     Clock3,
     Cloud,
     Copy,
-    ExternalLink,
     Loader2,
     RefreshCw,
     Search,
     X
   } from '@lucide/svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { relativeTime } from '$lib/format/relative-time'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { toast } from 'svelte-sonner'
@@ -29,6 +27,7 @@
     deploymentLogToText,
     type DeploymentLogLine
   } from '$lib/cloud/deployment-log'
+  import ContainerLinksMenu from './ContainerLinksMenu.svelte'
 
   interface Props {
     projectId: string
@@ -311,6 +310,19 @@
   function label(statusValue: CloudDeploymentContainer['status']): string {
     return statusValue === 'unknown' ? 'unknown' : statusValue
   }
+
+  /** Deduped, non-empty URLs for a container, preferring the provider's list. */
+  function containerUrls(container: CloudDeploymentContainer): string[] {
+    const result: string[] = []
+    const push = (value: string | undefined): void => {
+      if (!value) return
+      const trimmed = value.trim()
+      if (trimmed && !result.includes(trimmed)) result.push(trimmed)
+    }
+    for (const url of container.urls ?? []) push(url)
+    push(container.url)
+    return result
+  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -386,16 +398,12 @@
           <ArrowDown size={12} class={tail ? 'text-foreground' : ''} />
         </button>
       {/if}
-      {#if container.url}
-        <button
-          type="button"
-          class="cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          title="Open deployed site"
-          aria-label="Open deployed site"
-          onclick={() => void openInBrowser(container.url ?? '')}
-        >
-          <ExternalLink size={12} />
-        </button>
+      {#if containerUrls(container).length > 0}
+        <ContainerLinksMenu
+          urls={containerUrls(container)}
+          title="Open {container.label} deployed sites"
+          size={12}
+        />
       {/if}
     </div>
     <div class="mt-1 flex items-center gap-1.5 text-[9px] text-dimmed">
