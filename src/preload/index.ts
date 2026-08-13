@@ -397,7 +397,7 @@ type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[numb
 const allInvokeChannelsRegistered: [MissingInvokeChannel] extends [never] ? true : never = true
 void allInvokeChannelsRegistered
 
-const SEND_CHANNELS = ['pty:resize', 'pty:write'] as const
+const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
 const EVENT_CHANNELS = [
   'app:featuresReady',
   'agent:event',

@@ -28,6 +28,7 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
@@ -1008,11 +1009,16 @@
 
   /** Global application shortcuts. */
   function onKeydown(e: KeyboardEvent): void {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'w') {
+    const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
       // Primary path is the main process `before-input-event` → the
       // `window:closeShortcut` event. This is a fallback for platforms where
       // the key still reaches the renderer (the main process preventDefaults
       // the page keydown, so this normally never fires twice).
+      //
+      // On non-mac platforms Ctrl+W is the shell's delete-word binding while a
+      // terminal is focused — leave it alone so it reaches the shell.
+      if (!isMac && isTerminalFocused()) return
       e.preventDefault()
       if (e.repeat) return
       handleCloseShortcut()
