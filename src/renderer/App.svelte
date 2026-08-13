@@ -76,7 +76,8 @@
     keepAwakeWhileWorking: false,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
-    resumeWorkOnRestart: true
+    resumeWorkOnRestart: true,
+    defaultMergeMethod: 'squash'
   }
 
   let config = $state<AppConfig>(defaultConfig)
