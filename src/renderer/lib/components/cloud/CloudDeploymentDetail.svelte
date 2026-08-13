@@ -3,6 +3,7 @@
     ArrowDown,
     ArrowLeft,
     Bot,
+    Braces,
     ChevronDown,
     ChevronUp,
     CircleCheck,
@@ -285,6 +286,17 @@
     }
   }
 
+  /** Copy the raw log payload (the underlying JSON/raw text) unchanged. */
+  async function copyRawLog(): Promise<void> {
+    if (!log) return
+    try {
+      await copyTextToClipboard(log)
+      toast.success('Raw log copied.')
+    } catch {
+      toast.error('The raw log could not be copied.')
+    }
+  }
+
   $effect(() => {
     void loadDeployments()
   })
@@ -440,6 +452,16 @@
           >
             <Copy size={10} />
             Copy
+          </button>
+          <button
+            type="button"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded border border-border px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Copy raw log JSON"
+            aria-label="Copy raw log JSON"
+            onclick={() => void copyRawLog()}
+          >
+            <Braces size={10} />
+            Copy raw
           </button>
         {/if}
       </div>
