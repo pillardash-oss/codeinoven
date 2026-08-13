@@ -5,6 +5,7 @@ import type {
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentTokenUsage,
+  NormalizedUsage,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent,
@@ -12,6 +13,8 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReferences } from './attachment-reference'
+import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -165,10 +168,7 @@ interface ParsedAntigravityCatalog {
 
 /** Collapse effort-suffixed slugs into one model with dedicated thinking presets. */
 function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
-  const slugs = output
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !/^error\b/iu.test(line))
+  const slugs = antigravityModelSlugs(output)
   const variants = new Map<string, Map<ThinkingLevel, string>>()
   const standalone = new Set<string>()
   for (const slug of slugs) {
@@ -195,7 +195,7 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
       thinkingPresets: EFFORT_ORDER.filter((effort) => modelVariants.has(effort)).map(
         (effort) => EFFORT_PRESETS[effort as 'low' | 'medium' | 'high']
       ),
-      attachment: false,
+      attachment: true,
       toolcall: true
     })
   }
@@ -205,7 +205,7 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
       providerId: ANTIGRAVITY_PROVIDER_ID,
       name: prettyModelName(modelId),
       reasoning: modelId.endsWith('-thinking'),
-      attachment: false,
+      attachment: true,
       toolcall: true
     })
   }
@@ -223,20 +223,58 @@ function parseAntigravityModels(output: string): ParsedAntigravityCatalog {
   }
 }
 
-/** Map one Antigravity token-accounting object into the shared usage shape. */
-function mapAntigravityUsage(value: unknown): AgentTokenUsage | undefined {
+/** Map Antigravity accounting into the canonical normalized contract and display aggregates. */
+export function mapAntigravityUsage(value: unknown): {
+  aggregateTokens: AgentTokenUsage | undefined
+  normalizedUsage: NormalizedUsage | undefined
+} {
   const usage = record(value)
-  if (!usage) return undefined
-  const input = numberProperty(usage, 'input_tokens', 'inputTokens') ?? 0
-  const output = numberProperty(usage, 'output_tokens', 'outputTokens') ?? 0
-  const reasoning = numberProperty(usage, 'thinking_tokens', 'thinkingTokens') ?? 0
-  const cacheRead = numberProperty(usage, 'cache_read_tokens', 'cacheReadTokens') ?? 0
-  const cacheWrite = numberProperty(usage, 'cache_write_tokens', 'cacheWriteTokens') ?? 0
-  // Antigravity's provider total is input + output. Thinking is a subset of
-  // output and cache reads are a subset of input, so adding every category
-  // double-counts the turn when total_tokens is absent.
-  const total = numberProperty(usage, 'total_tokens', 'totalTokens') ?? input + output
-  return { input, output, reasoning, cacheRead, cacheWrite, total }
+  if (!usage) return { aggregateTokens: undefined, normalizedUsage: undefined }
+  const input = numberProperty(usage, 'input_tokens', 'inputTokens')
+  const output = numberProperty(usage, 'output_tokens', 'outputTokens')
+  const reasoning = numberProperty(usage, 'thinking_tokens', 'thinkingTokens')
+  const cachedInput = numberProperty(usage, 'cache_read_tokens', 'cacheReadTokens')
+  const cacheWrite = numberProperty(usage, 'cache_write_tokens', 'cacheWriteTokens')
+  const rawTotal = numberProperty(usage, 'total_tokens', 'totalTokens')
+  const reported =
+    input !== undefined ||
+    output !== undefined ||
+    reasoning !== undefined ||
+    cachedInput !== undefined ||
+    cacheWrite !== undefined ||
+    rawTotal !== undefined
+  if (!reported) return { aggregateTokens: undefined, normalizedUsage: undefined }
+  // Antigravity reports thinking as a subset of output, cache reads as a subset
+  // of input, and its total as covering every category, so the provider total's
+  // categories overlap when one is reported. A synthesized input+output total
+  // would hide cache or reasoning usage, so no comparable total is fabricated
+  // and the semantics are declared explicitly: `categories_may_overlap` when
+  // the provider reports a total and `unavailable` when it does not. Because
+  // the reported input already contains cached reads, uncached input is the
+  // remainder after subtracting them, clamped at zero so an inconsistent
+  // cache>input payload never produces a negative normalized category.
+  const normalizedUsage: NormalizedUsage = {
+    uncachedInput: input === undefined ? null : Math.max(0, input - (cachedInput ?? 0)),
+    cachedInput: cachedInput ?? null,
+    cacheWrite: cacheWrite ?? null,
+    output: output ?? null,
+    reasoning: reasoning ?? null,
+    rawProviderUsage: { ...usage },
+    rawTotal: rawTotal ?? null,
+    totalSemantics: rawTotal === undefined ? 'unavailable' : 'categories_may_overlap'
+  }
+  const aggregateTokens: AgentTokenUsage | undefined =
+    rawTotal === undefined
+      ? undefined
+      : {
+          input: input ?? 0,
+          output: output ?? 0,
+          reasoning: reasoning ?? 0,
+          cacheRead: cachedInput ?? 0,
+          cacheWrite: cacheWrite ?? 0,
+          total: rawTotal
+        }
+  return { aggregateTokens, normalizedUsage }
 }
 
 /** Normalize quota maps used by Antigravity's API and status-line payload. */
@@ -285,6 +323,8 @@ interface AntigravityTurnState {
   parts: AgentPart[]
   /** True once any assistant part has been emitted (message exists on disk). */
   started: boolean
+  /** Latest normalized usage metadata reported for this turn, when any. */
+  normalizedUsage?: NormalizedUsage
 }
 
 function antigravityMessage(state: AntigravityTurnState): AgentMessage {
@@ -293,7 +333,8 @@ function antigravityMessage(state: AntigravityTurnState): AgentMessage {
     role: 'assistant',
     parts: [...state.parts],
     createdAt: state.createdAt,
-    harnessId: 'antigravity'
+    harnessId: 'antigravity',
+    ...(state.normalizedUsage ? { normalizedUsage: state.normalizedUsage } : {})
   }
 }
 
@@ -320,9 +361,16 @@ function usageEvent(
   sessionId: string
 ): SessionAgentEvent | null {
   if (!state.started) return null
-  const tokens = mapAntigravityUsage(rawUsage)
-  if (!tokens) return null
-  return { type: 'usage.updated', sessionId, messageId: state.messageId, tokens }
+  const mapped = mapAntigravityUsage(rawUsage)
+  if (mapped.normalizedUsage) state.normalizedUsage = mapped.normalizedUsage
+  if (!mapped.aggregateTokens && !mapped.normalizedUsage) return null
+  return {
+    type: 'usage.updated',
+    sessionId,
+    messageId: state.messageId,
+    ...(mapped.aggregateTokens ? { tokens: mapped.aggregateTokens } : {}),
+    ...(mapped.normalizedUsage ? { normalizedUsage: mapped.normalizedUsage } : {})
+  }
 }
 
 /**
@@ -374,7 +422,9 @@ export function mapAntigravityRecord(
           part: textPart(state)
         })
       }
-      const usage = mapAntigravityUsage(result['usage'])
+      const mappedUsage = mapAntigravityUsage(result['usage'])
+      const usage = mappedUsage.aggregateTokens
+      if (mappedUsage.normalizedUsage) state.normalizedUsage = mappedUsage.normalizedUsage
       const structuredRateLimits = mapAntigravityRateLimits(result)
       const issue = error ? antigravityIssue(error) : undefined
       const rateLimits =
@@ -396,6 +446,7 @@ export function mapAntigravityRecord(
           sessionId: context.sessionId,
           messageId: state.messageId,
           ...(usage ? { tokens: usage } : {}),
+          ...(mappedUsage.normalizedUsage ? { normalizedUsage: mappedUsage.normalizedUsage } : {}),
           ...(rateLimits.length > 0 ? { rateLimits } : {})
         })
       }
@@ -404,6 +455,7 @@ export function mapAntigravityRecord(
         sessionId: context.sessionId,
         messageId: state.messageId,
         ...(usage ? { tokens: usage } : {}),
+        ...(mappedUsage.normalizedUsage ? { normalizedUsage: mappedUsage.normalizedUsage } : {}),
         ...(rateLimits.length > 0 ? { rateLimits } : {}),
         ...(error ? { error } : {}),
         ...(issue ? { issue } : {})
@@ -510,12 +562,13 @@ export class AntigravityDriver extends PersistentCliDriver {
   readonly id = 'antigravity'
   readonly name = 'Antigravity'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: false,
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
@@ -527,6 +580,7 @@ export class AntigravityDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, AntigravityTurnState>()
   private modelVariants = new Map<string, Map<ThinkingLevel, string>>()
+  private modelVariantsAttempted = false
 
   constructor(storage: StorageEngine) {
     super(storage)
@@ -584,16 +638,28 @@ export class AntigravityDriver extends PersistentCliDriver {
     return closest?.[1] ?? modelId
   }
 
+  /**
+   * Populate the effort-variant map on first use so bare effort model ids
+   * (`gemini-3.6-flash`) resolve to an effort-suffixed slug before being sent
+   * to agy. Discovery may serve the catalog from the persisted snapshot without
+   * ever running `listProviders` on this instance, which would otherwise leak
+   * the bare id into the turn command and make agy reject it. The probe runs at
+   * most once per driver instance even when it fails.
+   */
+  private async ensureModelVariants(): Promise<void> {
+    if (this.modelVariantsAttempted || this.modelVariants.size > 0) return
+    this.modelVariantsAttempted = true
+    const result = await runAgy(['models'], AGY_PROBE_TIMEOUT_MS)
+    if (result.succeeded) this.modelVariants = parseAntigravityModels(result.stdout).variants
+  }
+
   protected async buildTurnCommand(
     _projectPath: string,
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length) {
-      throw new Error('Antigravity CLI driver does not support prompt attachments')
-    }
-
-    const prompt = [options.systemPrompt, options.text].filter(Boolean).join('\n\n')
+    const attached = await attachmentReferences(options.attachments)
+    const prompt = [options.systemPrompt, attached, options.text].filter(Boolean).join('\n\n')
     // agy's custom flag parser treats `--output-format` (and its value) as part
     // of the prompt unless the prompt directly follows `-p`. The prompt must
     // come immediately after `-p`, with every flag after it, or print mode
@@ -601,6 +667,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     const args: string[] = ['-p', prompt, '--output-format', 'stream-json']
     if (session.nativeSessionId) args.push('--conversation', session.nativeSessionId)
     if (options.settings.modelId && options.settings.modelId !== 'default') {
+      await this.ensureModelVariants()
       args.push(
         '--model',
         this.resolveModelId(options.settings.modelId, options.settings.thinkingLevel)

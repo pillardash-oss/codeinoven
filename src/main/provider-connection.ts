@@ -1,8 +1,11 @@
-import { BrowserWindow, ipcMain } from 'electron'
+import { BrowserWindow } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { execFile, spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../lib/types'
 import { buildHarnessEnvironment } from './drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from './harness-registry'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
+import { sendToRenderer } from './renderer-delivery'
 
 /** Probe timeout — harnesses that hang longer than this are marked as error. */
 const PROBE_TIMEOUT_MS = 8000
@@ -75,11 +78,6 @@ export class ProviderConnectionService {
     return this.getAll()
   }
 
-  /** Run the initial detection pass (fire-and-forget on app start). */
-  warmUp(): void {
-    void this.checkAll()
-  }
-
   // ─── Internals ──────────────────────────────────────────────────────────────
 
   private update(info: ProviderConnectionInfo): void {
@@ -90,8 +88,9 @@ export class ProviderConnectionService {
   private broadcast(): void {
     const payload = this.getAll()
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send('providers:status', payload)
+      sendToRenderer(win.webContents, 'providers:status', payload)
     }
+    forwardRemoteEvent('providers:status', payload)
   }
 
   /** Resolve the binary, then verify it actually responds to a version probe. */

@@ -1,14 +1,16 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
   import { toast } from 'svelte-sonner'
-  import { projectIconOnError } from '$lib/project-icons'
+  import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import {
     rendererRecovery,
     isSettingsView,
@@ -22,16 +24,21 @@
   import type { EditorId, Project, Thread } from '$shared/types'
   import {
     AppWindow,
+    Archive,
     Bell,
+    Bug,
     Check,
     ChevronDown,
     ChevronLeft,
     ChevronRight,
-    Files,
     FileText,
     FolderKanban,
+    GitBranch,
     GitFork,
+    GitMergeConflict,
+    GitPullRequest,
     History,
+    Info,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -40,7 +47,6 @@
     Pin,
     PinOff,
     PanelRight,
-    Search,
     SquareTerminal,
     Timeline,
     Trash2,
@@ -54,8 +60,16 @@
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
-  import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID, type ScopeBucket } from '$shared/types'
+  import {
+    coordinatorHasActiveDelegates,
+    DEFAULT_SCOPE_BUCKET_ID,
+    INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    isThreadWorking,
+    type ScopeBucket
+  } from '$shared/types'
   import type { Component } from 'svelte'
 
   type View = MainView
@@ -67,7 +81,6 @@
     navigate: (view: View) => void
     goBack: () => void
     goForward: () => void
-    onCommandPaletteOpen: () => void
     onProjectCreated?: (project: Project) => void | Promise<void>
     onScopeThreadOpen?: (thread: Thread) => void | Promise<void>
   }
@@ -77,7 +90,6 @@
     navigate,
     goBack,
     goForward,
-    onCommandPaletteOpen,
     onProjectCreated = () => undefined,
     onScopeThreadOpen = () => undefined
   }: Props = $props()
@@ -139,6 +151,7 @@
     projects: 'Projects',
     chats: 'Chats',
     'settings-harnesses': 'Harnesses',
+    'settings-profile': 'Profile',
     remote: 'Remote',
     settings: 'Settings',
     scope: 'Scope',
@@ -152,6 +165,21 @@
 
   /** Chats must feel like chat — no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats')
+
+  /** Git controls and polling exist only for local projects configured for Git tracking. */
+  let gitAvailable = $derived.by(() => {
+    const thread = workspaceState.selectedThread
+    const project = workspaceState.activeProject
+    return Boolean(
+      thread &&
+      project &&
+      thread.projectId === project.id &&
+      project.id !== INBOX_PROJECT_ID &&
+      project.source === 'local' &&
+      project.path.trim() &&
+      project.changeTrackingMode === 'git'
+    )
+  })
 
   /** "Settings · <Section>" while a settings tab is on screen. */
   let settingsTitle = $derived(
@@ -167,6 +195,7 @@
     const allThreads: Thread[] = await invoke('thread:listAll')
     const projectThreads = allThreads
       .filter((t) => t.projectId === projectId && !t.archived)
+      .filter((t) => !isOrchestrationChildThread(t))
       .sort((a, b) => b.lastActivity - a.lastActivity)
 
     const activeThread = projectThreads[0] ?? null
@@ -318,11 +347,36 @@
     const thread = workspaceState.selectedThread
     if (!thread) return
     showHistory = false
-    if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'memory') {
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'memory') {
       contextSidebarState.hide()
       return
     }
     contextSidebarState.openMemory(thread.projectId, thread.id)
+  }
+
+  /** Toggle the Sources panel for the selected thread (chat mode header button). */
+  function toggleSources(): void {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    showHistory = false
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'sources') {
+      contextSidebarState.hide()
+      return
+    }
+    contextSidebarState.openSources(thread.projectId, thread.id)
+  }
+
+  /** Toggle the agent debugger panel — dev-only. */
+  function toggleDebugger(): void {
+    if (!import.meta.env.DEV) return
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    showHistory = false
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'debugger') {
+      contextSidebarState.hide()
+      return
+    }
+    contextSidebarState.openDebugger(thread.projectId, thread.id)
   }
 
   $effect(() => {
@@ -360,16 +414,53 @@
     Boolean(workspaceState.selectedThread && contextSidebarState.visible)
   )
 
+  /** True while the sources panel is the active sidebar tab. */
+  let sourcesOpen = $derived(
+    Boolean(
+      workspaceState.selectedThread &&
+      contextSidebarState.visible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'sources'
+    )
+  )
+
+  /** True while the agent debugger is the active sidebar tab. */
+  let debuggerOpen = $derived(
+    Boolean(
+      import.meta.env.DEV &&
+      workspaceState.selectedThread &&
+      contextSidebarState.visible &&
+      contextSidebarState.sidebarActiveTab?.kind === 'debugger'
+    )
+  )
+
+  /** Whether the terminal area is currently visible (dock at the bottom, or a
+   * focused terminal tab inside the sidebar when not docked). */
+  let terminalOpen = $derived(
+    contextSidebarState.terminalPlacement === 'bottom'
+      ? contextSidebarState.terminalDockVisible
+      : Boolean(contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'terminal')
+  )
+
   function openTerminal(): void {
     const thread = workspaceState.selectedThread
     if (!thread) return
     const tab = contextSidebarState.activeTab
-    if (
-      contextSidebarState.visible &&
-      tab?.kind === 'terminal' &&
-      tab.projectId === thread.projectId &&
-      tab.threadId === thread.id
-    ) {
+    const terminalActive =
+      tab?.kind === 'terminal' && tab.projectId === thread.projectId && tab.threadId === thread.id
+
+    if (contextSidebarState.terminalPlacement === 'bottom') {
+      // Terminal lives in its own bottom dock — the button toggles just the
+      // dock; the right sidebar is never affected.
+      if (terminalActive && contextSidebarState.terminalDockVisible) {
+        contextSidebarState.toggleTerminalDock()
+      } else {
+        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
+      }
+      return
+    }
+
+    // Terminal lives in the sidebar — toggle the whole context panel.
+    if (contextSidebarState.visible && terminalActive) {
       contextSidebarState.hide()
     } else {
       contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
@@ -381,6 +472,31 @@
     contextSidebarState.toggle()
   }
 
+  // ─── Git status chip ─────────────────────────────────────────────────────
+
+  /** Refresh git status whenever the active thread's project changes. */
+  $effect(() => {
+    const thread = workspaceState.selectedThread
+    if (!thread || !gitAvailable) {
+      gitState.deactivate()
+      return
+    }
+    // Activation + refresh are event-driven by the workspace store
+    // (`notifyThreadOpened` on every thread open) — this effect only subscribes
+    // to agent checkpoints for the active project.
+    gitState.ensureProjectEvents(thread.projectId)
+  })
+
+  function openGitPanel(): void {
+    const thread = workspaceState.selectedThread
+    if (!thread || !gitAvailable) return
+    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git') {
+      contextSidebarState.hide()
+    } else {
+      contextSidebarState.openGit(thread.projectId, thread.id)
+    }
+  }
+
   // ─── Thread actions (ellipsis dropdown) ──────────────────────────────────
 
   let showThreadRename = $state(false)
@@ -389,6 +505,11 @@
   let showThreadDeleteConfirm = $state(false)
 
   let showChangeScope = $state(false)
+
+  /** Title shown in the header — real title once generated, else a draft label. */
+  let headerThreadTitle = $derived(
+    workspaceState.selectedThread ? effectiveThreadTitle(workspaceState.selectedThread) : ''
+  )
 
   let scopeBucket = $derived.by((): ScopeBucket | null => {
     const thread = workspaceState.selectedThread
@@ -469,7 +590,8 @@
 </script>
 
 <header
-  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4 pl-24"
+  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4"
+  style={trafficLightInsetStyle()}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
     <!-- Global navigation: back / forward -->
@@ -710,35 +832,47 @@
         {@const thread = workspaceState.selectedThread}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          thread.status === 'planning' ||
-          thread.status === 'executing'}
+          isThreadWorking(thread) ||
+          coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
-          {#if !chatMode && workspaceState.activeProjectIconUrl && workspaceState.activeProject}
-            <div class="pointer-events-auto shrink-0">
-              <ProjectInfoDropdown
-                project={workspaceState.activeProject}
-                iconUrl={workspaceState.activeProjectIconUrl}
-                branch={workspaceState.selectedThread?.branch ?? null}
-                class="group/icon relative h-5 w-5"
-                onPinToggled={handleProjectPinToggled}
-                onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
-                onError={(message) => toast.error(message)}
-              >
-                <img
-                  src={workspaceState.activeProjectIconUrl}
-                  alt=""
-                  class="h-4 w-4 object-contain"
-                  onerror={projectIconOnError(workspaceState.activeProject)}
-                />
-              </ProjectInfoDropdown>
-            </div>
+          {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
+            {@const headerProject =
+              workspaceState.activeProject ??
+              scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ??
+              null}
+            {#if headerProject}
+              {@const resolvedProjectIcon = getProjectIcon(
+                headerProject,
+                workspaceState.activeProjectIconUrl ?? undefined
+              )}
+              {#if resolvedProjectIcon}
+                <div class="pointer-events-auto shrink-0">
+                  <ProjectInfoDropdown
+                    project={headerProject}
+                    iconUrl={resolvedProjectIcon}
+                    branch={thread.branch ?? null}
+                    class="group/icon relative h-5 w-5"
+                    onPinToggled={handleProjectPinToggled}
+                    onEdit={(projectId) => workspaceState.openProjectEdit(projectId)}
+                    onError={(message) => toast.error(message)}
+                  >
+                    <img
+                      src={resolvedProjectIcon}
+                      alt=""
+                      class="h-4 w-4 object-contain"
+                      onerror={projectIconOnError(headerProject)}
+                    />
+                  </ProjectInfoDropdown>
+                </div>
+              {/if}
+            {/if}
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
               class="truncate text-[13px] font-medium tracking-tight text-foreground"
-              title={thread.title}
+              title={headerThreadTitle}
             >
-              {thread.title}
+              {headerThreadTitle}
             </h1>
             <ThreadDropdown
               items={[
@@ -1083,24 +1217,6 @@
       </div>
     {/if}
 
-    <!-- Artifacts — chat mode only, appears once the chat has files -->
-    {#if chatMode && workspaceState.selectedThread && workspaceState.artifactsCount > 0}
-      <button
-        class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.artifactsOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={workspaceState.artifactsOpen ? 'Close artifacts' : 'Open artifacts'}
-        title={workspaceState.artifactsOpen ? 'Close artifacts' : 'Show the files in this chat'}
-        onclick={() => workspaceState.toggleArtifacts?.()}
-      >
-        <Files size={15} />
-        <span class="header-control-label text-[11px] font-medium">Artifacts</span>
-        <span class="header-control-label text-[11px] font-medium tabular-nums text-dimmed"
-          >{workspaceState.artifactsCount}</span
-        >
-      </button>
-    {/if}
-
     <!-- Spec studio — only for engineering-mode threads, never in chat mode -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
@@ -1140,26 +1256,112 @@
       </button>
     {/if}
 
+    <!-- Git status chip — only when a thread is open in a project view -->
+    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && gitAvailable}
+      <button
+        class={[
+          'relative flex h-8 max-w-40 items-center gap-1.5 rounded-lg px-2 transition-colors duration-150',
+          gitState.activePrConflictCount > 0
+            ? 'text-danger hover:bg-danger/10'
+            : gitState.conflicted.length > 0
+              ? 'text-warning hover:bg-warning/10'
+              : gitState.clean
+                ? 'text-dimmed hover:bg-elevated hover:text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label="Open Git panel"
+        title={gitState.activePrConflictCount > 0
+          ? `${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution — open Git panel`
+          : 'Open Git panel'}
+        onclick={openGitPanel}
+      >
+        {#if gitState.activePrConflictCount > 0}
+          <GitMergeConflict size={13} class="shrink-0" />
+        {:else}
+          <GitBranch size={13} class="shrink-0" />
+        {/if}
+        {#if gitState.branch}
+          <span class="min-w-0 flex-1 truncate font-mono text-[10px] font-medium">
+            {gitState.branch}
+          </span>
+        {/if}
+        {#if gitState.conflicted.length > 0}
+          <span
+            class="shrink-0 rounded-full bg-warning px-1.5 text-[9px] font-semibold tabular-nums text-on-primary"
+          >
+            {gitState.conflicted.length}
+          </span>
+        {:else if gitState.status && !gitState.clean}
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-warning"></span>
+        {/if}
+        {#if gitState.activePrConflictCount > 0}
+          <span
+            class="flex shrink-0 items-center gap-0.5 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-danger"
+            title={`${gitState.activePrConflictCount} open pull request${gitState.activePrConflictCount === 1 ? '' : 's'} need${gitState.activePrConflictCount === 1 ? 's' : ''} conflict resolution`}
+          >
+            <GitPullRequest size={9} class="shrink-0" />
+            {gitState.activePrConflictCount}
+          </span>
+        {/if}
+        {#if gitState.stashes.length > 0}
+          <span
+            class="absolute -bottom-1.5 left-2 flex items-center gap-0.5 rounded-full bg-info/15 px-1.5 py-0.5 text-[8px] font-semibold tabular-nums text-info ring-1 ring-info/30"
+            title={`${gitState.stashes.length} stashed change${gitState.stashes.length === 1 ? '' : 's'}`}
+          >
+            <Archive size={8} class="shrink-0" />
+            {gitState.stashes.length}
+          </span>
+        {/if}
+      </button>
+    {/if}
+
     <!-- Terminal — only when a thread is open in a terminal-hosting view, never in chat mode or scope view -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.terminalAvailable}
       <button
-        class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label="Open terminal"
-        title="Open terminal"
+        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {terminalOpen
+          ? 'bg-elevated text-foreground'
+          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
+        title={terminalOpen ? 'Hide terminal' : 'Show terminal'}
         onclick={openTerminal}
       >
         <SquareTerminal size={16} />
       </button>
     {/if}
 
-    <button
-      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-      aria-label="Open command palette"
-      title="Open command palette (Ctrl+K)"
-      onclick={onCommandPaletteOpen}
-    >
-      <Search size={14} aria-hidden="true" />
-    </button>
+    {#if chatMode}
+      {#if workspaceState.selectedThread}
+        <!-- Sources — chat mode surfaces the sources panel on the header -->
+        <button
+          class="relative flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {sourcesOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          aria-label={sourcesOpen ? 'Close sources' : 'Open sources'}
+          title={sourcesOpen ? 'Close sources' : 'Show sources for this chat'}
+          onclick={toggleSources}
+        >
+          <Info size={15} />
+          <span class="header-control-label text-[11px] font-medium">Sources</span>
+          {#if workspaceState.sources.length > 0}
+            <span class="header-control-label text-[11px] font-medium tabular-nums text-dimmed"
+              >{workspaceState.sources.length}</span
+            >
+          {/if}
+        </button>
+        {#if import.meta.env.DEV}
+          <button
+            class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150 {debuggerOpen
+              ? 'bg-elevated text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-label={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
+            title={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
+            onclick={toggleDebugger}
+          >
+            <Bug size={16} />
+          </button>
+        {/if}
+      {/if}
+    {/if}
 
     <!-- Notification bell — available in all views -->
     <button
@@ -1184,7 +1386,7 @@
       {/if}
     </button>
 
-    {#if !onSettings && !onScope && workspaceState.selectedThread}
+    {#if !chatMode && !onSettings && !onScope && workspaceState.selectedThread}
       <button
         class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {contextSidebarOpen
           ? 'bg-elevated text-foreground'

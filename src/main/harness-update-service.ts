@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import type { HarnessUpdateHandoff, HarnessUpdateStatus } from '../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
 import type { ProviderConnectionService } from './provider-connection'
@@ -43,7 +43,8 @@ const UPDATE_ARGS: Record<string, string[]> = {
   'claude-code': ['update'],
   cline: ['update'],
   pi: ['update'],
-  antigravity: ['update']
+  antigravity: ['update'],
+  muse: ['update']
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u

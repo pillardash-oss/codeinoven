@@ -22,10 +22,12 @@ describe('agent icon metadata', () => {
   })
 
   it('loads every metadata folder without a handwritten registry list', () => {
-    expect(agentIconRegistry).toHaveLength(6)
+    expect(agentIconRegistry).toHaveLength(7)
     expect(getAgentIcon('openai-codex')?.id).toBe('codex')
     expect(getAgentIcon('roo')).toBeUndefined()
     expect(getAgentIcon('pi')?.name).toBe('Pi')
     expect(getAgentIcon('agy')?.id).toBe('antigravity')
+    expect(getAgentIcon('muse')?.name).toBe('Muse Code')
+    expect(getAgentIcon('meta')?.id).toBe('muse')
   })
 })

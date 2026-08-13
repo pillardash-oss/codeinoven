@@ -1,0 +1,226 @@
+<script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { copyText } from '$lib/copy-text'
+  import { gitState } from '$lib/stores/git.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import type { GitHubDeviceCode } from '$shared/types'
+  import Modal from '../ui/Modal.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { Check, Copy, ExternalLink, Loader2, TimerOff } from '@lucide/svelte'
+
+  interface Props {
+    onClose: () => void
+    onConnected: () => void
+  }
+
+  let { onClose, onConnected }: Props = $props()
+
+  let device = $state<GitHubDeviceCode | null>(null)
+  let phase = $state<'starting' | 'waiting' | 'authorized' | 'expired' | 'error'>('starting')
+  let message = $state('')
+  let copied = $state(false)
+  let copyError = $state('')
+  let polling = $state(false)
+  let remaining = $state(0)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let ticker: ReturnType<typeof setInterval> | undefined
+  let copyTimer: ReturnType<typeof setTimeout> | undefined
+
+  /** Human-readable countdown, e.g. "14 min 59 sec" → "14:59". */
+  const countdown = $derived.by(() => {
+    const total = Math.max(0, remaining)
+    const minutes = Math.floor(total / 60)
+    const seconds = total % 60
+    if (minutes === 0) return `${seconds} second${seconds === 1 ? '' : 's'}`
+    return `${minutes}:${String(seconds).padStart(2, '0')}`
+  })
+
+  function startCountdown(seconds: number): void {
+    if (ticker) clearInterval(ticker)
+    remaining = seconds
+    ticker = setInterval(() => {
+      remaining = Math.max(0, remaining - 1)
+      if (remaining === 0 && ticker) clearInterval(ticker)
+    }, 1000)
+  }
+
+  async function startFlow(): Promise<void> {
+    phase = 'starting'
+    const result = await gitState.startGitHubDeviceFlow()
+    if (!result) {
+      phase = 'error'
+      message = gitState.error ?? 'GitHub sign-in could not be started'
+      return
+    }
+    device = result
+    phase = 'waiting'
+    startCountdown(result.expiresIn)
+    void poll()
+  }
+
+  async function poll(): Promise<void> {
+    if (polling || !device) return
+    polling = true
+    try {
+      const result = await gitState.pollGitHubDeviceCode(device.deviceCode)
+      if (result.status === 'authorized') {
+        phase = 'authorized'
+        onConnected()
+        return
+      }
+      if (result.status === 'expired') {
+        phase = 'expired'
+        return
+      }
+      if (result.status === 'error') {
+        phase = 'error'
+        message = result.message
+        return
+      }
+      // Still pending — schedule the next poll after the server-suggested interval.
+      timer = setTimeout(() => void poll(), device.interval * 1000)
+    } finally {
+      polling = false
+    }
+  }
+
+  async function copyCode(): Promise<void> {
+    if (!device) return
+    copyError = ''
+    try {
+      await copyText(device.userCode)
+      copied = true
+      if (copyTimer) clearTimeout(copyTimer)
+      copyTimer = setTimeout(() => (copied = false), 1500)
+    } catch {
+      copied = false
+      copyError = 'The device code could not be copied. Select the code and copy it manually.'
+    }
+  }
+
+  async function openGitHub(): Promise<void> {
+    if (device) await openInBrowser(device.verificationUri)
+  }
+
+  $effect(() => {
+    void startFlow()
+  })
+
+  onDestroy(() => {
+    if (timer) clearTimeout(timer)
+    if (ticker) clearInterval(ticker)
+    if (copyTimer) clearTimeout(copyTimer)
+  })
+</script>
+
+<Modal open title="Sign in to GitHub" {onClose} size="md">
+  {#if phase === 'starting'}
+    <div class="flex items-center justify-center gap-2 py-10 text-xs text-dimmed">
+      <Loader2 size={14} class="animate-spin" />
+      Starting sign-in…
+    </div>
+  {:else if phase === 'waiting' && device}
+    <div class="space-y-4">
+      <p class="flex items-start gap-2 text-xs leading-relaxed text-muted">
+        <VendorIcon name="GitHub" size={14} class="mt-0.5 text-foreground" />
+        Enter this code on GitHub to connect your account.
+      </p>
+
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-elevated px-4 py-3"
+        title="Copy code"
+        aria-label="Copy device code"
+        onclick={() => void copyCode()}
+      >
+        <span class="select-all font-mono text-3xl font-semibold tracking-[0.2em] text-foreground">
+          {device.userCode}
+        </span>
+        {#if copied}
+          <Check size={16} class="text-success" />
+        {:else}
+          <Copy size={16} class="text-dimmed" />
+        {/if}
+      </button>
+
+      {#if copyError}
+        <p role="alert" class="text-center text-[10px] text-danger">{copyError}</p>
+      {/if}
+
+      <div class="rounded-lg border border-border bg-surface px-3 py-2">
+        <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          Verification page
+        </p>
+        <p class="mt-0.5 truncate font-mono text-[11px] text-foreground">
+          {device.verificationUri}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        onclick={() => void openGitHub()}
+      >
+        <ExternalLink size={13} />
+        Open GitHub
+      </button>
+
+      <p class="flex items-center justify-center gap-1.5 text-[10px] text-dimmed">
+        <Loader2 size={11} class="animate-spin" />
+        {#if remaining > 0}
+          Waiting for you to authorize… code expires in {countdown}
+        {:else}
+          Waiting for you to authorize…
+        {/if}
+      </p>
+    </div>
+  {:else if phase === 'authorized'}
+    <div class="flex flex-col items-center justify-center py-8 text-center">
+      <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-success/10">
+        <Check size={18} class="text-success" />
+      </div>
+      <p class="text-xs font-medium text-foreground">Signed in to GitHub</p>
+      <p class="mt-1 text-[10px] text-dimmed">
+        Pull requests and sync now use your GitHub account.
+      </p>
+      <button
+        type="button"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        onclick={onClose}
+      >
+        Done
+      </button>
+    </div>
+  {:else if phase === 'expired'}
+    <div class="flex flex-col items-center justify-center py-8 text-center">
+      <div class="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-warning/10">
+        <TimerOff size={18} class="text-warning" />
+      </div>
+      <p class="text-xs font-medium text-foreground">Code expired</p>
+      <p class="mt-1 max-w-[30ch] text-[10px] leading-relaxed text-dimmed">
+        The sign-in code expired before it was authorized. Try again with a fresh code.
+      </p>
+      <button
+        type="button"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        onclick={() => void startFlow()}
+      >
+        Try again
+      </button>
+    </div>
+  {:else}
+    <div class="flex flex-col items-center justify-center py-8 text-center">
+      <p class="text-xs font-medium text-danger">Sign-in failed</p>
+      {#if message}
+        <p class="mt-1 max-w-[34ch] text-[10px] leading-relaxed text-dimmed">{message}</p>
+      {/if}
+      <button
+        type="button"
+        class="mt-4 h-8 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary hover:bg-primary-hover"
+        onclick={() => void startFlow()}
+      >
+        Try again
+      </button>
+    </div>
+  {/if}
+</Modal>

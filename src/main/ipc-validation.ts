@@ -1,3 +1,7 @@
+import { fileURLToPath } from 'url'
+import { realpath } from 'fs/promises'
+import { isAbsolute, relative, resolve, sep } from 'path'
+import type { WebFrameMain } from 'electron'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -10,6 +14,9 @@ import type {
   ThreadStatus,
   ThreadTitleSource
 } from '../lib/types'
+
+/** GitHub's opaque numeric IDs are not constrained to signed 32-bit integers. */
+export const MAX_GITHUB_NUMERIC_ID = Number.MAX_SAFE_INTEGER
 
 const SAFE_ENTITY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const THREAD_STATUSES = new Set<ThreadStatus>([
@@ -38,6 +45,7 @@ const THINKING_LEVELS = new Set<ThreadSettings['thinkingLevel']>([
   'ultra'
 ])
 const INFERENCE_MODES = new Set<InferenceMode>(['normal', 'fast'])
+const TITLE_MODES = new Set<NonNullable<ThreadSettings['titleMode']>>(['model', 'deterministic'])
 const PERMISSION_LEVELS = new Set<ThreadSettings['permissionLevel']>(['auto_review', 'full_access'])
 const PROJECT_SOURCES = new Set<NonNullable<CreateProjectInput['source']>>(['local', 'ssh'])
 const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrackingMode']>>([
@@ -50,6 +58,7 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
   'providerId',
   'modelId',
+  'titleMode',
   'thinkingLevel',
   'inferenceMode',
   'permissionLevel',
@@ -57,7 +66,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'assignmentMode',
   'loopMode',
   'fileSystemMode',
-  'loopAuditor'
+  'loopAuditor',
+  'imageDescriptor'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set(['harnessId', 'providerId', 'modelId'])
 const CREATE_PROJECT_FIELDS = new Set([
@@ -90,6 +100,285 @@ export function validateScopeSlice(value: unknown): ScopeSlice {
     throw new TypeError('Invalid scope slice')
   }
   return value as ScopeSlice
+}
+
+const GIT_PATH_PATTERN = /^[^\0]*$/u
+const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
+const GIT_REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
+const GIT_URL_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file'])
+const GIT_COMMIT_MESSAGE_MAX = 4096
+const GIT_RESET_MODES = new Set(['soft', 'mixed', 'hard'])
+
+/**
+ * Validate a project-relative git path: must be non-empty, bounded, free of
+ * control characters, and must not contain `..` segments (path traversal).
+ */
+export function validateGitRelativePath(value: unknown, label = 'Git file path'): string {
+  const path = validateBoundedString(value, label, 1, 4096)
+  if (!GIT_PATH_PATTERN.test(path)) {
+    throw new TypeError(`${label} must not contain control characters`)
+  }
+  const segments = path.split('/')
+  if (segments.some((segment) => segment === '..')) {
+    throw new TypeError(`${label} must not escape the repository root`)
+  }
+  return path
+}
+
+/** Validate a list of project-relative git paths. */
+export function validateGitPathArray(value: unknown, label = 'Git file paths'): string[] {
+  if (!Array.isArray(value) || value.length > 2000) {
+    throw new TypeError(`${label} must be an array of at most 2000 paths`)
+  }
+  return value.map((entry, index) => validateGitRelativePath(entry, `${label}[${index}]`))
+}
+
+/** Validate a branch name (letters, numbers, dots, underscores, hyphens, slashes). */
+export function validateBranchName(value: unknown, label = 'Git branch'): string {
+  const branch = validateBoundedString(value, label, 1, 256)
+  if (!GIT_BRANCH_PATTERN.test(branch) || branch.endsWith('/') || branch.endsWith('.')) {
+    throw new TypeError(`${label} is not a valid git branch name`)
+  }
+  return branch
+}
+
+/** Validate a commit message, allowing free-form multi-line text. */
+export function validateCommitMessage(value: unknown): string {
+  if (typeof value !== 'string') throw new TypeError('Commit message must be a string')
+  if (value.length === 0 || value.length > GIT_COMMIT_MESSAGE_MAX || value.includes('\0')) {
+    throw new TypeError(`Commit message must be between 1 and ${GIT_COMMIT_MESSAGE_MAX} characters`)
+  }
+  return value.replace(/\r\n/gu, '\n')
+}
+
+/** Validate a git reset severity mode (soft / mixed / hard). */
+export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' {
+  if (typeof value !== 'string' || !GIT_RESET_MODES.has(value)) {
+    throw new TypeError('Reset mode must be one of: soft, mixed, hard')
+  }
+  return value as 'soft' | 'mixed' | 'hard'
+}
+
+/** Validate a git identity name/email pair. */
+export function validateGitIdentity(value: unknown): { name: string; email: string } {
+  const input = assertRecord(value, 'Git identity')
+  rejectUnknownFields(input, new Set(['name', 'email']), 'git identity')
+  return {
+    name: validateBoundedString(input.name, 'Git identity name', 1, 256),
+    email: validateBoundedString(input.email, 'Git identity email', 1, 256)
+  }
+}
+
+/** Validate a remote name (single path-safe segment). */
+export function validateRemoteName(value: unknown): string {
+  const name = validateBoundedString(value, 'Remote name', 1, 128)
+  if (!GIT_REMOTE_NAME_PATTERN.test(name)) {
+    throw new TypeError(
+      'Remote name must contain only letters, numbers, dots, underscores, and hyphens'
+    )
+  }
+  return name
+}
+
+/** Validate a remote URL (scheme-constrained, bounded length). */
+export function validateRemoteUrl(value: unknown): string {
+  const url = validateBoundedString(value, 'Remote URL', 1, 4096)
+  if (!url.includes(':') && !url.startsWith('/')) {
+    throw new TypeError('Remote URL must be a valid git remote URL')
+  }
+  const schemeMatch = /^([a-z][a-z0-9+.-]*):/iu.exec(url)
+  if (schemeMatch && !GIT_URL_SCHEMES.has(schemeMatch[1]!.toLowerCase())) {
+    throw new TypeError(`Remote URL scheme "${schemeMatch[1]}" is not supported`)
+  }
+  if (url.includes('\n') || url.includes('\r') || url.includes('\0')) {
+    throw new TypeError('Remote URL must not contain control characters')
+  }
+  return url
+}
+
+const MERGE_METHODS = new Set<import('../lib/types').PrMergeMethod>(['merge', 'squash', 'rebase'])
+const PR_STATES = new Set<import('../lib/types').PrState>(['open', 'closed', 'all'])
+const PR_REVIEW_EVENTS = new Set<import('../lib/types').PrReviewEvent>([
+  'APPROVE',
+  'REQUEST_CHANGES',
+  'COMMENT'
+])
+
+/** Validate a PR merge method (merge|squash|rebase). */
+export function validateMergeMethod(value: unknown): import('../lib/types').PrMergeMethod {
+  return assertEnum(value, MERGE_METHODS, 'merge method')
+}
+
+/** Validate a PR draft create request. */
+export function validatePrDraft(value: unknown): import('../lib/types').PrDraft {
+  const input = assertRecord(value, 'Pull request draft')
+  rejectUnknownFields(
+    input,
+    new Set(['owner', 'repo', 'title', 'body', 'head', 'base', 'draft']),
+    'pull request draft'
+  )
+  const draft: import('../lib/types').PrDraft = {
+    owner: validateBoundedString(input.owner, 'PR owner', 1, 128),
+    repo: validateBoundedString(input.repo, 'PR repository', 1, 128),
+    title: validateBoundedString(input.title, 'PR title', 1, 512),
+    head: validateBranchName(input.head, 'PR head branch'),
+    base: validateBranchName(input.base, 'PR base branch')
+  }
+  if (input.body !== undefined) {
+    if (typeof input.body !== 'string' || input.body.length > 32_768 || input.body.includes('\0')) {
+      throw new TypeError('PR body must be a string of at most 32768 characters')
+    }
+    draft.body = input.body
+  }
+  if (input.draft !== undefined) {
+    draft.draft = validateBoolean(input.draft, 'PR draft')
+  }
+  return draft
+}
+
+/** Validate a PR create request (owner/repo resolved from the origin in main). */
+export function validatePrCreateInput(value: unknown): import('../lib/types').PrCreateInput {
+  const input = assertRecord(value, 'Pull request create input')
+  rejectUnknownFields(
+    input,
+    new Set(['title', 'body', 'head', 'base', 'draft']),
+    'pull request create input'
+  )
+  const draft: import('../lib/types').PrCreateInput = {
+    title: validateBoundedString(input.title, 'PR title', 1, 512),
+    head: validateBranchName(input.head, 'PR head branch'),
+    base: validateBranchName(input.base, 'PR base branch')
+  }
+  if (input.body !== undefined) {
+    if (typeof input.body !== 'string' || input.body.length > 32_768 || input.body.includes('\0')) {
+      throw new TypeError('PR body must be a string of at most 32768 characters')
+    }
+    draft.body = input.body
+  }
+  if (input.draft !== undefined) {
+    draft.draft = validateBoolean(input.draft, 'PR draft')
+  }
+  return draft
+}
+
+/** Validate a pull request number. */
+export function validatePrNumber(value: unknown): number {
+  return validateBoundedInteger(value, 'Pull request number', 1, MAX_GITHUB_NUMERIC_ID)
+}
+
+/** Validate a merge/rebase target branch or ref. */
+export function validateMergeTarget(value: unknown): string {
+  return validateBranchName(value, 'Merge target')
+}
+
+/** Validate push options passed to `git:push`. */
+export function validatePushOptions(value: unknown): {
+  setUpstream: boolean
+  remote?: string
+  branch?: string
+} {
+  const input = assertRecord(value, 'Push options')
+  rejectUnknownFields(input, new Set(['setUpstream', 'remote', 'branch']), 'push options')
+  const options: { setUpstream: boolean; remote?: string; branch?: string } = {
+    setUpstream: validateBoolean(input.setUpstream, 'Set upstream')
+  }
+  if (input.remote !== undefined) {
+    options.remote = validateRemoteName(input.remote)
+  }
+  if (input.branch !== undefined) {
+    options.branch = validateBranchName(input.branch, 'Push branch')
+  }
+  return options
+}
+
+/** Options for the conflict-aware pull used by push recovery. */
+export function validatePullIntegrateOptions(value: unknown): {
+  remote?: string
+  branch?: string
+  rebase: boolean
+} {
+  const input = assertRecord(value, 'Pull integrate options')
+  rejectUnknownFields(input, new Set(['remote', 'branch', 'rebase']), 'pull integrate options')
+  const options: { remote?: string; branch?: string; rebase: boolean } = {
+    rebase: validateBoolean(input.rebase, 'Rebase')
+  }
+  if (input.remote !== undefined) {
+    options.remote = validateRemoteName(input.remote)
+  }
+  if (input.branch !== undefined) {
+    options.branch = validateBranchName(input.branch, 'Pull branch')
+  }
+  return options
+}
+
+/** Validate options for preparing a local PR conflict resolution. */
+export function validatePrResolveOptions(value: unknown): {
+  remote: string
+  pullNumber: number
+  baseBranch: string
+} {
+  const input = assertRecord(value, 'PR resolve options')
+  rejectUnknownFields(input, new Set(['remote', 'pullNumber', 'baseBranch']), 'PR resolve options')
+  return {
+    remote: validateRemoteName(input.remote),
+    pullNumber: validateBoundedInteger(input.pullNumber, 'Pull request number', 1, 1_000_000_000),
+    baseBranch: validateBranchName(input.baseBranch, 'PR base branch')
+  }
+}
+
+/** Validate a PR list state filter. */
+export function validatePrState(value: unknown): import('../lib/types').PrState {
+  return assertEnum(value, PR_STATES, 'PR state')
+}
+
+/** Validate a PR review verdict. */
+export function validatePrReviewEvent(value: unknown): import('../lib/types').PrReviewEvent {
+  return assertEnum(value, PR_REVIEW_EVENTS, 'PR review event')
+}
+
+/** Validate a 1-based PR listing page number. */
+export function validatePrPage(value: unknown): number {
+  return validateBoundedInteger(value, 'Pull request page', 1, 1000)
+}
+
+/** Validate a PR comment or review body (GitHub caps bodies around 64k). */
+export function validatePrCommentBody(value: unknown, allowEmpty = false): string {
+  const body = validateBoundedString(value, 'Comment body', allowEmpty ? 0 : 1, 65_536)
+  return body
+}
+
+/** Validate an optional merge commit title (single line, GitHub-capped). */
+export function validateMergeCommitTitle(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  return validateBoundedString(value, 'Merge commit title', 1, 256)
+}
+
+/** Validate an optional merge commit message (like a comment on the merge). */
+export function validateMergeCommitMessage(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  return validateBoundedString(value, 'Merge commit message', 1, 65_536)
+}
+
+/** Validate an optional stash message. */
+export function validateStashMessage(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > 256 || value.includes('\0')) {
+    throw new TypeError('Stash message must be a string of at most 256 characters')
+  }
+  return value.trim() || undefined
+}
+
+/** Validate an optional stash selector, e.g. `stash@{0}`. */
+export function validateStashId(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > 64) {
+    throw new TypeError('Stash id must be a string of at most 64 characters')
+  }
+  const trimmed = value.trim()
+  if (!/^stash@\{[0-9]+\}$/u.test(trimmed)) {
+    throw new TypeError('Stash id must look like stash@{0}')
+  }
+  return trimmed
 }
 
 function assertRecord(value: unknown, label: string): Record<string, unknown> {
@@ -157,6 +446,19 @@ export function validateBoundedInteger(
   return value
 }
 
+/** A manual drag-reorder anchor: a finite, non-negative epoch timestamp (may be fractional). */
+export function validateSortOrder(value: unknown): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new TypeError('Sort order must be a finite non-negative number')
+  }
+  return value
+}
+
 export function validateBoundedString(
   value: unknown,
   label: string,
@@ -218,6 +520,9 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
   if (input.inferenceMode !== undefined) {
     settings.inferenceMode = assertEnum(input.inferenceMode, INFERENCE_MODES, 'inference mode')
   }
+  if (input.titleMode !== undefined) {
+    settings.titleMode = assertEnum(input.titleMode, TITLE_MODES, 'title mode')
+  }
   if (input.fileSystemMode !== undefined) {
     settings.fileSystemMode = validateBoolean(input.fileSystemMode, 'File System')
   }
@@ -233,6 +538,20 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         128
       ),
       modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256)
+    }
+  }
+  if (input.imageDescriptor !== undefined) {
+    const descriptor = assertRecord(input.imageDescriptor, 'Image descriptor')
+    rejectUnknownFields(descriptor, AGENT_MODEL_SELECTION_FIELDS, 'image descriptor')
+    settings.imageDescriptor = {
+      harnessId: validateEntityId(descriptor.harnessId, 'Image descriptor harness ID'),
+      providerId: validateBoundedString(
+        descriptor.providerId,
+        'Image descriptor provider ID',
+        1,
+        128
+      ),
+      modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256)
     }
   }
   return settings
@@ -461,4 +780,327 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
   }
 
   return { version: 1, buckets }
+}
+
+const HOSTNAME_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/iu
+
+/**
+ * Validate a list of hostnames used for favicon resolution. Each entry must be
+ * a bounded, hostname-shaped string with no scheme, path, port, or control
+ * characters. Deduplicates preserving first occurrence.
+ */
+export function validateFaviconHostnames(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new TypeError('Favicon hostnames must be an array')
+  if (value.length === 0 || value.length > 64) {
+    throw new TypeError('Favicon hostnames must contain between 1 and 64 entries')
+  }
+  const hostnames: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const entry = value[index]
+    if (
+      typeof entry !== 'string' ||
+      entry.length === 0 ||
+      entry.length > 253 ||
+      entry.includes('\0') ||
+      entry.includes('\n') ||
+      entry.includes('\r') ||
+      !HOSTNAME_PATTERN.test(entry)
+    ) {
+      throw new TypeError(`Favicon hostname at index ${index} is invalid`)
+    }
+    const normalized = entry.toLowerCase()
+    if (!hostnames.includes(normalized)) hostnames.push(normalized)
+  }
+  return hostnames
+}
+
+// ─── Privileged-IPC validation wrapper ──────────────────────────────────────
+
+const WEB_PROTOCOLS = new Set(['https:', 'http:'])
+/** Development-only origins that may be opened over plain http:. */
+const DEV_HTTP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
+const MAX_EXTERNAL_URL_LENGTH = 8192
+const MAX_SCOPED_PATH_LENGTH = 16_384
+
+/** True when the string contains a control character (C0, DEL). */
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code < 0x20 || code === 0x7f) return true
+  }
+  return false
+}
+
+/** Resolve the origin of a URL, or null when it cannot be parsed. */
+export function originOfUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    // The URL spec serializes `file:` origins as the literal string "null";
+    // normalize them to the scheme so trusted-file origins can be matched.
+    return parsed.protocol === 'file:' ? 'file://' : parsed.origin
+  } catch {
+    return null
+  }
+}
+
+/** Whether a URL's origin is contained in the trusted set. */
+export function isTrustedOrigin(url: string, trustedOrigins: ReadonlySet<string>): boolean {
+  const origin = originOfUrl(url)
+  return origin !== null && trustedOrigins.has(origin)
+}
+
+/** Resolvers for the local-file scopes that reveal/preview operations may target. */
+export interface PrivilegedScopeResolvers {
+  /** Registered local project root directories, resolved lazily. */
+  projectRoots: () => Promise<readonly string[]> | readonly string[]
+  /** Concrete app-owned artifact directories (per project) that reveal/preview
+   *  may target — never the whole config root, which holds secrets. */
+  appArtifactRoots: () => Promise<readonly string[]> | readonly string[]
+  /** Exact canonical files previously persisted as user-authored attachments. */
+  isApprovedFile?: (canonicalPath: string) => Promise<boolean> | boolean
+}
+
+export class ScopedPathError extends TypeError {
+  constructor(
+    readonly code: 'missing' | 'out_of_scope',
+    message: string
+  ) {
+    super(message)
+    this.name = 'ScopedPathError'
+  }
+}
+
+export function isMissingScopedPathError(error: unknown): boolean {
+  return error instanceof ScopedPathError && error.code === 'missing'
+}
+
+export interface PrivilegedIpcValidatorOptions {
+  /** Exact URLs the app's own renderer document lives at. Privileged IPC and
+   *  main-frame navigation are bound to these URLs, not to URL origins alone,
+   *  so packaged foreign `file:` documents can never be reached. */
+  navigationTargets?: Iterable<string>
+  /** Resolvers for the file scopes reveal/preview operations may target. */
+  scopes?: PrivilegedScopeResolvers
+  /** Whether plain `http:` localhost URLs may be opened (development only). */
+  allowDevelopmentHttp?: boolean
+}
+
+/** Minimal structural view of a frame for identity checks. */
+export interface FrameIdentity {
+  url: string
+  parent?: FrameIdentity | null
+}
+
+/** A frame that can be checked for a trusted main-frame identity. */
+export type TrustedFrameCandidate = FrameIdentity | WebFrameMain
+
+/**
+ * Shared privileged-IPC validation wrapper. Every renderer-exposed operation
+ * that can open the system browser, reveal files, or read local files goes
+ * through this single boundary so sender frames, external URLs, and local
+ * paths are validated consistently across the main process.
+ */
+export class PrivilegedIpcValidator {
+  readonly #navigationTargets: ReadonlySet<string>
+  readonly #scopes: PrivilegedScopeResolvers | undefined
+  readonly #allowDevelopmentHttp: boolean
+  readonly #userSelectedFiles = new Set<string>()
+  readonly #userSelectedRoots = new Set<string>()
+
+  constructor(options: PrivilegedIpcValidatorOptions) {
+    this.#navigationTargets = new Set(
+      [...(options.navigationTargets ?? [])]
+        .map((url) => this.#normalizeUrl(url))
+        .filter((url): url is string => url !== null)
+    )
+    this.#scopes = options.scopes
+    this.#allowDevelopmentHttp = options.allowDevelopmentHttp ?? false
+  }
+
+  /**
+   * Whether the IPC sender frame is the app's own trusted main frame. Only the
+   * top-level frame (no parent) may invoke privileged IPC, and its document URL
+   * must exactly match one of the app's own renderer URLs — never a foreign or
+   * arbitrary same-origin document.
+   */
+  isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {
+    if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
+    if (frame.parent != null) return false
+    return this.#isTrustedRendererUrl(frame.url)
+  }
+
+  /** Reject a privileged IPC call whose sender frame is not trusted. */
+  assertTrustedSender(
+    event: { senderFrame?: TrustedFrameCandidate | null } | null | undefined
+  ): void {
+    if (!this.isTrustedSenderFrame(event?.senderFrame)) {
+      throw new Error('Privileged IPC rejected: sender frame is not trusted')
+    }
+  }
+
+  /**
+   * Validate a URL for `shell.openExternal` / window-open. Only parsed `https:`
+   * URLs are permitted; plain `http:` is permitted only for intentionally
+   * supported localhost development origins and only when development HTTP is
+   * enabled (never in production). Credentials, control characters, malformed
+   * input, and non-web schemes are rejected. Returns the normalized URL.
+   */
+  validateExternalUrl(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) {
+      throw new TypeError('External URL must be a string of at most 8192 characters')
+    }
+    if (containsControlCharacter(value)) {
+      throw new TypeError('External URL must not contain control characters')
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(value)
+    } catch {
+      throw new TypeError('External URL is malformed')
+    }
+    if (!WEB_PROTOCOLS.has(parsed.protocol)) {
+      throw new TypeError(`External URL scheme "${parsed.protocol}" is not supported`)
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      throw new TypeError('External URL must not contain credentials')
+    }
+    if (parsed.protocol === 'http:') {
+      if (!this.#allowDevelopmentHttp) {
+        throw new TypeError('External http: URLs are only supported in development')
+      }
+      const hostname = parsed.hostname.replace(/^\[|\]$/gu, '')
+      if (!DEV_HTTP_HOSTNAMES.has(hostname)) {
+        throw new TypeError(
+          'External http: URLs are only supported for localhost development origins'
+        )
+      }
+    }
+    return parsed.toString()
+  }
+
+  /**
+   * Whether the main frame may navigate to the given URL. Only the exact
+   * canonical app renderer document is navigable, so arbitrary same-origin or
+   * `file:` targets are never reachable.
+   */
+  isTrustedNavigation(url: string): boolean {
+    return this.#isTrustedRendererUrl(url)
+  }
+
+  #isTrustedRendererUrl(url: string): boolean {
+    const normalized = this.#normalizeUrl(url)
+    return normalized !== null && this.#navigationTargets.has(normalized)
+  }
+
+  #normalizeUrl(url: string): string | null {
+    try {
+      return new URL(url).href
+    } catch {
+      return null
+    }
+  }
+
+  /** Record a file the user explicitly selected through an OS dialog. The
+   *  canonical (symlink-resolved) path is what grants preview/reveal, so a
+   *  later swap to a symlink can never widen the grant. */
+  async registerUserSelectedFile(path: string): Promise<void> {
+    const canonical = await this.#canonicalizeIfExists(path)
+    if (canonical) this.#userSelectedFiles.add(canonical)
+  }
+
+  /** Record a directory the user explicitly selected through an OS dialog. */
+  async registerUserSelectedRoot(path: string): Promise<void> {
+    const canonical = await this.#canonicalizeIfExists(path)
+    if (canonical) this.#userSelectedRoots.add(canonical)
+  }
+
+  /**
+   * Validate a local path for file preview/reveal. The candidate must be a
+   * bounded absolute path (or `file://` URL) free of control characters that,
+   * after symlink resolution, lives inside a registered project root, a
+   * concrete app-owned artifact root, or a user-selected directory, or exactly
+   * matches a user-selected file (by canonical path only). Returns the
+   * canonical path.
+   */
+  async resolveScopedPath(value: unknown): Promise<string> {
+    const candidate = this.#decodeCandidatePath(value)
+    const canonical = await this.#canonicalize(candidate)
+    if (this.#userSelectedFiles.has(canonical)) return canonical
+    if (await this.#scopes?.isApprovedFile?.(canonical)) return canonical
+    const scopes = await this.#resolveScopes()
+    for (const scope of scopes) {
+      if (isWithinRoot(scope, canonical)) return canonical
+    }
+    throw new ScopedPathError(
+      'out_of_scope',
+      'Path is outside the approved project or user-selected scopes'
+    )
+  }
+
+  #decodeCandidatePath(value: unknown): string {
+    if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SCOPED_PATH_LENGTH) {
+      throw new TypeError('Path must be a string of at most 16384 characters')
+    }
+    if (containsControlCharacter(value)) {
+      throw new TypeError('Path must not contain control characters')
+    }
+    const decoded = value.startsWith('file://') ? this.#fileUrlToPath(value) : value
+    if (!isAbsolute(decoded)) {
+      throw new TypeError('Path must be absolute')
+    }
+    return resolve(decoded)
+  }
+
+  #fileUrlToPath(value: string): string {
+    try {
+      return fileURLToPath(value)
+    } catch {
+      throw new TypeError('Path is not a valid file URL')
+    }
+  }
+
+  async #canonicalizeIfExists(path: string): Promise<string | null> {
+    try {
+      return await realpath(path)
+    } catch {
+      return null
+    }
+  }
+
+  async #canonicalize(path: string): Promise<string> {
+    try {
+      return await realpath(path)
+    } catch {
+      throw new ScopedPathError('missing', 'Path does not resolve to an existing file or directory')
+    }
+  }
+
+  async #resolveScopes(): Promise<string[]> {
+    if (!this.#scopes) return []
+    const [projectRoots, artifactRoots] = await Promise.all([
+      this.#scopes.projectRoots(),
+      this.#scopes.appArtifactRoots()
+    ])
+    const candidates = [...projectRoots, ...artifactRoots, ...this.#userSelectedRoots].filter(
+      (root) => typeof root === 'string' && root.length > 0
+    )
+    const resolved: string[] = []
+    for (const root of candidates) {
+      try {
+        resolved.push(await realpath(root))
+      } catch {
+        // A root that no longer exists can grant no scope.
+      }
+    }
+    return resolved
+  }
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const pathFromRoot = relative(root, target)
+  return (
+    pathFromRoot === '' ||
+    (!pathFromRoot.startsWith(`..${sep}`) && pathFromRoot !== '..' && !isAbsolute(pathFromRoot))
+  )
 }

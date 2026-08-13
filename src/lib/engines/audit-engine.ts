@@ -6,6 +6,7 @@ import type {
   AuditReport,
   AuditReportContent,
   AuditSectionId,
+  Project,
   SpecProvenance
 } from '../types'
 import { exportAuditReportMarkdown } from '../audit/audit-markdown'
@@ -17,6 +18,9 @@ export interface CreateAuditReportInput {
   threadId: string
   specId: string
   specVersion: number
+  assignmentId?: string
+  assignmentVersion?: number
+  reworkCycle?: number
   content: AuditReportContent
   provenance: Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
 }
@@ -50,6 +54,9 @@ export class AuditEngine {
       threadId: input.threadId,
       specId: input.specId,
       specVersion: input.specVersion,
+      assignmentId: input.assignmentId,
+      assignmentVersion: input.assignmentVersion,
+      reworkCycle: input.reworkCycle,
       version: (previous?.version ?? 0) + 1,
       content: structuredClone(input.content),
       annotations: [],
@@ -61,7 +68,7 @@ export class AuditEngine {
       createdAt: now,
       updatedAt: now
     }
-    this.writeStored(report)
+    await this.write(report)
     return report
   }
 
@@ -74,6 +81,110 @@ export class AuditEngine {
     return row ? (JSON.parse(row.data) as AuditReport) : null
   }
 
+  /** Fetch one persisted audit report version, or null when it does not exist. */
+  getVersion(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number
+  ): AuditReport | null {
+    const row = this.db.get<{ data: string }>(
+      'SELECT data FROM audit_reports WHERE report_id=? AND version=? AND project_id=? AND thread_id=?',
+      reportId,
+      version,
+      projectId,
+      threadId
+    )
+    return row ? (JSON.parse(row.data) as AuditReport) : null
+  }
+
+  /** Resolve the materialized markdown artifact for an audit report version. */
+  async markdownPath(
+    projectId: string,
+    threadId: string,
+    reportId: string,
+    version: number
+  ): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.db, projectId, threadId)
+    return this.storage.resolveProjectSpecArtifact(
+      projectId,
+      featureSlug,
+      join('versions', `${reportId}-audit-v${version}.md`),
+      requireLocalProject(this.db, projectId)
+    )
+  }
+
+  /**
+   * Materialize the markdown artifact for every persisted audit report on local
+   * projects. Reports created before the file-write path existed live only in the
+   * DB; this backfills their `.cio/specs/<slug>/audit.md` and
+   * `versions/<id>-audit-v<v>.md` files so agents and the file system can read
+   * them. Idempotent: already-written files are skipped.
+   */
+  async materializeAllReports(): Promise<void> {
+    const rows = this.db.all<{ data: string }>('SELECT data FROM audit_reports')
+    const byProject = new Map<
+      string,
+      { project: Project; featureSlug: string; reports: AuditReport[] }
+    >()
+    for (const row of rows) {
+      const report = JSON.parse(row.data) as AuditReport
+      const existing = byProject.get(report.projectId)
+      if (existing) {
+        existing.reports.push(report)
+        continue
+      }
+      let project: Project
+      try {
+        project = requireLocalProject(this.db, report.projectId)
+      } catch {
+        continue
+      }
+      let featureSlug: string
+      try {
+        featureSlug = await ensureFeatureSlug(this.db, report.projectId, report.threadId)
+      } catch {
+        // The owning thread may have been deleted; the report stays in the DB.
+        continue
+      }
+      byProject.set(report.projectId, { project, featureSlug, reports: [report] })
+    }
+    for (const { project, featureSlug, reports } of byProject.values()) {
+      for (const report of reports) {
+        const relativePath = join('versions', `${report.id}-audit-v${report.version}.md`)
+        try {
+          const existing = await this.storage.readProjectSpecRaw(
+            report.projectId,
+            featureSlug,
+            relativePath,
+            project
+          )
+          if (existing !== null) continue
+        } catch {
+          continue
+        }
+        const currentMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '' })
+        const versionMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '../' })
+        await Promise.all([
+          this.storage.writeProjectSpecRaw(
+            report.projectId,
+            featureSlug,
+            'audit.md',
+            currentMarkdown,
+            project
+          ),
+          this.storage.writeProjectSpecRaw(
+            report.projectId,
+            featureSlug,
+            relativePath,
+            versionMarkdown,
+            project
+          )
+        ])
+      }
+    }
+  }
+
   listVersions(projectId: string, threadId: string, reportId: string): AuditReport[] {
     const rows = this.db.all<{ data: string }>(
       'SELECT data FROM audit_reports WHERE report_id=? ORDER BY version',
@@ -84,7 +195,7 @@ export class AuditEngine {
 
   async save(report: AuditReport): Promise<AuditReport> {
     const updated = { ...report, updatedAt: this.now() }
-    this.writeStored(updated)
+    await this.write(updated)
     return updated
   }
 
@@ -173,22 +284,31 @@ export class AuditEngine {
 
   private async write(report: AuditReport): Promise<void> {
     this.writeStored(report)
+    // Remote projects have no local filesystem root to materialize into; the DB
+    // remains the source of truth there. Local projects always get the markdown
+    // artifacts so agents and the file system can read the report.
+    let project: Project
+    try {
+      project = requireLocalProject(this.db, report.projectId)
+    } catch {
+      return
+    }
     const featureSlug = await ensureFeatureSlug(this.db, report.projectId, report.threadId)
-    const project = requireLocalProject(this.db, report.projectId)
-    const markdown = exportAuditReportMarkdown(report)
+    const currentMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '' })
+    const versionMarkdown = exportAuditReportMarkdown(report, { evidenceLinkPrefix: '../' })
     await Promise.all([
       this.storage.writeProjectSpecRaw(
         report.projectId,
         featureSlug,
         'audit.md',
-        markdown,
+        currentMarkdown,
         project
       ),
       this.storage.writeProjectSpecRaw(
         report.projectId,
         featureSlug,
         join('versions', `${report.id}-audit-v${report.version}.md`),
-        markdown,
+        versionMarkdown,
         project
       )
     ])

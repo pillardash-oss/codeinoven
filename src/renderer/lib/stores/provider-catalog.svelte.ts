@@ -1,13 +1,13 @@
 /// <reference types="vite/client" />
 
 import type { AgentEvent, BaseUrlProvider, ProviderCatalog } from '$shared/types'
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { APP_SLUG } from '$shared/brand'
 
 /**
- * Per-project provider catalog cache (stale-while-revalidate) with eager
- * start-up hydration.
+ * Per-project provider catalog cache (stale-while-revalidate) with optional
+ * start-up hydration controls.
  *
  * `agent:refreshProviderCatalog` pings every harness driver, which can take
  * seconds on a cold project and (for Cline) hits the network. At app start
@@ -16,7 +16,9 @@ import { APP_SLUG } from '$shared/brand'
  * snapshot before the picker is ever opened. Pickers consume `cached()` — the
  * sole consumer — instantly; `refresh()` reuses fresh copies within a TTL and
  * revalidates when the copy is stale or a previous attempt failed. Failures
- * keep the stale entry and are retried in the background with backoff. Any
+ * keep the stale entry and are retried in the background with backoff, and a
+ * background staleness sweep re-hydrates caches on their own once they outlive
+ * the TTL — the picker is never the first contact with the harnesses. Any
  * number of concurrent refreshes for the same project share one request.
  *
  * A synchronous localStorage mirror of each project's last-known catalog is
@@ -33,7 +35,7 @@ const RETRY_MAX_DELAY_MS = 5 * 60 * 1000
 /** Minimum pause before a picker-open revalidation can re-probe a failing harness. */
 const RETRY_MIN_INTERVAL_MS = 20 * 1000
 /** localStorage key under which the last-known catalogs are mirrored. */
-const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror`
+const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror.v2`
 
 class ProviderCatalogStore {
   private cache = new SvelteMap<string, ProviderCatalog[]>()
@@ -44,8 +46,13 @@ class ProviderCatalogStore {
   /** Consecutive failed attempts per project, for exponential backoff. */
   private retryAttempts = new Map<string, number>()
   private inflight = new Map<string, Promise<ProviderCatalog[]>>()
+  /** Projects with a driver probe currently in flight, for picker spinners. */
+  private refreshingProjects = new SvelteSet<string>()
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retrySweeping = false
+  /** Timer for the background staleness sweep (re-hydrates stale caches alone). */
+  private stalenessTimer: ReturnType<typeof setTimeout> | null = null
+  private stalenessSweeping = false
 
   constructor() {
     // Seed from the last-known catalog mirror so a thread's selected model and
@@ -62,6 +69,7 @@ class ProviderCatalogStore {
         this.failedAt.delete(event.projectId)
         this.retryAttempts.delete(event.projectId)
         this.persistMirror()
+        this.scheduleStalenessSweep()
       }
     })
   }
@@ -69,7 +77,11 @@ class ProviderCatalogStore {
   /**
    * Seed every project's catalog from disk. Startup never contacts harnesses.
    */
-  async init(projectIds: string[]): Promise<void> {
+  async init(
+    projectIds: string[],
+    options: { refresh?: boolean } = {}
+  ): Promise<void> {
+    const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
     await Promise.all(
       targets.map(async (projectId) => {
@@ -90,6 +102,15 @@ class ProviderCatalogStore {
     )
     // Keep the local mirror current so the next launch renders instantly.
     this.persistMirror()
+    if (refresh) {
+      // Hydrate every project in the background so live harness data replaces
+      // the snapshot — and projects with no snapshot are populated — before the
+      // model picker is ever opened. Forced so a fresh snapshot is never trusted
+      // over a driver probe. Concurrent projects share one main-side discovery.
+      for (const projectId of targets) void this.refresh(projectId, true)
+    }
+    // Re-arm the staleness sweep so caches never outlive their TTL silently.
+    this.scheduleStalenessSweep()
   }
 
   /** Seed the cache synchronously from the last-known catalog mirror. */
@@ -127,6 +148,11 @@ class ProviderCatalogStore {
   cached(projectId: string): ProviderCatalog[] | undefined {
     const catalogs = this.cache.get(projectId)
     return catalogs ? this.applyCustomOverrides(catalogs) : undefined
+  }
+
+  /** True while a driver probe for the project is in flight (spinner state). */
+  refreshing(projectId: string): boolean {
+    return this.refreshingProjects.has(projectId)
   }
 
   /**
@@ -169,8 +195,10 @@ class ProviderCatalogStore {
       .then(() => this.cached(projectId) ?? [])
       .finally(() => {
         this.inflight.delete(projectId)
+        this.refreshingProjects.delete(projectId)
       })
     this.inflight.set(projectId, request)
+    this.refreshingProjects.add(projectId)
     return request
   }
 
@@ -187,6 +215,7 @@ class ProviderCatalogStore {
       this.failedAt.delete(projectId)
       this.retryAttempts.delete(projectId)
       this.persistMirror()
+      this.scheduleStalenessSweep()
     } catch {
       this.failedAt.set(projectId, Date.now())
       this.scheduleRetrySweep()
@@ -232,6 +261,49 @@ class ProviderCatalogStore {
     }
   }
 
+  /**
+   * Re-hydrate a project's catalog on its own once its cache outlives the
+   * freshness window, so the model list is already fresh the next time the
+   * picker opens — no user action required. Arms the timer to the earliest
+   * future expiry (new entries always expire later than any currently armed
+   * due, so no rescheduling is needed while a timer is pending) and re-arms
+   * after each sweep. A failed probe falls through to the failure-retry sweep,
+   * and an already-stale entry that stays stale is left for that backoff path
+   * rather than looping here.
+   */
+  private scheduleStalenessSweep(): void {
+    if (this.stalenessTimer !== null || this.stalenessSweeping) return
+    const now = Date.now()
+    let nextDue: number | null = null
+    for (const fetchedAt of this.refreshedAt.values()) {
+      const due = fetchedAt + CATALOG_FRESH_TTL_MS
+      if (due > now && (nextDue === null || due < nextDue)) nextDue = due
+    }
+    if (nextDue === null) return
+    this.stalenessTimer = setTimeout(() => {
+      this.stalenessTimer = null
+      void this.runStalenessSweep()
+    }, nextDue - now)
+  }
+
+  private async runStalenessSweep(): Promise<void> {
+    if (this.stalenessSweeping) return
+    this.stalenessSweeping = true
+    try {
+      const stale = [...this.refreshedAt.keys()].filter((projectId) => {
+        const fetchedAt = this.refreshedAt.get(projectId) ?? 0
+        return Date.now() - fetchedAt >= CATALOG_FRESH_TTL_MS
+      })
+      if (stale.length > 0) {
+        await Promise.all(stale.map((projectId) => this.refresh(projectId, true)))
+      }
+    } finally {
+      this.stalenessSweeping = false
+      // Re-arm for the next expiry.
+      this.scheduleStalenessSweep()
+    }
+  }
+
   /** Force-invalidate the cache for all projects. Use when provider availability changes. */
   invalidateAll(): void {
     this.refreshedAt.clear()
@@ -266,7 +338,7 @@ class ProviderCatalogStore {
           name: model.name,
           reasoning: model.reasoning,
           thinkingPresets: model.thinkingPresets,
-          attachment: false,
+          attachment: model.vision !== false,
           toolcall: true,
           contextWindow: model.contextWindow,
           fastSupported: false

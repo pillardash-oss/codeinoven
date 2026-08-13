@@ -17,6 +17,7 @@ interface ProjectRow {
   color: string | null
   icon_type: string | null
   change_tracking_mode: string
+  has_deployments: number
   created_at: number
   updated_at: number
 }
@@ -38,6 +39,7 @@ function rowToProject(row: ProjectRow): Project {
     color: row.color ?? undefined,
     iconType: row.icon_type ?? undefined,
     changeTrackingMode: row.change_tracking_mode as 'git' | 'manual',
+    hasDeployments: row.has_deployments === 1 || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -51,8 +53,8 @@ export class ProjectRepo {
       `INSERT INTO projects(
         id, name, path, source, host, provider_id, workflow_id, thread_limit,
         hidden, pinned, sort_order, icon, color, icon_type, change_tracking_mode,
-        created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        has_deployments, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         path = excluded.path,
@@ -68,6 +70,7 @@ export class ProjectRepo {
         color = excluded.color,
         icon_type = excluded.icon_type,
         change_tracking_mode = excluded.change_tracking_mode,
+        has_deployments = excluded.has_deployments,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at`,
       project.id,
@@ -85,6 +88,7 @@ export class ProjectRepo {
       project.color ?? null,
       project.iconType ?? null,
       project.changeTrackingMode ?? 'manual',
+      project.hasDeployments ? 1 : 0,
       project.createdAt,
       project.updatedAt
     )

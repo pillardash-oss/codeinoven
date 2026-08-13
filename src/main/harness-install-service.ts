@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { homedir } from 'os'
 import type {
   HarnessInstallInfo,
@@ -47,6 +47,11 @@ const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
     darwin: 'https://github.com/google-antigravity/antigravity-cli',
     linux: 'https://github.com/google-antigravity/antigravity-cli',
     win32: 'https://github.com/google-antigravity/antigravity-cli'
+  },
+  muse: {
+    darwin: 'https://developer.meta.com/ai/products/muse-code/',
+    linux: 'https://developer.meta.com/ai/products/muse-code/',
+    win32: 'https://developer.meta.com/ai/products/muse-code/'
   }
 }
 
@@ -78,6 +83,11 @@ const INSTALL_METHODS: Record<string, Partial<Record<Platform, HarnessInstallMet
     win32: ['npm']
   },
   antigravity: {
+    darwin: ['native'],
+    linux: ['native'],
+    win32: ['native']
+  },
+  muse: {
     darwin: ['native'],
     linux: ['native'],
     win32: ['native']
@@ -124,6 +134,12 @@ const UNINSTALL_COMMANDS: Record<
   },
   antigravity: {
     native: { command: 'rm', args: ['-rf', '~/.local/bin/agy', '~/.antigravity'] }
+  },
+  muse: {
+    native: {
+      command: 'rm',
+      args: ['-rf', '~/.local/bin/muse', '~/.config/muse', '~/.local/share/muse']
+    }
   }
 }
 

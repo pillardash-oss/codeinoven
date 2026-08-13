@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import { lstatSync, realpathSync } from 'fs'
 import { writeFile, rename, mkdir, readFile, readdir, rm } from 'fs/promises'
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
@@ -128,6 +130,9 @@ export async function removeDir(dirPath: string): Promise<void> {
 
 /** Get the app config root path */
 export function getConfigRoot(): string {
+  const configuredRoot = process.env['CODEINOVEN_CONFIG_ROOT']
+  const isPackagedSmoke = Boolean(process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'])
+  if (isPackagedSmoke && configuredRoot && isAbsolute(configuredRoot)) return configuredRoot
   const home = process.env.HOME ?? process.env.USERPROFILE ?? '~'
   return join(home, '.config', ORG_SLUG, APP_SLUG)
 }

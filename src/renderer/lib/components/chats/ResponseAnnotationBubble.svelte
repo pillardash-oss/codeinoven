@@ -17,11 +17,11 @@
 
 <button
   type="button"
-  class="fixed z-40 flex h-6 w-11 items-center justify-center gap-1 rounded-full border shadow-md transition-colors {active
-    ? 'border-accent bg-accent/15 text-accent'
+  class="fixed z-40 flex h-6 w-11 items-center justify-center gap-1 rounded-full border bg-white text-black shadow-md transition-colors {active
+    ? 'border-black/90 ring-2 ring-black/20'
     : hasComment
-      ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15'
-      : 'border-border bg-surface text-muted hover:bg-overlay hover:text-foreground'}"
+      ? 'border-accent hover:bg-zinc-100'
+      : 'border-black/90 hover:bg-zinc-100'}"
   style:left={`${x}px`}
   style:top={`${y}px`}
   {title}

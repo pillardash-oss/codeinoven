@@ -2,6 +2,7 @@
   import { tick, onDestroy, onMount } from 'svelte'
   import {
     ArrowUp,
+    AudioLines,
     Clock,
     Plus,
     Paperclip,
@@ -22,7 +23,10 @@
     Network,
     HardDrive,
     Zap,
-    ShieldAlert
+    ShieldAlert,
+    Eye,
+    Video,
+    Check
   } from '@lucide/svelte'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -31,8 +35,9 @@
     fastSelectionModelId,
     supportsFastInference
   } from '$shared/fast-inference'
-  import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
+  import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
+  import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -42,9 +47,9 @@
     getInlineFolderTypeIconDataUri
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { mimeFromPath, isImageMime, pathToFileUrl, fileUrlToPath } from '$lib/mime'
+  import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
-  import ImagePreview from './ImagePreview.svelte'
+  import AttachmentPreview from './AttachmentPreview.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
@@ -69,8 +74,12 @@
     PromptProjectReference,
     ComposerProject,
     AgentContextUsage,
+    AgentHarnessUsage,
     PromptReference,
-    AssignmentTask
+    AssignmentTask,
+    AgentModelSelection,
+    AttachmentStorageScope,
+    UsageEfficiencyKpis
   } from '$shared/types'
 
   interface Props {
@@ -107,6 +116,8 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
+    /** Project or app scratch destination for pasted/ephemeral attachment files. */
+    attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
     onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
@@ -137,6 +148,9 @@
     showEngineeringMode?: boolean
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
+    /** Hides the permission level selector and forces auto review — chats are
+     *  for questions and research, so they always run with auto permissions. */
+    hidePermissionSelector?: boolean
     /** Hides mutating controls and file attachment entry points. */
     readOnlyMode?: boolean
     /** Lets read-only composers still attach media files for context.
@@ -145,21 +159,45 @@
     /** Model keys (providerId:modelId) the user has favorited. */
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Called when the user reorders a favorite relative to another favorite. */
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     /** Model keys (providerId:modelId) the user has recently used, most recent first. */
     recentModels?: string[]
     /** Called when the user selects a model — for tracking recently used. */
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
+    efficiencyKpis?: UsageEfficiencyKpis
+    /** Per-harness quota telemetry when a thread used more than one harness. */
+    harnessUsage?: AgentHarnessUsage[]
     /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
     onRevealUsage?: () => void
+    /** Called when the user stops hovering the usage indicator. */
+    onHideUsage?: () => void
+    /** Whether live account usage is currently being fetched from the harness. */
+    usageRefreshing?: boolean
     /** Whether this harness can explicitly compact conversation context. */
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
+    /** Global default vision model used to describe images for text-only models. */
+    imageDescriptorDefault?: AgentModelSelection
+    /** When true, the vision-model picker card is skipped on image sends. */
+    imageDescriptorAskAgain?: boolean
+    /** Persists a new global image-descriptor default (Agents settings). */
+    onImageDescriptorDefaultChange?: (selection: AgentModelSelection) => void
+    /** Persists the "don't ask again" flag for image-descriptor picks. */
+    onImageDescriptorAskAgainChange?: (value: boolean) => void
+    /** Enables the image-to-text-only-model gate card. Off in side-chats. */
+    enableImageDescriptorGate?: boolean
   }
 
   let {
@@ -178,6 +216,7 @@
     harnessId = 'opencode',
     projectContext,
     projectId = null,
+    attachmentStorage,
     onSwitchProject,
     fileTagProjectId,
     assignmentId,
@@ -196,22 +235,39 @@
     onEditReference,
     showEngineeringMode = true,
     showChatModes = false,
+    hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
     favoriteModels = [],
     onToggleFavorite,
+    onReorderFavorite,
     recentModels = [],
     onModelUsed,
     contextUsage,
+    efficiencyKpis,
+    harnessUsage = [],
     onRevealUsage,
+    onHideUsage,
+    usageRefreshing = false,
     canCompact = false,
     compacting = false,
     onCompact,
-    historyMessages = []
+    historyMessages = [],
+    imageDescriptorDefault,
+    imageDescriptorAskAgain = false,
+    onImageDescriptorDefaultChange,
+    onImageDescriptorAskAgainChange,
+    enableImageDescriptorGate = true
   }: Props = $props()
 
-  /** Resolved settings — uses the prop if provided, else the global last-used. */
-  let resolved = $derived(settings ?? threadSettingsStore.lastUsed)
+  /** Resolved settings — uses the prop if provided, else the global last-used.
+   *  Chats always run with auto permission review, so when the permission
+   *  selector is hidden the level is pinned to `auto_review`. */
+  let resolved = $derived<ThreadSettings>(
+    hidePermissionSelector
+      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' as const }
+      : (settings ?? threadSettingsStore.lastUsed)
+  )
 
   function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
     return `@${reference.path}`
@@ -244,12 +300,32 @@
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
   let taskReferences = $state<PromptAssignmentTaskReference[]>([...initialTaskReferences])
+  let projectReferenceIcons = $state<Record<string, string>>({})
+
+  $effect(() => {
+    const references = projectReferences.map((reference) => ({ ...reference }))
+    let current = true
+    void Promise.all(
+      references.map(
+        async (reference) =>
+          [
+            projectReferenceToken(reference),
+            reference.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(reference.name)
+              : await getInlineFileTypeIconDataUri(reference.path)
+          ] as const
+      )
+    ).then((entries) => {
+      if (current) projectReferenceIcons = Object.fromEntries(entries)
+    })
+    return () => {
+      current = false
+    }
+  })
+
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
     ...projectReferences.map((reference) => ({
-      iconSrc:
-        reference.kind === 'directory'
-          ? getInlineFolderTypeIconDataUri(reference.name)
-          : getInlineFileTypeIconDataUri(reference.path),
+      iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
       title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
       value: projectReferenceToken(reference)
@@ -275,8 +351,15 @@
   })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
-  /** Object URLs for image previews, keyed by attachment file:// URL. */
+  /** Object URLs for image/pdf previews, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
+  /** Decoded text content for markdown/plain-text previews, keyed by url. */
+  let previewTexts = $state<Record<string, string>>({})
+  /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
+  let imageDescriptorGateOpen = $state(false)
+  let gateVisionSelection = $state<AgentModelSelection | null>(null)
+  let gateDonotAsk = $state(false)
+  let gateDirect = $state<boolean | undefined>(undefined)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
@@ -369,7 +452,11 @@
     thinkingMenuOpen = false
   }
 
-  let modelWasOpen = $state(false)
+  // Prior-open tracking for the focus-on-close edge detection below. This is a
+  // non-reactive scratch value read/written only inside the effect — the effect
+  // re-runs because it also reads the reactive menu state, so keeping the
+  // previous value in a plain variable (rather than $state) is correct.
+  let modelWasOpen = false
   $effect(() => {
     if (modelWasOpen && !modelMenuOpen) {
       focusComposerAtEnd()
@@ -377,7 +464,7 @@
     modelWasOpen = modelMenuOpen
   })
 
-  let thinkingWasOpen = $state(false)
+  let thinkingWasOpen = false
   $effect(() => {
     if (thinkingWasOpen && !thinkingMenuOpen && !modelMenuOpen) {
       focusComposerAtEnd()
@@ -415,6 +502,55 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
+
+  /** True when the catalog reports this model cannot see images. */
+  let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
+  let hasImageAttachments = $derived(attachments.some(isImageAttachment))
+
+  function isImageAttachment(file: PromptAttachment): boolean {
+    if (file.mime.startsWith('image/')) return true
+    return /\.(png|jpe?g|gif|webp|bmp|avif|svg|ico)$/iu.test(file.filename ?? '')
+  }
+
+  /**
+   * Whether sending the draft should be intercepted by the vision-model gate:
+   * an image is attached, the active model cannot see it, and the user has not
+   * opted into "don't ask again". The card is shown on every such send; the
+   * thread or global default merely pre-fills the picker.
+   */
+  function shouldInterceptImageGate(): boolean {
+    return (
+      enableImageDescriptorGate &&
+      hasImageAttachments &&
+      selectedModelLacksVision &&
+      !imageDescriptorAskAgain
+    )
+  }
+
+  function openImageDescriptorGate(direct?: boolean): void {
+    gateVisionSelection = resolved.imageDescriptor ?? imageDescriptorDefault ?? null
+    gateDonotAsk = false
+    gateDirect = direct
+    imageDescriptorGateOpen = true
+  }
+
+  function cancelImageDescriptorGate(): void {
+    imageDescriptorGateOpen = false
+  }
+
+  /** Persist the chosen vision model (thread + optional global default) and send. */
+  function confirmImageDescriptorGate(): void {
+    const selection = gateVisionSelection
+    if (!selection) return
+    if (onSettingsChange) onSettingsChange({ ...resolved, imageDescriptor: selection })
+    else threadSettingsStore.commit({ ...resolved, imageDescriptor: selection })
+    if (gateDonotAsk) {
+      onImageDescriptorDefaultChange?.(selection)
+      onImageDescriptorAskAgainChange?.(true)
+    }
+    imageDescriptorGateOpen = false
+    performSend(gateDirect)
+  }
 
   /**
    * Thinking presets declared by the selected model. While the catalog is cold
@@ -477,8 +613,15 @@
   let savedValue = $state('')
   let hasText = $derived(value.trim().length > 0)
 
-  /** Whether the button should show the stop icon (agent working, no text typed). */
-  let canStop = $derived(working && !hasText)
+  /** True when an attached selection carries a user comment, so an otherwise
+   *  empty message can still be sent (the comment is the payload). */
+  let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
+
+  /** Whether there is anything to send: text or a commented selection. */
+  let hasSendableContent = $derived(hasText || hasCommentReference)
+
+  /** Whether the button should show the stop icon (agent working, nothing to send). */
+  let canStop = $derived(working && !hasSendableContent)
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -513,7 +656,8 @@
     )
   }
 
-  function focusComposerAtEnd(): void {
+  /** Focus the composer editor and place the caret at the end, in place. */
+  export function focusComposerAtEnd(): void {
     void tick().then(() => {
       const editor = document.getElementById(composerEditorId)
       if (!(editor instanceof HTMLDivElement)) return
@@ -562,13 +706,13 @@
       return
     }
     if (disabled) return
-    if (working && !hasText) {
+    if (working && !hasSendableContent) {
       confirmStop()
       return
     }
     cancelStop()
     const msg = value.trim()
-    if (!msg) return
+    if (!msg && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
     const slashCommand = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(msg)
@@ -588,6 +732,15 @@
     }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
+    if (shouldInterceptImageGate()) {
+      openImageDescriptorGate(direct)
+      return
+    }
+    performSend(direct)
+  }
+
+  function performSend(direct?: boolean): void {
+    const msg = value.trim()
     value = ''
     onValueChange?.('')
     const files = [...attachments]
@@ -600,6 +753,7 @@
     projectReferences = []
     taskReferences = []
     previewUrls = {}
+    previewTexts = {}
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
@@ -801,24 +955,29 @@
 
   function selectModel(providerId: string, modelId: string, nextHarnessId?: string): void {
     modelMenuOpen = false
-    onModelUsed?.(`${providerId}:${modelId}`)
     const nextHarness = nextHarnessId ?? resolved.harnessId
+    onModelUsed?.(modelKey(nextHarness, providerId, modelId))
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
     const defaultThinkingLevel = baseUrlProviderStore.defaultThinkingLevel(
       nextHarness,
       providerId,
       modelId
     )
-    const provider = providers.find(
-      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
+    const thinkingLevel = resolveDefaultThinkingLevel(
+      model?.thinkingPresets,
+      defaultThinkingLevel,
+      resolved.thinkingLevel
     )
-    const model = provider?.models.find((candidate) => candidate.id === modelId)
     const fastSupported = supportsFastInference(nextHarness, providerId, model?.fastSupported)
     const updated: ThreadSettings = {
       ...resolved,
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
-      ...(defaultThinkingLevel ? { thinkingLevel: defaultThinkingLevel } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
     if (onSettingsChange) onSettingsChange(updated)
@@ -846,18 +1005,31 @@
     else threadSettingsStore.commit(updated)
   }
 
+  /** Loads the preview payload for one attachment: blob URLs for images/pdfs,
+   *  decoded text for markdown/plain-text. Missing/undecodable files silently
+   *  yield no preview so the chip falls back to the file:// URL or the modal
+   *  shows its unavailable state. */
+  async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
+    const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
+    if (!kind) return
+    try {
+      const bytes = await window.api.readFile(fileUrlToPath(file.url))
+      if (kind === 'markdown' || kind === 'text') {
+        if (previewTexts[file.url] !== undefined) return
+        previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
+        return
+      }
+      if (previewUrls[file.url]) return
+      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: file.mime }))
+      previewUrls = { ...previewUrls, [file.url]: objectUrl }
+    } catch {
+      // Preview unavailable; the chip/modal will fall back to the file:// URL.
+    }
+  }
+
   async function loadAttachmentPreviews(files: PromptAttachment[]): Promise<void> {
     for (const file of files) {
-      if (!isImageMime(file.mime)) continue
-      try {
-        const path = fileUrlToPath(file.url)
-        const objectUrl = URL.createObjectURL(
-          new Blob([await window.api.readFile(path)], { type: file.mime })
-        )
-        previewUrls = { ...previewUrls, [file.url]: objectUrl }
-      } catch {
-        // Preview unavailable; the chip/modal will fall back to the file:// URL.
-      }
+      await loadAttachmentPreview(file)
     }
   }
 
@@ -872,17 +1044,10 @@
       (filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'file').split('?')[0]
     const mime = file?.type || mimeFromPath(filePath)
     const url = pathToFileUrl(filePath)
-    attachments = [...attachments, { mime, url, filename }]
+    const attachment = { mime, url, filename }
+    attachments = [...attachments, attachment]
     onAttachmentsChange?.(attachments)
-    if (!isImageMime(mime)) return
-    try {
-      const objectUrl = file
-        ? URL.createObjectURL(file)
-        : URL.createObjectURL(new Blob([await window.api.readFile(filePath)], { type: mime }))
-      previewUrls = { ...previewUrls, [url]: objectUrl }
-    } catch {
-      // Preview unavailable; the chip/modal will fall back to the file:// URL.
-    }
+    void loadAttachmentPreview(attachment)
   }
 
   function removeAttachment(index: number): void {
@@ -895,6 +1060,9 @@
         delete rest[removed.url]
         previewUrls = rest
       }
+      const restTexts = { ...previewTexts }
+      delete restTexts[removed.url]
+      previewTexts = restTexts
     }
     attachments = attachments.filter((_, i) => i !== index)
     onAttachmentsChange?.(attachments)
@@ -910,7 +1078,7 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const path = await invoke('dialog:pickFile')
+    const path = await invoke('dialog:pickFile', attachmentStorage)
     if (!path) return
     await addFileAttachment(path)
   }
@@ -944,24 +1112,29 @@
     return false
   }
 
-  function handleDropFiles(dt: DataTransfer | null): void {
+  async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
     if (!dt) return
     const files = dt.files
     if (!files || files.length === 0) return
     for (const file of Array.from(files)) {
       try {
-        const filePath = window.api.getPathForFile(file)
-        if (filePath) addFileAttachment(filePath, file)
+        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+        if (filePath) await addFileAttachment(filePath, file)
       } catch {
         // Not a local file (e.g., image dragged from a web page); skip.
       }
     }
   }
 
-  $effect(() => {
-    if (readOnlyMode && !allowAttachments) return
+  // Register the document-level drag listeners once on mount and gate each
+  // handler on the current mode flags. The previous $effect re-subscribed on
+  // every change of readOnlyMode/allowAttachments; with the handlers gating on
+  // those values at event time the behavior is identical while keeping the
+  // listener lifecycle (and the isDragging mutations) out of a reactive effect.
+  onMount(() => {
     function onDragOver(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (overFileTree(e)) {
         // The file tree owns the drop in its region; hide the composer overlay.
         if (isDragging) isDragging = false
@@ -974,6 +1147,7 @@
     }
 
     function onDragLeave(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (
         e.clientX <= 0 ||
         e.clientY <= 0 ||
@@ -985,10 +1159,11 @@
     }
 
     function onDrop(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false
-      handleDropFiles(e.dataTransfer)
+      void handleDropFiles(e.dataTransfer)
     }
 
     document.addEventListener('dragover', onDragOver)
@@ -1013,9 +1188,9 @@
         const file = item.getAsFile()
         if (file) {
           try {
-            const filePath = window.api.getPathForFile(file)
+            const filePath = await window.api.registerFileSelection(file, attachmentStorage)
             if (filePath) {
-              addFileAttachment(filePath, file)
+              await addFileAttachment(filePath, file)
               hasFileAttachment = true
             }
           } catch {
@@ -1034,7 +1209,9 @@
       }
       if (hasFileAttachment) {
         try {
-          const path = await invoke('clipboard:saveImage')
+          const path = attachmentStorage
+            ? await invoke('clipboard:saveImage', attachmentStorage)
+            : null
           if (path) await addFileAttachment(path)
           else hasFileAttachment = false
         } catch {
@@ -1158,9 +1335,10 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if previewFile}
-  <ImagePreview
-    src={previewUrls[previewFile.url] ?? previewFile.url}
-    filename={previewFile.filename ?? 'file'}
+  <AttachmentPreview
+    attachment={previewFile}
+    src={previewUrls[previewFile.url]}
+    text={previewTexts[previewFile.url]}
     onClose={() => (previewFile = null)}
   />
 {/if}
@@ -1190,6 +1368,81 @@
       <div class="flex flex-col items-center gap-2 text-primary">
         <Upload size={32} />
         <span class="text-base font-medium">Drop files to attach</span>
+      </div>
+    </div>
+  {/if}
+
+  {#if imageDescriptorGateOpen}
+    <div
+      class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
+      role="dialog"
+      aria-label="Pick a vision model to describe this image"
+    >
+      <div class="flex items-start gap-2.5">
+        <div class="mt-0.5 shrink-0 rounded-lg bg-primary/10 p-1.5 text-primary">
+          <Eye size={15} />
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-foreground">This model can't see images</p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            You're about to send an image to a model without vision capability. Image Descriptor is
+            a tool the model can call to describe the image for it — but you need to pick the vision
+            model that does the describing.
+          </p>
+        </div>
+      </div>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          title="Cancel and keep your message and attachment"
+          onclick={cancelImageDescriptorGate}
+        >
+          Cancel
+        </button>
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={gateVisionSelection?.harnessId ??
+              providers[0]?.harnessId ??
+              resolved.harnessId}
+            providerId={gateVisionSelection?.providerId ?? ''}
+            modelId={gateVisionSelection?.modelId ?? ''}
+            {favoriteModels}
+            {recentModels}
+            visionOnly
+            side="top"
+            variant="field"
+            label={gateVisionSelection ? undefined : 'Choose a vision model'}
+            onSelect={(providerId, modelId, harnessId) => {
+              gateVisionSelection = { harnessId, providerId, modelId }
+            }}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
+        </div>
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          title="Send the image and describe it with the selected vision model"
+          disabled={!gateVisionSelection}
+          onclick={() => confirmImageDescriptorGate()}
+        >
+          <Check size={13} /> Continue
+        </button>
+      </div>
+      {#if !gateVisionSelection}
+        <p class="mt-1.5 text-[11px] text-dimmed">
+          No vision model selected — Continue is disabled until you pick one.
+        </p>
+      {/if}
+      <div class="mt-3 flex justify-start">
+        <Switch
+          bind:checked={gateDonotAsk}
+          label="Don't ask again"
+          aria-label="Don't ask again for this vision model"
+        />
       </div>
     </div>
   {/if}
@@ -1369,56 +1622,49 @@
       {#if attachments.length > 0}
         <div class="flex flex-wrap gap-1.5">
           {#each attachments as file, i (file.url)}
-            {@const isImage = isImageMime(file.mime)}
-            {#if isImage}
-              {@const previewSrc = previewUrls[file.url] ?? file.url}
-              <button
-                type="button"
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-overlay"
-                title="Click to preview"
-                onclick={() => (previewFile = file)}
-              >
-                <img
-                  src={previewSrc}
-                  alt={file.filename ?? 'file'}
-                  class="h-5 w-5 shrink-0 rounded object-cover"
-                />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
-                <span
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  role="button"
-                  tabindex="0"
-                  aria-label="Remove attachment"
-                  onclick={(e: MouseEvent) => {
-                    e.stopPropagation()
-                    removeAttachment(i)
-                  }}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      removeAttachment(i)
-                    }
-                  }}
-                >
-                  <X size={10} />
-                </span>
-              </button>
-            {:else}
-              <span
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-              >
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
+            {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
+            <div
+              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted transition-colors"
+            >
+              {#if previewKind}
                 <button
                   type="button"
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  title="Remove attachment"
-                  onclick={() => removeAttachment(i)}
+                  class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
+                  title="Click to preview"
+                  aria-label="Preview {file.filename ?? 'file'}"
+                  onclick={() => (previewFile = file)}
                 >
-                  <X size={10} />
+                  {#if previewKind === 'image'}
+                    <img
+                      src={previewUrls[file.url] ?? file.url}
+                      alt={file.filename ?? 'file'}
+                      class="h-5 w-5 shrink-0 rounded object-cover"
+                    />
+                  {:else if previewKind === 'video'}
+                    <Video size={11} class="shrink-0" />
+                  {:else if previewKind === 'audio'}
+                    <AudioLines size={11} class="shrink-0" />
+                  {:else}
+                    <FileText size={11} class="shrink-0" />
+                  {/if}
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
                 </button>
-              </span>
-            {/if}
+              {:else}
+                <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
+                  <FileText size={11} class="shrink-0" />
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
+                </span>
+              {/if}
+              <button
+                type="button"
+                class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                title="Remove attachment"
+                aria-label="Remove attachment"
+                onclick={() => removeAttachment(i)}
+              >
+                <X size={11} />
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
@@ -1612,7 +1858,7 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
-    {:else}
+    {:else if !hidePermissionSelector}
       <div class="relative">
         <button
           type="button"
@@ -1689,8 +1935,8 @@
       bind:open={modelMenuOpen}
       onSelect={selectModel}
       {onToggleFavorite}
+      {onReorderFavorite}
       fast={inferenceMode === 'fast'}
-      responsiveLabel
     />
 
     <!-- Thinking level — only for models that support reasoning -->
@@ -1831,15 +2077,17 @@
 
     <span class="flex-1"></span>
 
-    {#if contextUsage || canCompact}
-      <ContextUsageIndicator
-        usage={contextUsage}
-        {canCompact}
-        {compacting}
-        {onCompact}
-        onReveal={onRevealUsage}
-      />
-    {/if}
+    <ContextUsageIndicator
+      usage={contextUsage}
+      {efficiencyKpis}
+      {harnessUsage}
+      {canCompact}
+      {compacting}
+      {onCompact}
+      onReveal={onRevealUsage}
+      onHide={onHideUsage}
+      refreshing={usageRefreshing}
+    />
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty
@@ -1867,7 +2115,7 @@
           : working
             ? 'Queue — message sends when the agent finishes'
             : 'Send'}
-      disabled={disabled || (!working && !hasText)}
+      disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
     >
       {#if pendingStop}

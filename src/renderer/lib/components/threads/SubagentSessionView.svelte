@@ -133,6 +133,13 @@
     void messages.length
     void tick().then(() => {
       if (!scrollElement || userScrolledAway) return
+      // The scroll event lags the user's gesture by a frame, so re-check the
+      // live position before snapping — a queued callback racing a scroll-up
+      // would otherwise drag the view back to the bottom mid-gesture.
+      if (!isAtBottom(scrollElement)) {
+        userScrolledAway = true
+        return
+      }
       scrollElement.scrollTop = scrollElement.scrollHeight
     })
   })

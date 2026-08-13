@@ -1,12 +1,9 @@
 name: Nightly
 
 on:
-  schedule:
-    - cron: "0 4 * * *"
   push:
     branches:
       - nightly
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,10 +13,49 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate dev promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Require dev ancestry and a version bump
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          git fetch origin dev:refs/remotes/origin/dev
+          if ! git merge-base --is-ancestor origin/dev HEAD; then
+            echo "::error::nightly must be promoted from the current dev branch"
+            exit 1
+          fi
+          previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
+          current="$(jq -r .version package.json)"
+          upstream="$(git show origin/dev:package.json | jq -r .version)"
+          if [ "$current" != "$upstream" ]; then
+            echo "::error::nightly version $current does not match dev version $upstream"
+            exit 1
+          fi
+          BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$previous" CURRENT_VERSION="$current" \
+            bun scripts/validate-release-promotion.ts
+
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    needs: validate
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -29,20 +65,25 @@ jobs:
             target: mac
             arch: --arm64
             artifact: mac-arm64
+            app_dir: dist/mac-arm64
           - name: Windows (x64)
             os: windows-latest
             target: win
             arch: --x64
             artifact: win-x64
+            app_dir: dist/win-unpacked
           - name: Linux (x64)
             os: ubuntu-latest
             target: linux
             arch: --x64
             artifact: linux-x64
+            app_dir: dist/linux-unpacked
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -64,16 +105,31 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          flags=()
-          if [ -z "$CSC_LINK" ]; then
-            flags+=(-c.forceCodeSigning=false)
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
+            exit 1
           fi
           if [ "${{ matrix.target }}" = "mac" ]; then
-            if [ -z "$APPLE_ID" ]; then
-              flags+=(-c.mac.identity=null -c.mac.notarize=false)
+            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
+              exit 1
             fi
           fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly "${flags[@]}"
+          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.publish.channel=nightly -c.forceCodeSigning=true
+
+      - name: Verify packaged artifacts
+        run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
+
+      - name: Launch packaged application through workspace readiness
+        shell: bash
+        run: |
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          if [ "${{ matrix.target }}" = "linux" ]; then
+            xvfb-run -a "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -85,7 +141,8 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.blockmap
-            dist/latest*.yml
+            dist/*.yml
+            agent-out/startup-smoke-*.json
           if-no-files-found: error
 
   publish:
@@ -99,12 +156,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Determine nightly version
         id: version
         run: |
           base="$(node -p "require('./package.json').version")"
-          echo "version=${base}-nightly.$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+          if ! printf '%s' "$base" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::package.json version must be stable major.minor.patch, got $base"
+            exit 1
+          fi
+          echo "version=$base" >> "$GITHUB_OUTPUT"
+          echo "tag=v${base}-nightly.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -123,16 +187,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="${{ steps.version.outputs.version }}"
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag already points to $tagged_commit instead of $GITHUB_SHA"
+              exit 1
+            fi
+          fi
           files=()
-          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/latest*.yml artifacts/SHA256SUMS.txt; do
+          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/*.yml artifacts/SHA256SUMS.txt; do
             [ -f "$f" ] && files+=("$f")
           done
-          if gh release view nightly >/dev/null 2>&1; then
-            gh release upload nightly "${files[@]}" --clobber
-            gh release edit nightly --prerelease
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --title "CodeInOven $version nightly" --prerelease
           else
-            gh release create nightly "${files[@]}" \
-              --title "CodeInOven $version" \
-              --notes "Nightly build from the \`nightly\` branch. Use for testing; not intended for production." \
-              --prerelease
+            gh release create "$tag" "${files[@]}" \
+              --target "$GITHUB_SHA" \
+              --title "CodeInOven $version nightly" \
+              --notes "Prerelease build of version $version from the \`nightly\` branch. Use for testing; not intended for production." \
+              --prerelease \
+              --latest=false
           fi

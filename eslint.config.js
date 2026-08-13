@@ -15,7 +15,8 @@ export default defineConfig(
     languageOptions: {
       globals: {
         ...globals.browser,
-        ...globals.node
+        ...globals.node,
+        __CODEINOVEN_APP_VERSION__: 'readonly'
       }
     }
   },

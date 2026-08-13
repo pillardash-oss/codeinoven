@@ -1,7 +1,8 @@
 import type { Thread, ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
 
-const STORAGE_KEY = `${APP_SLUG}.threadSettings.lastUsed`
+const THREAD_SETTINGS_KEY = `${APP_SLUG}.threadSettings.lastUsed`
+const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
 
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
@@ -16,22 +17,34 @@ export const DEFAULT_SETTINGS: ThreadSettings = {
   fileSystemMode: false
 }
 
-function load(): ThreadSettings {
-  if (typeof window === 'undefined') return { ...DEFAULT_SETTINGS }
+/**
+ * Fallback settings for the Chats tab. Chats are for questions and research:
+ * they always run with auto permission review and never inject the Engineering
+ * workflow, and they keep their own last-used model so chatting with a cheap
+ * model never changes the model used for project work.
+ */
+export const CHAT_DEFAULT_SETTINGS: ThreadSettings = {
+  ...DEFAULT_SETTINGS,
+  engineeringMode: false,
+  permissionLevel: 'auto_review'
+}
+
+function load(storageKey: string, defaults: ThreadSettings): ThreadSettings {
+  if (typeof window === 'undefined') return { ...defaults }
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { ...DEFAULT_SETTINGS }
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return { ...defaults }
     const parsed = JSON.parse(raw) as Partial<ThreadSettings>
-    return { ...DEFAULT_SETTINGS, ...parsed }
+    return { ...defaults, ...parsed }
   } catch {
-    return { ...DEFAULT_SETTINGS }
+    return { ...defaults }
   }
 }
 
-function persist(settings: ThreadSettings): void {
+function persist(storageKey: string, settings: ThreadSettings): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+    window.localStorage.setItem(storageKey, JSON.stringify(settings))
   } catch {
     // Storage unavailable (private mode, quota) — non-fatal.
   }
@@ -44,21 +57,60 @@ function persist(settings: ThreadSettings): void {
  * used most recently become the seed for newly created threads, matching the
  * product rule that the last thread's configuration overrides the global
  * default while existing threads keep their own.
+ *
+ * The Chats tab gets its own instance (`chatSettings`) so switching a model
+ * there never affects the model used for project threads.
  */
 class ThreadSettingsStore {
-  /** Settings from the most recent send — seeds new threads. */
-  lastUsed = $state<ThreadSettings>(load())
+  /** Settings from the most recent send — seeds new threads. Replaced by the
+   *  persisted value in the constructor, before any reactive reader can run. */
+  lastUsed = $state<ThreadSettings>({ ...DEFAULT_SETTINGS })
+
+  constructor(
+    private readonly storageKey: string,
+    private readonly defaults: ThreadSettings
+  ) {
+    this.lastUsed = load(storageKey, defaults)
+  }
 
   /** Initial settings for a thread: its own persisted values, else the last-used ones. */
-  initialFor(thread: Thread): ThreadSettings {
-    return thread.settings ? { ...DEFAULT_SETTINGS, ...thread.settings } : { ...this.lastUsed }
+  initialFor(thread: Thread, fallback?: ThreadSettings): ThreadSettings {
+    return thread.settings
+      ? { ...this.defaults, ...thread.settings }
+      : { ...(fallback ?? this.lastUsed) }
   }
 
   /** Remember these settings as the default for future threads. */
   commit(settings: ThreadSettings): void {
     this.lastUsed = { ...settings }
-    persist(this.lastUsed)
+    persist(this.storageKey, this.lastUsed)
   }
 }
 
-export const threadSettings = new ThreadSettingsStore()
+export const threadSettings = new ThreadSettingsStore(THREAD_SETTINGS_KEY, DEFAULT_SETTINGS)
+
+export const chatSettings = new ThreadSettingsStore(CHAT_SETTINGS_KEY, CHAT_DEFAULT_SETTINGS)
+
+/**
+ * The effective settings for a chat: the chat's own last-used model once the
+ * user has picked one, otherwise the last project model — so a fresh chat
+ * starts on whatever model the user is already using for project work. Chats
+ * always run with auto permission review and never inject the Engineering
+ * workflow. A fallback never counts as a chat selection, so it stays live until
+ * the user explicitly chooses a chat model.
+ */
+export function chatEffectiveSettings(): ThreadSettings {
+  const project = threadSettings.lastUsed
+  const chat = chatSettings.lastUsed
+  if (chat.modelId) return { ...chat }
+  return {
+    ...project,
+    ...chat,
+    harnessId: project.harnessId,
+    providerId: project.providerId,
+    modelId: project.modelId,
+    thinkingLevel: project.thinkingLevel,
+    engineeringMode: false,
+    permissionLevel: 'auto_review'
+  }
+}

@@ -2,6 +2,8 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentQuestionRequest,
+  AgentRateLimitWindow,
+  AgentUsageCredits,
   PromptAttachment,
   ThreadSettings,
   ProviderCatalog,
@@ -16,6 +18,13 @@ export type AgentEventCallback = (event: AgentEvent) => void
 
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
+  /** Truthful process topology used for app-wide host and RAM policy. */
+  runtimeTopology: {
+    kind: 'shared_server' | 'shared_daemon' | 'embedded' | 'turn_process'
+    scope: 'application' | 'session'
+    /** Upstream may still create one worker process for each executing session. */
+    sessionWorkers?: boolean
+  }
   streaming: boolean
   /** Can append user input to the provider's currently active turn. */
   steering: boolean
@@ -37,6 +46,13 @@ export interface HarnessCapabilities {
   structuredOutput?: boolean
   /** Utility capabilities already supplied natively by this harness. */
   nativeUtilities?: UtilityKind[]
+  /**
+   * The harness schedules and performs its own provider retry after a reset
+   * (it emits a `waiting` session status with `retryAt` and resumes the turn
+   * itself). Harnesses without this need the app to auto-resume threads whose
+   * turn ended in a quota/rate-limit error with a reset time.
+   */
+  scheduledRetry?: boolean
 }
 
 /** Provider-neutral JSON-schema output request for deterministic agent results. */
@@ -55,6 +71,8 @@ export interface HarnessToolDefinition {
 /** Provider-neutral input supplied when a harness prepares utility injection. */
 export interface UtilityRuntimePreparationRequest {
   projectPath: string
+  /** Selected provider for this turn, when the harness exposes provider selection. */
+  providerId?: string
   resolvedUtilities: ResolvedUtility[]
 }
 
@@ -72,6 +90,11 @@ export interface UtilityRuntimeConfigFile {
  * Values remain inert until UtilityRuntimeService materializes the overlay.
  */
 export interface UtilityRuntimeOverlay {
+  /**
+   * The harness cannot safely expose the per-turn gateway for this launch.
+   * Skill instructions remain available, but gateway-backed utilities are not advertised.
+   */
+  gatewayAvailable?: boolean
   env?: Record<string, string>
   args?: string[]
   configFiles?: UtilityRuntimeConfigFile[]
@@ -166,6 +189,8 @@ export interface SendPromptOptions {
 export interface GenerateTitleOptions {
   settings: ThreadSettings
   message: string
+  /** Parent turn whose authenticated transport permits a safe auxiliary title process. */
+  parentSessionId?: string
 }
 
 /** Provider-neutral input appended to an already active harness turn. */
@@ -194,6 +219,9 @@ export interface HarnessDriver {
    */
   readonly capabilities?: HarnessCapabilities
   readonly authCapabilities?: HarnessAuthCapabilities
+
+  /** Attach task-level process tracking after driver construction. */
+  setProcessObserver?(observer: AgentProcessObserver): void
 
   /** Ensure the driver's backend is ready (e.g. spawn server). Called lazily. */
   ensureReady(projectPath: string): Promise<void>
@@ -230,6 +258,16 @@ export interface HarnessDriver {
   /** Abort the running turn in a session. */
   abort(projectPath: string, sessionId: string): Promise<void>
 
+  /**
+   * Forcefully stop the harness process backing a session (SIGTERM). Called when
+   * the user explicitly confirms a forced close so a still-streaming local
+   * project stops immediately instead of lingering after the app exits. Drivers
+   * that own a per-session process (e.g. the OpenCode SSE server) implement
+   * this to kill the process outright; the default `abort` already sends
+   * SIGTERM for one-process-per-turn CLI drivers.
+   */
+  terminate?(projectPath: string, sessionId: string): Promise<void> | void
+
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
@@ -253,8 +291,31 @@ export interface HarnessDriver {
     sessionId: string
   ): Promise<void>
 
+  /**
+   * Start any session-specific transport needed by the prepared runtime before
+   * prompt composition finishes. Implementations must keep this idempotent.
+   */
+  preparePromptTransport?(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void>
+
   /** Read the harness's current authentication state without changing it. */
   getAuthStatus?(projectPath: string): Promise<HarnessAuthStatus>
+
+  /**
+   * Fetch the account's current quota telemetry on demand (rate-limit windows,
+   * prepaid credits). Used by the battery popover so old threads — whose turns
+   * predate quota capture — can still show live quota. Returns null when the
+   * harness cannot report quota without a turn.
+   */
+  readAccountUsage?(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
+    contextWindow?: number
+    contextUsed?: number
+  } | null>
 
   /** Build, but do not execute, an interactive login handoff. */
   beginLogin?(projectPath: string, options?: HarnessLoginOptions): Promise<HarnessLoginHandoff>
@@ -303,4 +364,9 @@ export interface HarnessDriver {
 
   /** Tear down all pooled resources (called on app quit). */
   dispose(): void
+}
+
+/** Main-process observer used by drivers to attribute process trees to sessions. */
+export interface AgentProcessObserver {
+  watchProcess(sessionId: string, pid: number | undefined, command: string, cwd: string): void
 }

@@ -1,29 +1,68 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Publish a GitHub Release from this run (tag v<version>)'
-        required: false
-        type: boolean
-        default: true
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-main
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate stable version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Validate package version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git fetch origin nightly:refs/remotes/origin/nightly
+          if ! git merge-base --is-ancestor origin/nightly HEAD; then
+            echo "::error::main must be promoted from the current nightly branch"
+            exit 1
+          fi
+          previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
+          version="$(node -p "require('./package.json').version")"
+          upstream="$(git show origin/nightly:package.json | jq -r .version)"
+          if [ "$version" != "$upstream" ]; then
+            echo "::error::main version $version does not match nightly version $upstream"
+            exit 1
+          fi
+          if ! gh release list --limit 1000 --json tagName,isPrerelease | \
+            jq -e --arg prefix "v${version}-nightly." \
+              'any(.[]; .isPrerelease and (.tagName | startswith($prefix)))' >/dev/null; then
+            echo "::error::No published nightly prerelease exists for version $version"
+            exit 1
+          fi
+          BASE_BRANCH=main HEAD_BRANCH=nightly BASE_VERSION="$previous" CURRENT_VERSION="$version" \
+            bun scripts/validate-release-promotion.ts
+
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    needs: validate
+    env:
+      MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
+      CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,16 +72,19 @@ jobs:
             target: mac
             arch: --arm64
             artifact: mac-arm64
+            app_dir: dist/mac-arm64
           - name: Windows (x64)
             os: windows-latest
             target: win
             arch: --x64
             artifact: win-x64
+            app_dir: dist/win-unpacked
           - name: Linux (x64)
             os: ubuntu-latest
             target: linux
             arch: --x64
             artifact: linux-x64
+            app_dir: dist/linux-unpacked
 
     steps:
       - name: Check out repository
@@ -56,6 +98,10 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Linux native launcher headers
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+
       - name: Build production bundle
         run: bun run build:production
 
@@ -68,16 +114,31 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          flags=()
-          if [ -z "$CSC_LINK" ]; then
-            flags+=(-c.forceCodeSigning=false)
+          if [ -z "$CSC_LINK" ] || [ -z "$CSC_KEY_PASSWORD" ]; then
+            echo "::error::Missing signing credentials: CSC_LINK and CSC_KEY_PASSWORD are required"
+            exit 1
           fi
           if [ "${{ matrix.target }}" = "mac" ]; then
-            if [ -z "$APPLE_ID" ]; then
-              flags+=(-c.mac.identity=null -c.mac.notarize=false)
+            if [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+              echo "::error::Missing mac notarization credentials: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID"
+              exit 1
             fi
           fi
-          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never "${flags[@]}"
+          bunx electron-builder --${{ matrix.target }} ${{ matrix.arch }} --publish never -c.forceCodeSigning=true
+
+      - name: Verify packaged artifacts
+        run: bun run verify:packaged-app --target ${{ matrix.target }} --artifact-dir dist
+
+      - name: Launch packaged application through workspace readiness
+        shell: bash
+        run: |
+          command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          if [ "${{ matrix.target }}" = "linux" ]; then
+            xvfb-run -a "${command[@]}"
+          else
+            "${command[@]}"
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -89,13 +150,13 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.blockmap
-            dist/latest*.yml
+            dist/*.yml
+            agent-out/startup-smoke-*.json
           if-no-files-found: error
 
   release:
     name: Publish GitHub Release
     needs: build
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -104,15 +165,15 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Determine release tag
         id: tag
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-          fi
+          version="$(node -p "require('./package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -131,14 +192,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${{ steps.tag.outputs.tag }}"
+          version="${{ steps.tag.outputs.version }}"
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag already points to $tagged_commit instead of $GITHUB_SHA"
+              exit 1
+            fi
+          fi
           files=()
-          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/latest*.yml artifacts/SHA256SUMS.txt; do
+          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/*.yml artifacts/SHA256SUMS.txt; do
             [ -f "$f" ] && files+=("$f")
           done
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
+            gh release edit "$tag" --title "CodeInOven $version" --prerelease=false --latest
           else
             gh release create "$tag" "${files[@]}" \
-              --title "CodeInOven $tag" \
-              --generate-notes
+              --target "$GITHUB_SHA" \
+              --title "CodeInOven $version" \
+              --generate-notes \
+              --latest
           fi

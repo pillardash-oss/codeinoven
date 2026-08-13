@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { MockOpenCodeAdapter } from '../lib/adapters/opencode/mock'
 import type { ProviderAdapter } from '../lib/adapters/adapter.interface'
 

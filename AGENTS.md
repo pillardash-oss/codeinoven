@@ -47,7 +47,6 @@ However, if you have a way to name files like I just described above, maybe in y
 ### 2. Strict Rules
 
 - Always use `bun`.
-- Never run `bun run dev` rather use `bun run check [FILES]` to get check the project. Only check the files that concerns you, never check the whole project unless explicitly asked to.
 - Use `bun run lint [FILES]` to lint files. Lint only files you worked on, never lint the whole repo except explicitly asked to!
 - Use `bun run format [FILES]` to fix linting errors that can be fixed. Format only files you worked on. Never format the whole repo except explicitly asked to!
 - Use `bun run test [FILES]` to use the defined test script. Test only files you worked on and the files that concerns them. Where they were imported to! Never run test for the whole app except explicitly asked to.

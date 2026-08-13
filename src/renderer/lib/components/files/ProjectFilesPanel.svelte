@@ -14,14 +14,18 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { isAudioMime, isImageMime, isVideoMime, mimeFromPath } from '$lib/mime'
+  import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
   import FileDiffView from './FileDiffView.svelte'
+  import { diffDetails } from './file-diff'
+  import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
+  import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
@@ -30,6 +34,7 @@
   import ProjectTextEditor from './ProjectTextEditor.svelte'
   import ProjectFileViewerMenu from './ProjectFileViewerMenu.svelte'
   import type { AgentEvent, TurnCheckpointSummary } from '$shared/types'
+  import type { ProjectTextFile } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -40,9 +45,17 @@
   let { projectId, projectName, projectIconUrl = null }: Props = $props()
 
   let contextTab = $derived(
-    contextSidebarState.activeTab?.kind === 'files' ? contextSidebarState.activeTab : null
+    contextSidebarState.sidebarActiveTab?.kind === 'files'
+      ? contextSidebarState.sidebarActiveTab
+      : null
   )
   let activeThreadId = $derived(contextTab?.threadId ?? null)
+  // This panel can be restored directly from persisted sidebar state before a
+  // file action has had a chance to prepare the workspace store.
+  function prepareProjectFilesState(): void {
+    projectFilesWorkspace.ensureState(projectId)
+  }
+  prepareProjectFilesState()
   let projectState = $derived(projectFilesWorkspace.getState(projectId))
   let activeTab = $derived(
     contextTab?.fileTabId
@@ -52,17 +65,60 @@
   let activeSession = $derived(activeTab ? (projectState.sessions[activeTab.path] ?? null) : null)
   let dirty = $derived(activeSession ? activeSession.draft !== activeSession.source.content : false)
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
+  let diffStats = $derived(
+    activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
+      ? diffDetails(checkpointDiff.before, checkpointDiff.after)
+      : null
+  )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
+  let svg = $derived(activeTab ? isSvgMime(mimeFromPath(activeTab.path)) : false)
   let video = $derived(activeTab ? isVideoMime(mimeFromPath(activeTab.path)) : false)
   let audio = $derived(activeTab ? isAudioMime(mimeFromPath(activeTab.path)) : false)
   let previewUrl = $derived(
-    activeTab && (pdf || image || video || audio)
+    activeTab && (pdf || image || video || audio) && !svg
       ? projectFilePreviewUrl(projectId, activeTab.path)
       : null
   )
+  // SVG is rendered natively in the renderer via a blob URL (animated SVGs
+  // play), instead of the privileged `appfile://` scheme, which intentionally
+  // refuses to serve project-controlled SVG.
+  let svgPreviewUrl = $state<string | null>(null)
+  let svgPreviewFailed = $state(false)
+  $effect(() => {
+    if (!activeTab || !svg) {
+      if (svgPreviewUrl) {
+        URL.revokeObjectURL(svgPreviewUrl)
+        svgPreviewUrl = null
+      }
+      svgPreviewFailed = false
+      return
+    }
+    let cancelled = false
+    svgPreviewFailed = false
+    void invoke('projectFiles:read', projectId, activeTab.path)
+      .then((source: ProjectTextFile) => {
+        if (cancelled) return
+        const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
+        svgPreviewUrl = url
+      })
+      .catch(() => {
+        if (cancelled) return
+        svgPreviewFailed = true
+      })
+    return () => {
+      cancelled = true
+      if (svgPreviewUrl) {
+        URL.revokeObjectURL(svgPreviewUrl)
+        svgPreviewUrl = null
+      }
+      svgPreviewFailed = false
+    }
+  })
+  let imagePreviewSrc = $derived(svg ? svgPreviewUrl : previewUrl)
+  let imagePreviewFailed = $derived(svg ? svgPreviewFailed : false)
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
   let visibleContent = $derived(
     deletedAtCheckpoint ? historicalContent : (activeSession?.draft ?? historicalContent)
@@ -80,12 +136,17 @@
   let goToLineOpen = $state(false)
   let goToLineFocusTrigger = $state(0)
   let lastTurnPaths = $state<string[]>([])
+  let activeCheckpointPaths = $state<string[]>([])
   let lastTurnRequest = 0
 
-  async function loadLastTurnPaths(threadId: string | null): Promise<void> {
+  async function loadCheckpointPaths(
+    threadId: string | null,
+    checkpointId: string | null
+  ): Promise<void> {
     const request = ++lastTurnRequest
     if (!threadId) {
       lastTurnPaths = []
+      activeCheckpointPaths = []
       return
     }
     try {
@@ -95,13 +156,20 @@
         (checkpoint: TurnCheckpointSummary) => checkpoint.status !== 'active'
       )
       lastTurnPaths = latest ? latest.changes.map((change) => change.path) : []
+      const active = checkpointId
+        ? checkpoints.find((checkpoint: TurnCheckpointSummary) => checkpoint.id === checkpointId)
+        : null
+      activeCheckpointPaths = active ? active.changes.map((change) => change.path) : []
     } catch {
-      if (request === lastTurnRequest) lastTurnPaths = []
+      if (request === lastTurnRequest) {
+        lastTurnPaths = []
+        activeCheckpointPaths = []
+      }
     }
   }
 
   $effect(() => {
-    void loadLastTurnPaths(activeThreadId)
+    void loadCheckpointPaths(activeThreadId, activeTab?.checkpointId ?? null)
   })
 
   onMount(() =>
@@ -112,7 +180,7 @@
         event.projectId === projectId &&
         event.threadId === activeThreadId
       ) {
-        void loadLastTurnPaths(activeThreadId)
+        void loadCheckpointPaths(activeThreadId, activeTab?.checkpointId ?? null)
       }
     })
   )
@@ -191,6 +259,10 @@
   function fullscreenOpenFile(path: string): void {
     if (!activeTab) {
       void projectFilesWorkspace.openFile(projectId, path)
+      return
+    }
+    if (activeTab.checkpointId && activeCheckpointPaths.includes(path)) {
+      void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
       return
     }
     if (dirty) {
@@ -468,6 +540,21 @@
           {#if deletedAtCheckpoint}
             <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
           {/if}
+          {#if diffStats}
+            <span
+              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              aria-label="Added lines">+{diffStats.additions}</span
+            >
+            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+              >−{diffStats.deletions}</span
+            >
+            {#if checkpointDiff?.truncated}
+              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+                >Truncated</span
+              >
+            {/if}
+            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
+          {/if}
           <span class="flex-1"></span>
           <ProjectFileViewerMenu
             diffView={activeTab.view === 'diff'}
@@ -597,7 +684,7 @@
           {/if}
         </div>
       {:else if activeTab.view === 'preview' && image}
-        <FileImagePreview src={previewUrl} alt={activeTab.path} />
+        <FileImagePreview src={imagePreviewSrc} alt={activeTab.path} failed={imagePreviewFailed} />
       {:else if activeTab.view === 'preview' && (video || audio)}
         <FileMediaPreview src={previewUrl} alt={activeTab.path} kind={video ? 'video' : 'audio'} />
       {:else if projectState.loadingPaths[activeTab.path] && !activeSession && !deletedAtCheckpoint}
@@ -607,7 +694,11 @@
         </div>
       {:else if activeTab && !activeSession && !deletedAtCheckpoint}
         {#if image}
-          <FileImagePreview src={previewUrl} alt={activeTab.path} />
+          <FileImagePreview
+            src={imagePreviewSrc}
+            alt={activeTab.path}
+            failed={imagePreviewFailed}
+          />
         {:else if video || audio}
           <FileMediaPreview
             src={previewUrl}
@@ -658,6 +749,7 @@
         {projectState}
         selectedPath={activeTab?.path ?? null}
         {lastTurnPaths}
+        {activeCheckpointPaths}
         activeCheckpointId={activeTab?.checkpointId ?? null}
       />
     {/if}
@@ -671,7 +763,8 @@
       class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl outline-none"
     >
       <div
-        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3 pl-24"
+        class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+        style={trafficLightInsetStyle()}
       >
         <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
           {activeTab?.path ?? 'File'}
@@ -789,6 +882,21 @@
           {#if deletedAtCheckpoint}
             <span class="ml-1 text-[9px] font-medium text-danger">Deleted · read-only</span>
           {/if}
+          {#if diffStats}
+            <span
+              class="ml-1 font-mono text-[10px] tabular-nums text-success"
+              aria-label="Added lines">+{diffStats.additions}</span
+            >
+            <span class="font-mono text-[10px] tabular-nums text-danger" aria-label="Deleted lines"
+              >−{diffStats.deletions}</span
+            >
+            {#if checkpointDiff?.truncated}
+              <span class="text-[9px] text-warning" title="Preview truncated at 64 KiB"
+                >Truncated</span
+              >
+            {/if}
+            <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
+          {/if}
           <span class="flex-1"></span>
           <ProjectFileViewerMenu
             diffView={activeTab.view === 'diff'}
@@ -809,9 +917,9 @@
           />
         </div>
       {/if}
-      <div class="flex min-h-0 flex-1">
+      <div class="flex min-h-0 min-w-0 flex-1">
         <div
-          class="relative flex min-h-0 flex-1 flex-col"
+          class="relative flex min-h-0 min-w-0 flex-1 flex-col"
           data-region="editor"
           data-find-active={fullscreenOpen ? 'true' : undefined}
         >
@@ -854,7 +962,11 @@
               {/if}
             </div>
           {:else if activeTab?.view === 'preview' && image}
-            <FileImagePreview src={previewUrl} alt={activeTab.path} />
+            <FileImagePreview
+              src={imagePreviewSrc}
+              alt={activeTab.path}
+              failed={imagePreviewFailed}
+            />
           {:else if activeTab?.view === 'preview' && (video || audio)}
             <FileMediaPreview
               src={previewUrl}
@@ -863,7 +975,11 @@
             />
           {:else if activeTab && (image || video || audio || activeSession || deletedAtCheckpoint)}
             {#if image}
-              <FileImagePreview src={previewUrl} alt={activeTab.path} />
+              <FileImagePreview
+                src={imagePreviewSrc}
+                alt={activeTab.path}
+                failed={imagePreviewFailed}
+              />
             {:else if video || audio}
               <FileMediaPreview
                 src={previewUrl}
@@ -897,6 +1013,7 @@
             {projectState}
             selectedPath={activeTab.path}
             {lastTurnPaths}
+            {activeCheckpointPaths}
             activeCheckpointId={activeTab.checkpointId}
             onFileSelect={fullscreenOpenFile}
           />

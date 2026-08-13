@@ -16,6 +16,30 @@ declare global {
   }
 }
 
+/** IPC channels registered before the first renderer paint. */
+const HYDRATION_CHANNELS = new Set<InvokeChannel>([
+  'app:confirmClose',
+  'app:rendererReady',
+  'app:requestClose',
+  'app:waitForFeatures',
+  'config:get',
+  'project:ensureInbox',
+  'project:get',
+  'project:getIcon',
+  'project:list',
+  'scope:get',
+  'thread:get',
+  'thread:listRecent'
+])
+
+let featureReadyPromise: Promise<void> | null = null
+
+async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
+  if (HYDRATION_CHANNELS.has(channel)) return
+  featureReadyPromise ??= window.api.invoke('app:waitForFeatures')
+  await featureReadyPromise
+}
+
 /**
  * Typed IPC invoke helper. Channel determines both its argument tuple and result.
  *
@@ -29,6 +53,7 @@ export async function invoke<Channel extends InvokeChannel>(
   channel: Channel,
   ...args: InvokeArgs<Channel>
 ): Promise<InvokeResult<Channel>> {
+  await waitForFeatureHandlers(channel)
   const plainArgs = args.map((arg) => $state.snapshot(arg)) as InvokeArgs<Channel>
   const result = await window.api.invoke(channel, ...plainArgs)
   if (import.meta.env.DEV) {

@@ -11,7 +11,15 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
 /** A settings section — each is its own dedicated page in the app navigation. */
 export type SettingsSection =
-  'general' | 'memory' | 'audits' | 'harnesses' | 'utilities' | 'remote' | 'about'
+  | 'profile'
+  | 'general'
+  | 'memory'
+  | 'audits'
+  | 'harnesses'
+  | 'utilities'
+  | 'remote'
+  | 'cloud-deployments'
+  | 'about'
 
 export type MainView =
   | 'projects'
@@ -19,11 +27,13 @@ export type MainView =
   | 'scope'
   | 'threads'
   | 'settings'
+  | 'settings-profile'
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-harnesses'
   | 'settings-utilities'
   | 'settings-remote'
+  | 'settings-cloud-deployments'
   | 'settings-about'
 
 export interface SelectedThreadReference {
@@ -37,6 +47,8 @@ export interface ComposerDraftEntry {
   attachments: PromptAttachment[]
   projectReferences: PromptProjectReference[]
   taskReferences: PromptAssignmentTaskReference[]
+  /** Response-selection annotations attached to the composer (agent-output excerpts + comments). */
+  promptReferences: QueuedResponseReference[]
 }
 
 /** A selected assistant-response excerpt anchored to a message range. */
@@ -64,6 +76,12 @@ export interface QueuedMessageEntry {
 export interface RendererRecoverySnapshot {
   version: 1
   activeView: MainView
+  /** Last content view (Projects/Chats/Threads) — the shell returns here when
+   *  leaving Settings or Scope. Persisted so a restart made while on a Settings
+   *  page or the Scope view still returns to the previous content view. */
+  lastContentView: 'projects' | 'chats' | 'threads'
+  /** Last non-Settings view — the Settings back button returns here. */
+  lastViewBeforeSettings: MainView
   selectedProjectId: string | null
   selectedThread: SelectedThreadReference | null
   composerDrafts: Record<string, ComposerDraftEntry>
@@ -75,6 +93,11 @@ export interface RendererRecoverySnapshot {
   favoriteModels: string[]
   /** Model keys (providerId:modelId) the user has recently used, most recent first. */
   recentModels: string[]
+  /** Chats-tab favorites — kept separate from project favorites so chatting with
+   *  a cheap model never reshapes the project model list. */
+  chatFavoriteModels: string[]
+  /** Chats-tab recently used models, most recent first. */
+  chatRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
 }
@@ -91,6 +114,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'scope',
   'threads',
   'settings',
+  'settings-profile',
   'settings-memory',
   'settings-audits',
   'settings-harnesses',
@@ -99,12 +123,14 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-about'
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
+  'profile',
   'general',
   'memory',
   'audits',
   'harnesses',
   'utilities',
   'remote',
+  'cloud-deployments',
   'about'
 ]
 const SETTINGS_VIEW_PREFIX = 'settings-'
@@ -116,6 +142,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
   return {
     version: 1,
     activeView: 'projects',
+    lastContentView: 'projects',
+    lastViewBeforeSettings: 'projects',
     selectedProjectId: null,
     selectedThread: null,
     composerDrafts: {},
@@ -123,6 +151,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     collapsedFolders: [],
     favoriteModels: [],
     recentModels: [],
+    chatFavoriteModels: [],
+    chatRecentModels: [],
     auditModelKey: undefined
   }
 }
@@ -241,6 +271,20 @@ function normalizeMainView(value: unknown): MainView | null {
     : null
 }
 
+function parseContentView(value: unknown, activeView: MainView): 'projects' | 'chats' | 'threads' {
+  if (value === 'projects' || value === 'chats' || value === 'threads') return value
+  // Legacy snapshots don't carry a content view — fall back to the active view
+  // so an app closed directly on Threads/Chats still returns there.
+  return activeView === 'chats' || activeView === 'threads' ? activeView : 'projects'
+}
+
+function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
+  if (value === 'projects' || value === 'chats' || value === 'scope' || value === 'threads') {
+    return value
+  }
+  return fallback
+}
+
 export function recoveryDraftKey(projectId: string, threadId: string): string {
   return JSON.stringify([projectId, threadId])
 }
@@ -286,7 +330,13 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
 
     // Backwards compatibility: old snapshots stored a plain string.
     if (typeof raw === 'string' && raw.length <= MAX_DRAFT_LENGTH) {
-      drafts[key] = { text: raw, attachments: [], projectReferences: [], taskReferences: [] }
+      drafts[key] = {
+        text: raw,
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: []
+      }
       count += 1
       continue
     }
@@ -304,7 +354,10 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const taskReferences = Array.isArray(raw.taskReferences)
       ? raw.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
       : []
-    drafts[key] = { text, attachments, projectReferences, taskReferences }
+    const promptReferences = Array.isArray(raw.promptReferences)
+      ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+      : []
+    drafts[key] = { text, attachments, projectReferences, taskReferences, promptReferences }
     count += 1
   }
   return drafts
@@ -364,10 +417,18 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
     const selectedProjectId =
       selectedThread?.projectId ??
       (isRecoveryIdentifier(parsed.selectedProjectId) ? parsed.selectedProjectId : null)
+    const activeView = normalizeMainView(parsed.activeView) ?? 'projects'
+    const lastContentView = parseContentView(parsed.lastContentView, activeView)
+    const lastViewBeforeSettings = parseNonSettingsView(
+      parsed.lastViewBeforeSettings,
+      lastContentView
+    )
 
     return {
       version: 1,
-      activeView: normalizeMainView(parsed.activeView) ?? 'projects',
+      activeView,
+      lastContentView,
+      lastViewBeforeSettings,
       selectedProjectId,
       selectedThread,
       composerDrafts: parseDrafts(parsed.composerDrafts),
@@ -375,6 +436,8 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       collapsedFolders: parseCollapsedFolders(parsed.collapsedFolders),
       favoriteModels: parseFavoriteModels(parsed.favoriteModels),
       recentModels: parseFavoriteModels(parsed.recentModels),
+      chatFavoriteModels: parseFavoriteModels(parsed.chatFavoriteModels),
+      chatRecentModels: parseFavoriteModels(parsed.chatRecentModels),
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey

@@ -1,4 +1,7 @@
 import { spawn } from 'child_process'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AgentMessage,
@@ -6,8 +9,10 @@ import type {
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentTokenUsage,
+  AgentUsageCredits,
   ProviderCatalog,
   ProviderModel,
+  PromptAttachment,
   ThinkingPreset
 } from '../../lib/types'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
@@ -31,6 +36,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReference } from './attachment-reference'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'low', label: 'Low', description: 'Low reasoning effort' },
@@ -49,6 +55,59 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 ]
 
 const CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
+const CLAUDE_USAGE_TIMEOUT_MS = 12_000
+const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+const CLAUDE_TEXT_MIMES = new Set([
+  'application/json',
+  'application/ld+json',
+  'application/sql',
+  'application/xml',
+  'application/x-httpd-php',
+  'application/x-javascript',
+  'application/x-sh',
+  'application/x-typescript'
+])
+
+type ClaudeImageMime = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+type ClaudeAccountUsage = {
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  contextWindow?: number
+  contextUsed?: number
+}
+
+interface ClaudeUsageProbe {
+  usageRequestId: string
+  contextRequestId: string
+  rateLimitsPayload: Record<string, unknown> | null
+  rateLimitsResponded: boolean
+  contextPayload: Record<string, unknown> | null
+  contextResponded: boolean
+  timer: ReturnType<typeof setTimeout>
+  promise: Promise<Record<string, unknown> | null>
+  resolve: (value: Record<string, unknown> | null) => void
+}
+
+interface ClaudeAuthenticationReadiness {
+  promise: Promise<boolean>
+  resolve: (authenticated: boolean) => void
+  settled: boolean
+}
+type ClaudeInputBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image'
+      source:
+        { type: 'base64'; media_type: ClaudeImageMime; data: string } | { type: 'url'; url: string }
+    }
+  | {
+      type: 'document'
+      source:
+        | { type: 'base64'; media_type: 'application/pdf'; data: string }
+        | { type: 'text'; media_type: 'text/plain'; data: string }
+        | { type: 'url'; url: string }
+      title?: string
+    }
 
 function fallbackClaudeModel(): ProviderModel {
   return {
@@ -57,10 +116,23 @@ function fallbackClaudeModel(): ProviderModel {
     name: 'Default (recommended)',
     reasoning: true,
     thinkingPresets: THINKING_PRESETS,
-    attachment: false,
+    attachment: true,
     toolcall: true,
     fastSupported: false
   }
+}
+
+function claudeAuthenticationResult(value: unknown): boolean | undefined {
+  const entry = record(value)
+  const type = string(entry?.['type'])
+  if (type === 'assistant') {
+    return entry?.['error'] === 'authentication_failed' ||
+      entry?.['error'] === 'oauth_org_not_allowed'
+      ? false
+      : true
+  }
+  if (type !== 'stream_event') return undefined
+  return string(record(entry?.['event'])?.['type']) === 'message_start' ? true : undefined
 }
 
 function claudeModelName(model: ModelInfo): string {
@@ -82,7 +154,7 @@ function mapClaudeModel(model: ModelInfo): ProviderModel {
     name: claudeModelName(model),
     reasoning,
     thinkingPresets: reasoning ? thinkingPresets : undefined,
-    attachment: false,
+    attachment: true,
     toolcall: true,
     fastSupported: model.supportsFastMode ?? false
   }
@@ -248,23 +320,53 @@ function rateLimitWindow(
   const usedPercent =
     utilization === undefined ? undefined : utilization <= 1 ? utilization * 100 : utilization
   const resetsAt = epochMilliseconds(limit['resetsAt'] ?? limit['resets_at'])
+  const windowMinutes = numberProperty(limit, 'window_duration_mins', 'windowDurationMins')
   const overageStatus = string(limit['overageStatus']) ?? string(limit['overage_status'])
   const overageDisabledReason =
     string(limit['overageDisabledReason']) ?? string(limit['overage_disabled_reason'])
   const isUsingOverageValue = limit['isUsingOverage'] ?? limit['is_using_overage']
   const isUsingOverage = typeof isUsingOverageValue === 'boolean' ? isUsingOverageValue : undefined
-  const id = string(limit['id']) ?? limitType ?? status ?? fallbackId
-  const windowLabel = limitType ? limitType.replaceAll('_', ' ') : 'usage limit'
+  const id = string(limit['id']) ?? limitType ?? fallbackId ?? status ?? 'claude-rate-limit'
+  const label = windowLabel(limitType, windowMinutes, fallbackId)
+  // The `get_usage` rate_limits object mixes real windows (five_hour, seven_day,
+  // per-model windows) with account-state payloads (extra_usage, limits, spend,
+  // member_dashboard_available) that carry no window utilization or reset. Only
+  // surface entries that represent an actual quota window so the battery never
+  // renders meaningless "usage limit" rows.
+  if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+    return null
+  }
   return {
     id,
-    label: `Claude ${windowLabel}`,
+    label,
     ...(status === undefined ? {} : { status }),
     ...(usedPercent === undefined ? {} : { usedPercent: Math.min(100, usedPercent) }),
     ...(resetsAt === undefined ? {} : { resetsAt }),
+    ...(windowMinutes === undefined ? {} : { windowMinutes }),
     ...(overageStatus === undefined ? {} : { overageStatus }),
     ...(overageDisabledReason === undefined ? {} : { overageDisabledReason }),
     ...(isUsingOverage === undefined ? {} : { isUsingOverage })
   }
+}
+
+/** Human label for a Claude rate-limit type, e.g. `five_hour` → `5-hour`. */
+function windowLabel(
+  limitType: string | undefined,
+  windowMinutes: number | undefined,
+  fallbackId?: string
+): string {
+  if (windowMinutes !== undefined) {
+    if (windowMinutes === 300) return '5-hour limit'
+    if (windowMinutes === 10_080) return 'Weekly limit'
+    if (windowMinutes % 1_440 === 0) return `${windowMinutes / 1_440}-day limit`
+    if (windowMinutes % 60 === 0) return `${windowMinutes / 60}-hour limit`
+    return `${windowMinutes}-minute limit`
+  }
+  const type = (limitType ?? fallbackId)?.toLowerCase()
+  if (type === 'five_hour' || type === '5h' || type === '5hour') return '5-hour limit'
+  if (type === 'seven_day' || type === '7day' || type === 'weekly') return 'Weekly limit'
+  if (limitType) return limitType.replaceAll('_', ' ')
+  return 'usage limit'
 }
 
 function rateLimitWindows(value: unknown): AgentRateLimitWindow[] {
@@ -381,10 +483,108 @@ function summaryText(value: unknown): string | undefined {
   return summary || undefined
 }
 
-function claudeStreamInput(text: string, priority?: 'now'): string {
+function attachmentLabel(attachment: PromptAttachment): string {
+  if (attachment.filename) return attachment.filename
+  try {
+    return basename(
+      attachment.url.startsWith('file:') ? fileURLToPath(attachment.url) : attachment.url
+    )
+  } catch {
+    return attachment.url
+  }
+}
+
+async function attachmentBytes(attachment: PromptAttachment): Promise<Buffer> {
+  if (attachment.url.startsWith('data:')) {
+    const separator = attachment.url.indexOf(',')
+    if (separator < 0)
+      throw new Error(`Claude attachment is invalid: ${attachmentLabel(attachment)}`)
+    const metadata = attachment.url.slice(0, separator)
+    const payload = attachment.url.slice(separator + 1)
+    return metadata.endsWith(';base64')
+      ? Buffer.from(payload, 'base64')
+      : Buffer.from(decodeURIComponent(payload), 'utf8')
+  }
+  let path: string
+  try {
+    path = attachment.url.startsWith('file:') ? fileURLToPath(attachment.url) : attachment.url
+  } catch {
+    throw new Error(`Claude attachment path is invalid: ${attachmentLabel(attachment)}`)
+  }
+  try {
+    return await readFile(path)
+  } catch {
+    throw new Error(`Claude attachment is not readable: ${attachmentLabel(attachment)}`)
+  }
+}
+
+async function claudeInputBlocks(
+  text: string,
+  attachments: PromptAttachment[]
+): Promise<ClaudeInputBlock[]> {
+  const content: ClaudeInputBlock[] = [{ type: 'text', text }]
+  for (const attachment of attachments) {
+    const mime = attachment.mime.toLowerCase().split(';', 1)[0] ?? ''
+    const title = attachmentLabel(attachment)
+    const remote = /^https?:\/\//u.test(attachment.url)
+    if (CLAUDE_IMAGE_MIMES.has(mime)) {
+      content.push({
+        type: 'image',
+        source: remote
+          ? { type: 'url', url: attachment.url }
+          : {
+              type: 'base64',
+              media_type: mime as ClaudeImageMime,
+              data: (await attachmentBytes(attachment)).toString('base64')
+            }
+      })
+      continue
+    }
+    if (mime === 'application/pdf') {
+      content.push({
+        type: 'document',
+        source: remote
+          ? { type: 'url', url: attachment.url }
+          : {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: (await attachmentBytes(attachment)).toString('base64')
+            },
+        title
+      })
+      continue
+    }
+    if (mime.startsWith('text/') || CLAUDE_TEXT_MIMES.has(mime)) {
+      if (remote) {
+        throw new Error(`Claude cannot attach remote text files directly: ${title}`)
+      }
+      content.push({
+        type: 'document',
+        source: {
+          type: 'text',
+          media_type: 'text/plain',
+          data: (await attachmentBytes(attachment)).toString('utf8')
+        },
+        title
+      })
+      continue
+    }
+    content.push({ type: 'text', text: await attachmentReference(attachment) })
+  }
+  return content
+}
+
+async function claudeStreamInput(
+  text: string,
+  attachments: PromptAttachment[],
+  priority?: 'now'
+): Promise<string> {
   const message: SDKUserMessage = {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: {
+      role: 'user',
+      content: attachments.length > 0 ? await claudeInputBlocks(text, attachments) : text
+    },
     parent_tool_use_id: null,
     ...(priority ? { priority } : {})
   }
@@ -515,6 +715,12 @@ export function mapClaudeCodeRecord(
     const incoming = messageFromAssistant(rawMessage)
     const existing = context.session.messages.find((message) => message.id === incoming.id)
     const mapped = existing ? mergeAssistantRecord(existing, incoming) : incoming
+    const rawError = mapped.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    const authenticationFailure = entry['error'] === 'authentication_failed'
     const usageEvent = mapped.tokens
       ? [
           {
@@ -535,7 +741,24 @@ export function mapClaudeCodeRecord(
           sessionId: context.sessionId,
           part
         })),
-        ...usageEvent
+        ...usageEvent,
+        ...(authenticationFailure
+          ? [
+              {
+                type: 'message.completed' as const,
+                sessionId: context.sessionId,
+                messageId: mapped.id,
+                error: rawError || 'Claude Code authentication failed.',
+                issue: {
+                  kind: 'authentication' as const,
+                  message: 'Claude Code sign-in expired. Sign in again, then retry this message.',
+                  rawError: rawError || 'Claude Code authentication failed.',
+                  harnessId: 'claude-code',
+                  retryable: true
+                }
+              }
+            ]
+          : [])
       ]
     }
   }
@@ -766,12 +989,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   readonly id = 'claude-code'
   readonly name = 'Claude Code'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: true,
@@ -782,6 +1006,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
+  private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
+  private readonly authenticationReadiness = new Map<string, ClaudeAuthenticationReadiness>()
+  private usageProbeSequence = 0
 
   constructor(
     storage: StorageEngine,
@@ -832,7 +1059,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           thinkingPresets: model.reasoning
             ? (model.thinkingPresets ?? THINKING_PRESETS)
             : undefined,
-          attachment: false,
+          attachment: true,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))
@@ -841,6 +1068,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (
+      firstParty &&
+      (!options.parentSessionId ||
+        !(await this.waitForParentAuthentication(options.parentSessionId)))
+    ) {
+      return null
+    }
     const anthropic = (await this.listProviders(projectPath)).find(
       (catalog) => catalog.id === 'anthropic'
     )
@@ -855,10 +1090,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Append user input to Claude's realtime stream while its turn is active. */
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    if (options.attachments.length) {
-      throw new Error('Claude Code CLI driver does not support prompt attachments')
-    }
-    this.writeActiveInput(session.id, claudeStreamInput(options.text, 'now'))
+    this.writeActiveInput(
+      session.id,
+      await claudeStreamInput(options.text, options.attachments, 'now')
+    )
     this.appendUserMessage(session, options)
     await this.persistSession(session)
   }
@@ -940,8 +1175,6 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length)
-      throw new Error('Claude Code CLI driver does not support prompt attachments')
     const args = [
       '-p',
       '--output-format',
@@ -976,14 +1209,57 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--permission-mode', 'dontAsk')
     else args.push('--permission-mode', 'dontAsk')
     const env = await this.customProviderEnv(options.settings.providerId)
+    const input = await claudeStreamInput(options.text, options.attachments)
+    const trackAuthentication =
+      !this.isTitleSession(session.id) &&
+      (!options.settings.providerId || options.settings.providerId === 'anthropic')
+    if (trackAuthentication) this.beginAuthenticationReadiness(session.id)
     return {
       command: 'claude',
       args,
-      input: claudeStreamInput(options.text),
+      input,
       keepInputOpen: true,
       env,
-      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal')
+      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
+      ...(trackAuthentication
+        ? {
+            onJsonRecord: (value: unknown) => {
+              const result = claudeAuthenticationResult(value)
+              if (result !== undefined) this.settleAuthenticationReadiness(session.id, result)
+            },
+            onProcessExit: () => this.settleAuthenticationReadiness(session.id, false)
+          }
+        : {})
     }
+  }
+
+  private beginAuthenticationReadiness(sessionId: string): void {
+    let resolveReadiness: (authenticated: boolean) => void = () => undefined
+    const promise = new Promise<boolean>((resolve) => {
+      resolveReadiness = resolve
+    })
+    this.authenticationReadiness.set(sessionId, {
+      promise,
+      resolve: resolveReadiness,
+      settled: false
+    })
+  }
+
+  private settleAuthenticationReadiness(sessionId: string, authenticated: boolean): void {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness || readiness.settled) return
+    readiness.settled = true
+    readiness.resolve(authenticated)
+  }
+
+  private async waitForParentAuthentication(sessionId: string): Promise<boolean> {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness) return false
+    const authenticated = await readiness.promise
+    if (this.authenticationReadiness.get(sessionId) === readiness) {
+      this.authenticationReadiness.delete(sessionId)
+    }
+    return authenticated
   }
 
   /**
@@ -1004,8 +1280,244 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return env
   }
 
+  private readUsageFromActiveSession(sessionId: string): Promise<Record<string, unknown> | null> {
+    const existing = this.activeUsageProbes.get(sessionId)
+    if (existing) return existing.promise
+
+    const sequence = ++this.usageProbeSequence
+    const usageRequestId = `codeinoven-usage-${sequence}`
+    const contextRequestId = `codeinoven-context-${sequence}`
+    let resolveProbe: (value: Record<string, unknown> | null) => void = () => undefined
+    const promise = new Promise<Record<string, unknown> | null>((resolve) => {
+      resolveProbe = resolve
+    })
+    const probe: ClaudeUsageProbe = {
+      usageRequestId,
+      contextRequestId,
+      rateLimitsPayload: null,
+      rateLimitsResponded: false,
+      contextPayload: null,
+      contextResponded: false,
+      timer: setTimeout(
+        () => this.finishActiveUsageProbe(sessionId, null),
+        CLAUDE_USAGE_TIMEOUT_MS
+      ),
+      promise,
+      resolve: resolveProbe
+    }
+    this.activeUsageProbes.set(sessionId, probe)
+    try {
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: usageRequestId,
+          request: { subtype: 'get_usage' }
+        })}\n`
+      )
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: contextRequestId,
+          request: { subtype: 'get_context_usage' }
+        })}\n`
+      )
+    } catch {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    return promise
+  }
+
+  private finishActiveUsageProbe(sessionId: string, value: Record<string, unknown> | null): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe) return
+    this.activeUsageProbes.delete(sessionId)
+    clearTimeout(probe.timer)
+    probe.resolve(value)
+  }
+
+  private captureActiveUsageResponse(
+    sessionId: string,
+    entry: Record<string, unknown> | null
+  ): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe || entry?.['type'] !== 'control_response') return
+    const response = record(entry['response'])
+    const inner = record(response?.['response'])
+    const requestId = string(response?.['request_id'])
+    if (requestId === probe.usageRequestId) {
+      probe.rateLimitsResponded = true
+      const rateLimits = record(inner?.['rate_limits'])
+      probe.rateLimitsPayload =
+        inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+    } else if (requestId === probe.contextRequestId) {
+      probe.contextResponded = true
+      probe.contextPayload = inner
+    } else {
+      return
+    }
+
+    if (probe.rateLimitsResponded && probe.rateLimitsPayload === null) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: null,
+        context: probe.contextPayload
+      })
+    } else if (probe.rateLimitsResponded && probe.contextResponded) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: probe.rateLimitsPayload,
+        context: probe.contextPayload
+      })
+    }
+  }
+
+  private mapAccountUsage(telemetry: Record<string, unknown> | null): ClaudeAccountUsage | null {
+    if (!telemetry) return null
+    const usage = record(telemetry['rateLimits'])
+    const context = record(telemetry['context'])
+    const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
+    if (rateLimits.length === 0 && !context) return null
+    const contextWindow =
+      context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
+    const contextUsed =
+      context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
+    return {
+      rateLimits,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed })
+    }
+  }
+
+  /**
+   * Fetch the account's current plan rate-limit windows and live context-window
+   * usage on demand via the `get_usage` + `get_context_usage` control requests.
+   * These run WITHOUT a model turn (`total_api_duration_ms` stays 0), so the
+   * battery can show live quota and the context percent for old threads whose
+   * turns predate capture. Returns null when the session has no plan limits
+   * (API key, Bedrock, Vertex) or on any failure.
+   */
+  async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
+    const activeSessionId = this.activeSessionIds()[0]
+    if (activeSessionId) {
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
+    }
+    try {
+      const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
+        const child = spawn(
+          'claude',
+          [
+            '--print',
+            '--output-format',
+            'stream-json',
+            '--input-format',
+            'stream-json',
+            '--verbose'
+          ],
+          {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            stdio: ['pipe', 'pipe', 'pipe']
+          }
+        )
+        let buffer = ''
+        let settled = false
+        const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
+        const finish = (value: Record<string, unknown> | null): void => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          if (!child.killed) child.kill()
+          resolve(value)
+        }
+        let rateLimitsPayload: Record<string, unknown> | null = null
+        let rateLimitsResponded = false
+        let contextPayload: Record<string, unknown> | null = null
+        let contextResponded = false
+        const attemptFinish = (): void => {
+          if (settled) return
+          // If the session has no plan rate limits, stop waiting for context and
+          // report nothing. Otherwise wait for both responses so quota and
+          // context are reported together; the timeout covers a missing response.
+          if (rateLimitsResponded && rateLimitsPayload === null) {
+            finish({ rateLimits: null, context: contextPayload })
+            return
+          }
+          if (rateLimitsResponded && contextResponded) {
+            finish({ rateLimits: rateLimitsPayload, context: contextPayload })
+          }
+        }
+        const consume = (line: string): void => {
+          if (!line.trim()) return
+          const payload = record(JSON.parse(line) as unknown)
+          if (!payload) return
+          if (payload['type'] !== 'control_response') return
+          const response = record(payload['response'])
+          const inner = record(response?.['response'])
+          const requestId = string(response?.['request_id'])
+          if (requestId === 'usage') {
+            rateLimitsResponded = true
+            const rateLimits = record(inner?.['rate_limits'])
+            rateLimitsPayload =
+              inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+          } else if (requestId === 'context') {
+            contextResponded = true
+            contextPayload = inner
+          }
+          attemptFinish()
+        }
+        child.stdout?.on('data', (chunk: Buffer) => {
+          buffer += chunk.toString()
+          const lines = buffer.split(/\r?\n/u)
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            try {
+              consume(line)
+            } catch {
+              // Ignore malformed side-channel output.
+            }
+          }
+        })
+        child.on('error', () => finish(null))
+        child.on('exit', () => {
+          if (!settled) finish(null)
+        })
+        // Send both control requests immediately; `--print` waits on stdin.
+        child.stdin?.write(
+          `${JSON.stringify({
+            type: 'control_request',
+            request_id: 'usage',
+            request: { subtype: 'get_usage' }
+          })}\n`
+        )
+        child.stdin?.write(
+          `${JSON.stringify({
+            type: 'control_request',
+            request_id: 'context',
+            request: { subtype: 'get_context_usage' }
+          })}\n`
+        )
+      })
+      return this.mapAccountUsage(telemetry)
+    } catch (error) {
+      Logger.dev('Claude on-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
+  override dispose(): void {
+    for (const sessionId of this.activeUsageProbes.keys()) {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    for (const [sessionId, readiness] of this.authenticationReadiness) {
+      if (!readiness.settled) readiness.resolve(false)
+      this.authenticationReadiness.delete(sessionId)
+    }
+    super.dispose()
+  }
+
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
+    this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
     if (type === 'rate_limit_event' && !latestAssistant(context)) {
       const limits = rateLimitWindows(entry?.['rate_limit_info'] ?? entry?.['rateLimitInfo'])
@@ -1013,7 +1525,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
 
     const result = mapClaudeCodeRecord(value, context)
-    if (type === 'result') this.closeActiveInput(context.sessionId)
+    if (type === 'result') {
+      this.finishActiveUsageProbe(context.sessionId, null)
+      this.closeActiveInput(context.sessionId)
+    }
     if (!result) return null
     const assistant = result.messages?.find((message) => message.role === 'assistant')
     const pending = this.pendingRateLimits.get(context.sessionId)

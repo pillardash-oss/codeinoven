@@ -1,14 +1,19 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron'
+import { app, BrowserWindow, Notification } from 'electron'
+import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import { Logger } from './logger'
+import { sendToRenderer } from './renderer-delivery'
+import { forwardRemoteEvent } from './remote/remote-event-forwarder'
 import type { StorageEngine } from './storage-engine'
 import type { Database } from './database/database'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { ThreadRepo } from './database/repositories/thread-repo'
-import type { Thread, ThreadStatus } from '../lib/types'
+import { AssignmentRepo } from './database/repositories/assignment-repo'
+import { isOrchestrationChildThread, type Thread, type ThreadStatus } from '../lib/types'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
+  SystemNotificationPermissionStatus,
   SystemNotificationTestResult,
   ThreadClickedPayload
 } from '../lib/ipc-contract'
@@ -20,6 +25,12 @@ const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
 ])
 const MAX_RETAINED_NOTIFICATIONS = 200
 const BADGE_STATE_PATH = 'state/notification-badge.json'
+/**
+ * Cooldown covering the alert's duration. Only the first notification of a
+ * burst plays a sound — notifications arriving inside this window still show
+ * their cards but stay quiet so a burst never machine-guns beeps.
+ */
+const NOTIFICATION_SOUND_DEDUP_MS = 2_500
 
 interface BadgeStateRecord {
   version: 1
@@ -32,18 +43,30 @@ export class NotificationService {
   private readonly storage: StorageEngine
   private readonly projectRepo: ProjectRepo
   private readonly threadRepo: ThreadRepo
+  private readonly assignmentRepo: AssignmentRepo
   private readonly onThreadClicked: ThreadClickedHandler
   private readonly lastObservedStatus = new Map<string, ThreadStatus>()
   private readonly activeNotifications = new Map<string, Notification>()
   private readonly abortingThreads = new Set<string>()
   private readonly badgeThreads = new Set<string>()
+  private lastNotificationSoundPlayedAt = 0
   private started = false
   private unsupportedLogged = false
+  /**
+   * Last observed macOS notification delivery outcome, used to surface a
+   * permission warning in Settings. Electron exposes no native notification
+   * authorization query, so this is inferred from the OS delivery events:
+   * 'show' means permission granted; 'failed' or a test timeout means the OS
+   * refused delivery (permission denied or an unsigned/ad-hoc build that
+   * macOS silently blocks).
+   */
+  private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
 
   constructor(storage: StorageEngine, db: Database, onThreadClicked: ThreadClickedHandler) {
     this.storage = storage
     this.projectRepo = new ProjectRepo(db)
     this.threadRepo = new ThreadRepo(db)
+    this.assignmentRepo = new AssignmentRepo(db)
     this.onThreadClicked = onThreadClicked
   }
 
@@ -52,6 +75,7 @@ export class NotificationService {
     this.started = true
     void this.hydrateBadge()
     ipcMain.handle('notification:test', () => this.sendTestNotification())
+    ipcMain.handle('notification:getPermissionStatus', () => this.getPermissionStatus())
   }
 
   stop(): void {
@@ -62,6 +86,35 @@ export class NotificationService {
     this.badgeThreads.clear()
     this.updateBadge()
     ipcMain.removeHandler('notification:test')
+    ipcMain.removeHandler('notification:getPermissionStatus')
+  }
+
+  /**
+   * Record the outcome of a native notification delivery. Electron has no
+   * notification-permission query API on macOS, so the OS delivery events are
+   * the authoritative signal: a shown notification implies permission, a
+   * refused one implies the app is blocked (permission denied or unsigned).
+   */
+  private recordNotificationOutcome(outcome: 'shown' | 'failed'): void {
+    if (process.platform !== 'darwin') return
+    if (outcome === 'shown') {
+      this.macosNotificationPermission = 'granted'
+    } else if (this.macosNotificationPermission !== 'granted') {
+      this.macosNotificationPermission = 'denied'
+    }
+  }
+
+  /**
+   * macOS notification authorization, inferred from OS delivery outcomes.
+   * 'prompt' means the OS has not delivered nor refused yet — the first
+   * notification (or the Settings test) will decide it. Exposed so the UI can
+   * warn when notifications are blocked and deep-link into System Settings.
+   */
+  getPermissionStatus(): SystemNotificationPermissionStatus {
+    if (process.platform !== 'darwin') {
+      return { platform: 'other' }
+    }
+    return { platform: 'darwin', status: this.macosNotificationPermission }
   }
 
   markAborting(projectId: string, threadId: string): void {
@@ -70,6 +123,46 @@ export class NotificationService {
 
   clearAborting(projectId: string, threadId: string): void {
     this.abortingThreads.delete(`${projectId}:${threadId}`)
+  }
+
+  /**
+   * The Sr. Engineer (coordinator) thread is the one that owns an Achievement
+   * or Assignment workflow and is the only orchestration thread that may
+   * notify the user.
+   */
+  private isCoordinatorThread(thread: Thread): boolean {
+    return thread.achievementRole === 'coordinator' || thread.assignmentRole === 'coordinator'
+  }
+
+  /**
+   * Worker and auditor threads are orchestration internals: their progress and
+   * outcomes are surfaced through the coordinator instead, so they never
+   * notify on their own.
+   */
+  private isSuppressedOrchestration(thread: Thread): boolean {
+    return isOrchestrationChildThread(thread)
+  }
+
+  /**
+   * The coordinator notifies on `completed` only when the whole process is
+   * over. While its Achievement loop is still enabled or its Assignment is
+   * still running, a `completed` turn is an intermediate step (dispatch,
+   * review) that must not notify.
+   */
+  private isPrematureCoordinatorCompletion(thread: Thread): boolean {
+    if (thread.status !== 'completed' || !this.isCoordinatorThread(thread)) return false
+    if (thread.settings?.loopMode === true) return true
+    if (thread.assignmentId) {
+      try {
+        const assignment = this.assignmentRepo.getActive(thread.projectId, thread.id)
+        if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
+          return true
+        }
+      } catch (error) {
+        Logger.dev('Assignment state lookup failed for notification suppression:', error)
+      }
+    }
+    return false
   }
 
   /**
@@ -111,7 +204,12 @@ export class NotificationService {
       const threads = this.threadRepo.listAll()
       const validKeys = new Set<string>()
       for (const thread of threads) {
-        if (NOTIFIABLE_STATUSES.has(thread.status) && !thread.read) {
+        if (
+          NOTIFIABLE_STATUSES.has(thread.status) &&
+          !thread.read &&
+          !this.isSuppressedOrchestration(thread) &&
+          !this.isPrematureCoordinatorCompletion(thread)
+        ) {
           validKeys.add(`${thread.projectId}:${thread.id}`)
         }
       }
@@ -172,12 +270,24 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
+    // In Achievement/Assignment mode only the Sr. Engineer (coordinator) thread
+    // notifies, and only when the whole process is over or human intervention
+    // is needed. Worker/auditor threads never notify, and the coordinator's
+    // intermediate turn completions do not.
+    if (this.isSuppressedOrchestration(thread)) return
+    if (this.isPrematureCoordinatorCompletion(thread)) return
     const previous = this.lastObservedStatus.get(threadKey)
     this.lastObservedStatus.set(threadKey, thread.status)
 
     if (!NOTIFIABLE_STATUSES.has(thread.status)) return
     if (previous === thread.status) return
     if (thread.read) return
+    // A thread that transitions straight from `failed` to `completed` — without
+    // an intervening working status — is reporting a stale/wrong success: the
+    // turn never actually re-ran (a fresh run would pass through executing or
+    // planning). Emitting a "done" notification right after an error one is
+    // exactly the misleading double-notify users have reported, so suppress it.
+    if (thread.status === 'completed' && previous === 'failed') return
 
     let projectName = ''
     try {
@@ -195,12 +305,14 @@ export class NotificationService {
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('notification:show', payload)
+        sendToRenderer(window.webContents, 'notification:show', payload)
       }
     }
+    forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
-    const soundDispatched = this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(windows)
+    const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
         this.unsupportedLogged = true
@@ -217,7 +329,7 @@ export class NotificationService {
         subtitle: projectName || APP_NAME,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent: soundDispatched
+        silent
       })
 
       notification.on('click', (): void => {
@@ -227,6 +339,7 @@ export class NotificationService {
         })
       })
       notification.on('show', (): void => {
+        this.recordNotificationOutcome('shown')
         Logger.info('System notification shown', {
           kind: payload.kind,
           projectId: thread.projectId,
@@ -234,6 +347,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
+        this.recordNotificationOutcome('failed')
         Logger.error('System notification failed:', error)
       })
 
@@ -259,6 +373,9 @@ export class NotificationService {
 
     const threadKey = `${thread.projectId}:${thread.id}`
     if (this.abortingThreads.has(threadKey)) return
+    // Side chats piped through a worker or auditor parent thread stay quiet in
+    // Achievement/Assignment mode; only the Sr. Engineer thread notifies.
+    if (this.isSuppressedOrchestration(thread)) return
 
     let projectName = ''
     try {
@@ -277,12 +394,14 @@ export class NotificationService {
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-        window.webContents.send('notification:show', payload)
+        sendToRenderer(window.webContents, 'notification:show', payload)
       }
     }
+    forwardRemoteEvent('notification:show', payload)
 
     if (windows.some((window) => window.isFocused())) return
-    const soundDispatched = this.dispatchNotificationSound(windows)
+    this.dispatchNotificationSound(windows)
+    const silent = this.appManagesSound(windows)
     if (!Notification.isSupported()) {
       if (!this.unsupportedLogged) {
         this.unsupportedLogged = true
@@ -299,7 +418,7 @@ export class NotificationService {
         subtitle: projectName || APP_NAME,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
-        silent: soundDispatched
+        silent
       })
 
       notification.on('click', (): void => {
@@ -309,6 +428,7 @@ export class NotificationService {
         })
       })
       notification.on('show', (): void => {
+        this.recordNotificationOutcome('shown')
         Logger.info('Temporary chat system notification shown', {
           kind: payload.kind,
           projectId: thread.projectId,
@@ -317,6 +437,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
+        this.recordNotificationOutcome('failed')
         Logger.error('Temporary chat system notification failed:', error)
       })
 
@@ -328,7 +449,17 @@ export class NotificationService {
   }
 
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
-    const soundDispatched = this.dispatchNotificationSound()
+    const permission = this.getPermissionStatus()
+    if (permission.platform === 'darwin' && permission.status === 'denied') {
+      return {
+        status: 'failed',
+        message:
+          'macOS is blocking notifications for this app. Allow notifications in System Settings > Notifications.'
+      }
+    }
+
+    this.dispatchNotificationSound()
+    const silent = this.appManagesSound()
     if (!Notification.isSupported()) {
       return {
         status: 'unsupported',
@@ -342,7 +473,7 @@ export class NotificationService {
         groupId: `${APP_SLUG}-system`,
         title: `${APP_NAME} notifications`,
         body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
-        silent: soundDispatched
+        silent
       })
       let settled = false
       const finish = (result: SystemNotificationTestResult): void => {
@@ -352,24 +483,28 @@ export class NotificationService {
         resolve(result)
       }
       const timeout = setTimeout(() => {
+        this.recordNotificationOutcome('failed')
         finish({
           status: 'failed',
           message:
-            'The operating system did not confirm delivery. Check notification permissions and app signing.'
+            'macOS did not confirm delivery. Notifications are likely blocked — allow them in System Settings > Notifications (unsigned builds also require app signing).'
         })
       }, 5_000)
 
       notification.once('show', () => {
+        this.recordNotificationOutcome('shown')
         finish({
           status: 'shown',
           message: 'Test notification sent. System notifications are ready.'
         })
       })
       notification.once('failed', (_event, error) => {
+        this.recordNotificationOutcome('failed')
         Logger.error('System notification test failed:', error)
         finish({
           status: 'failed',
-          message: `The system rejected the notification: ${error}`
+          message:
+            'macOS rejected the notification. Allow notifications in System Settings > Notifications.'
         })
       })
 
@@ -437,14 +572,35 @@ export class NotificationService {
     }
   }
 
+  /**
+   * The app plays its own audible alert (`alert.wav`) from the renderer, so the
+   * OS notification must never add its default sound: as long as a renderer is
+   * alive the app owns audio and the OS notification is shown silent. Without a
+   * live renderer the OS notification falls back to its own sound.
+   */
+  private appManagesSound(windows = BrowserWindow.getAllWindows()): boolean {
+    return windows.some((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
+  }
+
+  /**
+   * Dispatch the custom audible alert for a notification. Only the first
+   * notification of a burst plays: notifications arriving within the dedup
+   * window after the last played sound still show their cards but stay quiet.
+   * The gate lives here in the main process — not the throttled renderer — so
+   * the decision is deterministic and the first sound is dispatched the moment
+   * its notification arrives, instead of seconds after the OS card appears.
+   */
   private dispatchNotificationSound(windows = BrowserWindow.getAllWindows()): boolean {
     const soundWindow = windows.find(
       (window) => !window.isDestroyed() && !window.webContents.isDestroyed()
     )
     if (!soundWindow) return false
 
-    soundWindow.webContents.send('notification:playSound')
-    return true
+    const now = Date.now()
+    if (now - this.lastNotificationSoundPlayedAt < NOTIFICATION_SOUND_DEDUP_MS) return false
+    this.lastNotificationSoundPlayedAt = now
+
+    return sendToRenderer(soundWindow.webContents, 'notification:playSound')
   }
 
   private retainNotification(key: string, notification: Notification): void {

@@ -18,17 +18,27 @@
     projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     compact?: boolean
     readOnly?: boolean
+    reworkCycle?: number
+    forceRework?: boolean
+    assignmentVersion?: number
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     annotations?: AssignmentAnnotation[]
     onOpenAnnotation?: (annotation: AssignmentAnnotation) => void
     onAnnotateSection?: (section: string, title: string, event: MouseEvent) => void
@@ -40,14 +50,20 @@
     projectId = null,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     compact = false,
     readOnly = false,
+    reworkCycle,
+    forceRework = false,
+    assignmentVersion,
     onChange,
     onWorkerModelChange,
+    onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     annotations = [],
     onOpenAnnotation,
     onAnnotateSection
@@ -83,7 +99,8 @@
   }
 
   function resolvedTaskModel(task: AssignmentTask): AssignmentModelSelection {
-    return task.model ?? phaseModel(task.phaseId)
+    if (task.model) return task.model
+    return task.owner === 'senior' ? seniorModel : phaseModel(task.phaseId)
   }
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
@@ -92,8 +109,14 @@
       onTaskModelChange !== undefined &&
       task.owner === 'worker' &&
       !task.threadId &&
-      task.status !== 'completed'
+      task.status !== 'completed' &&
+      task.status !== 'stopped'
     )
+  }
+
+  function taskReworkCycle(task: AssignmentTask): number | undefined {
+    if (task.workKind === 'rework') return task.reworkCycle ?? reworkCycle ?? 1
+    return forceRework ? (reworkCycle ?? 1) : undefined
   }
 
   function updatePhaseModel(
@@ -157,7 +180,8 @@
         }
       })
     })
-    onWorkerModelChange?.(selection)
+    if (current.owner === 'senior') onSeniorModelChange?.(selection)
+    else onWorkerModelChange?.(selection)
   }
 
   function updateTaskText(
@@ -340,6 +364,7 @@
               onSelect={(providerId, modelId, harnessId) =>
                 updatePhaseModel(phase.id, providerId, modelId, harnessId)}
               {onToggleFavorite}
+              {onReorderFavorite}
             />
             <select
               class="rounded-lg border bg-surface px-2 py-2 text-[11px] text-muted"
@@ -365,6 +390,7 @@
       <div class="space-y-3">
         {#each content.tasks.filter((task) => task.phaseId === phase.id) as task (task.id)}
           {@const selectedTaskModel = resolvedTaskModel(task)}
+          {@const displayedReworkCycle = taskReworkCycle(task)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -403,6 +429,15 @@
               <span class="rounded bg-overlay px-1.5 py-0.5 text-[10px] text-muted">
                 {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
               </span>
+              {#if displayedReworkCycle}
+                <span
+                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning"
+                >
+                  Rework {displayedReworkCycle} · Assignment v{task.workAssignmentVersion ??
+                    assignmentVersion ??
+                    '?'}
+                </span>
+              {/if}
             </div>
             <EditableMarkdown
               {readOnly}
@@ -445,6 +480,7 @@
                     onSelect={(providerId, modelId, harnessId) =>
                       updateTaskModel(task.id, providerId, modelId, harnessId)}
                     {onToggleFavorite}
+                    {onReorderFavorite}
                   />
                   <select
                     class="rounded-lg border bg-elevated px-2 py-2 text-[11px] text-muted"

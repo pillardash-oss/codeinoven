@@ -1,4 +1,5 @@
 import type { PromptReference } from '$shared/types'
+import { rendererRecovery } from './renderer-recovery.svelte'
 
 const MAX_REFERENCES_PER_THREAD = 20
 const MAX_THREADS_WITH_REFERENCES = 200
@@ -23,6 +24,7 @@ class ResponseReferencesState {
   setForThread(projectId: string, threadId: string, references: ResponseReferenceAnchor[]): void {
     const key = referenceKey(projectId, threadId)
     const next = { ...this.references }
+    let stored: ResponseReferenceAnchor[] = []
     if (references.length === 0) {
       delete next[key]
     } else {
@@ -30,12 +32,16 @@ class ResponseReferencesState {
         const oldestKey = Object.keys(next)[0]
         if (oldestKey) delete next[oldestKey]
       }
-      next[key] = references.slice(0, MAX_REFERENCES_PER_THREAD).map((reference, index) => ({
+      stored = references.slice(0, MAX_REFERENCES_PER_THREAD).map((reference, index) => ({
         ...reference,
         label: `Selection ${index + 1}`
       }))
+      next[key] = stored
     }
     this.references = next
+    // Mirror into the recovery snapshot so annotations survive thread switches
+    // and app restarts, alongside the rest of the composer draft.
+    rendererRecovery.setPromptReferences(projectId, threadId, stored)
   }
 
   clearThread(projectId: string, threadId: string): void {
