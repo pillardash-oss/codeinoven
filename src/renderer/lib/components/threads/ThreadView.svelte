@@ -5613,6 +5613,8 @@
   let editingText = $state('')
   let editingMessageAttachments = $state<PromptAttachment[]>([])
   let editingMessageProjectReferences = $state<PromptProjectReference[]>([])
+  let messagePendingDelete = $state<AgentMessage | null>(null)
+  let deletingMessageId = $state<string | null>(null)
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
@@ -5697,6 +5699,33 @@
     editingText = ''
     editingMessageAttachments = []
     editingMessageProjectReferences = []
+  }
+
+  /** Open the confirmation dialog before deleting history up to and including a message. */
+  function requestDeleteMessage(msg: AgentMessage): void {
+    if (busy) return
+    messagePendingDelete = msg
+  }
+
+  function cancelDeleteMessage(): void {
+    messagePendingDelete = null
+  }
+
+  /** Delete the message and everything after it, discarding the harness session. */
+  async function confirmDeleteMessage(): Promise<void> {
+    const msg = messagePendingDelete
+    if (!msg || deletingMessageId) return
+    messagePendingDelete = null
+    deletingMessageId = msg.id
+    try {
+      // Truncation drops the message, everything after it, and the harness
+      // session. The next send rebinds a fresh session via prepareSessionForSend.
+      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
+    } finally {
+      deletingMessageId = null
+    }
   }
 
   /**
@@ -6530,6 +6559,15 @@
                             onclick={() => editMessage(msg)}
                           >
                             <Pencil size={12} />
+                          </button>
+                          <button
+                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label="Delete message"
+                            title="Delete — removes the conversation up to this message"
+                            disabled={busy}
+                            onclick={() => requestDeleteMessage(msg)}
+                          >
+                            <Trash2 size={12} />
                           </button>
                         {/if}
                       </div>
@@ -7438,6 +7476,32 @@
       }}
     >
       Discard changes
+    </button>
+  {/snippet}
+</Modal>
+
+<Modal open={messagePendingDelete !== null} title="Delete message?" onClose={cancelDeleteMessage}>
+  <p class="text-sm text-muted">
+    This will delete the conversation history up to this point, and this message will be deleted
+    too. This cannot be undone.
+  </p>
+  {#snippet footer()}
+    <button
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={cancelDeleteMessage}
+    >
+      Cancel
+    </button>
+    <button
+      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={deletingMessageId !== null}
+      onclick={() => void confirmDeleteMessage()}
+    >
+      {#if deletingMessageId !== null}
+        <Loader2 size={14} class="animate-spin" />
+      {:else}
+        Delete
+      {/if}
     </button>
   {/snippet}
 </Modal>
