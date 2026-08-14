@@ -1760,7 +1760,10 @@
   let sources = $derived(
     collectAgentSources(messages).filter((source) => {
       if (source.kind !== 'file-citation') return true
-      return citationPathsState.isValidPath(source.path)
+      return (
+        citationPathsState.isValidPath(source.path) ||
+        citationPathsState.isKnownExternalPath(source.path)
+      )
     })
   )
 

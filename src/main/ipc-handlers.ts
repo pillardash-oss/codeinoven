@@ -2906,6 +2906,11 @@ export function registerIpcHandlers(
         validateStringArray(candidates, 'Citation paths')
       )
   )
+  ipcMain.handle('projectFiles:resolveExternalCitationPaths', (_, absolutePaths: unknown) =>
+    projectFilesService.resolveExternalCitationPaths(
+      validateStringArray(absolutePaths, 'Absolute citation paths')
+    )
+  )
   ipcMain.handle(
     'projectFiles:create',
     (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>

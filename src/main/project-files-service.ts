@@ -131,6 +131,33 @@ export class ProjectFilesService {
     return results
   }
 
+  /**
+   * Existence probe for absolute citation paths that live outside the project
+   * root (e.g. Codex `:codex-file-citation` tokens). Returns whether each path
+   * exists on disk as a regular file or directory (symlinks resolve to false).
+   * Purely an existence check — no content is read or returned.
+   */
+  async resolveExternalCitationPaths(absolutePaths: string[]): Promise<Record<string, boolean>> {
+    const results: Record<string, boolean> = {}
+    for (const candidate of absolutePaths) {
+      results[candidate] = await this.externalCitationPathExists(candidate)
+    }
+    return results
+  }
+
+  private async externalCitationPathExists(rawCandidate: string): Promise<boolean> {
+    if (!rawCandidate || rawCandidate.includes('\0')) return false
+    if (!isAbsolute(rawCandidate)) return false
+    try {
+      const metadata = await lstat(rawCandidate)
+      if (metadata.isSymbolicLink()) return false
+      return metadata.isFile() || metadata.isDirectory()
+    } catch (error) {
+      if (this.isMissingPathError(error)) return false
+      throw error
+    }
+  }
+
   private async resolveCitationPath(root: string, rawCandidate: string): Promise<string | null> {
     if (rawCandidate.length === 0 || rawCandidate.length > MAX_RELATIVE_PATH_LENGTH) return null
     if (rawCandidate.includes('\0') || rawCandidate.includes('\\')) return null

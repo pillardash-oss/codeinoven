@@ -264,6 +264,7 @@ const INVOKE_CHANNELS = [
   'projectFiles:list',
   'projectFiles:search',
   'projectFiles:resolveCitationPaths',
+  'projectFiles:resolveExternalCitationPaths',
   'projectFiles:create',
   'projectFiles:delete',
   'projectFiles:info',

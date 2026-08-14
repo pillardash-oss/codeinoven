@@ -1087,6 +1087,10 @@ export interface IpcInvokeContract {
     [projectId: string, candidates: string[]],
     Record<string, string | null>
   >
+  'projectFiles:resolveExternalCitationPaths': Contract<
+    [absolutePaths: string[]],
+    Record<string, boolean>
+  >
   'projectFiles:create': Contract<
     [projectId: string, relativeDirectory: string, name: string],
     ProjectFileEntry
