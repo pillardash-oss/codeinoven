@@ -163,6 +163,23 @@ export class GitHubProvider implements GitProvider {
     return this.toReference(response)
   }
 
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    input: PullRequestTarget & {
+      title?: string
+      body?: string
+    }
+  ): Promise<PullRequestReference> {
+    const patch: Record<string, unknown> = {}
+    if (input.title !== undefined) patch['title'] = input.title
+    if (input.body !== undefined) patch['body'] = input.body
+    const response = await this.request(`${this.pullPath(input)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
+    })
+    return this.toReference(response)
+  }
+
   async listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]> {
     const query = input.state ? `?state=${encodeURIComponent(input.state)}` : ''
     const response = await this.request(
@@ -708,10 +725,22 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  /** Read a provider error body's `message` field without touching headers. */
+  /**
+   * Read a provider error body's message without touching headers. GitHub wraps
+   * the actionable reason in `errors[0].message` (e.g. "A pull request already
+   * exists for …") while the top-level `message` stays the generic
+   * "Validation Failed", so the specific reason is preferred when present.
+   */
   private async readErrorMessage(response: Response): Promise<string> {
     try {
       const body = (await response.json()) as Record<string, unknown>
+      if (Array.isArray(body['errors'])) {
+        for (const entry of body['errors']) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const detail = (entry as Record<string, unknown>)['message']
+          if (typeof detail === 'string' && detail.trim()) return detail.slice(0, 500)
+        }
+      }
       if (typeof body['message'] === 'string') return body['message'].slice(0, 500)
     } catch {
       // Non-JSON error body — fall through to the status-only message.

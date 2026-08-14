@@ -11,6 +11,21 @@ import { sendToRenderer } from './renderer-delivery'
 const PROBE_TIMEOUT_MS = 8000
 
 /**
+ * The harness is installed but its detected version is not yet supported by
+ * CodeInOven. The Harnesses page surfaces a notice; everywhere else the harness
+ * is treated as not installed.
+ */
+export const OPENCODE_V2_UNSUPPORTED_DETAIL =
+  'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
+
+/** True when a `--version` line reports a major version >= 2 (OpenCode V2). */
+function isOpenCodeV2(version: string): boolean {
+  const match = /(\d+)/u.exec(version)
+  const major = match ? Number.parseInt(match[1], 10) : Number.NaN
+  return Number.isFinite(major) && major >= 2
+}
+
+/**
  * ProviderConnectionService — detects local AI harnesses by resolving their
  * binaries on an augmented PATH and verifying they respond to a version probe.
  * Broadcasts live status to all renderer windows over IPC. The harness list is
@@ -111,6 +126,19 @@ export class ProviderConnectionService {
 
     const versionResult = await this.probeVersion(def)
     if (versionResult.ok) {
+      // OpenCode V2 is not yet supported: report it as installed-but-unsupported
+      // so the Harnesses page can surface a notice while every availability
+      // check treats it as not installed.
+      if (def.id === 'opencode' && isOpenCodeV2(versionResult.version)) {
+        return {
+          ...base,
+          status: 'error',
+          resolvedPath: located.path,
+          version: versionResult.version,
+          unsupportedReason: 'opencode-v2',
+          detail: OPENCODE_V2_UNSUPPORTED_DETAIL
+        }
+      }
       return {
         ...base,
         status: 'available',

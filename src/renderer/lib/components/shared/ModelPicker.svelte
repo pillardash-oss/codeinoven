@@ -88,9 +88,13 @@
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
   /** Current-project entries win when present without dropping harnesses that
-   * are still pending from its background catalog enrichment. */
+   * are still pending from its background catalog enrichment. Harnesses whose
+   * installed version is unsupported (e.g. OpenCode V2) are dropped so they
+   * behave exactly as if not installed. */
   let displayProviders = $derived(
-    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders])
+    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
+      (provider) => !providerStore.isUnsupported(provider.harnessId)
+    )
   )
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(true)

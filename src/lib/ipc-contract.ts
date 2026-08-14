@@ -51,6 +51,7 @@ import type {
   Plan,
   Project,
   ProjectFileEntry,
+  ProjectFileDropResult,
   ProjectFileInfo,
   ProjectFileTransferMode,
   ProjectTextFile,
@@ -76,6 +77,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
   PrResolveOptions,
@@ -805,6 +807,17 @@ export interface IpcInvokeContract {
     [projectId: string, owner: string, repo: string, pullNumber: number],
     GitHubMutationResult<PullRequestReference>
   >
+  'pr:update': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      title: string | undefined,
+      body: string | undefined
+    ],
+    GitHubMutationResult<PullRequestReference>
+  >
   'pr:page': Contract<
     [projectId: string, owner: string, repo: string, state: PrState, page: number],
     PullRequestPage
@@ -1021,6 +1034,10 @@ export interface IpcInvokeContract {
   >
   /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
   'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>
+  /** Create `.cio/git/compose/<threadId>/` for the PR-compose agent and return its absolute path. */
+  'pr:composeWorkspace': Contract<[projectId: string, threadId: string], string>
+  /** Read back the agent's `.cio/git/compose/<threadId>/compose.json`, if it wrote one. */
+  'pr:composeReport': Contract<[projectId: string, threadId: string], PrComposeReport>
   'github:authStatus': Contract<[], GitHubAuthStatus>
   'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
   'github:poll': Contract<[deviceCode: string], GitHubPollResult>
@@ -1070,6 +1087,10 @@ export interface IpcInvokeContract {
     [projectId: string, candidates: string[]],
     Record<string, string | null>
   >
+  'projectFiles:resolveExternalCitationPaths': Contract<
+    [absolutePaths: string[]],
+    Record<string, boolean>
+  >
   'projectFiles:create': Contract<
     [projectId: string, relativeDirectory: string, name: string],
     ProjectFileEntry
@@ -1095,6 +1116,10 @@ export interface IpcInvokeContract {
   'projectFiles:importPaths': Contract<
     [projectId: string, sourcePaths: string[], destinationDirectory: string],
     ProjectFileEntry[]
+  >
+  'projectFiles:dropPaths': Contract<
+    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    ProjectFileDropResult[]
   >
   'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
   'projectFiles:rename': Contract<
@@ -1629,6 +1654,8 @@ export interface RemoteAuditEventInfo {
 export interface IpcEventContract {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': []
+  /** Emitted after browser sign-in changes the shared desktop account. */
+  'account:profileChanged': [state: import('./types').AccountProfileState]
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
@@ -1649,6 +1676,13 @@ export interface IpcEventContract {
    * and only fall back to closing the window when nothing is active.
    */
   'window:closeShortcut': []
+  /**
+   * Emitted when the user presses Cmd/Ctrl+T while a terminal holds focus. The
+   * main process intercepts the key (so ghostty-web never feeds it to the
+   * shell) and asks the renderer to open a new terminal tab in the terminal
+   * panel — right sidebar or bottom dock, whichever is active.
+   */
+  'window:newTerminalShortcut': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

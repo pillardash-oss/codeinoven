@@ -1,8 +1,9 @@
 import { invoke } from '$lib/ipc.svelte'
-import { normalizeCitationPath } from '$lib/agent-source-citations'
+import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { toast } from 'svelte-sonner'
 import type { ProjectFileEntry } from '$shared/types'
 
 async function ensureProjectFilesReady(projectId: string): Promise<void> {
@@ -91,5 +92,15 @@ export async function revealCitationFile(
   const exact = await exactEntry(projectId, relativePath)
   if (exact) {
     await revealEntry(projectId, exact, focusLine)
+    return
+  }
+  // Absolute citation outside the project root (e.g. Codex citations to files
+  // the user supplied) — reveal in the OS file manager. `shell:revealPath` is
+  // scope-gated in main, so out-of-scope paths fail safely.
+  if (isAbsoluteCitationPath(targetPath)) {
+    const revealed = await invoke('shell:revealPath', targetPath).catch(() => false)
+    if (!revealed) {
+      toast.error('This local file is outside the active project or no longer exists.')
+    }
   }
 }

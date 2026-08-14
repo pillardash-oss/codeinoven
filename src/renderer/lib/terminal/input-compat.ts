@@ -37,8 +37,8 @@ function normalizePastedText(text: string): string {
  *    cursor sequences (`ESC[1;3D`, `ESC[1;5C`, ...) which work in full-screen
  *    apps (vim) but are unbound in zsh/readline. In plain shell mode those are
  *    translated to the legacy `ESC b` / `ESC f` word-move sequences the line
- *    editors bind by default. Full-screen apps that enable application cursor
- *    keys (vim, less, tmux panes) keep the encoder's own sequences.
+ *    editors bind by default. Full-screen apps on the alternate screen (vim,
+ *    less, tmux panes) keep the encoder's own sequences.
  */
 export function attachTerminalInputCompat(
   { term, host }: TerminalInputCompatOptions,
@@ -49,10 +49,13 @@ export function attachTerminalInputCompat(
     const isWordMove =
       (event.altKey || event.ctrlKey) && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
     if (!isWordMove) return
-    // A full-screen app owns the keyboard on the alternate screen or with
-    // application cursor keys enabled (vim, less, htop...). Leave those keys
-    // for the app's own (working) bindings; only translate in a plain shell.
-    if (term.wasmTerm?.isAlternateScreen() || term.getMode(1)) return
+    // A full-screen app owns the keyboard on the alternate screen (vim, less,
+    // htop...). Leave those keys for the app's own (working) bindings; only
+    // translate in a plain shell. Application cursor keys (DECCKM, mode 1) are
+    // NOT a signal for that: the shell line editors (zsh zle, bash readline)
+    // enable them themselves (`smkx`) while editing a prompt, so checking them
+    // would suppress word hopping exactly when editing a command line.
+    if (term.wasmTerm?.isAlternateScreen()) return
     event.preventDefault()
     event.stopPropagation()
     send(event.key === 'ArrowLeft' ? LEGACY_BACKWARD_WORD : LEGACY_FORWARD_WORD)

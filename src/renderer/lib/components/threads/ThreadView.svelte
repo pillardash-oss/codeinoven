@@ -99,6 +99,7 @@
   import { modelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
+  import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     responseReferencesState,
@@ -248,6 +249,11 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  /** Whether the current run is confirmed by live session activity (vs an
+   *  optimistic restore off a persisted in-flight status). Only a live-confirmed
+   *  run may expand the working trace, so a stale `planning`/`executing` DB
+   *  status can't flash the trace open before the live session settles idle. */
+  let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -276,7 +282,18 @@
     thread.assignmentRole !== 'coordinator' &&
     thread.achievementRole !== 'coordinator'
   ) {
-    agentRuns.setBusy(thread.projectId, thread.id, true, undefined, thread.lastActivity)
+    // Optimistic restore off the persisted in-flight status: it keeps the
+    // composer/placeholder working, but it is not live-confirmed and must not
+    // expand the working trace (the live session settles the truth on connect).
+    agentRuns.setBusy(
+      thread.projectId,
+      thread.id,
+      true,
+      undefined,
+      thread.lastActivity,
+      false,
+      false
+    )
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
@@ -1760,7 +1777,10 @@
   let sources = $derived(
     collectAgentSources(messages).filter((source) => {
       if (source.kind !== 'file-citation') return true
-      return citationPathsState.isValidPath(source.path)
+      return (
+        citationPathsState.isValidPath(source.path) ||
+        citationPathsState.isKnownExternalPath(source.path)
+      )
     })
   )
 
@@ -2456,7 +2476,15 @@
       return
     }
     if (status === 'planning' || status === 'executing') {
-      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId(), startedAt)
+      agentRuns.setBusy(
+        thread.projectId,
+        thread.id,
+        true,
+        latestUserMessageId(),
+        startedAt,
+        false,
+        false
+      )
       return
     }
     setIdleFromRestore()
@@ -3047,19 +3075,27 @@
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
     if (!pending && !queuedHasContent) return
-    clearQueuedState()
-    await sendMessage(
-      pending,
-      pendingAttachments,
-      undefined,
-      undefined,
-      pendingPromptContext,
-      pendingPromptReferences,
-      pendingProjectReferences,
-      pendingPresentation,
-      pendingTaskReferences,
-      true
-    )
+    // Claim synchronously before sending so the background dispatcher (or any
+    // concurrent path) cannot also deliver this same queued message. If we lose
+    // the race, whoever claimed it will send it — never send here.
+    if (!claimQueuedMessage(projectId, id)) return
+    try {
+      clearQueuedState()
+      await sendMessage(
+        pending,
+        pendingAttachments,
+        undefined,
+        undefined,
+        pendingPromptContext,
+        pendingPromptReferences,
+        pendingProjectReferences,
+        pendingPresentation,
+        pendingTaskReferences,
+        true
+      )
+    } finally {
+      releaseQueuedMessage(projectId, id)
+    }
   }
 
   function scheduleIdleAttention(): void {
@@ -3667,6 +3703,10 @@
 
   function reviewCheckpoint(checkpointId: string): void {
     contextSidebarState.openDiff(thread.projectId, thread.id, checkpointId)
+  }
+
+  function revealCheckpointFile(checkpointId: string, path: string): void {
+    contextSidebarState.openDiff(thread.projectId, thread.id, checkpointId, path)
   }
 
   async function undoCheckpoint(checkpoint: TurnCheckpointSummary): Promise<void> {
@@ -5609,6 +5649,8 @@
   let editingText = $state('')
   let editingMessageAttachments = $state<PromptAttachment[]>([])
   let editingMessageProjectReferences = $state<PromptProjectReference[]>([])
+  let messagePendingDelete = $state<AgentMessage | null>(null)
+  let deletingMessageId = $state<string | null>(null)
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
@@ -5693,6 +5735,33 @@
     editingText = ''
     editingMessageAttachments = []
     editingMessageProjectReferences = []
+  }
+
+  /** Open the confirmation dialog before deleting history up to and including a message. */
+  function requestDeleteMessage(msg: AgentMessage): void {
+    if (busy) return
+    messagePendingDelete = msg
+  }
+
+  function cancelDeleteMessage(): void {
+    messagePendingDelete = null
+  }
+
+  /** Delete the message and everything after it, discarding the harness session. */
+  async function confirmDeleteMessage(): Promise<void> {
+    const msg = messagePendingDelete
+    if (!msg || deletingMessageId) return
+    messagePendingDelete = null
+    deletingMessageId = msg.id
+    try {
+      // Truncation drops the message, everything after it, and the harness
+      // session. The next send rebinds a fresh session via prepareSessionForSend.
+      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
+    } finally {
+      deletingMessageId = null
+    }
   }
 
   /**
@@ -6527,6 +6596,15 @@
                           >
                             <Pencil size={12} />
                           </button>
+                          <button
+                            class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+                            aria-label="Delete message"
+                            title="Delete — removes the conversation up to this message"
+                            disabled={busy}
+                            onclick={() => requestDeleteMessage(msg)}
+                          >
+                            <Trash2 size={12} />
+                          </button>
                         {/if}
                       </div>
                       <span class="text-[10px] text-dimmed">·</span>
@@ -6562,7 +6640,7 @@
                   {#if isTurnStart}
                     {@const collectedTurnParts = getTurnWorkingParts(
                       msgIndex,
-                      threadWorking && isLatestTurn
+                      liveBusy && isLatestTurn
                     )}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
@@ -6572,8 +6650,8 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={threadWorking && isLatestTurn}
-                        busy={threadWorking && isLatestTurn}
+                        open={liveBusy && isLatestTurn}
+                        busy={liveBusy && isLatestTurn}
                         latest={isLatestTurn}
                         done={isTurnCompleted(msgIndex)}
                         startTime={isLatestTurn
@@ -6652,6 +6730,9 @@
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
+                            projectId={thread.projectId}
+                            threadId={thread.id}
+                            onRevealFile={(path) => revealCheckpointFile(turnCheckpoint.id, path)}
                             onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
                             onReview={() => reviewCheckpoint(turnCheckpoint.id)}
                             onUndo={() => undoCheckpoint(turnCheckpoint)}
@@ -7431,6 +7512,32 @@
       }}
     >
       Discard changes
+    </button>
+  {/snippet}
+</Modal>
+
+<Modal open={messagePendingDelete !== null} title="Delete message?" onClose={cancelDeleteMessage}>
+  <p class="text-sm text-muted">
+    This will delete the conversation history up to this point, and this message will be deleted
+    too. This cannot be undone.
+  </p>
+  {#snippet footer()}
+    <button
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={cancelDeleteMessage}
+    >
+      Cancel
+    </button>
+    <button
+      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={deletingMessageId !== null}
+      onclick={() => void confirmDeleteMessage()}
+    >
+      {#if deletingMessageId !== null}
+        <Loader2 size={14} class="animate-spin" />
+      {:else}
+        Delete
+      {/if}
     </button>
   {/snippet}
 </Modal>

@@ -104,6 +104,12 @@ export interface ProjectFileInfo extends ProjectFileEntry {
 
 export type ProjectFileTransferMode = 'copy' | 'move'
 
+export interface ProjectFileDropResult {
+  entry: ProjectFileEntry
+  /** Previous project-relative path when the drop moved an existing project entry. */
+  movedFrom?: string
+}
+
 export interface ProjectTextFile {
   path: string
   content: string
@@ -386,6 +392,12 @@ export interface ProviderConnectionInfo {
   version?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
+  /**
+   * When set, the harness is installed but its detected version is not yet
+   * supported by CodeInOven (e.g. OpenCode V2). The harness is treated as not
+   * installed everywhere except the Harnesses page, which surfaces a notice.
+   */
+  unsupportedReason?: 'opencode-v2'
 }
 
 /** Where a confirmed harness-manifest behavior override came from. */
@@ -2861,6 +2873,8 @@ export interface AppConfig {
   /** Resume regular and Sr. Engineer threads that were interrupted by an app
    *  closure or unknown issue when the app restarts. */
   resumeWorkOnRestart: boolean
+  /** Default PR merge method used by the Git panel, pre-selected when merging. */
+  defaultMergeMethod: PrMergeMethod
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2889,6 +2903,7 @@ export type AppConfigPatch = Partial<
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
+    | 'defaultMergeMethod'
   >
 >
 
@@ -3130,6 +3145,12 @@ export interface PullRequestCompare {
   filesChanged: number
   /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
   hasChanges: boolean
+  /**
+   * An already-open pull request for the exact head→base pair, when one exists.
+   * GitHub rejects a second open PR for the same pair with a 422, so the form
+   * can warn and offer to open the existing PR instead of hitting that error.
+   */
+  existing?: PullRequestReference | null
 }
 
 /** Full pull request view, loaded when one is opened in the sidebar. */
@@ -3247,6 +3268,18 @@ export interface PrAgentReport {
   /** Epoch ms of the last write, or null when no report exists yet. */
   updatedAt: number | null
   /** Thread the review was handed to, so the UI can jump back into it. */
+  threadId: string | null
+}
+
+/** An agent-composed PR title/description read back from `.cio/git/compose/<threadId>/compose.json`. */
+export interface PrComposeReport {
+  /** Absolute path to the compose file. */
+  path: string
+  title: string
+  description: string
+  /** Epoch ms of the last write, or null when no report exists yet. */
+  updatedAt: number | null
+  /** Thread the compose was handed to, so the UI can jump back into it. */
   threadId: string | null
 }
 

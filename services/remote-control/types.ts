@@ -46,6 +46,12 @@ export interface AccountProfileRecord {
   updated_at: number
 }
 
+export interface DesktopAuthorizationCodeRecord {
+  user_id: string
+  code_challenge: string
+  redirect_uri: string
+}
+
 export interface EnrollmentRecord {
   id: string
   desktop_id: string

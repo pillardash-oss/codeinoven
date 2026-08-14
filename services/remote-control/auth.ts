@@ -1,9 +1,15 @@
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { generateKeyPairSync } from 'node:crypto'
 import { Database } from 'bun:sqlite'
 import { betterAuth } from 'better-auth'
 import { importPKCS8, SignJWT } from 'jose'
-import { remoteDatabasePath, remoteProduction, remotePublicOrigin } from './runtime-config'
+import {
+  remoteAuthOrigin,
+  remoteDatabasePath,
+  remoteProduction,
+  remotePublicOrigin
+} from './runtime-config'
 
 function environmentValue(name: string, developmentFallback: string): string {
   const value = process.env[name]?.trim()
@@ -14,14 +20,26 @@ function environmentValue(name: string, developmentFallback: string): string {
 
 export const authDatabasePath = remoteDatabasePath
 
-const baseURL = remotePublicOrigin
-const baseOrigin = new URL(baseURL).origin
+const authHosts = [new URL(remotePublicOrigin).host, new URL(remoteAuthOrigin).host]
+const trustedOrigins = [
+  new URL(remotePublicOrigin).origin,
+  new URL(remoteAuthOrigin).origin,
+  'https://appleid.apple.com'
+]
 const appleClientId = environmentValue('APPLE_OAUTH_CLIENT_ID', 'development-apple-client-id')
 const appleTeamId = environmentValue('APPLE_TEAM_ID', 'development-apple-team-id')
 const appleKeyId = environmentValue('APPLE_KEY_ID', 'development-apple-key-id')
+const developmentApplePrivateKey = remoteProduction
+  ? ''
+  : generateKeyPairSync('ec', { namedCurve: 'P-256' })
+      .privateKey.export({
+        type: 'pkcs8',
+        format: 'pem'
+      })
+      .toString()
 const applePrivateKey = environmentValue(
   'APPLE_PRIVATE_KEY',
-  'development-apple-private-key'
+  developmentApplePrivateKey
 ).replaceAll('\\n', '\n')
 mkdirSync(dirname(authDatabasePath), { recursive: true })
 const authDatabase = new Database(authDatabasePath)
@@ -52,13 +70,17 @@ async function generateAppleClientSecret(): Promise<string> {
 
 export const auth = betterAuth({
   appName: 'CodeInOven',
-  baseURL,
+  baseURL: {
+    allowedHosts: authHosts,
+    protocol: remoteProduction ? 'https' : 'http',
+    fallback: remotePublicOrigin
+  },
   secret: environmentValue(
     'BETTER_AUTH_SECRET',
     'development-only-codeinoven-auth-secret-change-me'
   ),
   database: authDatabase,
-  trustedOrigins: [baseOrigin, 'https://appleid.apple.com'],
+  trustedOrigins,
   emailAndPassword: { enabled: false },
   socialProviders: {
     google: {
