@@ -34,6 +34,7 @@
   const GAP_PX = 10
 
   let anchor = $state<HTMLElement | null>(null)
+  let popover = $state<HTMLDivElement | null>(null)
   let open = $state(false)
   let position = $state<{ top: number; left: number }>({ top: 0, left: 0 })
   let diff = $state<TurnCheckpointFileDiff | null>(null)
@@ -55,17 +56,18 @@
     }
   }
 
+  /** Place the popover directly above or below the trigger, clamped to the viewport. */
   function place(): void {
     const rect = anchor?.getBoundingClientRect()
     if (!rect) return
     const estimateHeight = 360
     const estimateWidth = 460
-    let top = rect.top + rect.height / 2 - estimateHeight / 2
-    let left = rect.right + GAP_PX
-    const maxLeft = window.innerWidth - estimateWidth - 8
-    const maxTop = window.innerHeight - estimateHeight - 8
-    if (left > maxLeft) left = Math.max(8, rect.left - estimateWidth - GAP_PX)
-    top = Math.max(8, Math.min(maxTop, top))
+    let top = rect.bottom + GAP_PX
+    if (top + estimateHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - estimateHeight - GAP_PX)
+    }
+    let left = rect.left + rect.width / 2 - estimateWidth / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - estimateWidth - 8))
     position = { top, left }
   }
 
@@ -104,7 +106,8 @@
 
   function closeOnScroll(event: Event): void {
     const target = event.target as Node | null
-    if (target && anchor?.contains(target)) return
+    if (!target) return
+    if (anchor?.contains(target) || popover?.contains(target)) return
     open = false
   }
 
@@ -137,6 +140,7 @@
 
 {#if open}
   <div
+    bind:this={popover}
     role="dialog"
     aria-label={`Diff preview for ${path}`}
     tabindex="-1"
