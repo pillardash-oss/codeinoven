@@ -185,7 +185,7 @@ if (target === 'win' && process.platform === 'win32') {
     Logger.error('[verify-packaged-app] signtool was not found to verify the windows signature')
     process.exit(1)
   }
-  const verify = spawnSync(signtool, ['verify', '/pa', '/q', exe], { encoding: 'utf8' })
+  const verify = spawnSync(signtool, ['verify', '/v', '/q', exe], { encoding: 'utf8' })
   if (verify.status !== 0) {
     Logger.error(
       `[verify-packaged-app] windows signature check failed for ${exe}: ${verify.stderr || verify.stdout || 'unknown'}`
