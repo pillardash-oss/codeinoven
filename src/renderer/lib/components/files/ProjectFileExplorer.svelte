@@ -68,6 +68,10 @@
   let dropFolder = $state<string | null>(null)
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
   let dropHoverPath: string | null = null
+  /** When true, the next reveal scroll is suppressed. Set during a pointer
+   *  interaction on the tree so a user clicking a row isn't yanked around;
+   *  cleared on a macrotask so external reveals still auto-scroll. */
+  let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
 
   /** Flattened, depth-first list of the tree rows currently visible, matching the
@@ -173,6 +177,7 @@
   $effect(() => {
     const path = revealedSearchPath ?? projectState.revealedPath ?? selectedPath
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
+    if (suppressRevealScroll) return
     void tick().then(() => {
       const selected = [
         ...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])
@@ -181,10 +186,23 @@
     })
   })
 
+  /** Suppress the auto-reveal scroll for the rest of the current pointer
+   *  interaction. The flag is cleared on a macrotask so it stays active through
+   *  the whole click event-turn (pointerdown -> click -> effect microtask flush)
+   *  while still letting external navigation (`revealFile`/`revealDirectory`,
+   *  agent links, file-changes card) scroll the tree into view. */
+  function suppressScrollForPointer(): void {
+    suppressRevealScroll = true
+    setTimeout(() => {
+      suppressRevealScroll = false
+    }, 0)
+  }
+
   async function selectEntry(
     entry: ProjectFileEntry,
     mode: 'normal' | 'preview' = 'preview'
   ): Promise<void> {
+    suppressScrollForPointer()
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
     projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -217,12 +235,6 @@
         await projectFilesWorkspace.openFilePreview(projectId, entry.path)
       }
     }
-
-    await tick()
-    const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
-      (element) => element.dataset.treePath === entry.path
-    )
-    row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
 
   function isRowActive(path: string): boolean {
@@ -494,6 +506,7 @@
   }
 
   function handleFilePointerDown(entry: ProjectFileEntry): void {
+    suppressScrollForPointer()
     const paths = selectionPathsFor(entry)
     if (!projectState.selectedPaths.includes(entry.path)) {
       projectFilesWorkspace.setSelection(projectId, paths)
