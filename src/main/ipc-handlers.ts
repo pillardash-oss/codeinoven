@@ -1,7 +1,7 @@
 import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
@@ -197,6 +197,33 @@ function githubPermissionRequired(
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
+}
+
+/** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
+ *  the drag ghost keeps the file's look; fall back to the app icon. */
+async function resolveDragIcon(firstPath?: string): Promise<Electron.NativeImage> {
+  if (firstPath) {
+    try {
+      const icon = await app.getFileIcon(firstPath, { size: 'normal' })
+      if (!icon.isEmpty()) return icon
+    } catch {
+      // Fall back to the app icon below.
+    }
+  }
+  const candidates = [
+    join(app.getAppPath(), 'out', 'renderer', 'icon.png'),
+    join(app.getAppPath(), 'src', 'renderer', 'static', 'icon.png')
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue
+      const icon = nativeImage.createFromBuffer(readFileSync(candidate))
+      if (!icon.isEmpty()) return icon
+    } catch {
+      // Try the next candidate path.
+    }
+  }
+  throw new Error('The native file drag icon is unavailable')
 }
 
 async function runGitHubMutation<T>(
@@ -2983,20 +3010,20 @@ export function registerIpcHandlers(
       )
   )
   ipcMain.on('projectFiles:startDrag', (event, projectId: unknown, relativePaths: unknown) => {
-    try {
-      const paths = projectFilesService.resolveForDragSync(
-        validateEntityId(projectId, 'Project ID'),
-        validateStringArray(relativePaths, 'Dragged paths')
-      )
-      if (paths.length === 0) throw new Error('No files are available to drag')
-      const icon = nativeImage.createFromBuffer(
-        readFileSync(join(app.getAppPath(), 'out', 'renderer', 'icon.png'))
-      )
-      if (icon.isEmpty()) throw new Error('The native file drag icon is unavailable')
-      event.sender.startDrag({ file: paths[0], files: paths, icon })
-    } catch (error) {
-      Logger.error('Could not start native file drag', error)
-    }
+    void (async () => {
+      try {
+        const paths = projectFilesService.resolveForDragSync(
+          validateEntityId(projectId, 'Project ID'),
+          validateStringArray(relativePaths, 'Dragged paths')
+        )
+        if (paths.length === 0) throw new Error('No files are available to drag')
+        const icon = await resolveDragIcon(paths[0])
+        event.sender.startDrag({ file: paths[0], files: paths, icon })
+        Logger.dev('Native file drag started', { files: paths.length })
+      } catch (error) {
+        Logger.error('Could not start native file drag', error)
+      }
+    })()
   })
   ipcMain.handle(
     'projectFiles:save',
