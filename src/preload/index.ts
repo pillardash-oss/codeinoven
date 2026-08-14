@@ -504,20 +504,6 @@ function defaultTrafficLight(platform: NodeJS.Platform): TrafficLightInfo {
     : NO_TRAFFIC_LIGHT
 }
 
-const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
-
-/**
- * Platform truth the flag is only an enhancement for. macOS always draws its
- * traffic lights inset on the left — never fall back to "none" there, even if
- * the `additionalArguments` flag is missing (e.g. a partial build), otherwise
- * the header content would slide under the window controls.
- */
-function defaultTrafficLight(platform: NodeJS.Platform): TrafficLightInfo {
-  return platform === 'darwin'
-    ? { present: true, side: 'left', offset: TRAFFIC_LIGHT_OFFSET }
-    : NO_TRAFFIC_LIGHT
-}
-
 const bridge: AppBridge = {
   invoke: <Channel extends InvokeChannel>(
     channel: Channel,
