@@ -1,6 +1,5 @@
 <script lang="ts">
   import { ChevronDown, ChevronRight } from '@lucide/svelte'
-  import type { Snippet } from 'svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
@@ -72,7 +71,12 @@
   }
 </script>
 
-{#snippet foldBar(caption: string, expandButton: Snippet)}
+{#snippet foldBar(
+  hunk: DiffHunk | null,
+  caption: string,
+  hidden: number,
+  direction: 'above' | 'below'
+)}
   <div
     role="button"
     tabindex="0"
@@ -93,31 +97,25 @@
     <span class="shrink-0 font-mono tabular-nums text-success">+{details.additions}</span>
     <span class="shrink-0 font-mono tabular-nums text-danger">−{details.deletions}</span>
     <span class="flex-1"></span>
-    {@render expandButton()}
+    {#if hunk && hidden > 0}
+      <button
+        type="button"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
+        onclick={(e: MouseEvent) => {
+          e.stopPropagation()
+          expand(hunk, direction)
+        }}
+      >
+        Show {Math.min(REVEAL_STEP, hidden)} more {direction}
+      </button>
+    {/if}
     {#if folded}
       <ChevronRight size={12} class="shrink-0 text-dimmed" />
     {:else}
       <ChevronDown size={12} class="shrink-0 text-dimmed" />
     {/if}
   </div>
-{/snippet}
-
-{#snippet showMore(hunk: DiffHunk, direction: 'above' | 'below', hidden: number)}
-  <button
-    type="button"
-    class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-    title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
-    onclick={(e: MouseEvent) => {
-      e.stopPropagation()
-      expand(hunk, direction)
-    }}
-  >
-    Show {Math.min(REVEAL_STEP, hidden)} more {direction}
-  </button>
-{/snippet}
-
-{#snippet emptySnippet()}
-  <span class="hidden"></span>
 {/snippet}
 
 {#if diff.binary}
@@ -135,19 +133,16 @@
       {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
       {:else if folded}
-        {@render foldBar('', emptySnippet)}
+        {@render foldBar(null, '', 0, 'above')}
       {:else}
         {#each details.hunks as hunk (hunk.id)}
           {@const w = hunkWindow(hunk)}
           {@const caption = `@@ -${w.beforeStart},${w.beforeCount} +${w.afterStart},${w.afterCount} @@`}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
-            {@render foldBar(
-              caption,
-              w.aboveHidden > 0 ? () => showMore(hunk, 'above', w.aboveHidden) : emptySnippet
-            )}
+            {@render foldBar(hunk, caption, w.aboveHidden, 'above')}
             <DiffRows lines={w.lines} paneLabels />
             {#if w.belowHidden > 0}
-              {@render foldBar('', () => showMore(hunk, 'below', w.belowHidden))}
+              {@render foldBar(hunk, '', w.belowHidden, 'below')}
             {/if}
           </section>
         {/each}
