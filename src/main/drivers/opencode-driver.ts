@@ -913,9 +913,12 @@ export class OpenCodeDriver implements HarnessDriver {
     contextUsage: true,
     compaction: true,
     subagents: true,
-    // OpenCode 1.18.10 accepts structured prompts but its history endpoint can
-    // fail to decode their stored format. Use deterministic JSON-only output.
-    structuredOutput: false,
+    // OpenCode 1.18.15 supports structured output end-to-end: prompts send the
+    // `json_schema` format and both the live event stream and the history
+    // endpoint decode `structured`/`structured_output`. The chat engine still
+    // falls back to deterministic JSON-only output per model if a structured
+    // session is ever rejected (chat-engine's `unsupportedStructuredOutputModels`).
+    structuredOutput: true,
     nativeUtilities: ['web_fetch'],
     // OpenCode schedules and performs its own provider retries (`session.status`
     // `retry` with a `next` timestamp) — the app must not auto-resume for it.
