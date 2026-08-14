@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, accessSync } from 'node:fs'
 import { join, resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { Logger } from '../src/main/logger'
@@ -130,23 +130,41 @@ const packageFiles = files
   })
   .map((file) => resolve(absArtifactDir, file))
 
+function findWindowsSigntool(): string | null {
+  const fromWhere = spawnSync('where', ['signtool'], { encoding: 'utf8' })
+  if (fromWhere.status === 0) return fromWhere.stdout.trim().split(/\r?\n/)[0]
+  const programFiles = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  const vswhere = join(programFiles, 'Microsoft Visual Studio/Installer/vswhere.exe')
+  const installRoot = spawnSync(vswhere, ['-latest', '-property', 'installationPath'], {
+    encoding: 'utf8'
+  })
+  if (installRoot.status !== 0) return null
+  const kitRoot = join(installRoot.stdout.trim(), 'VC', 'Tools', 'MSVC')
+  const kitVersions = readdirSync(kitRoot).sort().reverse()
+  for (const kitVersion of kitVersions) {
+    const candidate = join(kitRoot, kitVersion, 'bin', 'Hostx64', 'x64', 'signtool.exe')
+    try {
+      accessSync(candidate)
+      return candidate
+    } catch {
+      // Try the next MSVC toolset version.
+    }
+  }
+  return null
+}
+
 if (target === 'win' && process.platform === 'win32') {
   const exe = packageFiles.find((file) => file.endsWith('.exe'))
   if (!exe) {
     Logger.error('[verify-packaged-app] windows installer was expected but not found')
     process.exit(1)
   }
-  const escapedPath = exe.replace(/'/g, "''")
-  const verify = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `Import-Module Microsoft.PowerShell.Security -Force; $sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw ("Authenticode signature status: $($sig.Status)") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
-    ],
-    { encoding: 'utf8' }
-  )
+  const signtool = findWindowsSigntool()
+  if (!signtool) {
+    Logger.error('[verify-packaged-app] signtool was not found to verify the windows signature')
+    process.exit(1)
+  }
+  const verify = spawnSync(signtool, ['verify', '/pa', '/q', exe], { encoding: 'utf8' })
   if (verify.status !== 0) {
     Logger.error(
       `[verify-packaged-app] windows signature check failed for ${exe}: ${verify.stderr || verify.stdout || 'unknown'}`
