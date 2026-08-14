@@ -60,28 +60,21 @@
   /** Auto-revalidate statuses while mounted. */
   let liveUpdates = $state(true)
 
-  /** Filter row is collapsed by default so the sidebar stays a single toolbar. */
-  let filtersOpen = $state(false)
+  /** Text search is collapsed by default; the status strip below is always visible. */
+  let searchOpen = $state(false)
   let searchQuery = $state('')
   type StatusFilter = 'all' | CloudDeploymentContainer['status']
   let statusFilter = $state<StatusFilter>('all')
-
-  const STATUS_FILTERS: Array<{ value: StatusFilter; label: string }> = [
-    { value: 'all', label: 'All' },
-    { value: 'success', label: 'Live' },
-    { value: 'building', label: 'Building' },
-    { value: 'failed', label: 'Failed' }
-  ]
 
   function clearFilters(): void {
     searchQuery = ''
     statusFilter = 'all'
   }
 
-  /** Collapsing the filter row also drops the filters, so nothing hides silently. */
-  function toggleFilters(): void {
-    filtersOpen = !filtersOpen
-    if (!filtersOpen) clearFilters()
+  /** Collapsing search also drops the query, so nothing stays filtered invisibly. */
+  function toggleSearch(): void {
+    searchOpen = !searchOpen
+    if (!searchOpen) searchQuery = ''
   }
 
   // Configuration sheet state. Both the add-provider and add-container flows
@@ -173,6 +166,33 @@
 
   const hasContainers = $derived(containers.length > 0)
   const hasFilteredResults = $derived(filteredContainers.length > 0)
+
+  /**
+   * The status strip doubles as the panel's dashboard and its filter, so counts
+   * come from every container regardless of the active filter. Empty buckets are
+   * dropped so the strip stays one line in a narrow sidebar.
+   */
+  const statusChips = $derived.by(() => {
+    const buckets: Array<{ value: StatusFilter; label: string; tone: StatusTone }> = [
+      { value: 'failed', label: 'Failed', tone: 'danger' },
+      { value: 'building', label: 'Building', tone: 'warning' },
+      { value: 'success', label: 'Live', tone: 'success' },
+      { value: 'unknown', label: 'Unknown', tone: 'neutral' }
+    ]
+    const chips = [
+      {
+        value: 'all' as StatusFilter,
+        label: 'All',
+        tone: 'neutral' as StatusTone,
+        count: containers.length
+      }
+    ]
+    for (const bucket of buckets) {
+      const count = containers.filter((c) => c.status === bucket.value).length
+      if (count > 0) chips.push({ ...bucket, count })
+    }
+    return chips
+  })
 
   /** True while a configured provider's overview hasn't loaded into the cache yet. */
   const containersLoading = $derived(
@@ -273,8 +293,12 @@
     return 'neutral'
   }
 
+  /** Row pills and the status strip share one vocabulary. */
   function statusLabel(status: CloudDeploymentContainer['status']): string {
-    return status === 'unknown' ? 'unknown' : status
+    if (status === 'success') return 'Live'
+    if (status === 'failed') return 'Failed'
+    if (status === 'building') return 'Building'
+    return 'Unknown'
   }
 
   /** Deduped, non-empty URLs for a container, preferring the provider's list. */
@@ -380,12 +404,13 @@
       {#if configured && hasContainers}
         <button
           type="button"
-          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {filtersOpen
+          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {searchOpen
             ? 'bg-elevated text-foreground'
             : 'text-dimmed'}"
-          title="Filter containers"
-          aria-label="Filter containers"
-          onclick={toggleFilters}
+          title="Search containers by name"
+          aria-label="Search containers by name"
+          aria-pressed={searchOpen}
+          onclick={toggleSearch}
         >
           <Search size={12} />
         </button>
@@ -403,49 +428,67 @@
       {/if}
       <button
         type="button"
-        class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title={configured ? 'Add container' : 'Configure cloud deployments'}
-        aria-label={configured ? 'Add container' : 'Configure cloud deployments'}
+        class="ml-1 flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
+        aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
       >
-        <Plus size={14} />
+        <Plus size={12} />
+        {configured ? 'Add' : 'Connect'}
       </button>
     </div>
 
-    {#if configured && hasContainers && filtersOpen}
-      <div class="flex shrink-0 items-center gap-1.5 border-b border-border bg-surface px-3 py-1.5">
-        <div class="relative min-w-0 flex-1">
-          <Search
-            size={11}
-            class="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-dimmed"
-          />
-          <!-- svelte-ignore a11y_autofocus -->
-          <input
-            type="text"
-            autofocus
-            placeholder="Filter containers…"
-            aria-label="Filter containers"
-            class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[10px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-            bind:value={searchQuery}
-          />
-        </div>
-        <div class="flex shrink-0 items-center gap-0.5">
-          {#each STATUS_FILTERS as option (option.value)}
-            <button
-              type="button"
-              class="flex h-6 cursor-pointer items-center rounded-md px-1.5 text-[9px] font-medium transition-colors {statusFilter ===
-              option.value
-                ? 'bg-raised text-foreground'
-                : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-              title="Show {option.label.toLowerCase()} containers"
-              aria-label="Show {option.label.toLowerCase()} containers"
-              aria-pressed={statusFilter === option.value}
-              onclick={() => (statusFilter = option.value)}
-            >
-              {option.label}
-            </button>
-          {/each}
-        </div>
+    {#if configured && hasContainers}
+      <!-- Status strip: at-a-glance counts that double as the status filter. -->
+      <div
+        class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
+      >
+        {#each statusChips as chip (chip.value)}
+          <button
+            type="button"
+            class="flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[10px] font-medium transition-colors {statusFilter ===
+            chip.value
+              ? 'bg-raised text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            title="Show {chip.label.toLowerCase()} containers"
+            aria-label="Show {chip.label.toLowerCase()} containers"
+            aria-pressed={statusFilter === chip.value}
+            onclick={() => (statusFilter = chip.value)}
+          >
+            {#if chip.value !== 'all'}
+              <span
+                class="h-1.5 w-1.5 shrink-0 rounded-full {chip.tone === 'danger'
+                  ? 'bg-danger'
+                  : chip.tone === 'warning'
+                    ? 'bg-warning'
+                    : chip.tone === 'success'
+                      ? 'bg-success'
+                      : 'bg-dimmed'}"
+                aria-hidden="true"
+              ></span>
+            {/if}
+            {chip.label}
+            <span class="tabular-nums text-dimmed">{chip.count}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+
+    {#if configured && hasContainers && searchOpen}
+      <div class="relative shrink-0 border-b border-border bg-surface px-2 py-1.5">
+        <Search
+          size={11}
+          class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
+        />
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          type="text"
+          autofocus
+          placeholder="Search by name, id or project…"
+          aria-label="Search containers"
+          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[10px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          bind:value={searchQuery}
+        />
       </div>
     {/if}
 
@@ -521,6 +564,19 @@
               <span class="ml-auto text-[9px] tabular-nums text-dimmed"
                 >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
               >
+              <button
+                type="button"
+                class="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                title="Add a {PROVIDER_LABELS[
+                  kind as CloudDeploymentProviderKind
+                ]} container to monitor"
+                aria-label="Add a {PROVIDER_LABELS[
+                  kind as CloudDeploymentProviderKind
+                ]} container to monitor"
+                onclick={() => openConfigSheet('container')}
+              >
+                <Plus size={11} />
+              </button>
             </div>
             {#if accessErrors[kind]}
               <p
@@ -566,11 +622,13 @@
                             <p class="truncate text-[11px] font-medium text-foreground">
                               {container.label}
                             </p>
-                            {#if container.status !== 'unknown'}
-                              <StatusPill tone={statusTone(container.status)}>
-                                {statusLabel(container.status)}
-                              </StatusPill>
-                            {/if}
+                            <StatusPill
+                              tone={statusTone(container.status)}
+                              dot
+                              title="Deployment status: {statusLabel(container.status)}"
+                            >
+                              {statusLabel(container.status)}
+                            </StatusPill>
                           </div>
                           <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
                             <span class="truncate font-mono">{container.id}</span>
