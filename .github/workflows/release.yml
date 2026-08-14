@@ -34,7 +34,7 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch origin nightly:refs/remotes/origin/nightly
+          git fetch origin refs/heads/nightly:refs/remotes/origin/nightly
           if ! git merge-base --is-ancestor origin/nightly HEAD; then
             echo "::error::main must be promoted from the current nightly branch"
             exit 1
