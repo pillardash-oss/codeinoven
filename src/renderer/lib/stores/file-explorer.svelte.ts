@@ -25,6 +25,10 @@ export interface FileExplorerSnapshot {
 
 const MAX_PATH_LENGTH = 4096
 const MAX_SELECTED_PATHS = 500
+/** Cap on persisted expanded directories so a huge/poisoned snapshot can't be
+ *  hydrated back unbounded (protects against OOM on the next tree open). */
+const MAX_EXPANDED_DIRECTORIES = 400
+const MAX_EXPANDED_DEPTH = 8
 
 export function emptyFileExplorerProjectState(): FileExplorerProjectState {
   return {
@@ -50,9 +54,13 @@ function isValidPath(value: unknown): value is string {
 function parseExpandedDirectories(value: unknown): Record<string, boolean> {
   if (!isRecord(value)) return {}
   const expanded: Record<string, boolean> = {}
-  for (const [path, flag] of Object.entries(value)) {
-    if (isValidPath(path) && flag === true) expanded[path] = true
-  }
+  const paths = Object.entries(value)
+    .filter(
+      ([path, flag]) =>
+        flag === true && isValidPath(path) && path.split('/').length <= MAX_EXPANDED_DEPTH
+    )
+    .slice(0, MAX_EXPANDED_DIRECTORIES)
+  for (const [path] of paths) expanded[path] = true
   return expanded
 }
 
