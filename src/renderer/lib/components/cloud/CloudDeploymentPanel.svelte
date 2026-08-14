@@ -9,6 +9,7 @@
     Plus,
     RefreshCw,
     Rocket,
+    Search,
     Server,
     Trash2
   } from '@lucide/svelte'
@@ -58,6 +59,9 @@
 
   /** Auto-revalidate statuses while mounted. */
   let liveUpdates = $state(true)
+
+  let searchQuery = $state('')
+  let statusFilter = $state<'all' | CloudDeploymentContainer['status']>('all')
 
   // Configuration sheet state. Both the add-provider and add-container flows
   // live in the shared CloudDeploymentConfigSheet; the panel only picks which
@@ -123,7 +127,7 @@
       string,
       Array<{ project: string; containers: CloudDeploymentContainer[] }>
     > = {}
-    for (const container of containers) {
+    for (const container of filteredContainers) {
       const providerGroup = groups[container.providerKind] ?? (groups[container.providerKind] = [])
       const projectName = container.project ?? 'Other'
       let projectGroup = providerGroup.find((g) => g.project === projectName)
@@ -136,7 +140,18 @@
     return groups
   })
 
+  const filteredContainers = $derived.by(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return containers.filter((c) => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false
+      if (!q) return true
+      const haystack = [c.label, c.id, c.project ?? '', c.providerKind].join(' ').toLowerCase()
+      return haystack.includes(q)
+    })
+  })
+
   const hasContainers = $derived(containers.length > 0)
+  const hasFilteredResults = $derived(filteredContainers.length > 0)
 
   /** True while a configured provider's overview hasn't loaded into the cache yet. */
   const containersLoading = $derived(
@@ -327,43 +342,87 @@
     />
   {:else}
     <!-- Header -->
-    <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
-      <div class="min-w-0 flex-1">
-        <p class="text-[11px] font-semibold text-foreground">Cloud Deployments</p>
-        <p class="truncate text-[9px] text-dimmed">
+    <div class="flex shrink-0 flex-col gap-2 border-b border-border bg-surface/40 px-3.5 py-3">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <div
+              class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary"
+            >
+              <Cloud size={14} />
+            </div>
+            <p class="text-sm font-semibold leading-none tracking-tight text-foreground">
+              Cloud Deployments
+            </p>
+          </div>
+          <p class="mt-1.5 line-clamp-1 text-xs leading-none text-muted">
+            {#if configured}
+              {containers.length} container{containers.length === 1 ? '' : 's'} · {providers.length} provider{providers.length ===
+              1
+                ? ''
+                : 's'}
+            {:else}
+              Connect a provider to monitor deploys
+            {/if}
+          </p>
+        </div>
+        <div class="flex shrink-0 items-center gap-1">
           {#if configured}
-            {providers.length} provider{providers.length === 1 ? '' : 's'} configured
-          {:else}
-            No providers configured
+            <button
+              type="button"
+              class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-lg border border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              title="Refresh deployments"
+              aria-label="Refresh deployments"
+              onclick={() => void refreshAll()}
+            >
+              <RefreshCw size={13} class={refreshingAll ? 'animate-spin' : ''} />
+            </button>
           {/if}
-        </p>
+          <button
+            type="button"
+            class="flex h-7 cursor-pointer items-center gap-1 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+            title={configured ? 'Add container or provider' : 'Configure cloud deployments'}
+            aria-label={configured ? 'Add container or provider' : 'Configure cloud deployments'}
+            onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
+          >
+            <Plus size={13} />
+            {configured ? 'Add' : 'Connect'}
+          </button>
+        </div>
       </div>
-      {#if configured}
-        <button
-          type="button"
-          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-          title="Refresh deployments"
-          aria-label="Refresh deployments"
-          onclick={() => void refreshAll()}
-        >
-          <RefreshCw size={12} class={refreshingAll ? 'animate-spin' : ''} />
-        </button>
+      {#if configured && hasContainers}
+        <div class="flex items-center gap-2">
+          <div class="relative flex-1">
+            <Search
+              size={12}
+              class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+            />
+            <input
+              type="text"
+              placeholder="Search containers…"
+              class="h-7 w-full rounded-lg border border-border bg-surface py-1 pl-7 pr-2 text-xs placeholder:text-dimmed focus:border-primary/40 focus:outline-none focus:ring-1 focus:ring-primary/20"
+              bind:value={searchQuery}
+            />
+          </div>
+          {#if searchQuery}
+            <button
+              type="button"
+              class="shrink-0 rounded-lg px-2 py-1 text-xs text-muted hover:bg-elevated hover:text-foreground"
+              onclick={() => (searchQuery = '')}
+              title="Clear search"
+              aria-label="Clear search"
+            >
+              Clear
+            </button>
+          {/if}
+        </div>
       {/if}
-      <button
-        type="button"
-        class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Configure cloud deployments"
-        aria-label="Configure cloud deployments"
-        onclick={() => openConfigSheet('provider')}
-      >
-        <Plus size={14} />
-      </button>
     </div>
 
     {#if configLoading}
-      <div class="flex flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
-        Loading deployments
+      <div class="flex flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
+        <Loader2 size={16} class="animate-spin" />
+        Loading deployments…
       </div>
     {:else if !configured}
       <EmptyState
@@ -384,9 +443,9 @@
     {:else if error && !hasContainers}
       <EmptyState icon={CircleX} title="Deployments unavailable" description={error} />
     {:else if containersLoading}
-      <div class="flex min-h-0 flex-1 items-center justify-center gap-2 text-[11px] text-dimmed">
-        <Loader2 size={13} class="animate-spin" />
-        Loading containers
+      <div class="flex min-h-0 flex-1 items-center justify-center gap-2 py-10 text-sm text-muted">
+        <Loader2 size={16} class="animate-spin" />
+        Loading containers…
       </div>
     {:else if containers.length === 0 && !anyAccessError}
       <EmptyState
@@ -403,84 +462,129 @@
             Add container
           </button>
         {/snippet}
-      </EmptyState>{:else}
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <div class="flex items-center gap-2 border-b border-border bg-surface px-3 py-1.5">
-          <Cloud size={11} class="text-dimmed" />
-          <h3 class="text-[10px] font-semibold uppercase tracking-wide text-muted">Containers</h3>
-          <span class="ml-auto text-[9px] tabular-nums text-dimmed">{containers.length}</span>
+      </EmptyState>{:else if !hasFilteredResults}
+      <div class="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+        <div class="flex h-9 w-9 items-center justify-center rounded-full bg-surface text-muted">
+          <Search size={16} />
+        </div>
+        <div>
+          <p class="text-sm font-medium text-foreground">No matching containers</p>
+          <p class="mt-1 text-xs text-muted">Try a different search or clear filters.</p>
+        </div>
+        <button
+          type="button"
+          class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium hover:bg-elevated"
+          onclick={() => {
+            searchQuery = ''
+            statusFilter = 'all'
+          }}
+        >
+          Clear filters
+        </button>
+      </div>
+    {:else}
+      <!-- Status filter -->
+      <div class="flex items-center gap-1 border-b border-border bg-surface/50 px-3 py-2">
+        {#each [['all', 'All'], ['failed', 'Failed'], ['building', 'Building'], ['success', 'Live']] as [value, label] (value)}
           <button
             type="button"
-            class="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            title="Add container"
-            aria-label="Add container"
-            onclick={() => openConfigSheet('container')}
+            class="rounded-full px-2.5 py-1 text-xs font-medium transition-colors {statusFilter ===
+            value
+              ? 'bg-foreground text-background'
+              : 'bg-surface text-muted hover:bg-elevated hover:text-foreground'}"
+            onclick={() => (statusFilter = value as typeof statusFilter)}
           >
-            <Plus size={11} />
+            {label}
           </button>
+        {/each}
+        <span class="ml-auto text-xs tabular-nums text-dimmed"
+          >{filteredContainers.length} shown</span
+        >
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <div class="flex items-center gap-2 border-b border-border bg-surface px-3.5 py-2">
+          <Cloud size={12} class="text-muted" />
+          <h3 class="text-xs font-semibold tracking-wide text-muted">Containers</h3>
+          <span class="ml-auto text-xs tabular-nums text-dimmed">{filteredContainers.length}</span>
         </div>
         {#each Object.entries(containersByProvider) as [kind, projectGroups] (kind)}
           <section class="border-b border-border">
-            <div class="flex items-center gap-1.5 bg-surface px-3 py-1.5">
-              <CloudProviderIcon
-                providerKind={kind as CloudDeploymentProviderKind}
-                size={10}
-                class="shrink-0 text-dimmed"
-                title={PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
-              />
-              <span class="text-[10px] font-medium text-muted">
+            <div class="flex items-center gap-2 bg-surface px-3.5 py-2">
+              <div class="flex h-6 w-6 items-center justify-center rounded-md bg-raised">
+                <CloudProviderIcon
+                  providerKind={kind as CloudDeploymentProviderKind}
+                  size={11}
+                  class="shrink-0 text-muted"
+                  title={PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
+                />
+              </div>
+              <span class="text-xs font-semibold text-foreground">
                 {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}
               </span>
-              <span class="text-[9px] tabular-nums text-dimmed"
+              <span class="rounded-full bg-raised px-1.5 py-0.5 text-xs tabular-nums text-muted"
                 >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
               >
+              <button
+                type="button"
+                class="ml-auto flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
+                title="Add container to {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}"
+                aria-label="Add container to {PROVIDER_LABELS[kind as CloudDeploymentProviderKind]}"
+                onclick={() => openConfigSheet('container')}
+              >
+                <Plus size={12} />
+              </button>
             </div>
             {#if accessErrors[kind]}
               <p
-                class="border-t border-border bg-danger/10 px-3 py-1.5 text-[9px] leading-relaxed text-danger"
+                class="border-t border-border bg-danger/5 px-3.5 py-2 text-xs leading-relaxed text-danger"
               >
                 {accessErrors[kind]}
               </p>
             {/if}
             {#each projectGroups as projectGroup (projectGroup.project)}
               <div class="border-t border-border">
-                <div class="flex items-center gap-1.5 bg-surface/50 px-3 py-1">
-                  <Server size={9} class="shrink-0 text-dimmed" />
-                  <span class="text-[9px] font-medium text-muted">{projectGroup.project}</span>
-                  <span class="ml-auto text-[9px] tabular-nums text-dimmed">
+                <div class="flex items-center gap-1.5 bg-surface/50 px-3.5 py-1.5">
+                  <Server size={10} class="shrink-0 text-dimmed" />
+                  <span class="text-xs font-medium text-muted">{projectGroup.project}</span>
+                  <span class="ml-auto text-xs tabular-nums text-dimmed">
                     {projectGroup.containers.length}
                   </span>
                 </div>
                 <div class="divide-y divide-border">
                   {#each projectGroup.containers as container (container.id)}
-                    <div class="flex w-full items-center gap-1 transition-colors hover:bg-elevated">
+                    <div
+                      class="group flex w-full items-center gap-1 bg-surface transition-colors hover:bg-elevated/60"
+                    >
                       <button
                         type="button"
-                        class="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 px-3 py-2 text-left"
+                        class="flex min-w-0 flex-1 cursor-pointer items-center gap-3 px-3.5 py-3 text-left"
                         title="View {container.label}"
                         aria-label="View {container.label}"
                         onclick={() => openContainer(container)}
                       >
-                        {#if container.status === 'building'}
-                          <Clock3 size={13} class="mt-0.5 shrink-0 text-warning" />
-                        {:else if container.status === 'success'}
-                          <CircleCheck size={13} class="mt-0.5 shrink-0 text-success" />
-                        {:else if container.status === 'failed'}
-                          <CircleX size={13} class="mt-0.5 shrink-0 text-danger" />
-                        {:else}
-                          <Cloud size={13} class="mt-0.5 shrink-0 text-dimmed" />
-                        {/if}
+                        <div
+                          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg {container.status ===
+                          'failed'
+                            ? 'bg-danger/10 text-danger'
+                            : container.status === 'success'
+                              ? 'bg-success/10 text-success'
+                              : container.status === 'building'
+                                ? 'bg-warning/10 text-warning'
+                                : 'bg-raised text-muted'}"
+                        >
+                          {#if container.status === 'building'}
+                            <Clock3 size={14} />
+                          {:else if container.status === 'success'}
+                            <CircleCheck size={14} />
+                          {:else if container.status === 'failed'}
+                            <CircleX size={14} />
+                          {:else}
+                            <Cloud size={14} />
+                          {/if}
+                        </div>
                         <div class="min-w-0 flex-1">
                           <div class="flex items-center gap-2">
-                            {#if container.project}
-                              <span
-                                class="shrink-0 rounded bg-raised px-1 py-0.5 font-mono text-[9px] text-muted"
-                                title={container.project}
-                              >
-                                {container.project}
-                              </span>
-                            {/if}
-                            <p class="truncate text-[11px] font-medium text-foreground">
+                            <p class="truncate text-sm font-medium leading-none text-foreground">
                               {container.label}
                             </p>
                             {#if container.status !== 'unknown'}
@@ -489,40 +593,53 @@
                               </StatusPill>
                             {/if}
                           </div>
-                          <div class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
-                            <span class="font-mono">{container.id}</span>
+                          <div class="mt-1 flex items-center gap-1.5 text-xs text-muted">
+                            {#if container.project}
+                              <span
+                                class="shrink-0 rounded bg-raised px-1.5 py-0.5 font-mono text-[11px] text-muted"
+                                title={container.project}
+                              >
+                                {container.project}
+                              </span>
+                            {/if}
+                            <span class="truncate font-mono text-xs">{container.id}</span>
                             {#if container.updatedAt}
-                              <span>·</span>
-                              <span class="shrink-0">{relativeTime(container.updatedAt)}</span>
+                              <span class="shrink-0 text-dimmed"
+                                >· {relativeTime(container.updatedAt)}</span
+                              >
                             {/if}
                           </div>
                         </div>
                       </button>
-                      {#if containerUrls(container).length > 0}
-                        <ContainerLinksMenu
-                          urls={containerUrls(container)}
-                          title="Open {container.label} deployed sites"
-                          size={11}
-                        />
-                      {/if}
-                      <button
-                        type="button"
-                        class="shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                        title="Edit {container.label}"
-                        aria-label="Edit {container.label}"
-                        onclick={() => editContainer(container)}
+                      <div
+                        class="flex shrink-0 items-center gap-0.5 pr-2 opacity-60 transition-opacity group-hover:opacity-100"
                       >
-                        <Pencil size={11} />
-                      </button>
-                      <button
-                        type="button"
-                        class="mr-1 shrink-0 rounded p-1 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-                        title="Remove {container.label}"
-                        aria-label="Remove {container.label}"
-                        onclick={() => requestRemoveContainer(container)}
-                      >
-                        <Trash2 size={11} />
-                      </button>
+                        {#if containerUrls(container).length > 0}
+                          <ContainerLinksMenu
+                            urls={containerUrls(container)}
+                            title="Open {container.label} deployed sites"
+                            size={13}
+                          />
+                        {/if}
+                        <button
+                          type="button"
+                          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
+                          title="Edit {container.label}"
+                          aria-label="Edit {container.label}"
+                          onclick={() => editContainer(container)}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-danger/10 hover:text-danger"
+                          title="Remove {container.label}"
+                          aria-label="Remove {container.label}"
+                          onclick={() => requestRemoveContainer(container)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
                   {/each}
                 </div>
@@ -533,8 +650,13 @@
       </div>
     {/if}
 
-    <div class="flex shrink-0 items-center justify-between border-t border-border px-3 py-2">
-      <span class="text-[9px] text-dimmed">Live updates</span>
+    <div
+      class="flex shrink-0 items-center justify-between border-t border-border bg-surface/30 px-3.5 py-2.5"
+    >
+      <div>
+        <p class="text-xs font-medium text-foreground">Live updates</p>
+        <p class="text-xs text-muted">{liveUpdates ? 'Auto-refresh every minute' : 'Paused'}</p>
+      </div>
       <Switch
         checked={liveUpdates}
         onchange={(checked) => (liveUpdates = checked)}
