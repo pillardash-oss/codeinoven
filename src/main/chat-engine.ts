@@ -1342,8 +1342,10 @@ export class ChatEngine {
     private database: Database,
     private computerUsePip?: import('./computer-use-pip-service').ComputerUsePipService,
     private harnessManifest?: import('./harness-manifest-service').HarnessManifestService,
-    private threadCreation?: ThreadCreationCoordinator
+    private threadCreation?: ThreadCreationCoordinator,
+    processJournalPath?: string
   ) {
+    this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
     this.projectManager = new ProjectManager(database)
@@ -2027,6 +2029,15 @@ export class ChatEngine {
         }
       })
     )
+  }
+
+  /**
+   * Reap harness processes orphaned by an unclean previous run (crash, force
+   * quit, or the shutdown failsafe) before this session spawns any new servers.
+   * Only kills processes the app owns — never a user's external harness.
+   */
+  reapOrphanProcesses(): Promise<import('./agent-process-service').ReapOrphansResult> {
+    return this.agentProcesses.reapOrphans()
   }
 
   /** Kill all pooled driver resources (called on app quit). */

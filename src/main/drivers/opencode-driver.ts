@@ -1962,6 +1962,7 @@ export class OpenCodeDriver implements HarnessDriver {
             abortController: new AbortController()
           }
           Logger.dev(`shared opencode server up on :${port}`)
+          this.processObserver?.watchProcess(undefined, child.pid, 'opencode serve', projectPath)
           resolve(handle)
         }
       })
