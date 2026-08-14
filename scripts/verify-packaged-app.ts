@@ -134,15 +134,36 @@ function findWindowsSigntool(): string | null {
   const fromWhere = spawnSync('where', ['signtool'], { encoding: 'utf8' })
   if (fromWhere.status === 0) return fromWhere.stdout.trim().split(/\r?\n/)[0]
   const programFiles = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  const kitRoot = join(programFiles, 'Windows Kits', '10', 'bin')
+  let kitVersions: string[] = []
+  try {
+    kitVersions = readdirSync(kitRoot).sort().reverse()
+  } catch {
+    // Fall through to the MSVC toolset search below.
+  }
+  for (const kitVersion of kitVersions) {
+    const candidate = join(kitRoot, kitVersion, 'x64', 'signtool.exe')
+    try {
+      accessSync(candidate)
+      return candidate
+    } catch {
+      // Try the next SDK version.
+    }
+  }
   const vswhere = join(programFiles, 'Microsoft Visual Studio/Installer/vswhere.exe')
   const installRoot = spawnSync(vswhere, ['-latest', '-property', 'installationPath'], {
     encoding: 'utf8'
   })
   if (installRoot.status !== 0) return null
-  const kitRoot = join(installRoot.stdout.trim(), 'VC', 'Tools', 'MSVC')
-  const kitVersions = readdirSync(kitRoot).sort().reverse()
-  for (const kitVersion of kitVersions) {
-    const candidate = join(kitRoot, kitVersion, 'bin', 'Hostx64', 'x64', 'signtool.exe')
+  const msvcRoot = join(installRoot.stdout.trim(), 'VC', 'Tools', 'MSVC')
+  let msvcVersions: string[] = []
+  try {
+    msvcVersions = readdirSync(msvcRoot).sort().reverse()
+  } catch {
+    return null
+  }
+  for (const msvcVersion of msvcVersions) {
+    const candidate = join(msvcRoot, msvcVersion, 'bin', 'Hostx64', 'x64', 'signtool.exe')
     try {
       accessSync(candidate)
       return candidate
