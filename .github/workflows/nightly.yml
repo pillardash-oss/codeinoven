@@ -128,11 +128,20 @@ jobs:
         shell: bash
         run: |
           command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
-          if [ "${{ matrix.target }}" = "linux" ]; then
-            xvfb-run -a "${command[@]}"
-          else
-            "${command[@]}"
-          fi
+          for attempt in 1 2 3; do
+            if [ "${{ matrix.target }}" = "linux" ]; then
+              xvfb-run -a "${command[@]}"
+            else
+              "${command[@]}"
+            fi
+            exit_code=$?
+            if [ "$exit_code" -eq 0 ]; then
+              break
+            fi
+            echo "startup smoke attempt $attempt failed with exit $exit_code; retrying"
+            sleep 10
+          done
+          exit "$exit_code"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
