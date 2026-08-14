@@ -27,9 +27,13 @@
     projectId: string
     threadId: string
     checkpointId: string | null
+    /** File to reveal (scroll + highlight) when the Changes tab opens. */
+    revealPath?: string | null
+    /** Bumped on each reveal so re-clicking the same file re-triggers. */
+    revealNonce?: number
   }
 
-  let { projectId, threadId, checkpointId }: Props = $props()
+  let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
   let checkpoints = $state<TurnCheckpointSummary[]>([])
   let selectedCheckpointId = $state<string | null>(null)
@@ -41,6 +45,8 @@
   let fileDiffs = $state<TurnCheckpointFileDiff[]>([])
   let loadingDiffs = $state(false)
   let expandedDiffs = $state<Record<string, boolean>>({})
+  let flashPath = $state<string | null>(null)
+  let scrollContainer = $state<HTMLElement | null>(null)
   let loadedDiffKey: string | null = null
   const turns = $derived(checkpoints.filter((checkpoint) => checkpoint.status !== 'active'))
   const selectedIndex = $derived(
@@ -186,6 +192,22 @@
     void refresh(preferredCheckpointId)
   })
 
+  $effect(() => {
+    const target = revealPath
+    if (!target || revealNonce <= 0) return
+    if (!fileDiffs.some((diff) => diff.path === target)) return
+    const el = scrollContainer?.querySelector<HTMLElement>(
+      `[data-reveal-path="${CSS.escape(target)}"]`
+    )
+    if (!el) return
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    flashPath = target
+    const timer = setTimeout(() => {
+      if (flashPath === target) flashPath = null
+    }, 1600)
+    return () => clearTimeout(timer)
+  })
+
   onMount(() =>
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as AgentEvent
@@ -274,7 +296,7 @@
     </button>
   </div>
 
-  <div class="min-h-0 flex-1 overflow-auto p-2">
+  <div bind:this={scrollContainer} class="min-h-0 flex-1 overflow-auto p-2">
     {#if loading && turns.length === 0}
       <div class="flex items-center justify-center gap-2 py-8 text-xs text-dimmed">
         <Loader2 size={14} class="animate-spin" />
@@ -317,11 +339,20 @@
               </p>
             {:else}
               {#each fileDiffs as fileDiff (fileDiff.path)}
-                {@const stats = fileDiff.binary
+                {@const details = fileDiff.binary
                   ? null
                   : diffDetails(fileDiff.before, fileDiff.after)}
+                {@const stats = details}
                 {@const expanded = expandedDiffs[fileDiff.path] ?? true}
-                <section class="overflow-hidden rounded-md border border-border bg-surface">
+                <section
+                  data-reveal-path={fileDiff.path}
+                  class={[
+                    'overflow-hidden rounded-md border transition-colors',
+                    flashPath === fileDiff.path
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border bg-surface'
+                  ]}
+                >
                   <div class="flex min-h-9 items-center pr-1.5">
                     <button
                       type="button"
@@ -355,8 +386,8 @@
                     <button
                       type="button"
                       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      aria-label={`Open ${fileDiff.path} in the file viewer`}
-                      title={`Open ${fileDiff.path} in the file viewer`}
+                      aria-label={`Open ${fileDiff.path} in the changes sidebar`}
+                      title={`Open ${fileDiff.path} in the changes sidebar`}
                       onclick={() => void openChange(checkpoint.id, fileDiff.path)}
                     >
                       <Eye size={13} />

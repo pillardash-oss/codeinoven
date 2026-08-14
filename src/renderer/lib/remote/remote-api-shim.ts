@@ -38,7 +38,8 @@ export function installRemoteApiShim(): void {
     },
     readFile: async () => new Uint8Array(0),
     registerFileSelection: async () => '',
-    getPathForFile: () => ''
+    getPathForFile: () => '',
+    startFileDrag: () => {}
   }
 
   ;(window as Window & { api?: AppBridge }).api = bridge

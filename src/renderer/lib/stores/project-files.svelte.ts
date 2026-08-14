@@ -1,4 +1,5 @@
 import type {
+  ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
   ProjectFileTransferMode,
@@ -11,6 +12,10 @@ import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
+
+/** How many levels of subfolders "Expand all" reveals below the project root,
+ *  so the operation stays cheap even on very large trees. */
+const EXPAND_ALL_MAX_DEPTH = 4
 
 export type ProjectFileView = 'diff' | 'preview' | 'source'
 
@@ -178,6 +183,42 @@ class ProjectFilesWorkspace {
     await this.loadDirectory(projectId, directory)
   }
 
+  /** Collapse every expanded folder in the tree. */
+  collapseAllDirectories(projectId: string): void {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    this.persistExplorer(projectId)
+  }
+
+  /** Expand every folder in the tree, loading their contents recursively. */
+  async expandAllDirectories(projectId: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    await this.expandDirectoryTree(projectId, state, '')
+    this.persistExplorer(projectId)
+  }
+
+  /** Expand folders recursively up to a bounded depth, so we don't enumerate an
+   *  entire repository's subtree at once. */
+  private async expandDirectoryTree(
+    projectId: string,
+    state: ProjectFilesState,
+    directory: string,
+    depth = 0
+  ): Promise<void> {
+    if (!state.entriesByDirectory[directory]) {
+      await this.loadDirectory(projectId, directory)
+    }
+    state.expandedDirectories[directory] = true
+    if (depth >= EXPAND_ALL_MAX_DEPTH) return
+    const entries = state.entriesByDirectory[directory] ?? []
+    for (const entry of entries) {
+      if (entry.kind === 'directory') {
+        await this.expandDirectoryTree(projectId, state, entry.path, depth + 1)
+      }
+    }
+  }
+
   setClipboard(projectId: string, paths: string[], mode: ProjectFileTransferMode): void {
     this.clipboard = { projectId, paths, mode }
   }
@@ -304,6 +345,22 @@ class ProjectFilesWorkspace {
     )
     await this.loadDirectory(projectId, destinationDirectory, true)
     return entries
+  }
+
+  async dropExternalPaths(
+    projectId: string,
+    sourcePaths: string[],
+    destinationDirectory: string
+  ): Promise<ProjectFileDropResult[]> {
+    if (sourcePaths.length === 0) return []
+    const results = await this.runFileOperation(() =>
+      invoke('projectFiles:dropPaths', projectId, sourcePaths, destinationDirectory)
+    )
+    for (const result of results) {
+      if (result.movedFrom) this.remapMovedFile(projectId, result.movedFrom, result.entry.path)
+    }
+    await this.refresh(projectId)
+    return results
   }
 
   async fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {

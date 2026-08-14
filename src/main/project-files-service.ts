@@ -1,10 +1,11 @@
-import { constants } from 'node:fs'
+import { constants, lstatSync, realpathSync } from 'node:fs'
 import { copyFile, link, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ProjectFileIndexService } from './project-file-index-service'
 import type {
   Project,
+  ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
   ProjectFileTransferMode,
@@ -52,6 +53,7 @@ function decodeText(content: Uint8Array): string {
 
 export class ProjectFilesService {
   private readonly writeQueues = new Map<string, Promise<void>>()
+  private readonly projectRoots = new Map<string, string>()
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()
 
@@ -127,6 +129,33 @@ export class ProjectFilesService {
       results[rawCandidate] = await this.resolveCitationPath(root, rawCandidate)
     }
     return results
+  }
+
+  /**
+   * Existence probe for absolute citation paths that live outside the project
+   * root (e.g. Codex `:codex-file-citation` tokens). Returns whether each path
+   * exists on disk as a regular file or directory (symlinks resolve to false).
+   * Purely an existence check — no content is read or returned.
+   */
+  async resolveExternalCitationPaths(absolutePaths: string[]): Promise<Record<string, boolean>> {
+    const results: Record<string, boolean> = {}
+    for (const candidate of absolutePaths) {
+      results[candidate] = await this.externalCitationPathExists(candidate)
+    }
+    return results
+  }
+
+  private async externalCitationPathExists(rawCandidate: string): Promise<boolean> {
+    if (!rawCandidate || rawCandidate.includes('\0')) return false
+    if (!isAbsolute(rawCandidate)) return false
+    try {
+      const metadata = await lstat(rawCandidate)
+      if (metadata.isSymbolicLink()) return false
+      return metadata.isFile() || metadata.isDirectory()
+    } catch (error) {
+      if (this.isMissingPathError(error)) return false
+      throw error
+    }
   }
 
   private async resolveCitationPath(root: string, rawCandidate: string): Promise<string | null> {
@@ -348,6 +377,115 @@ export class ProjectFilesService {
     })
   }
 
+  /**
+   * Handle native filesystem paths dropped on the project tree. Entries that
+   * already belong to this project are moved; paths from elsewhere are copied in.
+   */
+  async dropPaths(
+    projectId: string,
+    sourcePaths: string[],
+    destinationDirectory: string
+  ): Promise<ProjectFileDropResult[]> {
+    return this.runMutationExclusive(async () => {
+      const root = await this.projectRoot(projectId)
+      const destination = await this.resolveExistingPath(root, destinationDirectory, true)
+      const dropped: ProjectFileDropResult[] = []
+      const candidates: string[] = []
+
+      for (const sourcePath of sourcePaths) {
+        if (!isAbsolute(sourcePath)) throw new Error('Dropped paths must be absolute')
+        const metadata = await lstat(sourcePath)
+        if (metadata.isSymbolicLink()) throw new Error('Symbolic links cannot be dropped')
+        const source = await realpath(sourcePath)
+        if (!candidates.includes(source)) candidates.push(source)
+      }
+
+      const sources = candidates.filter(
+        (candidate) =>
+          !candidates.some((other) => other !== candidate && isWithinRoot(other, candidate))
+      )
+
+      for (const source of sources) {
+        if (isWithinRoot(root, source) && source !== root) {
+          const relativePath = toPosixPath(relative(root, source))
+          dropped.push({
+            entry: await this.moveWithinProject(root, relativePath, destinationDirectory),
+            movedFrom: relativePath
+          })
+        } else {
+          dropped.push({ entry: await this.importOne(root, destination, source) })
+        }
+      }
+
+      this.invalidateProject(projectId)
+      return dropped
+    })
+  }
+
+  resolveForDragSync(projectId: string, relativePaths: string[]): string[] {
+    const root = this.projectRoots.get(projectId)
+    if (!root) throw new Error('Project files must be loaded before they can be dragged')
+    const resolved: string[] = []
+    const uniquePaths = [...new Set(relativePaths)].filter(
+      (candidate) =>
+        !relativePaths.some((other) => other !== candidate && candidate.startsWith(`${other}/`))
+    )
+    for (const relativePath of uniquePaths) {
+      const segments = this.validateRelativePath(relativePath, false)
+      let current = root
+      for (const segment of segments) {
+        current = resolve(current, segment)
+        if (!isWithinRoot(root, current))
+          throw new Error('Project file path escapes the project root')
+        const metadata = lstatSync(current)
+        if (metadata.isSymbolicLink()) {
+          throw new Error('Symbolic links are not available in the sidebar')
+        }
+      }
+      const metadata = lstatSync(current)
+      if (!metadata.isFile() && !metadata.isDirectory()) {
+        throw new Error('Project path is not a regular file or directory')
+      }
+      const canonical = realpathSync(current)
+      if (!isWithinRoot(root, canonical))
+        throw new Error('Project file path escapes the project root')
+      resolved.push(canonical)
+    }
+    return resolved
+  }
+
+  private async moveWithinProject(
+    root: string,
+    sourcePath: string,
+    destinationDirectory: string
+  ): Promise<ProjectFileEntry> {
+    const source = await this.resolveExistingEntry(root, sourcePath)
+    const sourceDirectory = toPosixPath(dirname(sourcePath))
+    if ((sourceDirectory === '.' ? '' : sourceDirectory) === destinationDirectory) {
+      return { name: basename(sourcePath), path: sourcePath, kind: source.kind }
+    }
+    if (source.kind === 'directory') {
+      const destination = toPosixPath(destinationDirectory)
+      if (destination === sourcePath || destination.startsWith(`${sourcePath}/`)) {
+        throw new Error('A folder cannot be moved into itself')
+      }
+    }
+
+    const target = await this.resolveNewPath(root, destinationDirectory, basename(sourcePath))
+    if (source.kind === 'directory') {
+      await this.pasteDirectory(source.absolutePath, target.absolutePath, 'move')
+    } else {
+      await link(source.absolutePath, target.absolutePath)
+      try {
+        await rm(source.absolutePath)
+      } catch (error) {
+        await rm(target.absolutePath, { force: true }).catch(() => undefined)
+        throw error
+      }
+    }
+    return { name: basename(sourcePath), path: target.relativePath, kind: source.kind }
+  }
+
   private async importOne(
     root: string,
     destination: string,
@@ -542,6 +680,7 @@ export class ProjectFilesService {
     if (!metadata.isDirectory()) {
       throw new Error('Project root is not a directory')
     }
+    this.projectRoots.set(projectId, root)
     return root
   }
 

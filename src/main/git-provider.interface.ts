@@ -84,6 +84,10 @@ export interface GitProvider {
   reopenPullRequest(input: PullRequestTarget): Promise<PullRequestReference>
   /** Close an open pull request without merging. */
   closePullRequest(input: PullRequestTarget): Promise<PullRequestReference>
+  /** Update an open pull request's title and/or description. */
+  updatePullRequest(
+    input: PullRequestTarget & { title?: string; body?: string }
+  ): Promise<PullRequestReference>
   listPullRequests(input: ListPullRequestsInput): Promise<PullRequestReference[]>
   /** Paginated listing with the detail the sidebar list needs. */
   listPullRequestPage(input: ListPullRequestPageInput): Promise<PullRequestPage>

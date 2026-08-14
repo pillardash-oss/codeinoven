@@ -258,7 +258,11 @@ export function lexMarkdown(text: string, allowHtml = false): Token[] {
   const parser = allowHtml ? markedWithHtml : marked
   const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
   const tokens = parser.lexer(
-    linkifyFileCitations(sectionLinked, (path) => citationPathsState.isValidPath(path))
+    linkifyFileCitations(
+      sectionLinked,
+      (path) => citationPathsState.isValidPath(path),
+      (path) => citationPathsState.isKnownExternalPath(path)
+    )
   )
   return resolveFootnotes(tokens)
 }

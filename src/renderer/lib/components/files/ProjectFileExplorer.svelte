@@ -6,6 +6,8 @@
   import {
     ChevronDown,
     ChevronRight,
+    ChevronsDown,
+    ChevronsUp,
     FileDiff,
     FolderOpen,
     Loader2,
@@ -67,6 +69,12 @@
   let dropIndicator = $state<{ path: string; position: 'before' | 'after' } | null>(null)
   let dropFolder = $state<string | null>(null)
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
+  let dropHoverPath: string | null = null
+  let treeBusy = $state(false)
+  /** When true, the next reveal scroll is suppressed. Set during a pointer
+   *  interaction on the tree so a user clicking a row isn't yanked around;
+   *  cleared on a macrotask so external reveals still auto-scroll. */
+  let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
 
   /** Flattened, depth-first list of the tree rows currently visible, matching the
@@ -172,6 +180,7 @@
   $effect(() => {
     const path = revealedSearchPath ?? projectState.revealedPath ?? selectedPath
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
+    if (suppressRevealScroll) return
     void tick().then(() => {
       const selected = [
         ...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])
@@ -180,10 +189,23 @@
     })
   })
 
+  /** Suppress the auto-reveal scroll for the rest of the current pointer
+   *  interaction. The flag is cleared on a macrotask so it stays active through
+   *  the whole click event-turn (pointerdown -> click -> effect microtask flush)
+   *  while still letting external navigation (`revealFile`/`revealDirectory`,
+   *  agent links, file-changes card) scroll the tree into view. */
+  function suppressScrollForPointer(): void {
+    suppressRevealScroll = true
+    setTimeout(() => {
+      suppressRevealScroll = false
+    }, 0)
+  }
+
   async function selectEntry(
     entry: ProjectFileEntry,
     mode: 'normal' | 'preview' = 'preview'
   ): Promise<void> {
+    suppressScrollForPointer()
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
     projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
@@ -216,12 +238,6 @@
         await projectFilesWorkspace.openFilePreview(projectId, entry.path)
       }
     }
-
-    await tick()
-    const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
-      (element) => element.dataset.treePath === entry.path
-    )
-    row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }
 
   function isRowActive(path: string): boolean {
@@ -478,6 +494,61 @@
     }
   }
 
+  async function dropInto(directory: string, paths: string[]): Promise<void> {
+    if (paths.length === 0) return
+    try {
+      const results = await projectFilesWorkspace.dropExternalPaths(projectId, paths, directory)
+      toast.success(
+        results.length === 1
+          ? `Dropped ${results[0].entry.name}`
+          : `Dropped ${results.length} items`
+      )
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The files could not be dropped')
+    }
+  }
+
+  function handleFilePointerDown(entry: ProjectFileEntry): void {
+    suppressScrollForPointer()
+    const paths = selectionPathsFor(entry)
+    if (!projectState.selectedPaths.includes(entry.path)) {
+      projectFilesWorkspace.setSelection(projectId, paths)
+      projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
+    }
+  }
+
+  function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
+    const paths = [...selectionPathsFor(entry)].map(String)
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
+    event.preventDefault()
+    try {
+      window.api.startFileDrag(projectId, paths)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Native dragging is unavailable')
+    }
+  }
+
+  /** Whether any subfolder is currently expanded, driving the collapse/expand-all toggle. */
+  let anyDirExpanded = $derived(
+    Object.keys(projectState.expandedDirectories).some(
+      (path) => path !== '' && projectState.expandedDirectories[path]
+    )
+  )
+
+  async function toggleExpandAll(): Promise<void> {
+    if (treeBusy) return
+    treeBusy = true
+    try {
+      if (anyDirExpanded) {
+        projectFilesWorkspace.collapseAllDirectories(projectId)
+      } else {
+        await projectFilesWorkspace.expandAllDirectories(projectId)
+      }
+    } finally {
+      treeBusy = false
+    }
+  }
+
   /** Resolve absolute paths for OS-dropped File objects (folder/file). */
   function droppedFilePaths(files: FileList | null): string[] {
     if (!files) return []
@@ -541,22 +612,37 @@
       clearTimeout(dropExpandTimer)
       dropExpandTimer = undefined
     }
+    dropHoverPath = null
     dropActive = false
     dropTargetPath = null
     dropIndicator = null
     dropFolder = null
   }
 
-  /** Auto-expand a collapsed folder after hovering on it briefly, so the user can
-   *  continue dragging into subfolders (regular file-explorer behavior). */
+  /** Cancel a pending auto-expand (e.g. the drag moved off the folder). */
+  function cancelFolderExpand(): void {
+    if (dropExpandTimer) {
+      clearTimeout(dropExpandTimer)
+      dropExpandTimer = undefined
+    }
+    dropHoverPath = null
+  }
+
+  /** Auto-expand a collapsed folder after the drag has hovered on it for ~1s, so
+   *  the user can keep dragging into its subfolders. Deterministic: only expands
+   *  on a sustained hover and is cancelled the moment the drag leaves the folder. */
   function scheduleFolderExpand(path: string): void {
     if (projectState.expandedDirectories[path]) return
+    if (dropHoverPath === path) return
+    dropHoverPath = path
     if (dropExpandTimer) clearTimeout(dropExpandTimer)
     dropExpandTimer = setTimeout(() => {
       dropExpandTimer = undefined
-      projectFilesWorkspace.markDirectoryExpanded(projectId, path)
-      void projectFilesWorkspace.loadDirectory(projectId, path)
-    }, 650)
+      if (dropHoverPath === path) {
+        projectFilesWorkspace.markDirectoryExpanded(projectId, path)
+        void projectFilesWorkspace.loadDirectory(projectId, path)
+      }
+    }, 1000)
   }
 
   function handleDragOver(event: DragEvent): void {
@@ -575,6 +661,7 @@
         dropIndicator = { path, position: 'after' }
         scheduleFolderExpand(path)
       } else if (path) {
+        cancelFolderExpand()
         dropTargetPath = parentDirectory(path)
         dropFolder = parentDirectory(path)
         if (row) {
@@ -587,6 +674,7 @@
           dropIndicator = { path, position: 'after' }
         }
       } else {
+        cancelFolderExpand()
         dropTargetPath = activeDirectory()
         dropFolder = null
         dropIndicator = null
@@ -616,7 +704,7 @@
         ? target
         : parentDirectory(target)
       : activeDirectory()
-    void importInto(directory, paths)
+    void dropInto(directory, paths)
   }
 
   function dropTargetIsDirectory(path: string): boolean {
@@ -793,6 +881,7 @@
         <button
           type="button"
           data-tree-path={entry.path}
+          draggable="true"
           class={[
             'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
             isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
@@ -803,6 +892,8 @@
           onclick={(event: MouseEvent) => handleRowClick(entry, event)}
           ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
           oncontextmenu={() => handleRowContextMenu(entry)}
+          onpointerdown={() => handleFilePointerDown(entry)}
+          ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
         >
           <div
             class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
@@ -886,6 +977,20 @@
     <span class="min-w-0 flex-1 truncate text-[10px] font-semibold text-foreground">
       {projectName}
     </span>
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+      title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+      disabled={treeBusy}
+      onclick={() => void toggleExpandAll()}
+    >
+      {#if anyDirExpanded}
+        <ChevronsUp size={12} />
+      {:else}
+        <ChevronsDown size={12} />
+      {/if}
+    </button>
     <button
       type="button"
       class={[

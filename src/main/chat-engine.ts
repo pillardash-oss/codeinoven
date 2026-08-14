@@ -311,7 +311,7 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_MAX_ATTEMPTS = 2
+const SPEC_GENERATION_MAX_ATTEMPTS = 3
 const CURRENT_SPEC_GENERATION_VERSION = 1
 const SPEC_GENERATION_FAILURE_USER_MESSAGE =
   'Spec generation failed, model returned an invalid spec.'
@@ -1342,8 +1342,10 @@ export class ChatEngine {
     private database: Database,
     private computerUsePip?: import('./computer-use-pip-service').ComputerUsePipService,
     private harnessManifest?: import('./harness-manifest-service').HarnessManifestService,
-    private threadCreation?: ThreadCreationCoordinator
+    private threadCreation?: ThreadCreationCoordinator,
+    processJournalPath?: string
   ) {
+    this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
     this.projectManager = new ProjectManager(database)
@@ -2027,6 +2029,15 @@ export class ChatEngine {
         }
       })
     )
+  }
+
+  /**
+   * Reap harness processes orphaned by an unclean previous run (crash, force
+   * quit, or the shutdown failsafe) before this session spawns any new servers.
+   * Only kills processes the app owns — never a user's external harness.
+   */
+  reapOrphanProcesses(): Promise<import('./agent-process-service').ReapOrphansResult> {
+    return this.agentProcesses.reapOrphans()
   }
 
   /** Kill all pooled driver resources (called on app quit). */

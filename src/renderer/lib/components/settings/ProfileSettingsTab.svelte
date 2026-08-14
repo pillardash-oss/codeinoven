@@ -11,7 +11,7 @@
     LocalProfileAnalyticsRange,
     LocalProfileProjectBreakdown
   } from '$shared/types'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -312,6 +312,13 @@
   onMount(() => {
     void loadUsage()
     void refreshAccount()
+    return subscribe('account:profileChanged', (state) => {
+      accountState = state
+      if (state.status === 'signed-in') {
+        signInOpen = false
+        signInError = ''
+      }
+    })
   })
 </script>
 
@@ -394,7 +401,8 @@
             {:else if accountState.status === 'pending'}
               <p class="text-sm font-semibold">Finish signing in</p>
               <p class="mt-1 text-xs leading-relaxed text-muted">
-                Complete Google or Apple sign-in in your browser, then return to CodeInOven.
+                Complete Google or Apple sign-in in your browser. CodeInOven will detect the secure
+                callback automatically.
               </p>
               {#if signInError}
                 <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">

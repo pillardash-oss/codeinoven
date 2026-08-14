@@ -76,7 +76,8 @@
     keepAwakeWhileWorking: false,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
-    resumeWorkOnRestart: true
+    resumeWorkOnRestart: true,
+    defaultMergeMethod: 'squash'
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -908,6 +909,9 @@
     const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
       handleCloseShortcut()
     })
+    const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
+      handleNewTerminalShortcut()
+    })
     updaterState.init()
     // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
     // initialise the store here so the overlay's dynamic import can be gated on
@@ -920,6 +924,7 @@
       unsubscribeThreadUpdated()
       unsubscribeThreadDeleted()
       unsubscribeCloseShortcut()
+      unsubscribeNewTerminalShortcut()
       updaterState.destroy()
     }
   }
@@ -968,6 +973,19 @@
     }
     // Nothing active — close the window through the confirmation gate.
     void invoke('app:requestClose')
+  }
+
+  /**
+   * Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
+   * terminal panel (right sidebar or bottom dock). The main process only emits
+   * this event when it intercepted the key with a terminal focused, but the
+   * renderer's own focus flag is the source of truth — re-check it defensively.
+   */
+  function handleNewTerminalShortcut(): void {
+    if (!isTerminalFocused()) return
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    contextSidebarState.openNewTerminal(thread.projectId, thread.id)
   }
 
   function handleFind(): void {

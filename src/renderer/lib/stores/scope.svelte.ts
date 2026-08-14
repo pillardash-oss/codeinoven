@@ -468,7 +468,13 @@ class ScopeState {
 
   bucketForThread(thread: Thread): string {
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    return this.board.buckets.some((bucket) => bucket.id === bucketId)
+    // Resolve against the thread's OWN project board, not the active project's.
+    // The regular thread list spans many projects; validating against `this.board`
+    // (the active project) would misclassify every non-active thread as default
+    // whenever its bucket isn't on the active board. Fall back to the active board
+    // only when the thread's project board hasn't been loaded yet.
+    const board = this.boards.get(thread.projectId) ?? this.board
+    return board.buckets.some((bucket) => bucket.id === bucketId)
       ? bucketId
       : DEFAULT_SCOPE_BUCKET_ID
   }

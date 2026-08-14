@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { isAbsoluteCitationPath } from '$lib/agent-source-citations'
 import { INBOX_PROJECT_ID } from '$shared/types'
 
 /**
@@ -10,6 +11,10 @@ import { INBOX_PROJECT_ID } from '$shared/types'
  * synchronously, so MarkdownView registers candidate paths here and the store
  * batch-checks them against main. Every successful resolution bumps a reactive
  * version, so `$derived` markdown re-lexes and the link appears only then.
+ *
+ * Absolute paths (e.g. Codex `:codex-file-citation` tokens) are probed for
+ * existence independently of the project root; they only ever become links and
+ * clicks are still constrained to the main process's approved scopes.
  */
 interface CitationPathsCache {
   /** Candidate strings confirmed to resolve to an existing project entry. */
@@ -23,6 +28,11 @@ interface CitationPathsCache {
 class CitationPathsState {
   private readonly projects = new Map<string, CitationPathsCache>()
   private readonly inflight = new Map<string, Promise<void>>()
+  /** Absolute paths outside the project root confirmed to exist on disk. */
+  private readonly externalKnown = new Set<string>()
+  private readonly externalChecked = new Set<string>()
+  private readonly externalPending = new Set<string>()
+  private externalInflight: Promise<void> | null = null
   /** Reactive version — bumped whenever a resolution changes the known set. */
   private refreshKey = $state(0)
 
@@ -43,7 +53,15 @@ class CitationPathsState {
     return this.cacheFor(projectId).known.has(path)
   }
 
-  /** Queue existence checks for candidate paths in the active project. */
+  /** Whether an absolute path (outside the project root) exists on disk. */
+  isKnownExternalPath(path: string): boolean {
+    void this.refreshKey
+    return this.externalKnown.has(path)
+  }
+
+  /** Queue existence checks for candidate paths in the active project. Absolute
+   *  candidates are probed externally; everything else resolves inside the
+   *  project root. */
   ensureActiveProjectChecked(candidates: string[]): void {
     const project = workspaceState.activeProject
     if (
@@ -55,7 +73,14 @@ class CitationPathsState {
     ) {
       return
     }
-    this.ensureChecked(project.id, candidates)
+    const external: string[] = []
+    const projectCandidates: string[] = []
+    for (const candidate of candidates) {
+      if (isAbsoluteCitationPath(candidate)) external.push(candidate)
+      else projectCandidates.push(candidate)
+    }
+    if (projectCandidates.length > 0) this.ensureChecked(project.id, projectCandidates)
+    if (external.length > 0) this.ensureExternalChecked(external)
   }
 
   /**
@@ -97,6 +122,41 @@ class CitationPathsState {
         if (changed) this.refreshKey++
       } catch {
         // Unresolvable citations simply never become links.
+      }
+    }
+  }
+
+  private ensureExternalChecked(candidates: string[]): void {
+    for (const candidate of candidates) {
+      if (candidate.length === 0 || this.externalChecked.has(candidate)) continue
+      this.externalChecked.add(candidate)
+      this.externalPending.add(candidate)
+    }
+    if (this.externalPending.size === 0 || this.externalInflight) return
+
+    const drain = this.drainExternal()
+    this.externalInflight = drain
+    void drain.finally(() => {
+      this.externalInflight = null
+    })
+  }
+
+  private async drainExternal(): Promise<void> {
+    while (this.externalPending.size > 0) {
+      const batch = [...this.externalPending]
+      this.externalPending.clear()
+      try {
+        const resolved = await invoke('projectFiles:resolveExternalCitationPaths', batch)
+        let changed = false
+        for (const [candidate, exists] of Object.entries(resolved)) {
+          if (exists) {
+            this.externalKnown.add(candidate)
+            changed = true
+          }
+        }
+        if (changed) this.refreshKey++
+      } catch {
+        // Unresolvable external citations simply never become links.
       }
     }
   }

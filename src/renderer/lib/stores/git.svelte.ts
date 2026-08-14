@@ -23,6 +23,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
   PrState,
@@ -68,6 +69,7 @@ export type GitOperation =
   | 'pr-detail'
   | 'pr-reopen'
   | 'pr-close'
+  | 'pr-update'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -661,6 +663,10 @@ export class GitState {
     this.error = null
     try {
       this.status = await invoke('git:fetch', projectId)
+      // Branch tracking (ahead/behind) changes with every fetch — refresh it so
+      // push decisions (like the PR sheet's "is there anything to push?") are
+      // made against freshly fetched remote refs, not the last panel refresh.
+      await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Fetch failed')
     } finally {
@@ -1055,6 +1061,30 @@ export class GitState {
     }
   }
 
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    title: string | undefined,
+    body: string | undefined
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-update', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return this.resolveGitHubMutation(
+        await invoke('pr:update', projectId, owner, repo, pullNumber, title, body)
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be updated')
+      return null
+    } finally {
+      this.markBusy('pr-update', false)
+    }
+  }
+
   /**
    * Cached PR listings and detail bundles.
    *
@@ -1404,6 +1434,24 @@ export class GitState {
       const report = await invoke('pr:agentReport', projectId, pullNumber)
       this.prAgentReports = { ...this.prAgentReports, [String(pullNumber)]: report }
       return report
+    } catch {
+      return null
+    }
+  }
+
+  /** Create `.cio/git/compose/<threadId>/` for the PR-compose agent. */
+  async createComposeWorkspace(projectId: string, threadId: string): Promise<string | null> {
+    try {
+      return await invoke('pr:composeWorkspace', projectId, threadId)
+    } catch {
+      return null
+    }
+  }
+
+  /** Read the agent's composed PR title/description, if it has written one. */
+  async loadComposeReport(projectId: string, threadId: string): Promise<PrComposeReport | null> {
+    try {
+      return await invoke('pr:composeReport', projectId, threadId)
     } catch {
       return null
     }

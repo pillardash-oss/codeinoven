@@ -219,6 +219,9 @@ const INVOKE_CHANNELS = [
   'pr:comment',
   'pr:review',
   'pr:reviewWorkspace',
+  'pr:update',
+  'pr:composeWorkspace',
+  'pr:composeReport',
   'github:authStatus',
   'github:startDeviceFlow',
   'github:poll',
@@ -261,6 +264,7 @@ const INVOKE_CHANNELS = [
   'projectFiles:list',
   'projectFiles:search',
   'projectFiles:resolveCitationPaths',
+  'projectFiles:resolveExternalCitationPaths',
   'projectFiles:create',
   'projectFiles:delete',
   'projectFiles:info',
@@ -269,6 +273,7 @@ const INVOKE_CHANNELS = [
   'projectFiles:saveAs',
   'projectFiles:paste',
   'projectFiles:importPaths',
+  'projectFiles:dropPaths',
   'projectFiles:read',
   'projectFiles:rename',
   'projectFiles:save',
@@ -401,6 +406,7 @@ void allInvokeChannelsRegistered
 const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
 const EVENT_CHANNELS = [
   'app:featuresReady',
+  'account:profileChanged',
   'agent:event',
   'agent:processesChanged',
   'agent:temporaryChatExpired',
@@ -414,6 +420,7 @@ const EVENT_CHANNELS = [
   'window:beforeQuit',
   'window:confirmClose',
   'window:closeShortcut',
+  'window:newTerminalShortcut',
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
@@ -479,6 +486,8 @@ export interface AppBridge {
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
   /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
   getPathForFile: (file: File) => string
+  /** Resolve and begin a native filesystem drag during the active drag gesture. */
+  startFileDrag: (projectId: string, relativePaths: string[]) => void
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
@@ -542,7 +551,13 @@ const bridge: AppBridge = {
     const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
     return typeof registered === 'string' ? registered : ''
   },
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  startFileDrag: (projectId: string, relativePaths: string[]): void =>
+    ipcRenderer.send(
+      'projectFiles:startDrag',
+      projectId,
+      Array.from(relativePaths ?? []).map(String)
+    )
 }
 
 contextBridge.exposeInMainWorld('api', bridge)

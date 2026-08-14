@@ -914,7 +914,10 @@ export class OpenCodeDriver implements HarnessDriver {
     compaction: true,
     subagents: true,
     // OpenCode 1.18.10 accepts structured prompts but its history endpoint can
-    // fail to decode their stored format. Use deterministic JSON-only output.
+    // fail to decode their stored format, and structured output returns no
+    // visible text into the conversation (the spec/assignment only appears in
+    // the studio/panel). Keep deterministic JSON-only output so the generated
+    // spec is written as a visible message the renderer reliably surfaces.
     structuredOutput: false,
     nativeUtilities: ['web_fetch'],
     // OpenCode schedules and performs its own provider retries (`session.status`
@@ -1959,6 +1962,7 @@ export class OpenCodeDriver implements HarnessDriver {
             abortController: new AbortController()
           }
           Logger.dev(`shared opencode server up on :${port}`)
+          this.processObserver?.watchProcess(undefined, child.pid, 'opencode serve', projectPath)
           resolve(handle)
         }
       })
