@@ -72,7 +72,13 @@
   }
 </script>
 
-{#snippet foldBar(hunk: DiffHunk, hidden: number, direction: 'above' | 'below')}
+{#snippet foldBar(
+  hunk: DiffHunk,
+  additions: number,
+  deletions: number,
+  hidden: number,
+  direction: 'above' | 'below'
+)}
   {@const isFolded = foldedHunks[hunk.id] ?? false}
   <div
     role="button"
@@ -88,8 +94,8 @@
       }
     }}
   >
-    <span class="shrink-0 font-mono tabular-nums text-success">+{details.additions}</span>
-    <span class="shrink-0 font-mono tabular-nums text-danger">−{details.deletions}</span>
+    <span class="shrink-0 font-mono tabular-nums text-success">+{additions}</span>
+    <span class="shrink-0 font-mono tabular-nums text-danger">−{deletions}</span>
     <span class="flex-1"></span>
     {#if !isFolded && hidden > 0}
       <button
@@ -129,13 +135,15 @@
       {:else}
         {#each details.hunks as hunk (hunk.id)}
           {@const w = hunkWindow(hunk)}
+          {@const hunkAdditions = w.lines.filter((line) => line.kind === 'added').length}
+          {@const hunkDeletions = w.lines.filter((line) => line.kind === 'deleted').length}
           {@const isFolded = foldedHunks[hunk.id] ?? false}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
-            {@render foldBar(hunk, w.aboveHidden, 'above')}
+            {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.aboveHidden, 'above')}
             {#if !isFolded}
               <DiffRows lines={w.lines} paneLabels />
               {#if w.belowHidden > 0}
-                {@render foldBar(hunk, w.belowHidden, 'below')}
+                {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.belowHidden, 'below')}
               {/if}
             {/if}
           </section>
