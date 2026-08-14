@@ -6,6 +6,8 @@
   import {
     ChevronDown,
     ChevronRight,
+    ChevronsDown,
+    ChevronsUp,
     FileDiff,
     FolderOpen,
     Loader2,
@@ -68,6 +70,7 @@
   let dropFolder = $state<string | null>(null)
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
   let dropHoverPath: string | null = null
+  let treeBusy = $state(false)
   /** When true, the next reveal scroll is suppressed. Set during a pointer
    *  interaction on the tree so a user clicking a row isn't yanked around;
    *  cleared on a macrotask so external reveals still auto-scroll. */
@@ -525,6 +528,27 @@
     }
   }
 
+  /** Whether any subfolder is currently expanded, driving the collapse/expand-all toggle. */
+  let anyDirExpanded = $derived(
+    Object.keys(projectState.expandedDirectories).some(
+      (path) => path !== '' && projectState.expandedDirectories[path]
+    )
+  )
+
+  async function toggleExpandAll(): Promise<void> {
+    if (treeBusy) return
+    treeBusy = true
+    try {
+      if (anyDirExpanded) {
+        projectFilesWorkspace.collapseAllDirectories(projectId)
+      } else {
+        await projectFilesWorkspace.expandAllDirectories(projectId)
+      }
+    } finally {
+      treeBusy = false
+    }
+  }
+
   /** Resolve absolute paths for OS-dropped File objects (folder/file). */
   function droppedFilePaths(files: FileList | null): string[] {
     if (!files) return []
@@ -604,7 +628,7 @@
     dropHoverPath = null
   }
 
-  /** Auto-expand a collapsed folder after the drag has hovered on it for ~2s, so
+  /** Auto-expand a collapsed folder after the drag has hovered on it for ~1s, so
    *  the user can keep dragging into its subfolders. Deterministic: only expands
    *  on a sustained hover and is cancelled the moment the drag leaves the folder. */
   function scheduleFolderExpand(path: string): void {
@@ -618,7 +642,7 @@
         projectFilesWorkspace.markDirectoryExpanded(projectId, path)
         void projectFilesWorkspace.loadDirectory(projectId, path)
       }
-    }, 2000)
+    }, 1000)
   }
 
   function handleDragOver(event: DragEvent): void {
@@ -953,6 +977,20 @@
     <span class="min-w-0 flex-1 truncate text-[10px] font-semibold text-foreground">
       {projectName}
     </span>
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+      aria-label={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+      title={anyDirExpanded ? 'Collapse all folders' : 'Expand all folders'}
+      disabled={treeBusy}
+      onclick={() => void toggleExpandAll()}
+    >
+      {#if anyDirExpanded}
+        <ChevronsUp size={12} />
+      {:else}
+        <ChevronsDown size={12} />
+      {/if}
+    </button>
     <button
       type="button"
       class={[
