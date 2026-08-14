@@ -6,6 +6,7 @@
     CheckCircle2,
     Circle,
     Download,
+    ExternalLink,
     Loader2,
     Plug,
     Plus,
@@ -27,6 +28,12 @@
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
+
+  /** Where users can browse existing PRs / open one for a V2 support effort. */
+  const OPENCODE_V2_PRS_URL = 'https://github.com/pillardash-oss/codeinoven/pulls'
+  /** Human copy shown for an installed-but-unsupported harness. */
+  const OPENCODE_V2_NOTICE =
+    'Open Code V2 support is not available at the moment. Pending the release of the stable release of Open Code V2.'
 
   /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
   let baseUrlHarnesses = $derived(
@@ -291,6 +298,16 @@
             >
               Check
             </button>
+            {#if provider.unsupportedReason === 'opencode-v2'}
+              <button
+                class="flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+                title="Check existing pull requests or open a new one for {provider.name} V2 support"
+                onclick={() => void openInBrowser(OPENCODE_V2_PRS_URL)}
+              >
+                <ExternalLink size={13} />
+                Check PRs
+              </button>
+            {/if}
             {#if provider.status === 'available'}
               <button
                 class="flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
@@ -335,6 +352,11 @@
               {:else if provider.status === 'not_found'}
                 <Circle size={14} class="shrink-0 text-dimmed" />
                 <span class="text-xs text-dimmed">Not installed</span>
+              {:else if provider.unsupportedReason === 'opencode-v2'}
+                <AlertTriangle size={14} class="shrink-0 text-warning" />
+                <span class="min-w-0 break-words text-xs font-medium text-warning">
+                  {OPENCODE_V2_NOTICE}
+                </span>
               {:else if provider.status === 'error'}
                 <AlertTriangle size={14} class="shrink-0 text-danger" />
                 <span class="min-w-0 break-words text-xs text-danger" title={provider.detail}>
