@@ -2978,6 +2978,8 @@
                   projectId={activeContextTab.projectId}
                   threadId={activeContextTab.threadId}
                   checkpointId={activeContextTab.checkpointId}
+                  revealPath={activeContextTab.revealPath}
+                  revealNonce={activeContextTab.revealNonce}
                 />
               {:else if activeContextTab.kind === 'terminal'}
                 {#if terminalFullscreenTabId === activeContextTab.id}
