@@ -392,6 +392,12 @@ export interface ProviderConnectionInfo {
   version?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
+  /**
+   * When set, the harness is installed but its detected version is not yet
+   * supported by CodeInOven (e.g. OpenCode V2). The harness is treated as not
+   * installed everywhere except the Harnesses page, which surfaces a notice.
+   */
+  unsupportedReason?: 'opencode-v2'
 }
 
 /** Where a confirmed harness-manifest behavior override came from. */
