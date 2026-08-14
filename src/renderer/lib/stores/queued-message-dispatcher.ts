@@ -19,6 +19,7 @@
  * missing after a thread remount and silently strand the queue.
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { rendererRecovery, type QueuedMessageEntry } from '$lib/stores/renderer-recovery.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
@@ -71,6 +72,10 @@ class QueuedMessageDispatcher {
   }
 
   async #dispatch(projectId: string, threadId: string, key: string): Promise<void> {
+    // Claim synchronously, before any await. This is the single atomic gate
+    // shared with the mounted ThreadView: whoever claims first owns delivery,
+    // so concurrent idle transitions can never double-send the same message.
+    if (!claimQueuedMessage(projectId, threadId)) return
     this.#inFlight.add(key)
     let dispatched: QueuedMessageEntry | null = null
     let userMessageId = ''
@@ -127,6 +132,7 @@ class QueuedMessageDispatcher {
       }
     } finally {
       this.#inFlight.delete(key)
+      releaseQueuedMessage(projectId, threadId)
     }
   }
 
