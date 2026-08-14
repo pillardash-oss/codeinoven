@@ -6,7 +6,6 @@
     CheckCircle2,
     Circle,
     Download,
-    ExternalLink,
     Loader2,
     Plug,
     Plus,
@@ -20,6 +19,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { toast } from 'svelte-sonner'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { ProviderAccountAuthStatus, ProviderConnectionInfo } from '$shared/types'
   import type { HarnessManifestEntry } from '$shared/types'
@@ -304,7 +304,7 @@
                 title="Check existing pull requests or open a new one for {provider.name} V2 support"
                 onclick={() => void openInBrowser(OPENCODE_V2_PRS_URL)}
               >
-                <ExternalLink size={13} />
+                <VendorIcon name="GitHub" size={13} />
                 Check PRs
               </button>
             {/if}
