@@ -184,8 +184,12 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.dmg *.zip *.exe *.AppImage *.deb 2>/dev/null > SHA256SUMS.txt || true
-          ls -la
+          find . -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \) -print0 \
+            | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          echo "artifacts listing:"
+          find . -type f | sort
+          echo "SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
 
       - name: Create or update release
         env:
@@ -201,16 +205,27 @@ jobs:
             fi
           fi
           files=()
-          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/*.yml artifacts/SHA256SUMS.txt; do
-            [ -f "$f" ] && files+=("$f")
+          while IFS= read -r f; do
+            files+=("$f")
+          done < <(find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.blockmap' -o -name '*.yml' -o -name 'SHA256SUMS.txt' \) | sort)
+          publish_attempt=0
+          while [ "$publish_attempt" -lt 3 ]; do
+            publish_attempt=$((publish_attempt + 1))
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" "${files[@]}" --clobber
+              gh release edit "$tag" --title "CodeInOven $version" --prerelease=false --latest
+            else
+              gh release create "$tag" "${files[@]}" \
+                --target "$GITHUB_SHA" \
+                --title "CodeInOven $version" \
+                --generate-notes \
+                --latest
+            fi
+            publish_exit=$?
+            if [ "$publish_exit" -eq 0 ]; then
+              break
+            fi
+            echo "release publish attempt $publish_attempt failed with exit $publish_exit; retrying"
+            sleep 10
           done
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${files[@]}" --clobber
-            gh release edit "$tag" --title "CodeInOven $version" --prerelease=false --latest
-          else
-            gh release create "$tag" "${files[@]}" \
-              --target "$GITHUB_SHA" \
-              --title "CodeInOven $version" \
-              --generate-notes \
-              --latest
-          fi
+          exit "$publish_exit"
