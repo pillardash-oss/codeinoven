@@ -12,6 +12,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import FileTypeIcon from './FileTypeIcon.svelte'
   import FileDiffView from './FileDiffView.svelte'
+  import HoverDiffPopover from './HoverDiffPopover.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
@@ -317,41 +318,47 @@
               </p>
             {:else}
               {#each fileDiffs as fileDiff (fileDiff.path)}
-                {@const stats = fileDiff.binary
+                {@const details = fileDiff.binary
                   ? null
                   : diffDetails(fileDiff.before, fileDiff.after)}
+                {@const stats = details}
+                {@const lines = details?.lines ?? []}
                 {@const expanded = expandedDiffs[fileDiff.path] ?? true}
                 <section class="overflow-hidden rounded-md border border-border bg-surface">
                   <div class="flex min-h-9 items-center pr-1.5">
-                    <button
-                      type="button"
-                      class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
-                      aria-expanded={expanded}
-                      title={expanded
-                        ? `Collapse diff for ${fileDiff.path}`
-                        : `Show diff for ${fileDiff.path}`}
-                      onclick={() => toggleDiff(fileDiff.path)}
-                    >
-                      <FileTypeIcon path={fileDiff.path} size={13} />
-                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
-                        {fileDiff.path}
-                      </span>
-                      {#if fileDiff.binary}
-                        <span class="shrink-0 text-[9px] text-dimmed">binary</span>
-                      {:else if stats}
-                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
-                          +{stats.additions}
-                        </span>
-                        <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
-                          −{stats.deletions}
-                        </span>
-                      {/if}
-                      {#if expanded}
-                        <ChevronDown size={12} class="shrink-0 text-dimmed" />
-                      {:else}
-                        <ChevronRight size={12} class="shrink-0 text-dimmed" />
-                      {/if}
-                    </button>
+                    <HoverDiffPopover {lines} class="min-w-0 flex-1" maxHeight="20rem">
+                      {#snippet trigger()}
+                        <button
+                          type="button"
+                          class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
+                          aria-expanded={expanded}
+                          title={expanded
+                            ? `Collapse diff for ${fileDiff.path}`
+                            : `Show diff for ${fileDiff.path}`}
+                          onclick={() => toggleDiff(fileDiff.path)}
+                        >
+                          <FileTypeIcon path={fileDiff.path} size={13} />
+                          <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                            {fileDiff.path}
+                          </span>
+                          {#if fileDiff.binary}
+                            <span class="shrink-0 text-[9px] text-dimmed">binary</span>
+                          {:else if stats}
+                            <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+                              +{stats.additions}
+                            </span>
+                            <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+                              −{stats.deletions}
+                            </span>
+                          {/if}
+                          {#if expanded}
+                            <ChevronDown size={12} class="shrink-0 text-dimmed" />
+                          {:else}
+                            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+                          {/if}
+                        </button>
+                      {/snippet}
+                    </HoverDiffPopover>
                     <button
                       type="button"
                       class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
