@@ -666,8 +666,8 @@
     {/if}
 
     <!-- Status bar: inventory on the left, the panel's actions on the right. -->
-    <div class="flex shrink-0 items-center gap-1 border-t border-border px-2 py-1">
-      <span class="truncate text-[9px] text-dimmed">
+    <div class="flex h-9 shrink-0 items-center gap-1 border-t border-border px-2">
+      <span class="truncate text-[11px] text-muted">
         {#if configured}
           {containers.length} container{containers.length === 1 ? '' : 's'} · {providers.length} provider{providers.length ===
           1
@@ -679,12 +679,12 @@
       </span>
       <button
         type="button"
-        class="flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
         onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
       >
-        <Plus size={11} />
+        <Plus size={13} />
         {configured ? 'Add' : 'Connect'}
       </button>
 
@@ -692,32 +692,32 @@
         {#if configured && hasContainers}
           <button
             type="button"
-            class="flex h-5 w-5 cursor-pointer items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground {searchOpen
+            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {searchOpen
               ? 'bg-elevated text-foreground'
-              : 'text-dimmed'}"
+              : 'text-muted'}"
             title="Search containers by name, id or project"
             aria-label="Search containers by name, id or project"
             aria-pressed={searchOpen}
             onclick={toggleSearch}
           >
-            <Search size={11} />
+            <Search size={13} />
           </button>
         {/if}
         {#if configured}
           <button
             type="button"
-            class="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Refresh deployment statuses now"
             aria-label="Refresh deployment statuses now"
             onclick={() => void refreshAll()}
           >
-            <RefreshCw size={11} class={refreshingAll ? 'animate-spin' : ''} />
+            <RefreshCw size={13} class={refreshingAll ? 'animate-spin' : ''} />
           </button>
         {/if}
         <Switch
           checked={liveUpdates}
           onchange={(checked) => (liveUpdates = checked)}
-          class="ml-0.5 scale-90"
+          class="ml-1 h-7"
           aria-label="Toggle live status updates"
           title={liveUpdates
             ? 'Live updates on — refreshing every minute'
