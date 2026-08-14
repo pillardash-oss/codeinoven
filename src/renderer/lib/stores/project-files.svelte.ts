@@ -13,6 +13,10 @@ import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
+/** How many levels of subfolders "Expand all" reveals below the project root,
+ *  so the operation stays cheap even on very large trees. */
+const EXPAND_ALL_MAX_DEPTH = 4
+
 export type ProjectFileView = 'diff' | 'preview' | 'source'
 
 export interface ProjectFileSession {
@@ -194,19 +198,23 @@ class ProjectFilesWorkspace {
     this.persistExplorer(projectId)
   }
 
+  /** Expand folders recursively up to a bounded depth, so we don't enumerate an
+   *  entire repository's subtree at once. */
   private async expandDirectoryTree(
     projectId: string,
     state: ProjectFilesState,
-    directory: string
+    directory: string,
+    depth = 0
   ): Promise<void> {
     if (!state.entriesByDirectory[directory]) {
       await this.loadDirectory(projectId, directory)
     }
     state.expandedDirectories[directory] = true
+    if (depth >= EXPAND_ALL_MAX_DEPTH) return
     const entries = state.entriesByDirectory[directory] ?? []
     for (const entry of entries) {
       if (entry.kind === 'directory') {
-        await this.expandDirectoryTree(projectId, state, entry.path)
+        await this.expandDirectoryTree(projectId, state, entry.path, depth + 1)
       }
     }
   }
