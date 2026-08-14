@@ -179,6 +179,38 @@ class ProjectFilesWorkspace {
     await this.loadDirectory(projectId, directory)
   }
 
+  /** Collapse every expanded folder in the tree. */
+  collapseAllDirectories(projectId: string): void {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    this.persistExplorer(projectId)
+  }
+
+  /** Expand every folder in the tree, loading their contents recursively. */
+  async expandAllDirectories(projectId: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    await this.expandDirectoryTree(projectId, state, '')
+    this.persistExplorer(projectId)
+  }
+
+  private async expandDirectoryTree(
+    projectId: string,
+    state: ProjectFilesState,
+    directory: string
+  ): Promise<void> {
+    if (!state.entriesByDirectory[directory]) {
+      await this.loadDirectory(projectId, directory)
+    }
+    state.expandedDirectories[directory] = true
+    const entries = state.entriesByDirectory[directory] ?? []
+    for (const entry of entries) {
+      if (entry.kind === 'directory') {
+        await this.expandDirectoryTree(projectId, state, entry.path)
+      }
+    }
+  }
+
   setClipboard(projectId: string, paths: string[], mode: ProjectFileTransferMode): void {
     this.clipboard = { projectId, paths, mode }
   }
