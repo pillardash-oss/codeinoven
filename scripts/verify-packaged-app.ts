@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { readdirSync, readFileSync } from 'node:fs'
-import { resolve, extname } from 'node:path'
+import { join, resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { Logger } from '../src/main/logger'
 
@@ -50,6 +50,26 @@ try {
 
 const files = entries.filter((entry) => !entry.startsWith('.'))
 const hasExtension = (extension: string): boolean => files.some((file) => file.endsWith(extension))
+
+function findFileUnder(root: string, matches: (entry: string) => boolean): string | undefined {
+  const queue = [root]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) continue
+    let children: string[]
+    try {
+      children = readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const child of children) {
+      const entry = join(current, child.name)
+      if (matches(child.name)) return entry
+      if (child.isDirectory()) queue.push(entry)
+    }
+  }
+  return undefined
+}
 
 const mustHave = (label: string, condition: boolean): void => {
   if (!condition) {
@@ -123,7 +143,7 @@ if (target === 'win' && process.platform === 'win32') {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw ("Authenticode signature status: $($sig.Status)") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
+      `Import-Module Microsoft.PowerShell.Security -Force; $sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw ("Authenticode signature status: $($sig.Status)") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
     ],
     { encoding: 'utf8' }
   )
@@ -136,14 +156,18 @@ if (target === 'win' && process.platform === 'win32') {
 }
 
 if (target === 'mac' && process.platform === 'darwin') {
-  const dmg = packageFiles.find((file) => file.endsWith('.dmg'))
-  if (!dmg) {
-    Logger.error('[verify-packaged-app] mac dmg artifact was expected but not found')
+  const appBundle = findFileUnder(absArtifactDir, (entry) => entry.endsWith('.app'))
+  if (!appBundle) {
+    Logger.error('[verify-packaged-app] mac app bundle was expected but not found')
     process.exit(1)
   }
-  const verify = spawnSync('codesign', ['-dv', dmg], { encoding: 'utf8' })
+  const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', appBundle], {
+    encoding: 'utf8'
+  })
   if (verify.status !== 0) {
-    Logger.error('[verify-packaged-app] mac code signature check failed for', dmg)
+    Logger.error(
+      `[verify-packaged-app] mac code signature check failed for ${appBundle}: ${verify.stderr || verify.stdout || 'unknown'}`
+    )
     process.exit(1)
   }
 }
