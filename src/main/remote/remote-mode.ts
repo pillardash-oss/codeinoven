@@ -12,6 +12,8 @@ import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
+import { createHash, randomBytes } from 'node:crypto'
+import { createServer, type Server, type ServerResponse } from 'node:http'
 import { Logger } from '../logger'
 import { sendToRenderer } from '../renderer-delivery'
 import { SecretVault } from '../secret-vault'
@@ -52,6 +54,8 @@ import {
 declare global {
   /** Public remote-service origin injected by the Electron production build. */
   const __CODEINOVEN_REMOTE_API_ORIGIN__: string | undefined
+  /** Public account sign-in origin injected by the Electron production build. */
+  const __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: string | undefined
 }
 
 /** Gateway device-authentication callback shape (see RemoteGateway options). */
@@ -95,6 +99,7 @@ export interface RemoteModeOptions {
 
 export const DEFAULT_LAN_PORT = 4455
 const CLOUD_CONFIG_PATH = 'remote/cloud-access.json'
+const ACCOUNT_CONFIG_PATH = 'account/session.json'
 
 interface CloudAccessConfig {
   apiOrigin: string
@@ -103,6 +108,11 @@ interface CloudAccessConfig {
   tokenRef: string
   profileTokenRef?: string
   enrollmentExpiresAt: number
+}
+
+interface AccountSessionConfig {
+  apiOrigin: string
+  profileTokenRef: string
 }
 
 interface EnrollmentResponse {
@@ -196,6 +206,26 @@ function resolveCloudApiOrigin(): string | null {
       ? __CODEINOVEN_REMOTE_API_ORIGIN__
       : undefined
   const value = (process.env['REMOTE_API_ORIGIN'] ?? baked ?? '').trim()
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) return null
+    url.pathname = '/'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
+function resolveAccountAuthOrigin(): string | null {
+  const baked =
+    typeof __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__ === 'string'
+      ? __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__
+      : undefined
+  const value = (process.env['ACCOUNT_AUTH_ORIGIN'] ?? baked ?? '').trim()
   if (!value) return null
   try {
     const url = new URL(value)
@@ -396,7 +426,11 @@ export class RemoteModeController {
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
+  private readonly accountAuthOrigin: string | null = resolveAccountAuthOrigin()
   private readonly vault: SecretVault | null
+  private accountConfig: AccountSessionConfig | null = null
+  private accountSignInServer: Server | null = null
+  private accountSignInTimeout: ReturnType<typeof setTimeout> | null = null
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
@@ -880,6 +914,7 @@ export class RemoteModeController {
    * device-awake blocker. Closing the app must leave nothing alive.
    */
   async dispose(): Promise<void> {
+    this.closeAccountSignInListener()
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
@@ -974,12 +1009,20 @@ export class RemoteModeController {
   }
 
   private async accountRequest(init?: RequestInit): Promise<Response | null> {
-    const config =
+    if (!this.vault) return null
+    const accountConfig =
+      this.accountConfig ??
+      (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
+      null
+    this.accountConfig = accountConfig
+    const cloudConfig =
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
-    if (!config || !this.vault) return null
-    const token = await this.vault.resolve(config.profileTokenRef ?? config.tokenRef)
+    const tokenRef = accountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
+    if (!tokenRef) return null
+    const token = await this.vault.resolve(tokenRef)
+    const apiOrigin = accountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
     return fetchWithDeadline(
-      new URL('/v1/profile', config.apiOrigin),
+      new URL('/v1/profile', apiOrigin),
       {
         ...init,
         headers: {
@@ -1033,9 +1076,130 @@ export class RemoteModeController {
   async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
     if (provider !== 'google' && provider !== 'apple') throw new Error('Invalid account provider')
     if (!this.cloudApiOrigin) throw new Error('REMOTE_API_ORIGIN is not configured')
-    const url = new URL('/', this.cloudApiOrigin)
-    url.hash = new URLSearchParams({ provider }).toString()
+    if (!this.accountAuthOrigin) throw new Error('ACCOUNT_AUTH_ORIGIN is not configured')
+    if (!this.storage || !this.vault || !this.vault.isAvailable()) {
+      throw new Error('Secure desktop storage is unavailable')
+    }
+
+    this.closeAccountSignInListener()
+    const state = randomBytes(32).toString('base64url')
+    const codeVerifier = randomBytes(48).toString('base64url')
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const callback = await this.listenForAccountCallback(state, codeVerifier)
+    const url = new URL('/desktop/sign-in', this.accountAuthOrigin)
+    url.search = new URLSearchParams({
+      provider,
+      redirect_uri: callback,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256'
+    }).toString()
     return { url: url.toString() }
+  }
+
+  private closeAccountSignInListener(): void {
+    if (this.accountSignInTimeout) clearTimeout(this.accountSignInTimeout)
+    this.accountSignInTimeout = null
+    this.accountSignInServer?.close()
+    this.accountSignInServer = null
+  }
+
+  private accountCallbackResponse(response: ServerResponse, status: number, message: string): void {
+    response.writeHead(status, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'"
+    })
+    response.end(
+      `<!doctype html><meta charset="utf-8"><title>CodeInOven sign-in</title><style>body{font:16px system-ui;margin:48px;color:#081825}main{max-width:560px}p{line-height:1.6}</style><main><h1>${status === 200 ? 'Sign-in complete' : 'Sign-in failed'}</h1><p>${message}</p></main>`
+    )
+  }
+
+  private async listenForAccountCallback(state: string, codeVerifier: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const server = createServer((request, response) => {
+        void (async () => {
+          try {
+            const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1')
+            if (request.method !== 'GET' || requestUrl.pathname !== '/account/callback') {
+              this.accountCallbackResponse(response, 404, 'This callback is not valid.')
+              return
+            }
+            const callbackState = requestUrl.searchParams.get('state')
+            const code = requestUrl.searchParams.get('code')
+            if (callbackState !== state || !code) {
+              this.accountCallbackResponse(
+                response,
+                400,
+                'The sign-in response could not be verified.'
+              )
+              return
+            }
+            const callbackUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/account/callback`
+            const exchange = await fetchWithDeadline(
+              new URL('/v1/desktop-auth/exchange', this.cloudApiOrigin!),
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, codeVerifier, redirectUri: callbackUrl })
+              },
+              CLOUD_REQUEST_TIMEOUT_MS
+            )
+            const payload = (await exchange.json()) as Record<string, unknown>
+            const profileToken = payload['profileToken']
+            if (!exchange.ok || typeof profileToken !== 'string' || profileToken.length === 0) {
+              throw new Error('Account credential exchange failed')
+            }
+            const profileTokenRef = await this.vault!.save(
+              profileToken,
+              this.accountConfig?.profileTokenRef
+            )
+            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef }
+            await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
+            const profile = await this.syncAccountProfile()
+            this.broadcastAccountProfile(profile)
+            this.accountCallbackResponse(
+              response,
+              200,
+              'Your account is connected. You can close this tab and return to CodeInOven.'
+            )
+          } catch (error) {
+            Logger.error('Desktop account sign-in callback failed:', error)
+            this.accountCallbackResponse(
+              response,
+              500,
+              'CodeInOven could not finish connecting your account. Return to the app and try again.'
+            )
+          } finally {
+            this.closeAccountSignInListener()
+          }
+        })()
+      })
+      server.once('error', (error) => {
+        this.closeAccountSignInListener()
+        reject(error)
+      })
+      server.listen(0, '127.0.0.1', () => {
+        this.accountSignInServer = server
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          this.closeAccountSignInListener()
+          reject(new Error('Desktop sign-in callback listener is unavailable'))
+          return
+        }
+        this.accountSignInTimeout = setTimeout(
+          () => this.closeAccountSignInListener(),
+          5 * 60 * 1_000
+        )
+        resolve(`http://127.0.0.1:${address.port}/account/callback`)
+      })
+    })
+  }
+
+  private broadcastAccountProfile(state: AccountProfileState): void {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) sendToRenderer(window.webContents, 'account:profileChanged', state)
+    }
   }
 
   async syncAccountProfile(): Promise<AccountProfileState> {
@@ -1088,7 +1252,10 @@ export class RemoteModeController {
 
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
-    const existingToken = previous?.tokenRef ? await this.vault.resolve(previous.tokenRef) : null
+    const accountConfig =
+      this.accountConfig ?? (await this.storage.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH))
+    const existingTokenRef = previous?.tokenRef ?? accountConfig?.profileTokenRef
+    const existingToken = existingTokenRef ? await this.vault.resolve(existingTokenRef) : null
 
     this.stopCloudAccess()
     this.cloudAbortController = new AbortController()
@@ -1129,7 +1296,12 @@ export class RemoteModeController {
     const deviceToken = payload.deviceToken ?? existingToken
     if (!deviceToken) throw new Error('Cloud service did not issue a desktop credential')
     const tokenRef = await this.vault.save(deviceToken, previous?.tokenRef)
-    const profileTokenRef = await this.vault.save(payload.profileToken, previous?.profileTokenRef)
+    const profileTokenRef = await this.vault.save(
+      payload.profileToken,
+      previous?.profileTokenRef ?? accountConfig?.profileTokenRef
+    )
+    this.accountConfig = { apiOrigin: this.cloudApiOrigin, profileTokenRef }
+    await this.storage.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
     this.cloudConfig = {
       apiOrigin: this.cloudApiOrigin,
       desktopId: payload.desktopId,
@@ -1172,9 +1344,7 @@ export class RemoteModeController {
     this.stopCloudAccess()
     if (config?.tokenRef && this.vault) {
       await this.vault.remove(config.tokenRef)
-      if (config.profileTokenRef && config.profileTokenRef !== config.tokenRef) {
-        await this.vault.remove(config.profileTokenRef)
-      }
+      // Account authentication is independent of remote-device enrollment.
     }
     if (this.storage) await this.storage.remove(CLOUD_CONFIG_PATH)
     this.cloudConfig = null
@@ -1245,9 +1415,7 @@ export class RemoteModeController {
     if (config?.tokenRef && this.vault) {
       try {
         await this.vault.remove(config.tokenRef)
-        if (config.profileTokenRef && config.profileTokenRef !== config.tokenRef) {
-          await this.vault.remove(config.profileTokenRef)
-        }
+        // Keep the account credential so Profile and a new enrollment stay signed in.
       } catch (error) {
         Logger.error('Could not remove rejected remote cloud credential:', error)
       }

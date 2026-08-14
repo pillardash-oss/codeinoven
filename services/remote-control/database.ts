@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
   AccountProfileRecord,
+  DesktopAuthorizationCodeRecord,
   DesktopRecord,
   EnrollmentRecord,
   MobileDeviceRecord,
@@ -95,6 +96,29 @@ CREATE TABLE IF NOT EXISTS account_profiles (
   global_memories_json TEXT NOT NULL DEFAULT '[]',
   updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS desktop_authorization_codes (
+  code_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_challenge TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  consumed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS desktop_authorization_codes_expiry_idx
+  ON desktop_authorization_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS account_tokens (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS account_tokens_user_idx ON account_tokens(user_id, revoked_at);
+CREATE INDEX IF NOT EXISTS account_tokens_expiry_idx ON account_tokens(expires_at);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -256,6 +280,109 @@ export class RemoteControlDatabase {
       )
       .run(userId, usageJson, globalMemoriesJson, updatedAt)
     return updatedAt
+  }
+
+  createDesktopAuthorizationCode(input: {
+    codeHash: string
+    userId: string
+    codeChallenge: string
+    redirectUri: string
+    expiresAt: number
+  }): void {
+    const now = Date.now()
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          'DELETE FROM desktop_authorization_codes WHERE expires_at <= ? OR consumed_at IS NOT NULL'
+        )
+        .run(now)
+      this.db
+        .prepare(
+          `INSERT INTO desktop_authorization_codes(
+             code_hash, user_id, code_challenge, redirect_uri, created_at, expires_at, consumed_at
+           ) VALUES(?, ?, ?, ?, ?, ?, NULL)`
+        )
+        .run(
+          input.codeHash,
+          input.userId,
+          input.codeChallenge,
+          input.redirectUri,
+          now,
+          input.expiresAt
+        )
+    })()
+  }
+
+  consumeDesktopAuthorizationCode(input: {
+    codeHash: string
+    codeChallenge: string
+    redirectUri: string
+  }): DesktopAuthorizationCodeRecord | null {
+    const consume = this.db.transaction((consumeInput: typeof input) => {
+      const now = Date.now()
+      const record = this.db
+        .prepare(
+          `SELECT user_id, code_challenge, redirect_uri
+           FROM desktop_authorization_codes
+           WHERE code_hash = ? AND expires_at > ? AND consumed_at IS NULL`
+        )
+        .get(consumeInput.codeHash, now) as DesktopAuthorizationCodeRecord | undefined
+      if (
+        !record ||
+        record.code_challenge !== consumeInput.codeChallenge ||
+        record.redirect_uri !== consumeInput.redirectUri
+      ) {
+        return null
+      }
+      const consumed = this.db
+        .prepare(
+          'UPDATE desktop_authorization_codes SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL'
+        )
+        .run(now, consumeInput.codeHash)
+      return consumed.changes === 1 ? record : null
+    })
+    return consume.immediate(input)
+  }
+
+  createAccountToken(input: { tokenHash: string; userId: string; expiresAt: number }): void {
+    const now = Date.now()
+    this.db.transaction(() => {
+      this.db
+        .prepare('DELETE FROM account_tokens WHERE expires_at <= ? OR revoked_at IS NOT NULL')
+        .run(now)
+      this.db
+        .prepare(
+          `INSERT INTO account_tokens(
+             token_hash, user_id, created_at, expires_at, last_used_at, revoked_at
+           ) VALUES(?, ?, ?, ?, ?, NULL)`
+        )
+        .run(input.tokenHash, input.userId, now, input.expiresAt, now)
+      this.db
+        .prepare(
+          `DELETE FROM account_tokens
+           WHERE user_id = ? AND token_hash NOT IN (
+             SELECT token_hash FROM account_tokens
+             WHERE user_id = ? AND revoked_at IS NULL
+             ORDER BY created_at DESC LIMIT 10
+           )`
+        )
+        .run(input.userId, input.userId)
+    })()
+  }
+
+  findUserIdByAccountTokenHash(hash: string): string | null {
+    const now = Date.now()
+    const record = this.db
+      .prepare(
+        `SELECT user_id FROM account_tokens
+         WHERE token_hash = ? AND expires_at > ? AND revoked_at IS NULL`
+      )
+      .get(hash, now) as { user_id: string } | undefined
+    if (!record) return null
+    this.db
+      .prepare('UPDATE account_tokens SET last_used_at = ? WHERE token_hash = ?')
+      .run(now, hash)
+    return record.user_id
   }
 
   rememberOAuthSession(session: AuthenticatedSession): void {

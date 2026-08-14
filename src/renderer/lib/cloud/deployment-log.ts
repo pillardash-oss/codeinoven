@@ -2,17 +2,20 @@
  * Parse a cloud deployment build log into human-readable lines.
  *
  * Coolify deployment records carry their log as a JSON-encoded array of
- * entries shaped `{ command, output, type, timestamp, hidden, batch, order }`.
- * We render each entry as a timestamp line followed by its output line(s), and
- * mark lines emitted on `stderr` as errors so the UI can tint them destructively.
- * Anything that is not that JSON-array shape is treated as plain text and split
- * on newlines.
+ * entries shaped `{ command, output, type, timestamp, hidden, batch, order }`,
+ * where `type` is `stdout` or `stderr`. We render each entry as a timestamp
+ * line followed by its output line(s), and mark only lines from `stderr`
+ * entries as errors so the UI can tint them destructively. Nothing is inferred
+ * from the text itself — a successful build can print words like "error" or
+ * "failed" on stdout (e.g. a commit message), so the stream type is the single
+ * source of truth. Anything that is not that JSON-array shape is treated as
+ * plain text and split on newlines.
  */
 
 export interface DeploymentLogLine {
   /** Human-readable text for this line. */
   text: string
-  /** True when this line came from `stderr` (a build/step error). */
+  /** True when this line came from a `stderr` stream (a build/step error). */
   isError: boolean
 }
 
@@ -69,6 +72,7 @@ export function parseDeploymentLog(raw: string): DeploymentLogLine[] {
       if (timestamp) {
         lines.push({ text: formatCoolifyTimestamp(timestamp), isError: false })
       }
+      // The provider's `type` is authoritative: only stderr is a real error.
       const isError = entry.type === 'stderr'
       const outputLines = output.split(/\r?\n/u)
       for (const line of outputLines) {

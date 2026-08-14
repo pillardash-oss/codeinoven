@@ -171,6 +171,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'memory:saveEntries',
   // Files (composer @-file tags + citation paths)
   'projectFiles:resolveCitationPaths',
+  'projectFiles:resolveExternalCitationPaths',
   'projectFiles:search',
   // Repo metadata (thread hover popover)
   'repository:remoteOrigin',
@@ -504,6 +505,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // filesystem.read — default-No, always step-up
   'projectFiles:resolveCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
+  'projectFiles:resolveExternalCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
   'projectFiles:search': { scope: 'filesystem.read', stepUp: 'always' },
   'repository:remoteOrigin': { scope: 'filesystem.read', stepUp: 'always' },
   'repository:preflight': { scope: 'filesystem.read', stepUp: 'always' },

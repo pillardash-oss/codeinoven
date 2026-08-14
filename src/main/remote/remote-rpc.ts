@@ -1214,6 +1214,8 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           (args[1] ?? []) as string[]
         )
+      case 'projectFiles:resolveExternalCitationPaths':
+        return this.projectFilesService.resolveExternalCitationPaths((args[0] ?? []) as string[])
 
       // ─── Repo metadata ──────────────────────────────────────────────────
       case 'repository:remoteOrigin':

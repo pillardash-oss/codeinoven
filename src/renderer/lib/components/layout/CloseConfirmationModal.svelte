@@ -119,7 +119,7 @@
     >
       Dismiss
     </button>
-    {#if onConfirmSave}
+    {#if onConfirmSave && hasFiles}
       <button
         type="button"
         class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"

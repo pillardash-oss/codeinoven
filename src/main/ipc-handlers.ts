@@ -1,6 +1,7 @@
-import { app, dialog, shell, clipboard, BrowserWindow } from 'electron'
+import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { existsSync, readFileSync } from 'node:fs'
 import { readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
@@ -198,6 +199,33 @@ function githubPermissionRequired(
   }
 }
 
+/** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
+ *  the drag ghost keeps the file's look; fall back to the app icon. */
+async function resolveDragIcon(firstPath?: string): Promise<Electron.NativeImage> {
+  if (firstPath) {
+    try {
+      const icon = await app.getFileIcon(firstPath, { size: 'normal' })
+      if (!icon.isEmpty()) return icon
+    } catch {
+      // Fall back to the app icon below.
+    }
+  }
+  const candidates = [
+    join(app.getAppPath(), 'out', 'renderer', 'icon.png'),
+    join(app.getAppPath(), 'src', 'renderer', 'static', 'icon.png')
+  ]
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue
+      const icon = nativeImage.createFromBuffer(readFileSync(candidate))
+      if (!icon.isEmpty()) return icon
+    } catch {
+      // Try the next candidate path.
+    }
+  }
+  throw new Error('The native file drag icon is unavailable')
+}
+
 async function runGitHubMutation<T>(
   owner: string,
   repo: string,
@@ -262,7 +290,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'keepAwakeWhileWorking',
   'imageDescriptorAskAgain',
   'autoRetryAfterReset',
-  'resumeWorkOnRestart'
+  'resumeWorkOnRestart',
+  'defaultMergeMethod'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -1028,6 +1057,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('defaultMergeMethod' in value) {
+    patch.defaultMergeMethod = validateMergeMethod(value.defaultMergeMethod)
   }
 
   return patch
@@ -2873,6 +2906,11 @@ export function registerIpcHandlers(
         validateStringArray(candidates, 'Citation paths')
       )
   )
+  ipcMain.handle('projectFiles:resolveExternalCitationPaths', (_, absolutePaths: unknown) =>
+    projectFilesService.resolveExternalCitationPaths(
+      validateStringArray(absolutePaths, 'Absolute citation paths')
+    )
+  )
   ipcMain.handle(
     'projectFiles:create',
     (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
@@ -2967,6 +3005,31 @@ export function registerIpcHandlers(
         requireString(destinationDirectory, 'Destination directory', true)
       )
   )
+  ipcMain.handle(
+    'projectFiles:dropPaths',
+    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+      projectFilesService.dropPaths(
+        validateEntityId(projectId, 'Project ID'),
+        validateStringArray(sourcePaths, 'Dropped paths'),
+        requireString(destinationDirectory, 'Destination directory', true)
+      )
+  )
+  ipcMain.on('projectFiles:startDrag', (event, projectId: unknown, relativePaths: unknown) => {
+    void (async () => {
+      try {
+        const paths = projectFilesService.resolveForDragSync(
+          validateEntityId(projectId, 'Project ID'),
+          validateStringArray(relativePaths, 'Dragged paths')
+        )
+        if (paths.length === 0) throw new Error('No files are available to drag')
+        const icon = await resolveDragIcon(paths[0])
+        event.sender.startDrag({ file: paths[0], files: paths, icon })
+        Logger.dev('Native file drag started', { files: paths.length })
+      } catch (error) {
+        Logger.error('Could not start native file drag', error)
+      }
+    })()
+  })
   ipcMain.handle(
     'projectFiles:save',
     (_, projectId: unknown, relativePath: unknown, content: unknown, expectedRevision: unknown) => {
@@ -3432,11 +3495,35 @@ export function registerIpcHandlers(
         base: safeBase,
         head: safeHead
       }
+      // Warn when an open PR already exists for this exact head→base pair —
+      // GitHub would reject a duplicate creation with a 422. The lookup is
+      // advisory and never allowed to block the compare itself.
+      let existing = null
+      try {
+        const openPrs = await provider.listPullRequestPage({
+          owner: input.owner,
+          repo: input.repo,
+          state: 'open',
+          page: 1,
+          perPage: 100
+        })
+        const match = openPrs.items.find(
+          (pr) =>
+            canonicalGitHubBranch(pr.headRef) === safeHead &&
+            canonicalGitHubBranch(pr.baseRef) === safeBase
+        )
+        if (match) {
+          existing = { number: match.number, url: match.url, title: match.title }
+        }
+      } catch {
+        existing = null
+      }
       let remoteCompare = null
       let missingRemoteHead: ProviderHttpError | null = null
       try {
         remoteCompare = await provider.comparePullRequests(input)
-        if (remoteCompare.hasChanges) return remoteCompare
+        if (remoteCompare.hasChanges)
+          return existing ? { ...remoteCompare, existing } : remoteCompare
       } catch (error) {
         // A branch that has never been pushed cannot be compared by GitHub yet.
         if (!(error instanceof ProviderHttpError) || error.status !== 404) throw error
@@ -3447,9 +3534,9 @@ export function registerIpcHandlers(
         safeBase,
         safeHead
       )
-      if (localCompare?.hasChanges) return localCompare
+      if (localCompare?.hasChanges) return existing ? { ...localCompare, existing } : localCompare
       const fallback = remoteCompare ?? localCompare
-      if (fallback) return fallback
+      if (fallback) return existing ? { ...fallback, existing } : fallback
       throw missingRemoteHead ?? new Error('Could not compare these branches')
     }
   )
@@ -3467,6 +3554,28 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
       return runGitHubMutation(target.owner, target.repo, () => provider.closePullRequest(target))
+    }
+  )
+
+  ipcMain.handle(
+    'pr:update',
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      pullNumber: unknown,
+      title: unknown,
+      body: unknown
+    ) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.updatePullRequest({
+          ...target,
+          title: title === undefined ? undefined : validatePrCommentBody(title, true),
+          body: body === undefined ? undefined : validatePrCommentBody(body, true)
+        })
+      )
     }
   )
 
@@ -4190,6 +4299,47 @@ export function registerIpcHandlers(
       return directory
     }
   )
+
+  ipcMain.handle('pr:composeWorkspace', async (_, projectId: unknown, threadId: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const directory = join(
+      projectPath,
+      '.cio',
+      'git',
+      'compose',
+      validateEntityId(threadId, 'Thread ID')
+    )
+    await mkdir(directory, { recursive: true })
+    return directory
+  })
+
+  ipcMain.handle('pr:composeReport', async (_, projectId: unknown, threadId: unknown) => {
+    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const reportPath = join(projectPath, '.cio', 'git', 'compose', safeThreadId, 'compose.json')
+    try {
+      const [raw, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
+      const parsed: unknown = JSON.parse(raw)
+      const record = isRecord(parsed) ? parsed : {}
+      const title = typeof record['title'] === 'string' ? record['title'] : ''
+      const description = typeof record['description'] === 'string' ? record['description'] : ''
+      return {
+        path: reportPath,
+        title,
+        description,
+        updatedAt: stats.mtimeMs,
+        threadId: safeThreadId
+      }
+    } catch {
+      return {
+        path: reportPath,
+        title: '',
+        description: '',
+        updatedAt: null,
+        threadId: safeThreadId
+      }
+    }
+  })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())

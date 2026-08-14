@@ -1,12 +1,9 @@
 name: Nightly
 
 on:
-  schedule:
-    - cron: '0 4 * * *'
   push:
     branches:
       - nightly
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,10 +13,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate dev promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Require dev ancestry and a version bump
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          git fetch origin dev:refs/remotes/origin/dev
+          if ! git merge-base --is-ancestor origin/dev HEAD; then
+            echo "::error::nightly must be promoted from the current dev branch"
+            exit 1
+          fi
+          previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
+          current="$(jq -r .version package.json)"
+          upstream="$(git show origin/dev:package.json | jq -r .version)"
+          if [ "$current" != "$upstream" ]; then
+            echo "::error::nightly version $current does not match dev version $upstream"
+            exit 1
+          fi
+          BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$previous" CURRENT_VERSION="$current" \
+            bun scripts/validate-release-promotion.ts
+
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    needs: validate
     env:
       MAIN_VITE_REMOTE_API_ORIGIN: ${{ vars.REMOTE_API_ORIGIN || 'https://mobile.codeinoven.com' }}
       CODEINOVEN_GITHUB_CLIENT_ID: ${{ vars.CODEINOVEN_GITHUB_CLIENT_ID }}
@@ -49,6 +82,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -57,6 +92,10 @@ jobs:
 
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
+
+      - name: Install Linux native launcher headers
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
 
       - name: Build production bundle
         run: bun run build:production
@@ -89,11 +128,20 @@ jobs:
         shell: bash
         run: |
           command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
-          if [ "${{ matrix.target }}" = "linux" ]; then
-            xvfb-run -a "${command[@]}"
-          else
-            "${command[@]}"
-          fi
+          exit_code=0
+          for attempt in 1 2 3; do
+            if [ "${{ matrix.target }}" = "linux" ]; then
+              xvfb-run -a "${command[@]}" || exit_code=$?
+            else
+              "${command[@]}" || exit_code=$?
+            fi
+            if [ "$exit_code" -eq 0 ]; then
+              break
+            fi
+            echo "startup smoke attempt $attempt failed with exit $exit_code; retrying"
+            sleep 10
+          done
+          exit "$exit_code"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
@@ -106,7 +154,7 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.blockmap
-            dist/latest*.yml
+            dist/*.yml
             agent-out/startup-smoke-*.json
           if-no-files-found: error
 
@@ -121,12 +169,19 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Determine nightly version
         id: version
         run: |
           base="$(node -p "require('./package.json').version")"
-          echo "version=${base}-nightly.$(date -u +%Y%m%d%H%M)" >> "$GITHUB_OUTPUT"
+          if ! printf '%s' "$base" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "::error::package.json version must be stable major.minor.patch, got $base"
+            exit 1
+          fi
+          echo "version=$base" >> "$GITHUB_OUTPUT"
+          echo "tag=v${base}-nightly.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7
@@ -137,24 +192,49 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum *.dmg *.zip *.exe *.AppImage *.deb 2>/dev/null > SHA256SUMS.txt || true
-          ls -la
+          find . -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' \) -print0 \
+            | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          echo "artifacts listing:"
+          find . -type f | sort
+          echo "SHA256SUMS.txt:"
+          cat SHA256SUMS.txt
 
       - name: Create or update nightly release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="${{ steps.version.outputs.version }}"
-          files=()
-          for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/latest*.yml artifacts/SHA256SUMS.txt; do
-            [ -f "$f" ] && files+=("$f")
-          done
-          if gh release view nightly >/dev/null 2>&1; then
-            gh release upload nightly "${files[@]}" --clobber
-            gh release edit nightly --prerelease
-          else
-            gh release create nightly "${files[@]}" \
-              --title "CodeInOven $version" \
-              --notes "Nightly build from the \`nightly\` branch. Use for testing; not intended for production." \
-              --prerelease
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_commit="$(git rev-list -n 1 "$tag")"
+            if [ "$tagged_commit" != "$GITHUB_SHA" ]; then
+              echo "::error::Tag $tag already points to $tagged_commit instead of $GITHUB_SHA"
+              exit 1
+            fi
           fi
+          files=()
+          while IFS= read -r f; do
+            files+=("$f")
+          done < <(find artifacts -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.blockmap' -o -name '*.yml' -o -name 'SHA256SUMS.txt' \) | sort)
+          publish_attempt=0
+          while [ "$publish_attempt" -lt 3 ]; do
+            publish_attempt=$((publish_attempt + 1))
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" "${files[@]}" --clobber
+              gh release edit "$tag" --title "CodeInOven $version nightly" --prerelease
+            else
+              gh release create "$tag" "${files[@]}" \
+                --target "$GITHUB_SHA" \
+                --title "CodeInOven $version nightly" \
+                --notes "Prerelease build of version $version from the \`nightly\` branch. Use for testing; not intended for production." \
+                --prerelease \
+                --latest=false
+            fi
+            publish_exit=$?
+            if [ "$publish_exit" -eq 0 ]; then
+              break
+            fi
+            echo "release publish attempt $publish_attempt failed with exit $publish_exit; retrying"
+            sleep 10
+          done
+          exit "$publish_exit"

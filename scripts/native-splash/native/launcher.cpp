@@ -1,5 +1,8 @@
 #define UNICODE
 #define _UNICODE
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <bcrypt.h>
 #include <gdiplus.h>
@@ -71,7 +74,7 @@ static Bitmap *load_icon() {
         0,
         static_cast<INT>(decoded->GetWidth()),
         static_cast<INT>(decoded->GetHeight()),
-        Gdiplus::PixelFormat32bppPARGB);
+        PixelFormat32bppPARGB);
   }
   delete decoded;
   stream->Release();

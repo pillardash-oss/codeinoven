@@ -4,7 +4,13 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
-  import type { AppConfig, AppConfigPatch, SlashCommandMode, ThemePreference } from '$shared/types'
+  import type {
+    AppConfig,
+    AppConfigPatch,
+    PrMergeMethod,
+    SlashCommandMode,
+    ThemePreference
+  } from '$shared/types'
   import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG } from '$shared/brand'
   import {
@@ -128,6 +134,15 @@
       label: 'Harness passthrough',
       description: 'Forward slash commands to the active agent harness.'
     }
+  ]
+
+  const mergeMethodOptions: Array<{
+    id: PrMergeMethod
+    label: string
+  }> = [
+    { id: 'squash', label: 'Squash' },
+    { id: 'merge', label: 'Merge' },
+    { id: 'rebase', label: 'Rebase' }
   ]
 
   function saveThreadLimit(event: Event): void {
@@ -461,6 +476,33 @@
                   disabled={!settingsReady}
                 />
               </div>
+            </div>
+          </div>
+
+          <!-- Git -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium">Default merge method</p>
+                <p class="text-xs text-dimmed">
+                  Pre-selected when merging a pull request from the Git panel
+                </p>
+              </div>
+              <select
+                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                value={config.defaultMergeMethod}
+                disabled={!settingsReady}
+                aria-label="Default merge method"
+                onchange={(event: SelectChangeEvent) =>
+                  void updateConfig({
+                    defaultMergeMethod: event.currentTarget.value as PrMergeMethod
+                  })}
+              >
+                {#each mergeMethodOptions as option (option.id)}
+                  <option value={option.id}>{option.label}</option>
+                {/each}
+              </select>
             </div>
           </div>
 

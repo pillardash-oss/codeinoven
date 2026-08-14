@@ -37,6 +37,13 @@ interface GitCommandError extends Error {
 
 const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
 
+function isUnbornBranchLogError(failure: unknown): boolean {
+  if (!(failure instanceof Error)) return false
+  const error = failure as GitCommandError
+  const message = error.gitError ?? error.message
+  return message.includes('does not have any commits yet')
+}
+
 /**
  * Main-process git runtime built on `simple-git` — the same thin wrapper over
  * the system `git` binary the app already execs in `repository-service`,
@@ -333,7 +340,13 @@ export class GitService {
           maxCount: Math.max(1, Math.min(limit, 200))
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
-        const history = await git.log(options)
+        let history
+        try {
+          history = await git.log(options)
+        } catch (failure) {
+          if (isUnbornBranchLogError(failure)) return []
+          throw failure
+        }
         return history.all.map((entry): GitCommitInfo => ({
           hash: entry.hash,
           shortHash: entry.hash.slice(0, 7),
@@ -763,7 +776,7 @@ export class GitService {
     })
   }
 
-  /** Add paths to `.gitignore` (directories get a trailing slash). */
+  /** Stop tracking paths, preserve them on disk, and add them to `.gitignore`. */
   async ignore(projectPath: string, paths: string[]): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -784,12 +797,26 @@ export class GitService {
           const pattern = isDirectory ? `${path}/` : path
           if (!lines.includes(pattern)) patterns.push(pattern)
         }
-        if (patterns.length === 0) return
-        const separator = lines.length > 0 && lines[lines.length - 1]?.trim() !== '' ? '\n' : ''
-        const additions =
-          lines.length > 0 ? `${separator}${patterns.join('\n')}` : patterns.join('\n')
-        const content = existing ? `${existing}${additions}\n` : `${patterns.join('\n')}\n`
-        await writeFile(gitignorePath, content, 'utf-8')
+        if (patterns.length > 0) {
+          const separator = lines.length > 0 && lines[lines.length - 1]?.trim() !== '' ? '\n' : ''
+          const additions =
+            lines.length > 0 ? `${separator}${patterns.join('\n')}` : patterns.join('\n')
+          const content = existing ? `${existing}${additions}\n` : `${patterns.join('\n')}\n`
+          await writeFile(gitignorePath, content, 'utf-8')
+        }
+
+        // An ignore rule has no effect on files that are already tracked. Remove
+        // the selected paths from the index while keeping their working-tree
+        // contents intact so the requested ignore operation fully takes effect.
+        await this.client(directory).raw([
+          'rm',
+          '-r',
+          '--cached',
+          '--force',
+          '--ignore-unmatch',
+          '--',
+          ...safePaths
+        ])
       })
       return this.readStatus(directory)
     })

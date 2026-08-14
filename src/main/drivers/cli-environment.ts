@@ -14,6 +14,11 @@ function nvmVersionedBins(): string[] {
   }
 }
 
+/** Marker env var set on every process spawned for a harness so a startup
+ * reaper can identify app-owned processes without touching a user's own
+ * external claude-code/opencode sessions. Inherited by agent-spawned children. */
+export const OWNED_PROCESS_MARKER = 'CODEINOVEN_OWNED'
+
 /**
  * Desktop apps do not inherit a login shell PATH. Keep the augmented harness
  * environment in one place so probing and process-backed drivers agree.
@@ -34,6 +39,7 @@ export function buildHarnessEnvironment(base: NodeJS.ProcessEnv = process.env): 
   ]
   return {
     ...base,
-    PATH: `${base['PATH'] ?? ''}:${extraPaths.join(':')}`
+    PATH: `${base['PATH'] ?? ''}:${extraPaths.join(':')}`,
+    [OWNED_PROCESS_MARKER]: '1'
   }
 }

@@ -47,14 +47,33 @@ describe('parseDeploymentLog', () => {
     ])
   })
 
-  it('marks stderr lines as errors and stdout as normal', () => {
+  it('marks only stderr lines as errors, regardless of text', () => {
     const lines = parseDeploymentLog(
       JSON.stringify([
         { output: 'ok', type: 'stdout', timestamp: '2026-08-11T06:49:50.202938Z' },
-        { output: 'bad', type: 'stderr', timestamp: '2026-08-11T06:49:51.202938Z' }
+        {
+          output: 'error in a commit message',
+          type: 'stdout',
+          timestamp: '2026-08-11T06:49:51.202938Z'
+        },
+        {
+          output: 'npm ERR! something failed',
+          type: 'stderr',
+          timestamp: '2026-08-11T06:49:52.202938Z'
+        },
+        {
+          output: 'Service built successfully',
+          type: 'stderr',
+          timestamp: '2026-08-11T06:49:53.202938Z'
+        }
       ])
     )
-    expect(lines.filter((line) => line.isError).map((line) => line.text)).toEqual(['bad'])
+    // The stream type is authoritative: both stderr lines are errors; stdout
+    // lines are not, even when their text contains the word "error".
+    expect(lines.filter((line) => line.isError).map((line) => line.text)).toEqual([
+      'npm ERR! something failed',
+      'Service built successfully'
+    ])
   })
 
   it('splits multi-line output across separate lines', () => {
@@ -82,6 +101,14 @@ describe('parseDeploymentLog', () => {
     expect(lines).toEqual([
       { text: 'plain line one', isError: false },
       { text: 'plain line two', isError: false }
+    ])
+  })
+
+  it('never flags errors in the plain-text fallback (no stream info)', () => {
+    const lines = parseDeploymentLog('Step 1 ok\nERROR: build failed')
+    expect(lines).toEqual([
+      { text: 'Step 1 ok', isError: false },
+      { text: 'ERROR: build failed', isError: false }
     ])
   })
 

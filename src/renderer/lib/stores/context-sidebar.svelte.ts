@@ -38,6 +38,10 @@ export interface DiffContextTab {
   projectId: string
   threadId: string
   checkpointId: string | null
+  /** When set, the Changes panel scrolls to this file's diff. */
+  revealPath: string | null
+  /** Bumped on every reveal request so re-clicking the same file re-triggers. */
+  revealNonce: number
 }
 
 export interface SubagentContextTab {
@@ -517,12 +521,19 @@ class ContextSidebarState {
     }
   }
 
-  openDiff(projectId: string, threadId: string, checkpointId: string | null = null): void {
+  openDiff(
+    projectId: string,
+    threadId: string,
+    checkpointId: string | null = null,
+    revealPath: string | null = null
+  ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `diff:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing?.kind === 'diff') {
       existing.checkpointId = checkpointId
+      existing.revealPath = revealPath
+      existing.revealNonce += 1
       this.focusInContext(context, id)
       return
     }
@@ -532,7 +543,9 @@ class ContextSidebarState {
       title: 'Changes',
       projectId,
       threadId,
-      checkpointId
+      checkpointId,
+      revealPath,
+      revealNonce: 1
     })
   }
 

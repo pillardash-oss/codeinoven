@@ -908,9 +908,15 @@
   }
 
   $effect(() => {
+    // Load scope boards for every project that has threads in the sidebar, not
+    // just the top-10 recent ones. Scope tags and the two-row layout resolve per
+    // thread through the project's own board, so after a refresh (when the boards
+    // map starts empty) every visible project's board must be loaded or the tags
+    // disappear until a project switch forces them in. ensureBoardLoaded is cached,
+    // so this stays cheap after the first pass.
     const projectIds = [
       ...new Set(
-        recentThreads
+        allThreads
           .filter((thread) => thread.projectId !== INBOX_PROJECT_ID)
           .map((thread) => thread.projectId)
       )
@@ -1053,6 +1059,11 @@
     })
   })
 
+  /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
+   *  effect below only fires when the draft state actually transitions — never
+   *  clobbering a manual slice switch while a draft stays unchanged. */
+  let draftStageSyncKey: string | null = null
+
   // Sync the selected thread's draft state to scope so draft-aware slicing works.
   // This MUST run before the pending-updates effect so scope's draftThreadId is
   // always current when stageForThread is evaluated.
@@ -1061,15 +1072,20 @@
     const hasDraft = selectedThreadHasDraft
     scopeState.setSelectedThreadDraftState(id, hasDraft)
     // Immediately switch the scope sidebar to 'todo' when draft promotion kicks in
-    // for the thread the sidebar is currently showing.
+    // for the thread the sidebar is currently showing — but only when the draft
+    // state changes. Reading sidebarContext here would otherwise make this effect
+    // re-run on every manual stage change and undo the user's slice switch.
+    const key = `${id}:${hasDraft}`
     if (
       id &&
       hasDraft &&
       scopeState.sidebarContext?.threadId === id &&
-      scopeState.sidebarContext.stage !== 'todo'
+      scopeState.sidebarContext.stage !== 'todo' &&
+      draftStageSyncKey !== key
     ) {
       scopeState.sidebarContext = { ...scopeState.sidebarContext, stage: 'todo' }
     }
+    draftStageSyncKey = key
   })
 
   // Detect user-initiated scrolling of the sidebar so focus-follow doesn't
@@ -1090,6 +1106,20 @@
    *  its own per-stage lists and inner scrolling; the focus-follow reveal below
    *  is only for the regular Projects/Threads/Chats views. */
   let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
+
+  // The scope-state sidebar board reads its data from the active project's board
+  // and thread list (`scopeState.board` / `currentProjectThreads`, keyed off
+  // `activeProjectId`). The sidebar context is set with a fire-and-forget
+  // `activateProject`, so `sidebarContext.projectId` and `activeProjectId` can be
+  // out of sync on first entry — which would render stale/empty stage slices until
+  // a project switch realigned them. Keep them aligned reactively so the board
+  // hydrates immediately (mirrors ScopeView's own activeProjectId reload effect).
+  $effect(() => {
+    const context = scopeState.sidebarContext
+    if (context && context.projectId !== scopeState.activeProjectId) {
+      void scopeState.activateProject(context.projectId)
+    }
+  })
 
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
@@ -1615,8 +1645,9 @@
     const idx = projectThreads.findIndex((t) => t.id === draggedId)
     const above = projectThreads[idx - 1]
     const below = projectThreads[idx + 1]
-    const aboveKey = above ? (above.sortOrder ?? above.lastActivity) : Number.MAX_SAFE_INTEGER
-    const belowKey = below ? (below.sortOrder ?? below.lastActivity) : 0
+    const effectiveKey = (t: Thread) => Math.max(t.sortOrder ?? 0, t.lastActivity)
+    const aboveKey = above ? effectiveKey(above) : Number.MAX_SAFE_INTEGER
+    const belowKey = below ? effectiveKey(below) : 0
     let sortOrder: number
     if (above && below) {
       sortOrder = (aboveKey + belowKey) / 2
@@ -2977,6 +3008,8 @@
                   projectId={activeContextTab.projectId}
                   threadId={activeContextTab.threadId}
                   checkpointId={activeContextTab.checkpointId}
+                  revealPath={activeContextTab.revealPath}
+                  revealNonce={activeContextTab.revealNonce}
                 />
               {:else if activeContextTab.kind === 'terminal'}
                 {#if terminalFullscreenTabId === activeContextTab.id}

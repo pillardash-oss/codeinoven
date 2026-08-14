@@ -10,7 +10,13 @@ import { ClaudeCodeDriver, mapClaudeCodeRecord } from './claude-code-driver'
 import type { CliLineParseContext } from './persistent-cli-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
-vi.mock('child_process', () => ({ spawn: spawnMock }))
+const execFileMock = vi.hoisted(() => vi.fn())
+vi.mock('child_process', () => ({ spawn: spawnMock, execFile: execFileMock }))
+// Default: resolve the pre-flight `claude auth status` probe as authenticated so
+// existing sendPrompt tests exercise the real turn path unchanged.
+execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, callback) =>
+  callback(null, JSON.stringify({ loggedIn: true }))
+)
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
@@ -28,6 +34,10 @@ class FakeChild extends EventEmitter {
 const roots: string[] = []
 afterEach(async () => {
   spawnMock.mockReset()
+  execFileMock.mockReset()
+  execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, callback) =>
+    callback(null, JSON.stringify({ loggedIn: true }))
+  )
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 

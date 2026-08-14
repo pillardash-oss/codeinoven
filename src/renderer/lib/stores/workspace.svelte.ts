@@ -327,12 +327,15 @@ export function threadSort(
   if (aDraft !== bDraft) return aDraft ? -1 : 1
   if (a.status === 'created' && b.status !== 'created') return -1
   if (b.status === 'created' && a.status !== 'created') return 1
-  // Order by a "frozen recency" anchor: a manual drag-reorder (sortOrder) sets
-  // a timestamp that holds the thread's position, but any thread with genuinely
-  // newer activity (a larger lastActivity) sorts above it, and can be dragged
-  // back above again. Unanchored threads fall back to their last activity.
-  const aKey = a.sortOrder ?? a.lastActivity
-  const bKey = b.sortOrder ?? b.lastActivity
+  // Order by the newer of the thread's last activity and its manual sort-order
+  // anchor. Any new activity (a send, rename, status change, a working thread,
+  // etc.) always pushes the thread to the top, because its lastActivity (epoch
+  // time, always growing) outranks an older manual anchor. A manual drag sets a
+  // newer timestamp so the thread holds its place — until something moves again,
+  // at which point it can be dragged back above. Threads without an anchor just
+  // fall back to last activity, so the default is pure recency ordering.
+  const aKey = Math.max(a.sortOrder ?? 0, a.lastActivity)
+  const bKey = Math.max(b.sortOrder ?? 0, b.lastActivity)
   if (aKey !== bKey) return bKey - aKey
   return a.id.localeCompare(b.id)
 }
