@@ -908,9 +908,15 @@
   }
 
   $effect(() => {
+    // Load scope boards for every project that has threads in the sidebar, not
+    // just the top-10 recent ones. Scope tags and the two-row layout resolve per
+    // thread through the project's own board, so after a refresh (when the boards
+    // map starts empty) every visible project's board must be loaded or the tags
+    // disappear until a project switch forces them in. ensureBoardLoaded is cached,
+    // so this stays cheap after the first pass.
     const projectIds = [
       ...new Set(
-        recentThreads
+        allThreads
           .filter((thread) => thread.projectId !== INBOX_PROJECT_ID)
           .map((thread) => thread.projectId)
       )
