@@ -311,7 +311,7 @@ const INCOMPLETE_TURN_MESSAGE =
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
-const SPEC_GENERATION_MAX_ATTEMPTS = 2
+const SPEC_GENERATION_MAX_ATTEMPTS = 3
 const CURRENT_SPEC_GENERATION_VERSION = 1
 const SPEC_GENERATION_FAILURE_USER_MESSAGE =
   'Spec generation failed, model returned an invalid spec.'
