@@ -128,13 +128,13 @@ jobs:
         shell: bash
         run: |
           command=(bun run smoke:packaged --target "${{ matrix.target }}" --app-dir "${{ matrix.app_dir }}" --output "agent-out/startup-smoke-${{ matrix.target }}.json")
+          exit_code=0
           for attempt in 1 2 3; do
             if [ "${{ matrix.target }}" = "linux" ]; then
-              xvfb-run -a "${command[@]}"
+              xvfb-run -a "${command[@]}" || exit_code=$?
             else
-              "${command[@]}"
+              "${command[@]}" || exit_code=$?
             fi
-            exit_code=$?
             if [ "$exit_code" -eq 0 ]; then
               break
             fi
