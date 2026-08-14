@@ -65,10 +65,12 @@
   let searchQuery = $state('')
   type StatusFilter = 'all' | CloudDeploymentContainer['status']
   let statusFilter = $state<StatusFilter>('all')
+  let providerFilter = $state<'all' | CloudDeploymentProviderKind>('all')
 
   function clearFilters(): void {
     searchQuery = ''
     statusFilter = 'all'
+    providerFilter = 'all'
   }
 
   /** Collapsing search also drops the query, so nothing stays filtered invisibly. */
@@ -158,6 +160,7 @@
     const q = searchQuery.trim().toLowerCase()
     return containers.filter((c) => {
       if (statusFilter !== 'all' && c.status !== statusFilter) return false
+      if (providerFilter !== 'all' && c.providerKind !== providerFilter) return false
       if (!q) return true
       const haystack = [c.label, c.id, c.project ?? '', c.providerKind].join(' ').toLowerCase()
       return haystack.includes(q)
@@ -193,6 +196,15 @@
     }
     return chips
   })
+
+  /** Provider chips share the filter strip and carry their own add-container action. */
+  const providerChips = $derived(
+    providers.map((kind) => ({
+      kind,
+      label: PROVIDER_LABELS[kind] ?? kind,
+      count: containers.filter((c) => c.providerKind === kind).length
+    }))
+  )
 
   /** True while a configured provider's overview hasn't loaded into the cache yet. */
   const containersLoading = $derived(
@@ -386,60 +398,8 @@
       onRemediate={(logText) => void startAgentRemediation(logText)}
     />
   {:else}
-    <!-- Header -->
-    <div class="flex shrink-0 items-center border-b border-border px-3 py-2">
-      <div class="min-w-0 flex-1">
-        <p class="text-[11px] font-semibold text-foreground">Cloud Deployments</p>
-        <p class="truncate text-[9px] text-dimmed">
-          {#if configured}
-            {containers.length} container{containers.length === 1 ? '' : 's'} · {providers.length} provider{providers.length ===
-            1
-              ? ''
-              : 's'}
-          {:else}
-            No providers configured
-          {/if}
-        </p>
-      </div>
-      {#if configured && hasContainers}
-        <button
-          type="button"
-          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-elevated hover:text-foreground {searchOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-dimmed'}"
-          title="Search containers by name"
-          aria-label="Search containers by name"
-          aria-pressed={searchOpen}
-          onclick={toggleSearch}
-        >
-          <Search size={12} />
-        </button>
-      {/if}
-      {#if configured}
-        <button
-          type="button"
-          class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-          title="Refresh deployments"
-          aria-label="Refresh deployments"
-          onclick={() => void refreshAll()}
-        >
-          <RefreshCw size={12} class={refreshingAll ? 'animate-spin' : ''} />
-        </button>
-      {/if}
-      <button
-        type="button"
-        class="ml-1 flex h-7 cursor-pointer items-center gap-1 rounded-md bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
-        aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
-        onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
-      >
-        <Plus size={12} />
-        {configured ? 'Add' : 'Connect'}
-      </button>
-    </div>
-
     {#if configured && hasContainers}
-      <!-- Status strip: at-a-glance counts that double as the status filter. -->
+      <!-- Filter strip: status counts and providers in one row; also the panel's dashboard. -->
       <div
         class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
       >
@@ -471,24 +431,47 @@
             <span class="tabular-nums text-dimmed">{chip.count}</span>
           </button>
         {/each}
-      </div>
-    {/if}
 
-    {#if configured && hasContainers && searchOpen}
-      <div class="relative shrink-0 border-b border-border bg-surface px-2 py-1.5">
-        <Search
-          size={11}
-          class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
-        />
-        <!-- svelte-ignore a11y_autofocus -->
-        <input
-          type="text"
-          autofocus
-          placeholder="Search by name, id or project…"
-          aria-label="Search containers"
-          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[10px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-          bind:value={searchQuery}
-        />
+        {#if providerChips.length > 0}
+          <span class="mx-0.5 h-4 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        {/if}
+
+        {#each providerChips as chip (chip.kind)}
+          <!-- Chip and its add action are siblings so neither button nests in the other. -->
+          <div
+            class="flex h-6 shrink-0 items-center rounded-md transition-colors {providerFilter ===
+            chip.kind
+              ? 'bg-raised text-foreground'
+              : 'text-muted hover:bg-elevated'}"
+          >
+            <button
+              type="button"
+              class="flex h-6 cursor-pointer items-center gap-1 rounded-l-md pl-1.5 pr-1 text-[10px] font-medium hover:text-foreground"
+              title="Show only {chip.label} containers"
+              aria-label="Show only {chip.label} containers"
+              aria-pressed={providerFilter === chip.kind}
+              onclick={() => (providerFilter = providerFilter === chip.kind ? 'all' : chip.kind)}
+            >
+              <CloudProviderIcon
+                providerKind={chip.kind}
+                size={10}
+                class="shrink-0"
+                title={chip.label}
+              />
+              {chip.label}
+              <span class="tabular-nums text-dimmed">{chip.count}</span>
+            </button>
+            <button
+              type="button"
+              class="flex h-6 w-5 cursor-pointer items-center justify-center rounded-r-md text-dimmed hover:text-foreground"
+              title="Add a {chip.label} container to monitor"
+              aria-label="Add a {chip.label} container to monitor"
+              onclick={() => openConfigSheet('container')}
+            >
+              <Plus size={11} />
+            </button>
+          </div>
+        {/each}
       </div>
     {/if}
 
@@ -564,19 +547,6 @@
               <span class="ml-auto text-[9px] tabular-nums text-dimmed"
                 >{projectGroups.reduce((n, g) => n + g.containers.length, 0)}</span
               >
-              <button
-                type="button"
-                class="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Add a {PROVIDER_LABELS[
-                  kind as CloudDeploymentProviderKind
-                ]} container to monitor"
-                aria-label="Add a {PROVIDER_LABELS[
-                  kind as CloudDeploymentProviderKind
-                ]} container to monitor"
-                onclick={() => openConfigSheet('container')}
-              >
-                <Plus size={11} />
-              </button>
             </div>
             {#if accessErrors[kind]}
               <p
@@ -677,16 +647,83 @@
       </div>
     {/if}
 
-    <div class="flex shrink-0 items-center justify-between border-t border-border px-3 py-2">
-      <span class="text-[9px] text-dimmed">
-        Live updates{liveUpdates ? ' · every minute' : ' · paused'}
+    {#if configured && hasContainers && searchOpen}
+      <div class="relative shrink-0 border-t border-border bg-surface px-2 py-1.5">
+        <Search
+          size={11}
+          class="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-dimmed"
+        />
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          type="text"
+          autofocus
+          placeholder="Search by name, id or project…"
+          aria-label="Search containers"
+          class="h-6 w-full rounded-md border border-border bg-elevated pl-6 pr-2 text-[10px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
+          bind:value={searchQuery}
+        />
+      </div>
+    {/if}
+
+    <!-- Status bar: inventory on the left, the panel's actions on the right. -->
+    <div class="flex shrink-0 items-center gap-1 border-t border-border px-2 py-1">
+      <span class="truncate text-[9px] text-dimmed">
+        {#if configured}
+          {containers.length} container{containers.length === 1 ? '' : 's'} · {providers.length} provider{providers.length ===
+          1
+            ? ''
+            : 's'}
+        {:else}
+          No providers configured
+        {/if}
       </span>
-      <Switch
-        checked={liveUpdates}
-        onchange={(checked) => (liveUpdates = checked)}
-        aria-label="Toggle live status updates"
-        title="Toggle live status updates"
-      />
+      <button
+        type="button"
+        class="flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded px-1 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
+        aria-label={configured ? 'Add a container to monitor' : 'Connect a cloud provider'}
+        onclick={() => openConfigSheet(configured ? 'container' : 'provider')}
+      >
+        <Plus size={11} />
+        {configured ? 'Add' : 'Connect'}
+      </button>
+
+      <div class="ml-auto flex shrink-0 items-center gap-0.5">
+        {#if configured && hasContainers}
+          <button
+            type="button"
+            class="flex h-5 w-5 cursor-pointer items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground {searchOpen
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed'}"
+            title="Search containers by name, id or project"
+            aria-label="Search containers by name, id or project"
+            aria-pressed={searchOpen}
+            onclick={toggleSearch}
+          >
+            <Search size={11} />
+          </button>
+        {/if}
+        {#if configured}
+          <button
+            type="button"
+            class="flex h-5 w-5 cursor-pointer items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            title="Refresh deployment statuses now"
+            aria-label="Refresh deployment statuses now"
+            onclick={() => void refreshAll()}
+          >
+            <RefreshCw size={11} class={refreshingAll ? 'animate-spin' : ''} />
+          </button>
+        {/if}
+        <Switch
+          checked={liveUpdates}
+          onchange={(checked) => (liveUpdates = checked)}
+          class="ml-0.5 scale-90"
+          aria-label="Toggle live status updates"
+          title={liveUpdates
+            ? 'Live updates on — refreshing every minute'
+            : 'Live updates paused — refresh manually'}
+        />
+      </div>
     </div>
   {/if}
 </div>
