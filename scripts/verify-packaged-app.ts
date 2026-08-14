@@ -75,10 +75,18 @@ if (target === 'mac') {
 
 mustHave(
   'metadata file',
-  files.some((file) => extname(file) === '.yml' && file.includes('latest'))
+  files.some(
+    (file) =>
+      extname(file) === '.yml' &&
+      (file.includes('latest') || file.includes('nightly'))
+  )
 )
 
-const yamlFiles = files.filter((file) => extname(file) === '.yml' && file.includes('latest'))
+const yamlFiles = files.filter(
+  (file) =>
+    extname(file) === '.yml' &&
+    (file.includes('latest') || file.includes('nightly'))
+)
 let hasVersionMarker = false
 for (const file of yamlFiles) {
   const contents = readFileSync(resolve(absArtifactDir, file), 'utf8')
