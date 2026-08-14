@@ -1091,6 +1091,20 @@
    *  is only for the regular Projects/Threads/Chats views. */
   let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
 
+  // The scope-state sidebar board reads its data from the active project's board
+  // and thread list (`scopeState.board` / `currentProjectThreads`, keyed off
+  // `activeProjectId`). The sidebar context is set with a fire-and-forget
+  // `activateProject`, so `sidebarContext.projectId` and `activeProjectId` can be
+  // out of sync on first entry — which would render stale/empty stage slices until
+  // a project switch realigned them. Keep them aligned reactively so the board
+  // hydrates immediately (mirrors ScopeView's own activeProjectId reload effect).
+  $effect(() => {
+    const context = scopeState.sidebarContext
+    if (context && context.projectId !== scopeState.activeProjectId) {
+      void scopeState.activateProject(context.projectId)
+    }
+  })
+
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
   // suppression; list changes re-reveal the row if background activity pushed
