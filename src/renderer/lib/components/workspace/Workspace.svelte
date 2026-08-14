@@ -1059,6 +1059,11 @@
     })
   })
 
+  /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
+   *  effect below only fires when the draft state actually transitions — never
+   *  clobbering a manual slice switch while a draft stays unchanged. */
+  let draftStageSyncKey: string | null = null
+
   // Sync the selected thread's draft state to scope so draft-aware slicing works.
   // This MUST run before the pending-updates effect so scope's draftThreadId is
   // always current when stageForThread is evaluated.
@@ -1067,15 +1072,20 @@
     const hasDraft = selectedThreadHasDraft
     scopeState.setSelectedThreadDraftState(id, hasDraft)
     // Immediately switch the scope sidebar to 'todo' when draft promotion kicks in
-    // for the thread the sidebar is currently showing.
+    // for the thread the sidebar is currently showing — but only when the draft
+    // state changes. Reading sidebarContext here would otherwise make this effect
+    // re-run on every manual stage change and undo the user's slice switch.
+    const key = `${id}:${hasDraft}`
     if (
       id &&
       hasDraft &&
       scopeState.sidebarContext?.threadId === id &&
-      scopeState.sidebarContext.stage !== 'todo'
+      scopeState.sidebarContext.stage !== 'todo' &&
+      draftStageSyncKey !== key
     ) {
       scopeState.sidebarContext = { ...scopeState.sidebarContext, stage: 'todo' }
     }
+    draftStageSyncKey = key
   })
 
   // Detect user-initiated scrolling of the sidebar so focus-follow doesn't
