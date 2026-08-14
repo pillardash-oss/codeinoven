@@ -248,6 +248,11 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  /** Whether the current run is confirmed by live session activity (vs an
+   *  optimistic restore off a persisted in-flight status). Only a live-confirmed
+   *  run may expand the working trace, so a stale `planning`/`executing` DB
+   *  status can't flash the trace open before the live session settles idle. */
+  let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -276,7 +281,18 @@
     thread.assignmentRole !== 'coordinator' &&
     thread.achievementRole !== 'coordinator'
   ) {
-    agentRuns.setBusy(thread.projectId, thread.id, true, undefined, thread.lastActivity)
+    // Optimistic restore off the persisted in-flight status: it keeps the
+    // composer/placeholder working, but it is not live-confirmed and must not
+    // expand the working trace (the live session settles the truth on connect).
+    agentRuns.setBusy(
+      thread.projectId,
+      thread.id,
+      true,
+      undefined,
+      thread.lastActivity,
+      false,
+      false
+    )
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
@@ -2459,7 +2475,15 @@
       return
     }
     if (status === 'planning' || status === 'executing') {
-      agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId(), startedAt)
+      agentRuns.setBusy(
+        thread.projectId,
+        thread.id,
+        true,
+        latestUserMessageId(),
+        startedAt,
+        false,
+        false
+      )
       return
     }
     setIdleFromRestore()
@@ -6607,7 +6631,7 @@
                   {#if isTurnStart}
                     {@const collectedTurnParts = getTurnWorkingParts(
                       msgIndex,
-                      threadWorking && isLatestTurn
+                      liveBusy && isLatestTurn
                     )}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
@@ -6617,8 +6641,8 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={threadWorking && isLatestTurn}
-                        busy={threadWorking && isLatestTurn}
+                        open={liveBusy && isLatestTurn}
+                        busy={liveBusy && isLatestTurn}
                         latest={isLatestTurn}
                         done={isTurnCompleted(msgIndex)}
                         startTime={isLatestTurn
