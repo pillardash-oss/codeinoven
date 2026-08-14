@@ -12,8 +12,6 @@
     trigger: Snippet
     /** Caps the height of the scrollable diff body. */
     maxHeight?: string
-    /** Width of the popover. */
-    width?: string
     /** Extra classes for the hover wrapper element. */
     class?: string
   }
@@ -25,7 +23,6 @@
     path,
     trigger,
     maxHeight = '18rem',
-    width = '460px',
     class: className = ''
   }: Props = $props()
 
@@ -37,6 +34,8 @@
   let popover = $state<HTMLDivElement | null>(null)
   let open = $state(false)
   let position = $state<{ top: number; left: number }>({ top: 0, left: 0 })
+  /** Matches the trigger (card) width so the diff preview spans the full card. */
+  let popoverWidth = $state(460)
   let diff = $state<TurnCheckpointFileDiff | null>(null)
   let loading = $state(false)
   let error = $state('')
@@ -61,13 +60,13 @@
     const rect = anchor?.getBoundingClientRect()
     if (!rect) return
     const estimateHeight = 360
-    const estimateWidth = 460
+    popoverWidth = Math.min(Math.round(rect.width), window.innerWidth - 16)
     let top = rect.bottom + GAP_PX
     if (top + estimateHeight > window.innerHeight - 8) {
       top = Math.max(8, rect.top - estimateHeight - GAP_PX)
     }
-    let left = rect.left + rect.width / 2 - estimateWidth / 2
-    left = Math.max(8, Math.min(left, window.innerWidth - estimateWidth - 8))
+    let left = rect.left + rect.width / 2 - popoverWidth / 2
+    left = Math.max(8, Math.min(left, window.innerWidth - popoverWidth - 8))
     position = { top, left }
   }
 
@@ -145,7 +144,7 @@
     aria-label={`Diff preview for ${path}`}
     tabindex="-1"
     class="fixed z-50 overflow-hidden rounded-lg border border-border bg-surface shadow-xl"
-    style="top: {position.top}px; left: {position.left}px; width: {width};"
+    style="top: {position.top}px; left: {position.left}px; width: {popoverWidth}px;"
     onpointerenter={cancelHide}
     onpointerleave={scheduleHide}
   >
