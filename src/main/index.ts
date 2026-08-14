@@ -509,12 +509,27 @@ async function bootPostPaintServices(): Promise<void> {
     database,
     computerUsePipService,
     harnessManifestService,
-    threadCreation
+    threadCreation,
+    join(app.getPath('userData'), 'owned-processes.json')
   )
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
   updaterService.setChatEngine(chatEngine)
+  // Reap any harness processes orphaned by an unclean previous run before the
+  // first session can spawn fresh servers, so leftover dev servers/ports are
+  // reclaimed without ever touching a harness the user runs outside the app.
+  try {
+    const reaped = await chatEngine.reapOrphanProcesses()
+    if (reaped.killed.length > 0 || reaped.skipped.length > 0) {
+      Logger.info('Reaped orphaned harness processes from an unclean shutdown', {
+        killed: reaped.killed,
+        skipped: reaped.skipped
+      })
+    }
+  } catch (error) {
+    Logger.error('Orphaned harness process reaping failed at startup:', error)
+  }
   registerIpcHandlers(storage, database, updaterService, chatEngine, {
     projectManager,
     projectFilesService,

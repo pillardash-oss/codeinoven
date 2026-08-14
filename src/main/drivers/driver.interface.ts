@@ -368,5 +368,14 @@ export interface HarnessDriver {
 
 /** Main-process observer used by drivers to attribute process trees to sessions. */
 export interface AgentProcessObserver {
-  watchProcess(sessionId: string, pid: number | undefined, command: string, cwd: string): void
+  /**
+   * Register a harness root process. `sessionId` may be omitted for app-wide
+   * roots (e.g. the shared opencode server) that are not tied to one thread.
+   */
+  watchProcess(
+    sessionId: string | undefined,
+    pid: number | undefined,
+    command: string,
+    cwd: string
+  ): void
 }

@@ -1,13 +1,18 @@
 import { execFile } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess } from '../lib/types'
 import type { AgentProcessObserver } from './drivers/driver.interface'
+import { OWNED_PROCESS_MARKER } from './drivers/cli-environment'
 import { Logger } from './logger'
+import { OwnedProcessJournal } from './owned-process-journal'
 import { broadcastAgentProcessesChanged } from './thread-events'
 
 const execFileAsync = promisify(execFile)
 const PROCESS_SCAN_INTERVAL_MS = 750
 const PROCESS_EXIT_GRACE_MS = 1_500
+/** Key under which app-wide roots (e.g. the shared opencode server) are tracked. */
+const APP_SCOPE = '__codeinoven_app_scope__'
 
 interface ProcessSnapshotEntry {
   pid: number
@@ -28,6 +33,11 @@ interface HarnessRoot {
 
 interface TrackedProcess extends AgentRunningProcess {
   sessionId: string
+}
+
+export interface ReapOrphansResult {
+  killed: number[]
+  skipped: number[]
 }
 
 type ProcessSnapshotter = () => Promise<ProcessSnapshotEntry[]>
@@ -116,21 +126,38 @@ export class AgentProcessService implements AgentProcessObserver {
   private readonly tracked = new Map<string, Map<number, TrackedProcess>>()
   private scanTimer: ReturnType<typeof setInterval> | null = null
   private scanInFlight = false
+  private journal: OwnedProcessJournal | null = null
 
   constructor(private readonly snapshotter: ProcessSnapshotter = defaultSnapshotter) {}
+
+  /**
+   * Persist which harness roots this app spawned so a future launch can reap
+   * orphans without ever touching a harness the user runs outside the app.
+   */
+  attachJournal(filePath: string | undefined): void {
+    if (!filePath) return
+    this.journal = new OwnedProcessJournal(filePath)
+  }
 
   claimSession(sessionId: string, projectId: string, threadId: string): void {
     this.owners.set(sessionId, { projectId, threadId })
   }
 
-  watchProcess(sessionId: string, pid: number | undefined, command: string, cwd: string): void {
+  watchProcess(
+    sessionId: string | undefined,
+    pid: number | undefined,
+    command: string,
+    cwd: string
+  ): void {
     if (!pid || pid <= 0) return
-    let sessionRoots = this.roots.get(sessionId)
+    const scope = sessionId ?? APP_SCOPE
+    let sessionRoots = this.roots.get(scope)
     if (!sessionRoots) {
       sessionRoots = new Map()
-      this.roots.set(sessionId, sessionRoots)
+      this.roots.set(scope, sessionRoots)
     }
     sessionRoots.set(pid, { pid, command, cwd })
+    this.journal?.register(pid, command, cwd)
     this.ensureScanner()
     void this.scan()
   }
@@ -165,10 +192,15 @@ export class AgentProcessService implements AgentProcessObserver {
     const pids = new Set<number>()
     for (const sessionId of sessionIds) {
       for (const process of this.tracked.get(sessionId)?.values() ?? []) pids.add(process.pid)
+      for (const root of this.roots.get(sessionId)?.values() ?? []) pids.add(root.pid)
     }
     await Promise.allSettled([...pids].map((pid) => this.killTree(pid)))
     for (const sessionId of sessionIds) {
       this.tracked.delete(sessionId)
+      for (const root of this.roots.get(sessionId)?.values() ?? []) {
+        this.journal?.unregister(root.pid)
+      }
+      this.roots.delete(sessionId)
     }
     broadcastAgentProcessesChanged(projectId, threadId)
     this.stopScannerWhenIdle()
@@ -190,14 +222,120 @@ export class AgentProcessService implements AgentProcessObserver {
     for (const processes of this.tracked.values()) {
       for (const process of processes.values()) pids.add(process.pid)
     }
+    for (const roots of this.roots.values()) {
+      for (const root of roots.values()) pids.add(root.pid)
+    }
     await Promise.allSettled([...pids].map((pid) => this.killTree(pid)))
     this.tracked.clear()
     this.roots.clear()
     this.owners.clear()
+    if (this.journal) {
+      this.journal.clear()
+      await this.journal.flush()
+    }
     for (const owner of owners.values()) {
       broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
     this.stopScanner()
+  }
+
+  /**
+   * Reap harness processes left orphaned by an unclean previous run (crash,
+   * force-quit, or the shutdown failsafe). Only ever kills processes the app
+   * actually spawned: journaled roots verified as owned (marker env present) or
+   * orphaned, plus — on Linux — any orphaned process still carrying the marker
+   * so a dev server whose root already died is reclaimed too. A user's own
+   * external claude-code/opencode session is never touched.
+   */
+  async reapOrphans(): Promise<ReapOrphansResult> {
+    if (!this.journal) return { killed: [], skipped: [] }
+    const roots = await this.journal.load()
+    const snapshot = await this.snapshotter().catch(() => [])
+    const alive = new Set(snapshot.map((entry) => entry.pid))
+    const parentOf = new Map(snapshot.map((entry) => [entry.pid, entry.parentPid]))
+    const killed: number[] = []
+    const skipped: number[] = []
+
+    for (const root of roots) {
+      if (!alive.has(root.pid)) {
+        skipped.push(root.pid)
+        continue
+      }
+      const parentPid = parentOf.get(root.pid) ?? 0
+      const owned = await this.isOwnedOrOrphaned(root.pid, parentPid, alive)
+      if (owned) {
+        await this.killTree(root.pid)
+        killed.push(root.pid)
+      } else {
+        skipped.push(root.pid)
+      }
+    }
+
+    if (roots.length > 0) {
+      this.journal.clear()
+      await this.journal.flush()
+    }
+
+    // Linux-only sweep: `/proc/<pid>/environ` lets us read another process's env
+    // reliably, so sweep every orphaned process carrying the marker. This reclaims
+    // a dev server whose root already died — including one leaked after a *clean*
+    // shutdown (when the journal is already cleared). On macOS/Windows env is not
+    // readable, so we rely on the journaled, orphaned roots above (which covers
+    // the common crash-leak of a live `opencode serve` root).
+    if (process.platform === 'linux') {
+      const markedOrphans = await this.sweepMarkedOrphans(snapshot, alive)
+      for (const pid of markedOrphans) {
+        if (killed.includes(pid)) continue
+        await this.killTree(pid)
+        killed.push(pid)
+      }
+    }
+
+    return { killed, skipped }
+  }
+
+  private async sweepMarkedOrphans(
+    snapshot: ProcessSnapshotEntry[],
+    alive: ReadonlySet<number>
+  ): Promise<number[]> {
+    const found: number[] = []
+    for (const entry of snapshot) {
+      if (!this.isOrphaned(entry.parentPid, alive)) continue
+      if ((await this.processHasMarker(entry.pid)) !== true) continue
+      found.push(entry.pid)
+    }
+    return found
+  }
+
+  private async isOwnedOrOrphaned(
+    pid: number,
+    parentPid: number,
+    alive: ReadonlySet<number>
+  ): Promise<boolean> {
+    const marker = await this.processHasMarker(pid)
+    if (marker === true) return true
+    if (marker === false) return false
+    return this.isOrphaned(parentPid, alive)
+  }
+
+  private isOrphaned(parentPid: number, alive: ReadonlySet<number>): boolean {
+    return parentPid <= 1 || !alive.has(parentPid)
+  }
+
+  /**
+   * Best-effort check for the app's ownership marker in a process environment.
+   * Returns `true`/`false` only where another process's environment is reliably
+   * readable (Linux `/proc`); returns `null` when the platform cannot reveal it
+   * (macOS `ps -E`, Windows) so callers fall back to the orphaned-parent check.
+   */
+  private async processHasMarker(pid: number): Promise<boolean | null> {
+    if (process.platform !== 'linux') return null
+    try {
+      const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
+      return environ.split('\0').includes(`${OWNED_PROCESS_MARKER}=1`)
+    } catch {
+      return null
+    }
   }
 
   private sessionsForThread(projectId: string, threadId: string): string[] {
@@ -253,7 +391,10 @@ export class AgentProcessService implements AgentProcessObserver {
             })
             changed = true
           }
-          if (!currentByPid.has(root.pid)) sessionRoots.delete(root.pid)
+          if (!currentByPid.has(root.pid)) {
+            sessionRoots.delete(root.pid)
+            this.journal?.unregister(root.pid)
+          }
         }
         for (const [pid, tracked] of sessionProcesses) {
           const current = currentByPid.get(pid)
