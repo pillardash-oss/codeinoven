@@ -99,6 +99,7 @@
   import { modelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
+  import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     responseReferencesState,
@@ -3074,19 +3075,27 @@
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
     if (!pending && !queuedHasContent) return
-    clearQueuedState()
-    await sendMessage(
-      pending,
-      pendingAttachments,
-      undefined,
-      undefined,
-      pendingPromptContext,
-      pendingPromptReferences,
-      pendingProjectReferences,
-      pendingPresentation,
-      pendingTaskReferences,
-      true
-    )
+    // Claim synchronously before sending so the background dispatcher (or any
+    // concurrent path) cannot also deliver this same queued message. If we lose
+    // the race, whoever claimed it will send it — never send here.
+    if (!claimQueuedMessage(projectId, id)) return
+    try {
+      clearQueuedState()
+      await sendMessage(
+        pending,
+        pendingAttachments,
+        undefined,
+        undefined,
+        pendingPromptContext,
+        pendingPromptReferences,
+        pendingProjectReferences,
+        pendingPresentation,
+        pendingTaskReferences,
+        true
+      )
+    } finally {
+      releaseQueuedMessage(projectId, id)
+    }
   }
 
   function scheduleIdleAttention(): void {
