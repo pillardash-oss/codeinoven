@@ -212,14 +212,25 @@ jobs:
           for f in artifacts/*.dmg artifacts/*.zip artifacts/*.exe artifacts/*.AppImage artifacts/*.deb artifacts/*.blockmap artifacts/*.yml artifacts/SHA256SUMS.txt; do
             [ -f "$f" ] && files+=("$f")
           done
-          if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "${files[@]}" --clobber
-            gh release edit "$tag" --title "CodeInOven $version nightly" --prerelease
-          else
-            gh release create "$tag" "${files[@]}" \
-              --target "$GITHUB_SHA" \
-              --title "CodeInOven $version nightly" \
-              --notes "Prerelease build of version $version from the \`nightly\` branch. Use for testing; not intended for production." \
-              --prerelease \
-              --latest=false
-          fi
+          publish_attempt=0
+          while [ "$publish_attempt" -lt 3 ]; do
+            publish_attempt=$((publish_attempt + 1))
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release upload "$tag" "${files[@]}" --clobber
+              gh release edit "$tag" --title "CodeInOven $version nightly" --prerelease
+            else
+              gh release create "$tag" "${files[@]}" \
+                --target "$GITHUB_SHA" \
+                --title "CodeInOven $version nightly" \
+                --notes "Prerelease build of version $version from the \`nightly\` branch. Use for testing; not intended for production." \
+                --prerelease \
+                --latest=false
+            fi
+            publish_exit=$?
+            if [ "$publish_exit" -eq 0 ]; then
+              break
+            fi
+            echo "release publish attempt $publish_attempt failed with exit $publish_exit; retrying"
+            sleep 10
+          done
+          exit "$publish_exit"
