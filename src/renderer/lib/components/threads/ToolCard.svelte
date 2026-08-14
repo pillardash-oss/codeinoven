@@ -14,8 +14,6 @@
     XCircle
   } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { AgentPart } from '$shared/types'
   import InlineToolDiff from './InlineToolDiff.svelte'
   import {
@@ -150,38 +148,6 @@
     const s = seconds % 60
     return s > 0 ? `${m}m ${s}s` : `${m}m`
   }
-
-  function resolveCheckpointPath(toolPath: string, paths: string[]): string | null {
-    const canonical = [...new Set(paths.map((path) => path.replaceAll('\\', '/')))]
-    const normalized = toolPath.replaceAll('\\', '/').replace(/^\.\//u, '')
-    const exact = canonical.find((path) => path === normalized)
-    if (exact) return exact
-    const longestFirst = [...canonical].sort((left, right) => right.length - left.length)
-    const absoluteMatch = longestFirst.find((path) => normalized.endsWith(`/${path}`))
-    if (absoluteMatch) return absoluteMatch
-    if (normalized.includes('/')) return null
-    const basenameMatches = canonical.filter((path) => path.split('/').at(-1) === normalized)
-    return basenameMatches.length === 1 ? (basenameMatches[0] ?? null) : null
-  }
-
-  async function openCapturedDiff(path: string): Promise<void> {
-    const currentProjectId = projectId
-    const currentThreadId = threadId
-    if (!currentProjectId || !currentThreadId) return
-    const resolved = checkpointId ? resolveCheckpointPath(path, checkpointPaths) : null
-    if (checkpointId && resolved) {
-      await projectFilesWorkspace.loadDirectory(currentProjectId, '')
-      contextSidebarState.openFiles(currentProjectId, currentThreadId)
-      await projectFilesWorkspace.openCheckpointFile(
-        currentProjectId,
-        checkpointId,
-        resolved,
-        'diff'
-      )
-    } else {
-      await projectFilesWorkspace.openFile(currentProjectId, path)
-    }
-  }
 </script>
 
 <div class="overflow-hidden rounded-lg border bg-surface">
@@ -239,7 +205,7 @@
   {#if open}
     <div class="space-y-2 border-t px-3 py-2">
       {#if displayDiffs.length > 0}
-        <InlineToolDiff diffs={displayDiffs} onOpen={(path) => void openCapturedDiff(path)} />
+        <InlineToolDiff diffs={displayDiffs} />
       {:else if Object.keys(part.state.input).length > 0}
         <div>
           <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Input</p>

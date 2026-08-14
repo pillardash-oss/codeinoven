@@ -1,17 +1,8 @@
 <script lang="ts">
-  import {
-    ChevronDown,
-    ChevronLeft,
-    ChevronRight,
-    Eye,
-    FileDiff,
-    Loader2,
-    RefreshCw
-  } from '@lucide/svelte'
+  import { ChevronLeft, ChevronRight, FileDiff, Loader2, RefreshCw } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import FileTypeIcon from './FileTypeIcon.svelte'
-  import FileDiffView from './FileDiffView.svelte'
   import HoverDiffPopover from './HoverDiffPopover.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
@@ -41,7 +32,6 @@
   let mode = $state<ChangesMode>('diffs')
   let fileDiffs = $state<TurnCheckpointFileDiff[]>([])
   let loadingDiffs = $state(false)
-  let expandedDiffs = $state<Record<string, boolean>>({})
   let loadedDiffKey: string | null = null
   const turns = $derived(checkpoints.filter((checkpoint) => checkpoint.status !== 'active'))
   const selectedIndex = $derived(
@@ -138,10 +128,6 @@
     }
   }
 
-  function toggleDiff(path: string): void {
-    expandedDiffs = { ...expandedDiffs, [path]: !(expandedDiffs[path] ?? true) }
-  }
-
   $effect(() => {
     const checkpoint = selectedCheckpoint
     if (!checkpoint) {
@@ -163,16 +149,6 @@
       if (cancelled) return
       fileDiffs = results.flatMap((result) =>
         result.status === 'fulfilled' ? [result.value as TurnCheckpointFileDiff] : []
-      )
-      expandedDiffs = results.reduce<Record<string, boolean>>(
-        (next, result) => {
-          if (result.status === 'fulfilled') {
-            const path = (result.value as TurnCheckpointFileDiff).path
-            if (!(path in next)) next[path] = true
-          }
-          return next
-        },
-        { ...expandedDiffs }
       )
       loadingDiffs = false
     })
@@ -323,57 +299,33 @@
                   : diffDetails(fileDiff.before, fileDiff.after)}
                 {@const stats = details}
                 {@const lines = details?.lines ?? []}
-                {@const expanded = expandedDiffs[fileDiff.path] ?? true}
                 <section class="overflow-hidden rounded-md border border-border bg-surface">
-                  <div class="flex min-h-9 items-center pr-1.5">
-                    <HoverDiffPopover {lines} class="min-w-0 flex-1" maxHeight="20rem">
-                      {#snippet trigger()}
-                        <button
-                          type="button"
-                          class="flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
-                          aria-expanded={expanded}
-                          title={expanded
-                            ? `Collapse diff for ${fileDiff.path}`
-                            : `Show diff for ${fileDiff.path}`}
-                          onclick={() => toggleDiff(fileDiff.path)}
-                        >
-                          <FileTypeIcon path={fileDiff.path} size={13} />
-                          <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
-                            {fileDiff.path}
+                  <HoverDiffPopover {lines} class="block w-full" maxHeight="20rem">
+                    {#snippet trigger()}
+                      <button
+                        type="button"
+                        class="flex h-9 w-full min-w-0 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
+                        title={`Open ${fileDiff.path} in the changes sidebar`}
+                        aria-label={`Open ${fileDiff.path} in the changes sidebar`}
+                        onclick={() => void openChange(checkpoint.id, fileDiff.path)}
+                      >
+                        <FileTypeIcon path={fileDiff.path} size={13} />
+                        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                          {fileDiff.path}
+                        </span>
+                        {#if fileDiff.binary}
+                          <span class="shrink-0 text-[9px] text-dimmed">binary</span>
+                        {:else if stats}
+                          <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
+                            +{stats.additions}
                           </span>
-                          {#if fileDiff.binary}
-                            <span class="shrink-0 text-[9px] text-dimmed">binary</span>
-                          {:else if stats}
-                            <span class="shrink-0 font-mono text-[10px] tabular-nums text-success">
-                              +{stats.additions}
-                            </span>
-                            <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
-                              −{stats.deletions}
-                            </span>
-                          {/if}
-                          {#if expanded}
-                            <ChevronDown size={12} class="shrink-0 text-dimmed" />
-                          {:else}
-                            <ChevronRight size={12} class="shrink-0 text-dimmed" />
-                          {/if}
-                        </button>
-                      {/snippet}
-                    </HoverDiffPopover>
-                    <button
-                      type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      aria-label={`Open ${fileDiff.path} in the file viewer`}
-                      title={`Open ${fileDiff.path} in the file viewer`}
-                      onclick={() => void openChange(checkpoint.id, fileDiff.path)}
-                    >
-                      <Eye size={13} />
-                    </button>
-                  </div>
-                  {#if expanded}
-                    <div class="border-t border-border">
-                      <FileDiffView diff={fileDiff} maxHeight="24rem" />
-                    </div>
-                  {/if}
+                          <span class="shrink-0 font-mono text-[10px] tabular-nums text-danger">
+                            −{stats.deletions}
+                          </span>
+                        {/if}
+                      </button>
+                    {/snippet}
+                  </HoverDiffPopover>
                 </section>
               {/each}
             {/if}

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { ChevronDown, ChevronRight } from '@lucide/svelte'
+  import type { Snippet } from 'svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
@@ -20,6 +22,7 @@
   }
 
   let reveal = $state<Record<string, RevealState>>({})
+  let folded = $state(false)
 
   interface HunkWindow {
     lines: DiffLine[]
@@ -63,22 +66,58 @@
     else next.below = amount
     reveal = { ...reveal, [hunk.id]: next }
   }
+
+  function toggleFold(): void {
+    folded = !folded
+  }
 </script>
 
-{#snippet contextExpander(hunk: DiffHunk, direction: 'above' | 'below', hidden: number)}
-  <div class="flex items-center gap-2 border-y border-border bg-elevated px-3 py-1">
-    <span class="text-[9px] tabular-nums text-dimmed">
-      {hidden} hidden {direction === 'above' ? 'above' : 'below'}
-    </span>
-    <button
-      type="button"
-      class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
-      title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
-      onclick={() => expand(hunk, direction)}
-    >
-      Show {Math.min(REVEAL_STEP, hidden)} more
-    </button>
+{#snippet foldBar(caption: string, expandButton: Snippet)}
+  <div
+    role="button"
+    tabindex="0"
+    aria-label={folded ? 'Expand diff' : 'Fold diff'}
+    title={folded ? 'Expand diff' : 'Fold diff'}
+    class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[10px]"
+    onclick={toggleFold}
+    onkeydown={(e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        toggleFold()
+      }
+    }}
+  >
+    {#if caption}
+      <span class="shrink-0 font-mono text-info">{caption}</span>
+    {/if}
+    <span class="shrink-0 font-mono tabular-nums text-success">+{details.additions}</span>
+    <span class="shrink-0 font-mono tabular-nums text-danger">−{details.deletions}</span>
+    <span class="flex-1"></span>
+    {@render expandButton()}
+    {#if folded}
+      <ChevronRight size={12} class="shrink-0 text-dimmed" />
+    {:else}
+      <ChevronDown size={12} class="shrink-0 text-dimmed" />
+    {/if}
   </div>
+{/snippet}
+
+{#snippet showMore(hunk: DiffHunk, direction: 'above' | 'below', hidden: number)}
+  <button
+    type="button"
+    class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+    title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
+    onclick={(e: MouseEvent) => {
+      e.stopPropagation()
+      expand(hunk, direction)
+    }}
+  >
+    Show {Math.min(REVEAL_STEP, hidden)} more {direction}
+  </button>
+{/snippet}
+
+{#snippet emptySnippet()}
+  <span class="hidden"></span>
 {/snippet}
 
 {#if diff.binary}
@@ -95,19 +134,20 @@
     >
       {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
+      {:else if folded}
+        {@render foldBar('', emptySnippet)}
       {:else}
         {#each details.hunks as hunk (hunk.id)}
           {@const w = hunkWindow(hunk)}
+          {@const caption = `@@ -${w.beforeStart},${w.beforeCount} +${w.afterStart},${w.afterCount} @@`}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
-            {#if w.aboveHidden > 0}
-              {@render contextExpander(hunk, 'above', w.aboveHidden)}
-            {/if}
-            <div class="flex items-center gap-2 bg-elevated px-3 py-0.5 text-[10px] text-info">
-              <span>@@ -{w.beforeStart},{w.beforeCount} +{w.afterStart},{w.afterCount} @@</span>
-            </div>
+            {@render foldBar(
+              caption,
+              w.aboveHidden > 0 ? () => showMore(hunk, 'above', w.aboveHidden) : emptySnippet
+            )}
             <DiffRows lines={w.lines} paneLabels />
             {#if w.belowHidden > 0}
-              {@render contextExpander(hunk, 'below', w.belowHidden)}
+              {@render foldBar('', () => showMore(hunk, 'below', w.belowHidden))}
             {/if}
           </section>
         {/each}
