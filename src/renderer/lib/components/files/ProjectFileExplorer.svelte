@@ -67,6 +67,7 @@
   let dropIndicator = $state<{ path: string; position: 'before' | 'after' } | null>(null)
   let dropFolder = $state<string | null>(null)
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
+  let dropHoverPath: string | null = null
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
 
   /** Flattened, depth-first list of the tree rows currently visible, matching the
@@ -501,10 +502,14 @@
   }
 
   function handleFileDragStart(entry: ProjectFileEntry, event: DragEvent): void {
-    const paths = selectionPathsFor(entry)
+    const paths = [...selectionPathsFor(entry)].map(String)
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copyMove'
     event.preventDefault()
-    window.api.startFileDrag(projectId, paths)
+    try {
+      window.api.startFileDrag(projectId, paths)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Native dragging is unavailable')
+    }
   }
 
   /** Resolve absolute paths for OS-dropped File objects (folder/file). */
@@ -570,22 +575,37 @@
       clearTimeout(dropExpandTimer)
       dropExpandTimer = undefined
     }
+    dropHoverPath = null
     dropActive = false
     dropTargetPath = null
     dropIndicator = null
     dropFolder = null
   }
 
-  /** Auto-expand a collapsed folder after hovering on it briefly, so the user can
-   *  continue dragging into subfolders (regular file-explorer behavior). */
+  /** Cancel a pending auto-expand (e.g. the drag moved off the folder). */
+  function cancelFolderExpand(): void {
+    if (dropExpandTimer) {
+      clearTimeout(dropExpandTimer)
+      dropExpandTimer = undefined
+    }
+    dropHoverPath = null
+  }
+
+  /** Auto-expand a collapsed folder after the drag has hovered on it for ~2s, so
+   *  the user can keep dragging into its subfolders. Deterministic: only expands
+   *  on a sustained hover and is cancelled the moment the drag leaves the folder. */
   function scheduleFolderExpand(path: string): void {
     if (projectState.expandedDirectories[path]) return
+    if (dropHoverPath === path) return
+    dropHoverPath = path
     if (dropExpandTimer) clearTimeout(dropExpandTimer)
     dropExpandTimer = setTimeout(() => {
       dropExpandTimer = undefined
-      projectFilesWorkspace.markDirectoryExpanded(projectId, path)
-      void projectFilesWorkspace.loadDirectory(projectId, path)
-    }, 650)
+      if (dropHoverPath === path) {
+        projectFilesWorkspace.markDirectoryExpanded(projectId, path)
+        void projectFilesWorkspace.loadDirectory(projectId, path)
+      }
+    }, 2000)
   }
 
   function handleDragOver(event: DragEvent): void {
@@ -604,6 +624,7 @@
         dropIndicator = { path, position: 'after' }
         scheduleFolderExpand(path)
       } else if (path) {
+        cancelFolderExpand()
         dropTargetPath = parentDirectory(path)
         dropFolder = parentDirectory(path)
         if (row) {
@@ -616,6 +637,7 @@
           dropIndicator = { path, position: 'after' }
         }
       } else {
+        cancelFolderExpand()
         dropTargetPath = activeDirectory()
         dropFolder = null
         dropIndicator = null

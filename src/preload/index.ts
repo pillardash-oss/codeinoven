@@ -552,7 +552,11 @@ const bridge: AppBridge = {
   },
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   startFileDrag: (projectId: string, relativePaths: string[]): void =>
-    ipcRenderer.send('projectFiles:startDrag', projectId, relativePaths)
+    ipcRenderer.send(
+      'projectFiles:startDrag',
+      projectId,
+      Array.from(relativePaths ?? []).map(String)
+    )
 }
 
 contextBridge.exposeInMainWorld('api', bridge)
