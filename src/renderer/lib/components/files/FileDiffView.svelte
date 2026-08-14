@@ -21,7 +21,8 @@
   }
 
   let reveal = $state<Record<string, RevealState>>({})
-  let folded = $state(false)
+  /** Folds a single hunk (its changed block), not the whole file. */
+  let foldedHunks = $state<Record<string, boolean>>({})
 
   interface HunkWindow {
     lines: DiffLine[]
@@ -66,38 +67,31 @@
     reveal = { ...reveal, [hunk.id]: next }
   }
 
-  function toggleFold(): void {
-    folded = !folded
+  function toggleHunkFold(hunkId: string): void {
+    foldedHunks = { ...foldedHunks, [hunkId]: !(foldedHunks[hunkId] ?? false) }
   }
 </script>
 
-{#snippet foldBar(
-  hunk: DiffHunk | null,
-  caption: string,
-  hidden: number,
-  direction: 'above' | 'below'
-)}
+{#snippet foldBar(hunk: DiffHunk, hidden: number, direction: 'above' | 'below')}
+  {@const isFolded = foldedHunks[hunk.id] ?? false}
   <div
     role="button"
     tabindex="0"
-    aria-label={folded ? 'Expand diff' : 'Fold diff'}
-    title={folded ? 'Expand diff' : 'Fold diff'}
+    aria-expanded={!isFolded}
+    title={isFolded ? 'Show this hunk' : 'Fold this hunk'}
     class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[10px]"
-    onclick={toggleFold}
+    onclick={() => toggleHunkFold(hunk.id)}
     onkeydown={(e: KeyboardEvent) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
-        toggleFold()
+        toggleHunkFold(hunk.id)
       }
     }}
   >
-    {#if caption}
-      <span class="shrink-0 font-mono text-info">{caption}</span>
-    {/if}
     <span class="shrink-0 font-mono tabular-nums text-success">+{details.additions}</span>
     <span class="shrink-0 font-mono tabular-nums text-danger">−{details.deletions}</span>
     <span class="flex-1"></span>
-    {#if hunk && hidden > 0}
+    {#if !isFolded && hidden > 0}
       <button
         type="button"
         class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
@@ -110,7 +104,7 @@
         Show {Math.min(REVEAL_STEP, hidden)} more {direction}
       </button>
     {/if}
-    {#if folded}
+    {#if isFolded}
       <ChevronRight size={12} class="shrink-0 text-dimmed" />
     {:else}
       <ChevronDown size={12} class="shrink-0 text-dimmed" />
@@ -132,17 +126,17 @@
     >
       {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
-      {:else if folded}
-        {@render foldBar(null, '', 0, 'above')}
       {:else}
         {#each details.hunks as hunk (hunk.id)}
           {@const w = hunkWindow(hunk)}
-          {@const caption = `@@ -${w.beforeStart},${w.beforeCount} +${w.afterStart},${w.afterCount} @@`}
+          {@const isFolded = foldedHunks[hunk.id] ?? false}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
-            {@render foldBar(hunk, caption, w.aboveHidden, 'above')}
-            <DiffRows lines={w.lines} paneLabels />
-            {#if w.belowHidden > 0}
-              {@render foldBar(hunk, '', w.belowHidden, 'below')}
+            {@render foldBar(hunk, w.aboveHidden, 'above')}
+            {#if !isFolded}
+              <DiffRows lines={w.lines} paneLabels />
+              {#if w.belowHidden > 0}
+                {@render foldBar(hunk, w.belowHidden, 'below')}
+              {/if}
             {/if}
           </section>
         {/each}

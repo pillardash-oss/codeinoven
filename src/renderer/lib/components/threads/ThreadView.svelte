@@ -3669,6 +3669,10 @@
     contextSidebarState.openDiff(thread.projectId, thread.id, checkpointId)
   }
 
+  function revealCheckpointFile(checkpointId: string, path: string): void {
+    contextSidebarState.openDiff(thread.projectId, thread.id, checkpointId, path)
+  }
+
   async function undoCheckpoint(checkpoint: TurnCheckpointSummary): Promise<void> {
     const paths = checkpoint.changes
       .map((change) => change.path)
@@ -6652,6 +6656,9 @@
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
+                            projectId={thread.projectId}
+                            threadId={thread.id}
+                            onRevealFile={(path) => revealCheckpointFile(turnCheckpoint.id, path)}
                             onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
                             onReview={() => reviewCheckpoint(turnCheckpoint.id)}
                             onUndo={() => undoCheckpoint(turnCheckpoint)}
