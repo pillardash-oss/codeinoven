@@ -17,6 +17,15 @@ import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
  *  so the operation stays cheap even on very large trees. */
 const EXPAND_ALL_MAX_DEPTH = 4
 
+/** Hard cap on how many persisted expanded directories a freshly hydrated tree
+ *  will re-populate on first open. Guards against a poisoned/huge localStorage
+ *  snapshot re-hydrating an entire repository (or `node_modules`) at once, which
+ *  would balloon the renderer heap and OOM the app. */
+const RESTORE_MAX_DIRECTORIES = 400
+
+/** Do not auto-expand deeper than this when restoring a persisted tree. */
+const RESTORE_MAX_DEPTH = 8
+
 export type ProjectFileView = 'diff' | 'preview' | 'source'
 
 export interface ProjectFileSession {
@@ -146,7 +155,9 @@ class ProjectFilesWorkspace {
     }
   }
 
-  /** Load the persisted expanded directories so the restored tree is populated. */
+  /** Load the persisted expanded directories so the restored tree is populated,
+   *  bounded to a sane count and depth so a large or poisoned snapshot can't
+   *  re-hydrate an entire repository at once (which would OOM the renderer). */
   private async restoreExpandedDirectories(
     projectId: string,
     state: ProjectFilesState
@@ -154,8 +165,19 @@ class ProjectFilesWorkspace {
     const expanded = Object.keys(state.expandedDirectories)
       .filter((candidate) => candidate && !state.entriesByDirectory[candidate])
       .sort((left, right) => left.split('/').length - right.split('/').length)
-    for (const directory of expanded) {
+    const bounded = expanded.filter((candidate) => candidate.split('/').length <= RESTORE_MAX_DEPTH)
+    for (const directory of bounded.slice(0, RESTORE_MAX_DIRECTORIES)) {
       await this.loadDirectory(projectId, directory)
+    }
+    // Drop any directories we refused to restore so the persisted snapshot is
+    // reconciled to what the tree actually shows on next persist.
+    const dropped: Record<string, true> = {}
+    for (const directory of expanded) dropped[directory] = true
+    for (const directory of bounded.slice(0, RESTORE_MAX_DIRECTORIES)) {
+      delete dropped[directory]
+    }
+    for (const directory of Object.keys(dropped)) {
+      delete state.expandedDirectories[directory]
     }
   }
 

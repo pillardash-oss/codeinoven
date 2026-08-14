@@ -93,6 +93,10 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Linux native launcher headers
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+
       - name: Build production bundle
         run: bun run build:production
 

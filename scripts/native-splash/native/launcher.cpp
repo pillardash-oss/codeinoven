@@ -1,5 +1,8 @@
 #define UNICODE
 #define _UNICODE
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <bcrypt.h>
 #include <gdiplus.h>
