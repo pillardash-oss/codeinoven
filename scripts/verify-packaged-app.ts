@@ -156,7 +156,7 @@ function findWindowsSigntool(): string | null {
   })
   if (installRoot.status !== 0) return null
   const msvcRoot = join(installRoot.stdout.trim(), 'VC', 'Tools', 'MSVC')
-  let msvcVersions: string[] = []
+  let msvcVersions: string[]
   try {
     msvcVersions = readdirSync(msvcRoot).sort().reverse()
   } catch {
