@@ -1,4 +1,4 @@
-import { spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,6 +56,10 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 
 const CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
 const CLAUDE_USAGE_TIMEOUT_MS = 12_000
+/** How long a successful `claude auth status` pre-flight verdict is trusted. */
+const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
+/** Bounded wait for the `claude auth status` pre-flight probe. */
+const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -1008,6 +1012,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
   private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
   private readonly authenticationReadiness = new Map<string, ClaudeAuthenticationReadiness>()
+  /** Cached `claude auth status` verdict per project, so a fresh thread never
+   *  re-spawns the CLI for auth on every message. */
+  private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
   private usageProbeSequence = 0
 
   constructor(
@@ -1175,6 +1182,18 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
+    // Pre-flight auth gate at message-send time (buildTurnCommand runs per turn,
+    // never on thread open). For first-party Anthropic turns, probe the CLI's
+    // stored credential so the CLI's own silent OAuth refresh is triggered up
+    // front; if it genuinely cannot authenticate, fail with a clean early
+    // authentication issue instead of a confusing mid-turn authentication_failed.
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (firstParty && !this.isTitleSession(session.id)) {
+      const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
+      if (!authenticated) {
+        throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+      }
+    }
     const args = [
       '-p',
       '--output-format',
@@ -1259,6 +1278,49 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (this.authenticationReadiness.get(sessionId) === readiness) {
       this.authenticationReadiness.delete(sessionId)
     }
+    return authenticated
+  }
+
+  /**
+   * Pre-flight probe of the first-party Anthropic credential. Shells
+   * `claude auth status --json` and trusts its `loggedIn` verdict, letting the
+   * CLI's own silent OAuth refresh run before a turn is dispatched. The result
+   * is cached per project for a short window so a session's consecutive
+   * messages do not each re-spawn the CLI. On any probe failure (CLI missing,
+   * timeout, unparseable output) we assume authenticated so the turn still has
+   * a chance to report the real error mid-stream rather than being silently
+   * blocked by an unreliable pre-check.
+   */
+  private async probeFirstPartyAuthentication(projectPath: string): Promise<boolean> {
+    const now = Date.now()
+    const cached = this.authProbeCache.get(projectPath)
+    if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
+    const authenticated = await new Promise<boolean>((resolve) => {
+      execFile(
+        'claude',
+        ['auth', 'status', '--json'],
+        {
+          cwd: projectPath,
+          env: buildHarnessEnvironment(),
+          timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024
+        },
+        (error, stdout) => {
+          if (error) {
+            resolve(true)
+            return
+          }
+          try {
+            const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+            resolve(parsed['loggedIn'] === true)
+          } catch {
+            resolve(true)
+          }
+        }
+      )
+    })
+    this.authProbeCache.delete(projectPath)
+    if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
     return authenticated
   }
 
@@ -1505,6 +1567,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   override dispose(): void {
+    this.authProbeCache.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
