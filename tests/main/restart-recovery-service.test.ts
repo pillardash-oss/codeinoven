@@ -105,6 +105,89 @@ describe('RestartRecoveryService', () => {
 
     expect(result.failures).toEqual([])
     expect(result.recovered).toHaveLength(1)
+    expect(result.completed).toHaveLength(0)
     expect(persisted?.status as ThreadStatus | 'interrupted').toBe('interrupted')
+  })
+
+  it('finalizes a demonstrably completed turn as completed and never resumes it', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
+
+    const thread = await threads.createThread({
+      projectId: 'project2',
+      providerId: 'provider1',
+      title: 'Done before stop'
+    })
+    await threads.setStatus('project2', thread.id, 'executing')
+    const active = await checkpoints.beginTurn(
+      'project2',
+      thread.id,
+      projectRoot,
+      'Active completed turn',
+      false
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, created_at) VALUES (?, ?, 'user', ?, ?)`,
+      `${thread.id}-u`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Build the feature' }]),
+      Date.now()
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, created_at) VALUES (?, ?, 'assistant', ?, ?)`,
+      `${thread.id}-a`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Done. Feature implemented.' }]),
+      Date.now() + 1
+    )
+
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
+    const persisted = await threads.getThread('project2', thread.id)
+
+    expect(result.failures).toEqual([])
+    expect(result.recovered).toHaveLength(0)
+    expect(result.completed.map((entry) => entry.id)).toEqual([thread.id])
+    expect(persisted?.status).toBe('completed')
+    expect((await checkpoints.get('project2', thread.id, active.id))?.status).toBe('completed')
+  })
+
+  it('keeps a turn interrupted when the latest assistant answer ended in an error', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
+
+    const thread = await threads.createThread({
+      projectId: 'project2',
+      providerId: 'provider1',
+      title: 'Errored before stop'
+    })
+    await threads.setStatus('project2', thread.id, 'executing')
+    const active = await checkpoints.beginTurn(
+      'project2',
+      thread.id,
+      projectRoot,
+      'Active errored turn',
+      false
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, error, created_at) VALUES (?, ?, 'assistant', ?, ?, ?)`,
+      `${thread.id}-a`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Partial output' }]),
+      'Provider rate limited',
+      Date.now()
+    )
+
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
+    const persisted = await threads.getThread('project2', thread.id)
+
+    expect(result.failures).toEqual([])
+    expect(result.recovered.map((entry) => entry.id)).toEqual([thread.id])
+    expect(result.completed).toHaveLength(0)
+    expect(persisted?.status).toBe('interrupted')
+    expect((await checkpoints.get('project2', thread.id, active.id))?.status).toBe('interrupted')
   })
 })

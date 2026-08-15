@@ -219,6 +219,45 @@ export class CheckpointManager {
     }
   }
 
+  /**
+   * Finalize the active turn as completed when restart recovery finds that the
+   * harness demonstrably produced a terminal answer before the app stopped.
+   * Distinct from `markActiveInterrupted`: no interruption failure text and no
+   * premature partial snapshot — the full `before` → current disk diff is kept.
+   */
+  async markActiveCompleted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') return checkpoint
+    try {
+      return await this.completeTurn(
+        projectId,
+        threadId,
+        checkpoint.id,
+        checkpoint.before.projectRoot,
+        'completed'
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status: 'completed',
+        failure: `Change capture failed while finalizing a completed turn: ${detail}`
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
+    }
+  }
+
   /** Downgrade a captured checkpoint when post-turn contract validation fails. */
   async markFailed(
     projectId: string,

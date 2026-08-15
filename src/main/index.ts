@@ -678,6 +678,21 @@ async function bootPostPaintServices(): Promise<void> {
           broadcastThreadUpdate(thread)
         }
       }
+      // Threads whose turns demonstrably completed before the stop are finalized
+      // as `completed`, never resumed. Broadcast their corrected status too so the
+      // sidebar doesn't linger on the stale "working" indicator.
+      if (recovery.completed.length > 0) {
+        Logger.info('Finalized completed interrupted threads', {
+          inspected: recovery.inspected,
+          completed: recovery.completed.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+        for (const thread of recovery.completed) {
+          broadcastThreadUpdate(thread)
+        }
+      }
       if (recovery.failures.length > 0) {
         Logger.error('Restart recovery completed with failures', recovery.failures)
       }
