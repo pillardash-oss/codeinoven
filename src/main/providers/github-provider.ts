@@ -31,8 +31,8 @@ import type {
   ListPullRequestsInput,
   MergePullRequestInput,
   PullRequestTarget
-} from '../git-provider.interface'
-import { Logger } from '../logger'
+} from '../git/git-provider.interface'
+import { Logger } from '../system/logger'
 
 /** Default provider base URL — the public GitHub.com REST API the app already calls. */
 export const GITHUB_API_BASE_URL = 'https://api.github.com'

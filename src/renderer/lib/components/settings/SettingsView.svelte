@@ -25,6 +25,7 @@
     Download,
     Globe,
     Info,
+    Keyboard,
     Loader2,
     Monitor,
     Moon,
@@ -41,6 +42,7 @@
   import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
+  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
@@ -99,6 +101,7 @@
     { id: 'audits', label: 'Agents', icon: UsersRound },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
     { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
     { id: 'profile', label: 'Profile', icon: UserRound },
@@ -171,6 +174,19 @@
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
   }
 
+  function saveMaxDiffLines(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < 10 || value > 5000) {
+      input.value = String(config.maxDiffLines)
+      return
+    }
+
+    void updateConfig({ maxDiffLines: value })
+  }
+
   async function exportDiagnostics(): Promise<void> {
     diagnosticsBusy = true
     diagnosticsResult = ''
@@ -214,10 +230,7 @@
   }
 
   function openNotificationSettings(): void {
-    void invoke(
-      'shell:openExternal',
-      'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
-    )
+    void invoke('notification:openSettings')
   }
 
   onMount(() => {
@@ -482,27 +495,51 @@
           <!-- Git -->
           <div class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-sm font-medium">Default merge method</p>
-                <p class="text-xs text-dimmed">
-                  Pre-selected when merging a pull request from the Git panel
-                </p>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium">Default merge method</p>
+                  <p class="text-xs text-dimmed">
+                    Pre-selected when merging a pull request from the Git panel
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.defaultMergeMethod}
+                  disabled={!settingsReady}
+                  aria-label="Default merge method"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      defaultMergeMethod: event.currentTarget.value as PrMergeMethod
+                    })}
+                >
+                  {#each mergeMethodOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
               </div>
-              <select
-                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.defaultMergeMethod}
-                disabled={!settingsReady}
-                aria-label="Default merge method"
-                onchange={(event: SelectChangeEvent) =>
-                  void updateConfig({
-                    defaultMergeMethod: event.currentTarget.value as PrMergeMethod
-                  })}
-              >
-                {#each mergeMethodOptions as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Maximum diff lines</p>
+                  <p class="text-xs text-dimmed">
+                    Hunks larger than this are collapsed with a notice so huge diffs stay responsive
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min="10"
+                    max="5000"
+                    step="1"
+                    value={config.maxDiffLines}
+                    disabled={!settingsReady}
+                    aria-label="Maximum diff lines per hunk"
+                    onchange={saveMaxDiffLines}
+                  />
+                  lines
+                </label>
+              </div>
             </div>
           </div>
 
@@ -596,6 +633,8 @@
       <ProvidersView />
     {:else if section === 'utilities'}
       <UtilitiesView />
+    {:else if section === 'keymap'}
+      <KeymapSettingsTab />
     {:else if section === 'remote'}
       <RemoteSettingsTab />
     {:else if section === 'cloud-deployments'}

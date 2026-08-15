@@ -124,6 +124,10 @@ export interface TemporaryChatContextTab {
   selectionAttached: boolean
   selectionMessageId: string | null
   autoPromptSent: boolean
+  /** Override for the auto-sent explain prompt, when the tab was opened to
+   *  explain a specific selection (e.g. an agent question) rather than the
+   *  generic "explain this selection" elaboration. */
+  autoPrompt?: string
   sessionStarted: boolean
   expired: boolean
   expiresAt: number
@@ -195,6 +199,9 @@ class ContextSidebarState {
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>('right')
+  /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
+   *  consumer (Workspace) can run the close-through-confirmation flow. */
+  closeActiveTabRequest = $state(0)
 
   get tabs(): ContextSidebarTab[] {
     return this.activeContext?.tabs ?? EMPTY_TABS
@@ -249,6 +256,19 @@ class ContextSidebarState {
     return (
       this.terminalPlacement === 'bottom' &&
       this.activeContext?.terminalDockOpen !== false &&
+      this.terminalTabs.length > 0
+    )
+  }
+
+  /**
+   * Whether the bottom terminal dock is folded into its thin restore bar.
+   * True while the dock is closed but terminal tabs still exist, so a user can
+   * expand the shell back to its previous height from the chevron bar.
+   */
+  get terminalDockCollapsed(): boolean {
+    return (
+      this.terminalPlacement === 'bottom' &&
+      this.activeContext?.terminalDockOpen === false &&
       this.terminalTabs.length > 0
     )
   }
@@ -682,7 +702,8 @@ class ContextSidebarState {
     selection: string,
     initialContext: string,
     settings: ThreadSettings,
-    selectionAttached = true
+    selectionAttached = true,
+    autoPrompt?: string
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
 
@@ -727,6 +748,7 @@ class ContextSidebarState {
       selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
+      autoPrompt,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
@@ -981,6 +1003,12 @@ class ContextSidebarState {
     if (context.tabs.length === 0) {
       context.visible = false
     }
+  }
+
+  /** Signal Workspace to close the active tab through its confirmation flow
+   *  (unsaved-file dialog). The tab is not closed here — Workspace decides. */
+  requestCloseActiveTab(): void {
+    this.closeActiveTabRequest += 1
   }
 
   reorder(id: string, targetId: string, position: 'before' | 'after'): void {

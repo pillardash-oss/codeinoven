@@ -2,6 +2,7 @@
   import {
     Archive,
     Bot,
+    Brain,
     CheckCircle2,
     Clock,
     Cog,
@@ -19,7 +20,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { AgentPart, AgentToolStatus } from '$shared/types'
+  import type { AgentPart, AgentToolStatus, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
 
@@ -37,6 +38,8 @@
     startTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
+    /** Thinking level used for this trace's turn, when the model reasons. */
+    thinkingLevel?: ThinkingLevel | null
     providerName?: string | null
     harnessId?: string | null
     harnessName?: string | null
@@ -60,6 +63,7 @@
     initialUserOpened = false,
     startTime,
     modelLabel = null,
+    thinkingLevel = null,
     providerName,
     harnessId,
     harnessName,
@@ -471,6 +475,16 @@
                 aria-label="Fast inference"
                 title="Fast inference"
               />
+            {/if}
+            {#if thinkingLevel}
+              <span
+                class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                title={`Thinking level: ${thinkingLevel}`}
+                aria-label={`Thinking level: ${thinkingLevel}`}
+              >
+                <Brain size={9} />
+                {thinkingLevel}
+              </span>
             {/if}
           </span>
         {/if}

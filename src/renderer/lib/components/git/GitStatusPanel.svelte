@@ -779,6 +779,14 @@
     }
   }
 
+  function onCommitMessageKeydown(event: KeyboardEvent): void {
+    // Enter never commits by itself — only Cmd/Ctrl+Enter does, so writing a
+    // multi-line message can never fire the commit early.
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    void commitInline()
+  }
+
   async function reloadHistory(): Promise<void> {
     commitHistory = []
     historyHasMore = true
@@ -2505,7 +2513,8 @@
           bind:this={commitTextarea}
           class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
-          bind:value={commitMessage}></textarea>
+          bind:value={commitMessage}
+          onkeydown={onCommitMessageKeydown}></textarea>
       </div>
       <div class="flex items-center gap-1.5 px-2 py-2">
         <span class="flex-1"></span>

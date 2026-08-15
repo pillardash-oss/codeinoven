@@ -1,6 +1,8 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
+import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
+import { patchSelectionCopy } from './selection-copy'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
@@ -130,6 +132,7 @@ class TerminalSessionManager {
 
   private async create(id: string): Promise<TerminalSession> {
     const ghostty = await this.getRuntime()
+    patchSelectionCopy()
     const term = new Terminal({
       ghostty,
       cursorBlink: true,
@@ -152,8 +155,17 @@ class TerminalSessionManager {
     // Reflect terminal focus to the app's shortcut routing. On non-mac platforms
     // Ctrl+W must keep its shell delete-word behavior while the terminal is
     // focused, so both the main process and the renderer fallback need to know.
-    const onFocusIn = (): void => setTerminalFocused(true)
-    const onFocusOut = (): void => setTerminalFocused(false)
+    // Focus also drives the caret: it only renders while the terminal is focused,
+    // and DECSCUSR blink state is re-applied on focus regain.
+    const cursorVisibility = new TerminalCursorController(term)
+    const onFocusIn = (): void => {
+      cursorVisibility.focus()
+      setTerminalFocused(true)
+    }
+    const onFocusOut = (): void => {
+      cursorVisibility.blur()
+      setTerminalFocused(false)
+    }
     host.addEventListener('focusin', onFocusIn)
     host.addEventListener('focusout', onFocusOut)
     const cleanupFocus = (): void => {
@@ -193,7 +205,7 @@ class TerminalSessionManager {
         const shape = cursorShape.push(text)
         if (shape && term.renderer) {
           term.renderer.setCursorStyle(shape.style)
-          term.renderer.setCursorBlink(shape.blinking)
+          cursorVisibility.updateBlink(shape.blinking)
         }
       })
     )

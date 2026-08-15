@@ -2,14 +2,18 @@
   import { onDestroy, onMount } from 'svelte'
   import {
     AudioLines,
+    Brain,
     Check,
     Clock3,
     Copy,
+    Ellipsis,
     FileText,
     GitFork,
     Loader2,
     MessageSquare,
+    Pencil,
     RotateCcw,
+    Trash2,
     Video,
     X,
     Zap
@@ -20,10 +24,11 @@
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { messageId } from '$shared/id'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
   import {
@@ -42,6 +47,7 @@
     PromptAttachment,
     PromptReference,
     ProviderCatalog,
+    ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
 
@@ -143,6 +149,42 @@
   // ─── Turn attribution (harness / model / time) ─────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /** Thinking level used for the chat's turns, when the chat's model reasons. */
+  let thinkingLevel = $derived.by((): ThinkingLevel | null => {
+    const modelId = tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === fastBaseModelId(modelId) &&
+          (!tab.settings.providerId || m.providerId === tab.settings.providerId)
+      ) ?? allModels.find((m) => m.id === fastBaseModelId(modelId))
+    const presets = model?.thinkingPresets ?? []
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, tab.settings.thinkingLevel) ?? null
+  })
+
+  /** Thinking level used for a specific message's turn, when its model reasons. */
+  function messageThinkingLevel(message: AgentMessage): ThinkingLevel | null {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === fastBaseModelId(modelId) &&
+          (!message.providerId || m.providerId === message.providerId)
+      ) ?? allModels.find((m) => m.id === fastBaseModelId(modelId))
+    const presets = model?.thinkingPresets ?? []
+    // A model known not to reason never shows a thinking badge, even when a
+    // generic level was stamped onto its rows.
+    if (model && presets.length === 0) return null
+    // Prefer the level actually persisted for this turn (historical truth),
+    // falling back to the chat's current level for legacy/live messages.
+    if (message.thinkingLevel) return message.thinkingLevel
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, tab.settings.thinkingLevel) ?? null
+  }
 
   /** Provider catalog entry for the message, falling back to the chat's model. */
   function messageProvider(message: AgentMessage): ProviderCatalog | undefined {
@@ -336,22 +378,66 @@
     }
   }
 
+  const DEFAULT_ELABORATE_PROMPT =
+    'Explain this selection in detail. Be clear and explain in simple terms, ensure you do not overwhelm the user with so much jargons, unless explicitly asked to. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!'
+
   function sendElaboratePrompt(): Promise<void> {
     return send(
-      'Explain this selection in detail. Be clear and explain in simple terms, ensure you do not overwhelm the user with so much jargons, unless explicitly asked to. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!',
+      tab.autoPrompt ?? DEFAULT_ELABORATE_PROMPT,
       [],
-      '*Elaborate.*'
+      tab.autoPrompt ? '*Explain this question.*' : '*Elaborate.*'
     )
   }
+
+  /** A message queued while the agent is working — sent automatically when the
+   *  turn finishes, or steered into the live turn on demand. */
+  interface QueuedTemporaryPrompt {
+    text: string
+    attachments: PromptAttachment[]
+    selections: string[]
+    selectionAttached: boolean
+  }
+
+  let queued = $state<QueuedTemporaryPrompt | null>(null)
+  let showQueueMenu = $state(false)
+  /** Bumped to remount the composer with a restored draft after editing the queue. */
+  let composerRestoreKey = $state(0)
+  /** Shortcut label for the steer combo — macOS shows ⌘⇧, others Ctrl+Shift+. */
+  const steerModifierLabel =
+    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
+  /** Attachments to restore into the composer after an Edit of the queue. */
+  let restoredAttachments = $state<PromptAttachment[]>([])
+  /** True while a user-initiated stop is settling — suppresses the expected
+   *  "stopped" rejection from surfacing as an error banner. */
+  let aborting = $state(false)
 
   async function send(
     text: string,
     attachments: PromptAttachment[] = [],
-    presentationText = text
+    presentationText = text,
+    direct = false
   ): Promise<void> {
     const prompt = text.trim()
-    if (!prompt || tab.busy || tab.expired) return
+    if (!prompt || tab.expired) return
     touch()
+    // While the agent is working, the message is queued unless the user
+    // force-sends it (Cmd/Ctrl+Shift+Enter) as a steer intervention.
+    if (tab.busy) {
+      const pending: QueuedTemporaryPrompt = {
+        text: prompt,
+        attachments,
+        selections: tab.selectionAttached ? [...tab.selections] : [],
+        selectionAttached: tab.selectionAttached
+      }
+      tab.selections = []
+      tab.selectionAttached = false
+      if (direct) {
+        await steerQueuedMessage(pending)
+      } else {
+        queued = pending
+      }
+      return
+    }
     const temporaryChatId = tab.temporaryChatId
     const attachedSelections = tab.selectionAttached ? [...tab.selections] : []
     const outgoing = userMessage(
@@ -390,12 +476,114 @@
       touch()
     } catch (error) {
       if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
+      if (aborting) {
+        aborting = false
+        return
+      }
       tab.error = error instanceof Error ? error.message : 'The temporary chat could not respond.'
     } finally {
+      aborting = false
       if (tab.temporaryChatId === temporaryChatId && !tab.expired) {
         tab.busy = false
+        // Auto-send a message queued while the agent was working. The queue
+        // captured its selections, so restore them before sending.
+        const pending = queued
+        if (pending) {
+          queued = null
+          showQueueMenu = false
+          tab.selections = pending.selectionAttached ? [...pending.selections] : []
+          tab.selectionAttached = pending.selectionAttached
+          void send(pending.text, pending.attachments, pending.text)
+        }
       }
     }
+  }
+
+  /** Abort the running temporary chat turn. */
+  async function stopRun(): Promise<void> {
+    if (!tab.busy || tab.expired) return
+    aborting = true
+    queued = null
+    showQueueMenu = false
+    try {
+      await invoke('agent:abortTemporaryChat', tab.projectId, tab.threadId, tab.temporaryChatId)
+    } catch (error) {
+      aborting = false
+      tab.error = error instanceof Error ? error.message : 'The request could not be stopped.'
+    }
+  }
+
+  /**
+   * Steer — deliver a message into the live temporary-chat turn as an
+   * intervention (Cmd/Ctrl+Shift+Enter in the composer, or the queue card's
+   * Steer button). If the turn finished before delivery the message is
+   * restored to the queue instead of being lost.
+   */
+  async function steerQueuedMessage(pendingOverride?: QueuedTemporaryPrompt): Promise<void> {
+    const pending = pendingOverride ?? queued
+    if (!pending || !tab.busy || tab.expired) return
+    showQueueMenu = false
+    if (!pendingOverride) queued = null
+    touch()
+    const temporaryChatId = tab.temporaryChatId
+    const outgoing = userMessage(
+      pending.text,
+      pending.attachments,
+      pending.selectionAttached
+        ? pending.selections.map((selection, index) => ({
+            id: `${temporaryChatId}:selection:${index}`,
+            label: `Selection ${index + 1}`,
+            text: selection
+          }))
+        : []
+    )
+    tab.messages = [...tab.messages, outgoing]
+    if (pending.selectionAttached && pending.selections.length > 0) {
+      tab.selectionMessageId = outgoing.id
+    }
+    tab.sessionStarted = true
+    try {
+      await invoke(
+        'agent:steerTemporaryPrompt',
+        tab.projectId,
+        tab.threadId,
+        temporaryChatId,
+        tab.settings,
+        pending.text,
+        pending.attachments,
+        pending.selections
+      )
+      if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
+      touch()
+    } catch (error) {
+      if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
+      // The steer was not delivered — restore the queue and drop the optimistic copy.
+      if (!queued) {
+        queued = pending
+        tab.messages = tab.messages.filter((message) => message.id !== outgoing.id)
+      }
+      tab.error =
+        error instanceof Error ? error.message : 'The steer message could not be delivered.'
+    }
+  }
+
+  /** Return the queued message to the composer for editing. */
+  function editQueuedMessage(): void {
+    showQueueMenu = false
+    const pending = queued
+    if (!pending) return
+    tab.draft = pending.text
+    tab.selections = pending.selectionAttached ? [...pending.selections] : []
+    tab.selectionAttached = pending.selectionAttached
+    restoredAttachments = pending.attachments
+    queued = null
+    composerRestoreKey += 1
+  }
+
+  /** Delete the queued message. */
+  function deleteQueuedMessage(): void {
+    showQueueMenu = false
+    queued = null
   }
 
   function updateSettings(settings: ThreadSettings): void {
@@ -634,6 +822,7 @@
                   latest={tab.busy}
                   startTime={turnStartTime(messageIndex)}
                   {modelLabel}
+                  {thinkingLevel}
                   {providerName}
                   harnessId={tab.settings.harnessId}
                   {harnessName}
@@ -653,6 +842,7 @@
                 latest={tab.busy}
                 startTime={turnStartTime(messageIndex)}
                 {modelLabel}
+                {thinkingLevel}
                 {providerName}
                 harnessId={tab.settings.harnessId}
                 {harnessName}
@@ -708,47 +898,155 @@
     </div>
 
     {#if tab.mode !== 'audit'}
+      {#if queued}
+        <div class="shrink-0 border-t border-border bg-app px-3 pt-2">
+          <div class="mx-auto max-w-2xl">
+            <div class="rounded-t-xl border border-border bg-surface shadow-sm">
+              <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                  >Queued</span
+                >
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+                    title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
+                    onclick={() => void steerQueuedMessage()}
+                  >
+                    Steer
+                  </button>
+                  <div class="relative">
+                    <button
+                      type="button"
+                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      aria-label="Queued message actions"
+                      title="Queued message actions"
+                      onclick={() => (showQueueMenu = !showQueueMenu)}
+                      oncontextmenu={(e: MouseEvent) => {
+                        e.preventDefault()
+                        showQueueMenu = true
+                      }}
+                    >
+                      <Ellipsis size={13} />
+                    </button>
+                    {#if showQueueMenu}
+                      <button
+                        type="button"
+                        class="fixed inset-0 z-30 cursor-default"
+                        aria-label="Close menu"
+                        onclick={() => (showQueueMenu = false)}
+                      ></button>
+                      <div
+                        class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                        role="menu"
+                      >
+                        <button
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+                          role="menuitem"
+                          onclick={editQueuedMessage}
+                        >
+                          <Pencil size={13} class="text-muted" />
+                          Edit
+                        </button>
+                        <div class="mx-2 my-1 border-t"></div>
+                        <button
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                          role="menuitem"
+                          onclick={deleteQueuedMessage}
+                        >
+                          <Trash2 size={13} />
+                          Delete
+                        </button>
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+              {#if queued.selectionAttached && queued.selections.length > 0}
+                <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                  {#each queued.selections as selection, index (index)}
+                    <span
+                      class="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                      title={selection}
+                    >
+                      <MessageSquare size={11} class="shrink-0 text-accent" />
+                      <span class="font-medium text-foreground">Selection {index + 1}</span>
+                      <span class="truncate text-muted">{selection}</span>
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              {#if queued.attachments.length > 0}
+                <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                  {#each queued.attachments as attachment (attachment.url)}
+                    <span
+                      class="flex max-w-full items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted"
+                      title={attachment.filename ?? attachment.url}
+                    >
+                      <FileText size={11} class="shrink-0" />
+                      <span class="max-w-32 truncate"
+                        >{attachment.filename ?? attachment.url.split('/').pop() ?? 'file'}</span
+                      >
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queued.text}</p>
+            </div>
+          </div>
+        </div>
+      {/if}
       <div class="shrink-0 border-t border-border bg-app px-3 py-3">
         <div class="mx-auto max-w-2xl">
-          <ChatComposer
-            placeholder="Ask a read-only question…"
-            disabled={tab.busy}
-            settings={tab.settings}
-            onSettingsChange={updateSettings}
-            {providers}
-            projectId={tab.projectId}
-            attachmentStorage={{
-              kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
-              projectId: tab.projectId,
-              threadId: tab.threadId
-            }}
-            harnessId={tab.settings.harnessId}
-            showEngineeringMode={false}
-            readOnlyMode
-            allowAttachments
-            hidePermissionSelector
-            enableImageDescriptorGate={false}
-            favoriteModels={rendererRecovery.chatFavoriteModels}
-            onToggleFavorite={(providerId, modelId, harnessId) =>
-              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-            recentModels={rendererRecovery.chatRecentModels}
-            onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-            {references}
-            onRemoveReference={(id) => {
-              const index = references.findIndex((reference) => reference.id === id)
-              if (index < 0) return
-              tab.selections = tab.selections.filter((_, i) => i !== index)
-              tab.selectionAttached = tab.selections.length > 0
-            }}
-            initialValue={tab.draft}
-            onValueChange={(value) => {
-              tab.draft = value
-              touch()
-            }}
-            onSend={(message, attachments) => void send(message, attachments)}
-          />
+          {#key composerRestoreKey}
+            <ChatComposer
+              placeholder={tab.busy
+                ? 'The agent is working — type to queue a question'
+                : 'Ask a read-only question…'}
+              autofocus
+              working={tab.busy}
+              onStop={stopRun}
+              settings={tab.settings}
+              onSettingsChange={updateSettings}
+              {providers}
+              projectId={tab.projectId}
+              attachmentStorage={{
+                kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
+                projectId: tab.projectId,
+                threadId: tab.threadId
+              }}
+              harnessId={tab.settings.harnessId}
+              showEngineeringMode={false}
+              readOnlyMode
+              allowAttachments
+              hidePermissionSelector
+              enableImageDescriptorGate={false}
+              favoriteModels={rendererRecovery.chatFavoriteModels}
+              onToggleFavorite={(providerId, modelId, harnessId) =>
+                rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+              recentModels={rendererRecovery.chatRecentModels}
+              onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+              {references}
+              onRemoveReference={(id) => {
+                const index = references.findIndex((reference) => reference.id === id)
+                if (index < 0) return
+                tab.selections = tab.selections.filter((_, i) => i !== index)
+                tab.selectionAttached = tab.selections.length > 0
+              }}
+              initialValue={tab.draft}
+              initialAttachments={restoredAttachments}
+              onValueChange={(value) => {
+                tab.draft = value
+                touch()
+              }}
+              onSend={(message, attachments, direct) =>
+                void send(message, attachments, message, direct)}
+            />
+          {/key}
         </div>
       </div>
     {/if}
@@ -758,6 +1056,7 @@
 {#snippet turnFooter(message: AgentMessage, messageIndex: number)}
   {@const msgModelLabel = messageModelLabel(message)}
   {@const msgFastVariant = fastVariantForModelId(message.modelId ?? tab.settings.modelId)}
+  {@const msgThinking = messageThinkingLevel(message)}
   {@const msgDuration = turnDuration(messageIndex)}
   <div class="flex items-center gap-1.5">
     <div class="flex items-center gap-0.5">
@@ -809,6 +1108,16 @@
             />
           {/if}
         </span>
+        {#if msgThinking}
+          <span
+            class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+            title={`Thinking level: ${msgThinking}`}
+            aria-label={`Thinking level: ${msgThinking}`}
+          >
+            <Brain size={9} />
+            {msgThinking}
+          </span>
+        {/if}
       {/if}
       <span class="text-[10px] text-dimmed"
         >· {formatTime(message.completedAt ?? message.createdAt)}</span

@@ -11,6 +11,7 @@ import type {
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
   LocalProfileUsageBreakdown,
+  ThinkingLevel,
   UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
   UsageEvent
@@ -22,6 +23,7 @@ interface HarnessUsageRow {
   harness_id: string
   provider_id: string
   model_id: string | null
+  thinking_level: string | null
   message_count: number
   cost_usd: number
   tokens_in: number
@@ -40,6 +42,7 @@ interface HarnessModelUsageRow {
   harness_id: string
   provider_id: string
   model_id: string
+  thinking_level: string | null
   message_count: number
   cost_usd: number
   tokens_in: number
@@ -64,6 +67,7 @@ interface UsageAggregateRow {
 interface LocalUsageAggregateRow extends UsageAggregateRow {
   harness_id: string | null
   provider_id: string | null
+  thinking_level: string | null
 }
 
 interface LocalProjectAggregateRow extends UsageAggregateRow {
@@ -83,7 +87,10 @@ interface LocalProjectAggregateRow extends UsageAggregateRow {
  * computer-use tool calls are excluded because their tokens ride inside the
  * parent agent turn.
  */
-const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title'] as const
+const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search_nudge'] as const
+
+/** Upper bound for profile analytics result sets (worker bounded reads). */
+const ANALYTICS_MAX_ROWS = 100_000
 
 function tokensFromRow(
   row: Pick<
@@ -113,6 +120,7 @@ function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
     harnessId: row.harness_id,
     providerId: row.provider_id,
     ...(row.model_id ? { modelId: row.model_id } : {}),
+    ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
     tokens: tokensFromRow(row),
@@ -128,6 +136,7 @@ function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
     harnessId: row.harness_id,
     providerId: row.provider_id,
     modelId: row.model_id,
+    ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
     tokens: tokensFromRow(row),
@@ -165,12 +174,12 @@ export class HarnessUsageRepo {
     this.db.run(
       `INSERT OR IGNORE INTO usage_events(
         id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
-        harness_id, provider_id, model_id, utility_id, raw_provider_usage_json,
+        harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
         tokens_uncached_input, tokens_cached_input, tokens_cache_write,
         tokens_output, tokens_reasoning, raw_total, total_semantics,
         cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
         success, retry_cause, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       event.id,
       event.threadId,
       event.parentTurnId,
@@ -180,6 +189,7 @@ export class HarnessUsageRepo {
       event.harnessId,
       event.providerId,
       event.modelId,
+      event.thinkingLevel,
       event.utilityId,
       JSON.stringify(event.rawProviderUsage),
       event.tokens.uncachedInput,
@@ -493,35 +503,40 @@ export class HarnessUsageRepo {
   }
 
   /** App-wide totals and ranked breakdowns for the signed-in profile. */
-  profileSummary(): AccountUsageSummary {
-    const harnessRows = this.db.all<UsageAggregateRow>(
-      `SELECT harness_id AS id,
-              SUM(message_count) AS message_count,
-              SUM(cost_usd) AS cost_usd,
-              SUM(tokens_total) AS tokens_total,
-              SUM(duration_ms) AS duration_ms
-       FROM harness_usage
-       GROUP BY harness_id
-       ORDER BY message_count DESC, MAX(last_used_at) DESC`
-    )
-    const modelRows = this.db.all<UsageAggregateRow>(
-      `SELECT model_id AS id,
-              SUM(message_count) AS message_count,
-              SUM(cost_usd) AS cost_usd,
-              SUM(tokens_total) AS tokens_total,
-              SUM(duration_ms) AS duration_ms
-       FROM harness_usage_models
-       GROUP BY model_id
-       ORDER BY message_count DESC, MAX(last_used_at) DESC`
-    )
-    const activityDays = this.db.all<{ date: string; message_count: number }>(
-      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-              COUNT(*) AS message_count
-       FROM agent_messages
-       WHERE role = 'assistant' AND harness_id IS NOT NULL
-       GROUP BY date
-       ORDER BY date ASC`
-    )
+  async profileSummary(): Promise<AccountUsageSummary> {
+    const [harnessRows, modelRows, activityRows] = await Promise.all([
+      this.aggregate<UsageAggregateRow>(
+        `SELECT harness_id AS id,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                SUM(tokens_total) AS tokens_total,
+                SUM(duration_ms) AS duration_ms
+         FROM harness_usage
+         GROUP BY harness_id
+         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
+        []
+      ),
+      this.aggregate<UsageAggregateRow>(
+        `SELECT model_id AS id,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                SUM(tokens_total) AS tokens_total,
+                SUM(duration_ms) AS duration_ms
+         FROM harness_usage_models
+         GROUP BY model_id
+         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
+        []
+      ),
+      this.aggregate<{ date: string; message_count: number }>(
+        `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                COUNT(*) AS message_count
+         FROM agent_messages
+         WHERE role = 'assistant' AND harness_id IS NOT NULL
+         GROUP BY date
+         ORDER BY date ASC`,
+        []
+      )
+    ])
     const toBreakdown = (row: UsageAggregateRow): AccountUsageBreakdown => ({
       id: row.id,
       messageCount: row.message_count,
@@ -530,7 +545,7 @@ export class HarnessUsageRepo {
     })
     const harnesses = harnessRows.map(toBreakdown)
     const models = modelRows.map(toBreakdown)
-    const activity: AccountActivityDay[] = activityDays.map((row) => ({
+    const activity: AccountActivityDay[] = activityRows.map((row) => ({
       date: row.date,
       messageCount: row.message_count
     }))
@@ -549,10 +564,10 @@ export class HarnessUsageRepo {
   }
 
   /** Range-aware local Profile analytics derived from persisted assistant messages. */
-  profileAnalytics(range: LocalProfileAnalyticsRange): LocalProfileAnalytics {
+  async profileAnalytics(range: LocalProfileAnalyticsRange): Promise<LocalProfileAnalytics> {
     const aggregateSelect = `COUNT(*) AS message_count,
               SUM(COALESCE(cost, 0)) AS cost_usd,
-              SUM(COALESCE(CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+              SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
               SUM(CASE
                     WHEN completed_at IS NOT NULL AND completed_at > created_at
                     THEN completed_at - created_at
@@ -564,99 +579,103 @@ export class HarnessUsageRepo {
        AND created_at < ?`
     const params = [range.startAt, range.endAt] as const
 
-    const harnessRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT harness_id AS id,
-              harness_id,
-              NULL AS provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange}
-       GROUP BY harness_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const providerRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT provider_id AS id,
-              NULL AS harness_id,
-              provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange} AND provider_id IS NOT NULL
-       GROUP BY provider_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const modelRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT model_id AS id,
-              harness_id,
-              provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange} AND model_id IS NOT NULL
-       GROUP BY harness_id, provider_id, model_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const projectRows = this.db.all<LocalProjectAggregateRow>(
-      `SELECT p.id,
-              p.name,
-              p.color,
-              p.icon_type,
-              p.icon,
-              COUNT(*) AS message_count,
-              SUM(COALESCE(m.cost, 0)) AS cost_usd,
-              SUM(COALESCE(CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-              SUM(CASE
-                    WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
-                    THEN m.completed_at - m.created_at
-                    ELSE 0
-                  END) AS duration_ms,
-              COUNT(DISTINCT t.id) AS thread_count,
-              COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
-              MAX(m.created_at) AS last_active_at
-       FROM agent_messages m
-       JOIN threads t ON t.id = m.thread_id
-       JOIN projects p ON p.id = t.project_id
-       WHERE m.role = 'assistant'
-         AND m.harness_id IS NOT NULL
-         AND m.created_at >= ?
-         AND m.created_at < ?
-       GROUP BY p.id
-       ORDER BY message_count DESC, last_active_at DESC`,
-      ...params
-    )
-    const utilityRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT feature AS id,
-              NULL AS harness_id,
-              NULL AS provider_id,
-              COUNT(*) AS message_count,
-              SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-              SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
-                  + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
-                  + COALESCE(tokens_reasoning, 0)) AS tokens_total,
-              0 AS duration_ms
-       FROM usage_events
-       WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
-         AND created_at >= ?
-         AND created_at < ?
-       GROUP BY feature
-       ORDER BY message_count DESC, feature ASC`,
-      ...PROFILE_UTILITY_FEATURES,
-      ...params
-    )
-    const activityRows = this.db.all<{ date: string; message_count: number }>(
-      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-              COUNT(*) AS message_count
-       FROM agent_messages
-       WHERE ${messageRange}
-       GROUP BY date
-       ORDER BY date ASC`,
-      ...params
-    )
+    const [harnessRows, providerRows, modelRows, projectRows, utilityRows, activityRows] =
+      await Promise.all([
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT harness_id AS id,
+                  harness_id,
+                  NULL AS provider_id,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange}
+           GROUP BY harness_id
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT provider_id AS id,
+                  NULL AS harness_id,
+                  provider_id,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange} AND provider_id IS NOT NULL
+           GROUP BY provider_id
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT model_id AS id,
+                  harness_id,
+                  provider_id,
+                  thinking_level,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange} AND model_id IS NOT NULL
+           GROUP BY harness_id, provider_id, model_id, thinking_level
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalProjectAggregateRow>(
+          `SELECT p.id,
+                  p.name,
+                  p.color,
+                  p.icon_type,
+                  p.icon,
+                  COUNT(*) AS message_count,
+                  SUM(COALESCE(m.cost, 0)) AS cost_usd,
+                  SUM(COALESCE(m.tokens_total, CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+                  SUM(CASE
+                        WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
+                        THEN m.completed_at - m.created_at
+                        ELSE 0
+                      END) AS duration_ms,
+                  COUNT(DISTINCT t.id) AS thread_count,
+                  COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
+                  MAX(m.created_at) AS last_active_at
+           FROM agent_messages m
+           JOIN threads t ON t.id = m.thread_id
+           JOIN projects p ON p.id = t.project_id
+           WHERE m.role = 'assistant'
+             AND m.harness_id IS NOT NULL
+             AND m.created_at >= ?
+             AND m.created_at < ?
+           GROUP BY p.id
+           ORDER BY message_count DESC, last_active_at DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT feature AS id,
+                  NULL AS harness_id,
+                  NULL AS provider_id,
+                  COUNT(*) AS message_count,
+                  SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+                  SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
+                      + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
+                      + COALESCE(tokens_reasoning, 0)) AS tokens_total,
+                  0 AS duration_ms
+           FROM usage_events
+           WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
+             AND created_at >= ?
+             AND created_at < ?
+           GROUP BY feature
+           ORDER BY message_count DESC, feature ASC`,
+          [...PROFILE_UTILITY_FEATURES, ...params]
+        ),
+        this.aggregate<{ date: string; message_count: number }>(
+          `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                  COUNT(*) AS message_count
+           FROM agent_messages
+           WHERE ${messageRange}
+           GROUP BY date
+           ORDER BY date ASC`,
+          [...params]
+        )
+      ])
     const toUsageBreakdown = (row: LocalUsageAggregateRow): LocalProfileUsageBreakdown => ({
       id: row.id,
       ...(row.harness_id ? { harnessId: row.harness_id } : {}),
       ...(row.provider_id ? { providerId: row.provider_id } : {}),
+      ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
       messageCount: row.message_count,
       costUsd: row.cost_usd,
       tokens: row.tokens_total,
@@ -703,8 +722,30 @@ export class HarnessUsageRepo {
       utilities,
       projects,
       activityDays,
+      // Feedback scoring and its cost live in TurnFeedbackRepo; the IPC layer
+      // overlays them.
+      modelPerformance: [],
+      feedbackCost: {
+        outcomes: 0,
+        pricedOutcomes: 0,
+        costUsd: 0,
+        knownCostUsd: 0,
+        estimatedCostUsd: 0,
+        tokensTotal: 0
+      },
       generatedAt: Date.now()
     }
+  }
+
+  /**
+   * Run an aggregate read on the maintenance worker connection so large
+   * analytics scans never block the Electron main thread (primary-connection
+   * fallback for in-memory test databases). Bounded far above any real result
+   * set; the caller's SQL must not contain LIMIT.
+   */
+  private async aggregate<T>(sql: string, params: unknown[]): Promise<T[]> {
+    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS)
+    return result.rows as T[]
   }
 
   /**
@@ -742,21 +783,22 @@ export class HarnessUsageRepo {
 
       const providerId = message.providerId ?? ''
       const modelId = message.modelId
+      const thinkingLevel = message.thinkingLevel ?? null
       const cost = messageCost(message) ?? 0
       const tokens = message.tokens
       const createdAt = message.createdAt
       const completedAt = message.completedAt ?? createdAt
       const duration = completedAt > createdAt ? completedAt - createdAt : 0
-
       statements.push({
         sql: `INSERT INTO harness_usage(
-          project_id, thread_id, harness_id, provider_id, model_id,
+          project_id, thread_id, harness_id, provider_id, model_id, thinking_level,
           message_count, cost_usd,
           tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
           duration_ms, first_used_at, last_used_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(project_id, thread_id, harness_id, provider_id) DO UPDATE SET
           model_id = COALESCE(excluded.model_id, harness_usage.model_id),
+          thinking_level = COALESCE(excluded.thinking_level, harness_usage.thinking_level),
           message_count = harness_usage.message_count + excluded.message_count,
           cost_usd = harness_usage.cost_usd + excluded.cost_usd,
           tokens_in = harness_usage.tokens_in + excluded.tokens_in,
@@ -774,6 +816,7 @@ export class HarnessUsageRepo {
           harnessId,
           providerId,
           modelId ?? null,
+          thinkingLevel,
           1,
           cost,
           tokens?.input ?? 0,
@@ -790,12 +833,12 @@ export class HarnessUsageRepo {
       if (modelId) {
         statements.push({
           sql: `INSERT INTO harness_usage_models(
-            thread_id, harness_id, provider_id, model_id,
+            thread_id, harness_id, provider_id, model_id, thinking_level,
             message_count, cost_usd,
             tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
             duration_ms, first_used_at, last_used_at
-          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-          ON CONFLICT(thread_id, harness_id, provider_id, model_id) DO UPDATE SET
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(thread_id, harness_id, provider_id, model_id, thinking_level) DO UPDATE SET
             message_count = harness_usage_models.message_count + excluded.message_count,
             cost_usd = harness_usage_models.cost_usd + excluded.cost_usd,
             tokens_in = harness_usage_models.tokens_in + excluded.tokens_in,
@@ -812,6 +855,7 @@ export class HarnessUsageRepo {
             harnessId,
             providerId,
             modelId,
+            thinkingLevel ?? '',
             1,
             cost,
             tokens?.input ?? 0,

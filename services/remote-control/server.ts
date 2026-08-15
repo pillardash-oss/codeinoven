@@ -1,12 +1,13 @@
 import { serve, type Server, type ServerWebSocket } from 'bun'
 import { isIP } from 'node:net'
-import { auth, authDatabasePath, closeAuthDatabase, remoteAuthSession } from './auth'
 import { EnrollmentClaimConflictError, RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import { RelayHub } from './relay-hub'
 import {
+  convexSiteUrl,
   remoteAuthOrigin,
   remoteBrowserOrigin,
+  remoteDatabasePath,
   remotePublicOrigin,
   trustRemoteProxy
 } from './runtime-config'
@@ -26,11 +27,13 @@ const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
 const MAX_MEMORY_CLOCK_SKEW_MS = 5 * 60_000
 const SESSION_PERSIST_INTERVAL_MS = 5 * 60_000
+const CONVEX_SESSION_TTL_MS = 24 * 60 * 60_000
+const CONVEX_REQUEST_TIMEOUT_MS = 10_000
 
 const port = positiveInteger(process.env['PORT'], 8877)
 const allowedOrigins = new Set([remoteBrowserOrigin, remotePublicOrigin, remoteAuthOrigin])
 
-const database = new RemoteControlDatabase(authDatabasePath)
+const database = new RemoteControlDatabase(remoteDatabasePath)
 const relayHub = new RelayHub({
   bufferLimit: positiveInteger(process.env['RELAY_BUFFER_LIMIT'], 256),
   bufferTtlMs: positiveInteger(process.env['RELAY_BUFFER_TTL_MS'], 60_000)
@@ -100,37 +103,85 @@ async function readJsonObject(
   }
 }
 
-async function sessionFromRequest(request: Request): Promise<AuthenticatedSession | null> {
-  const remoteSession = await remoteAuthSession(request)
-  if (!remoteSession) return null
-  const session: AuthenticatedSession = {
-    id: remoteSession.id,
-    userId: remoteSession.userId,
-    expiresAt: remoteSession.expiresAt
+interface AccountIdentity {
+  id: string
+  email: string
+  displayName: string
+  image: string | null
+}
+
+function parseAccountIdentity(value: unknown): AccountIdentity | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const profile = (value as Record<string, unknown>)['profile']
+  if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) return null
+  const record = profile as Record<string, unknown>
+  if (
+    typeof record['id'] !== 'string' ||
+    typeof record['email'] !== 'string' ||
+    typeof record['displayName'] !== 'string' ||
+    (record['image'] !== null && typeof record['image'] !== 'string')
+  ) {
+    return null
   }
+  return {
+    id: record['id'],
+    email: record['email'],
+    displayName: record['displayName'],
+    image: record['image']
+  }
+}
+
+async function accountIdentityFromRequest(request: Request): Promise<AccountIdentity | null> {
+  const authorization = request.headers.get('authorization')
+  const cookie = request.headers.get('cookie')
+  if (!authorization && !cookie) return null
+  const headers = new Headers({ Origin: remotePublicOrigin })
+  if (authorization) headers.set('Authorization', authorization)
+  if (cookie) headers.set('Cookie', cookie)
+  try {
+    const response = await fetch(new URL('/v1/profile', convexSiteUrl), {
+      headers,
+      signal: AbortSignal.timeout(CONVEX_REQUEST_TIMEOUT_MS)
+    })
+    if (!response.ok) return null
+    return parseAccountIdentity(await response.json())
+  } catch {
+    return null
+  }
+}
+
+async function sessionFromRequest(request: Request): Promise<AuthenticatedSession | null> {
+  const account = await accountIdentityFromRequest(request)
+  if (!account) return null
+  const credential =
+    request.headers.get('authorization') ?? request.headers.get('cookie') ?? account.id
   const now = Date.now()
-  const identity = JSON.stringify([
-    remoteSession.userId,
-    remoteSession.email,
-    remoteSession.displayName,
-    remoteSession.image,
-    remoteSession.expiresAt
+  const session: AuthenticatedSession = {
+    id: `convex:${tokenHash(credential)}`,
+    userId: account.id,
+    expiresAt: now + CONVEX_SESSION_TTL_MS
+  }
+  const identitySnapshot = JSON.stringify([
+    account.id,
+    account.email,
+    account.displayName,
+    account.image
   ])
   const persisted = persistedSessions.get(session.id)
   if (
     !persisted ||
-    persisted.identity !== identity ||
+    persisted.identity !== identitySnapshot ||
     now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS
   ) {
     database.upsertOAuthUser({
-      id: remoteSession.userId,
-      email: remoteSession.email,
-      displayName: remoteSession.displayName,
-      image: remoteSession.image
+      id: account.id,
+      email: account.email,
+      displayName: account.displayName,
+      image: account.image
     })
     database.rememberOAuthSession(session)
     if (persistedSessions.size >= 10_000) persistedSessions.clear()
-    persistedSessions.set(session.id, { identity, persistedAt: now })
+    persistedSessions.set(session.id, { identity: identitySnapshot, persistedAt: now })
   }
   return session
 }
@@ -197,6 +248,7 @@ function redirect(location: string, source?: Response): Response {
 }
 
 async function beginDesktopSignIn(request: Request, url: URL): Promise<Response> {
+  const { auth } = await import('./auth')
   const publicOrigin = publicRequestOrigin(url)
   const provider = url.searchParams.get('provider')
   const redirectUri = validDesktopCallback(url.searchParams.get('redirect_uri'))
@@ -505,8 +557,18 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
   const presentedToken = bearerToken(request)
   const presentedHash = presentedToken ? tokenHash(presentedToken) : null
   const existing = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
-  const accountUserId = presentedHash ? database.findUserIdByAccountTokenHash(presentedHash) : null
+  const accountIdentity =
+    presentedToken && !existing ? await accountIdentityFromRequest(request) : null
+  const accountUserId = accountIdentity?.id ?? null
   if (presentedToken && !existing && !accountUserId) return json({ error: 'unauthorized' }, 401)
+  if (accountIdentity) {
+    database.upsertOAuthUser({
+      id: accountIdentity.id,
+      email: accountIdentity.email,
+      displayName: accountIdentity.displayName,
+      image: accountIdentity.image
+    })
+  }
   const desktopId = existing?.id ?? crypto.randomUUID()
   const deviceToken = existing ? null : randomToken()
   const profileToken = accountUserId && presentedToken ? presentedToken : randomToken()
@@ -777,6 +839,7 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
     return websocketUpgrade(request, url)
   }
   if (url.pathname.startsWith('/api/auth/')) {
+    const { auth } = await import('./auth')
     const endingSession =
       url.pathname === '/api/auth/sign-out' ? await sessionFromRequest(request) : null
     const response = await auth.handler(request)
@@ -996,7 +1059,6 @@ function shutdown(): void {
   clearInterval(cleanupTimer)
   server.stop(true)
   database.close()
-  closeAuthDatabase()
 }
 
 process.once('SIGINT', shutdown)

@@ -6,8 +6,8 @@ import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { PACKAGED_SMOKE_OUTPUT_ENV } from '../src/main/packaged-smoke'
-import type { StartupPhase, StartupTelemetrySnapshot } from '../src/main/startup-telemetry'
+import { PACKAGED_SMOKE_OUTPUT_ENV } from '../src/main/system/packaged-smoke'
+import type { StartupPhase, StartupTelemetrySnapshot } from '../src/main/system/startup-telemetry'
 
 interface SmokeOptions {
   appDir: string

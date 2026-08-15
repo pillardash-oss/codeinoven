@@ -3,6 +3,7 @@
   import type { TurnCheckpointFileDiff } from '$shared/types'
   import DiffRows from './DiffRows.svelte'
   import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
 
   interface Props {
     diff: TurnCheckpointFileDiff
@@ -12,6 +13,8 @@
 
   let { diff, maxHeight = undefined }: Props = $props()
   let details = $derived(diffDetails(diff.before, diff.after))
+  /** Hunks with more changed lines than this render a notice instead of lines. */
+  let maxDiffLines = $derived(appConfigState.maxDiffLines)
 
   const REVEAL_STEP = 10
 
@@ -137,13 +140,22 @@
           {@const w = hunkWindow(hunk)}
           {@const hunkAdditions = w.lines.filter((line) => line.kind === 'added').length}
           {@const hunkDeletions = w.lines.filter((line) => line.kind === 'deleted').length}
+          {@const hunkChanged = hunkAdditions + hunkDeletions}
           {@const isFolded = foldedHunks[hunk.id] ?? false}
+          {@const limitExceeded = hunkChanged > maxDiffLines}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
             {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.aboveHidden, 'above')}
             {#if !isFolded}
-              <DiffRows lines={w.lines} paneLabels />
-              {#if w.belowHidden > 0}
-                {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.belowHidden, 'below')}
+              {#if limitExceeded}
+                <div class="px-3 py-3 text-center font-sans text-[11px] text-muted" role="note">
+                  Maximum diff exceeded — this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
+                  The lines are hidden to keep the diff responsive.
+                </div>
+              {:else}
+                <DiffRows lines={w.lines} paneLabels />
+                {#if w.belowHidden > 0}
+                  {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.belowHidden, 'below')}
+                {/if}
               {/if}
             {/if}
           </section>

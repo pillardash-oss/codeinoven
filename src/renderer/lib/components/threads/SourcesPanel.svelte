@@ -47,10 +47,12 @@
 
   type SourcesSection = 'sources' | 'mcps' | 'skills' | 'processes'
   type OriginFilter = 'all' | AgentCapabilityOrigin
+  type SourceFilter = 'all' | AgentSource['kind']
 
   let { sources, projectId, threadId }: Props = $props()
   let section = $state<SourcesSection>('sources')
   let originFilter = $state<OriginFilter>('all')
+  let sourceFilter = $state<SourceFilter>('all')
   let searchQuery = $state('')
   let previewSource = $state<FileAgentSource | null>(null)
   let imageUrls = new FileBlobUrlManager()
@@ -99,6 +101,14 @@
   const imageCount = $derived(sources.filter((source) => source.kind === 'generated-image').length)
   const citationCount = $derived(sources.filter((source) => source.kind === 'file-citation').length)
   const sectionCount = $derived(sources.filter((source) => source.kind === 'section').length)
+
+  const filteredSources = $derived(
+    sourceFilter === 'all' ? sources : sources.filter((source) => source.kind === sourceFilter)
+  )
+
+  function toggleSourceFilter(kind: SourceFilter): void {
+    sourceFilter = sourceFilter === kind ? 'all' : kind
+  }
 
   const availableMcps = $derived(capabilities?.mcp ?? [])
   const availableSkills = $derived(capabilities?.skill ?? [])
@@ -239,6 +249,33 @@
     return 'Website'
   }
 
+  function sourceFilterLabel(kind: SourceFilter): string {
+    switch (kind) {
+      case 'all':
+        return 'source'
+      case 'attachment':
+        return 'attachment'
+      case 'web':
+        return 'web'
+      case 'generated-image':
+        return 'image'
+      case 'file-citation':
+        return 'cited-file'
+      case 'section':
+        return 'section'
+    }
+  }
+
+  /** Citation text shown in the panel: the project-relative path when the file
+   *  lives in the project (the full absolute path stays in the tooltip and on
+   *  the click target). Long paths are middle-ellipsized so the tail — the
+   *  filename — is never cut off by the narrow sidebar. */
+  function citationDisplayText(source: FileCitationAgentSource): string {
+    const path = source.displayPath ?? source.path
+    if (path.length <= 48) return path
+    return `${path.slice(0, 12)}…${path.slice(-34)}`
+  }
+
   function handleCitationClick(source: FileCitationAgentSource): void {
     const projectId = workspaceState.activeProject?.id
     if (!projectId) return
@@ -290,7 +327,9 @@
       </div>
       <span class="text-xs font-semibold tabular-nums text-muted">
         {#if section === 'sources'}
-          {sources.length}
+          {filteredSources.length}{#if sourceFilter !== 'all' && filteredSources.length !== sources.length}
+            <span class="text-dimmed"> / {sources.length}</span>
+          {/if}
         {:else if section === 'mcps'}
           {filteredMcps.length}
         {:else if section === 'skills'}
@@ -431,23 +470,82 @@
     {/if}
 
     {#if section === 'sources' && sources.length > 0}
-      <div class="mt-3 flex flex-wrap gap-1.5 text-[10px] text-muted">
-        <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">
+      <div class="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Filter sources by kind">
+        <button
+          type="button"
+          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          'all'
+            ? 'bg-primary/15 text-primary'
+            : 'bg-raised text-muted hover:text-foreground'}"
+          aria-pressed={sourceFilter === 'all'}
+          title="Show every kind of source"
+          onclick={() => toggleSourceFilter('all')}
+        >
+          {sources.length} all
+        </button>
+        <button
+          type="button"
+          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          'attachment'
+            ? 'bg-primary/15 text-primary'
+            : 'bg-raised text-muted hover:text-foreground'}"
+          aria-pressed={sourceFilter === 'attachment'}
+          title="Show only attached files"
+          onclick={() => toggleSourceFilter('attachment')}
+        >
           {attachmentCount} attachments
-        </span>
-        <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">{webCount} web</span>
-        <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">
+        </button>
+        <button
+          type="button"
+          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          'web'
+            ? 'bg-primary/15 text-primary'
+            : 'bg-raised text-muted hover:text-foreground'}"
+          aria-pressed={sourceFilter === 'web'}
+          title="Show only websites cited or fetched by the agent"
+          onclick={() => toggleSourceFilter('web')}
+        >
+          {webCount} web
+        </button>
+        <button
+          type="button"
+          class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+          'generated-image'
+            ? 'bg-primary/15 text-primary'
+            : 'bg-raised text-muted hover:text-foreground'}"
+          aria-pressed={sourceFilter === 'generated-image'}
+          title="Show only generated images"
+          onclick={() => toggleSourceFilter('generated-image')}
+        >
           {imageCount} images
-        </span>
+        </button>
         {#if citationCount > 0}
-          <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">
+          <button
+            type="button"
+            class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+            'file-citation'
+              ? 'bg-primary/15 text-primary'
+              : 'bg-raised text-muted hover:text-foreground'}"
+            aria-pressed={sourceFilter === 'file-citation'}
+            title="Show only files cited by the agent"
+            onclick={() => toggleSourceFilter('file-citation')}
+          >
             {citationCount} cited files
-          </span>
+          </button>
         {/if}
         {#if sectionCount > 0}
-          <span class="rounded-md bg-raised px-1.5 py-0.5 tabular-nums">
+          <button
+            type="button"
+            class="rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors {sourceFilter ===
+            'section'
+              ? 'bg-primary/15 text-primary'
+              : 'bg-raised text-muted hover:text-foreground'}"
+            aria-pressed={sourceFilter === 'section'}
+            title="Show only conversation sections referenced by the agent"
+            onclick={() => toggleSourceFilter('section')}
+          >
             {sectionCount} sections
-          </span>
+          </button>
         {/if}
       </div>
     {/if}
@@ -472,125 +570,7 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     {#if section === 'sources'}
-      {#each sources as source (source.id)}
-        <div class="group border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
-          <div class="flex items-start gap-3">
-            {#if source.kind === 'web'}
-              {@const favicon = source.url ? faviconState.faviconFor(source.url) : null}
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-raised {favicon
-                  ? ''
-                  : 'text-muted'}"
-              >
-                {#if favicon}
-                  <img src={favicon} alt="" class="h-5 w-5 rounded-sm object-contain" />
-                {:else}
-                  <Globe2 size={15} />
-                {/if}
-              </span>
-            {:else if source.kind === 'file-citation'}
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-              >
-                <FileText size={15} />
-              </span>
-            {:else if source.kind === 'section'}
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
-              >
-                <Hash size={15} />
-              </span>
-            {:else if isImageSource(source)}
-              <button
-                type="button"
-                class="h-8 w-8 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-raised"
-                aria-label={`Preview ${source.title}`}
-                title={`Preview ${source.title}`}
-                onclick={() => (previewSource = source)}
-              >
-                <img
-                  src={imageUrls.getUrl(source.url)}
-                  alt=""
-                  class="h-full w-full object-cover"
-                  onerror={(e: Event) =>
-                    void imageUrls.bindImage(
-                      source.url,
-                      source.mime,
-                      e.currentTarget as HTMLImageElement
-                    )}
-                />
-              </button>
-            {:else}
-              <span
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
-              >
-                <FileText size={15} />
-              </span>
-            {/if}
-
-            <div class="min-w-0 flex-1">
-              <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-dimmed">
-                {sourceLabel(source)}
-              </p>
-              {#if source.kind === 'web' && source.url}
-                {@const url = source.url}
-                <button
-                  type="button"
-                  class="mt-0.5 flex min-w-0 cursor-pointer items-center gap-1 text-left text-xs font-medium text-foreground hover:text-primary"
-                  title={`Open ${url} in browser`}
-                  onclick={() => openWebUrl(url)}
-                >
-                  <span class="truncate">{source.title}</span>
-                </button>
-                <p class="mt-1 truncate text-[10px] text-dimmed" title={url}>
-                  {url}
-                </p>
-              {:else if source.kind === 'web'}
-                <p class="mt-0.5 text-xs font-medium text-foreground">{source.title}</p>
-              {:else if source.kind === 'file-citation'}
-                <button
-                  type="button"
-                  class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-primary hover:text-primary/80"
-                  title={`Open ${source.path}${source.line ? ` at line ${source.line}` : ''}`}
-                  onclick={() => handleCitationClick(source)}
-                >
-                  <span class="truncate">{source.path}</span>
-                  {#if source.line}
-                    <span class="ml-1 text-[10px] text-dimmed tabular-nums">:{source.line}</span>
-                  {/if}
-                </button>
-              {:else if source.kind === 'section'}
-                <button
-                  type="button"
-                  class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-primary hover:text-primary/80"
-                  title={`Jump to section ${source.section} in this conversation`}
-                  onclick={() => handleSectionClick(source)}
-                >
-                  <span class="truncate">{source.title}</span>
-                </button>
-              {:else}
-                <button
-                  type="button"
-                  class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-foreground hover:text-primary"
-                  title={isImageSource(source) ? `Preview ${source.title}` : `Open ${source.title}`}
-                  onclick={() => openFileInViewer(source)}
-                >
-                  {source.title}
-                </button>
-              {/if}
-              {#if source.kind === 'web' && source.detail}
-                <p class="mt-1 line-clamp-2 text-[10px] leading-relaxed text-dimmed">
-                  {source.detail}
-                </p>
-              {/if}
-            </div>
-
-            {#if source.kind === 'generated-image'}
-              <ImageIcon size={13} class="mt-1 shrink-0 text-dimmed" />
-            {/if}
-          </div>
-        </div>
-      {:else}
+      {#if filteredSources.length === 0 && sources.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
             <span
@@ -605,7 +585,153 @@
             </p>
           </div>
         </div>
-      {/each}
+      {:else if filteredSources.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <span
+              class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-raised text-dimmed"
+            >
+              <Search size={18} />
+            </span>
+            <h2 class="mt-3 text-sm font-semibold text-foreground">
+              No {sourceFilterLabel(sourceFilter)} sources
+            </h2>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              Nothing in this conversation matches the active filter.
+            </p>
+            <button
+              type="button"
+              class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+              title="Clear the active source filter"
+              onclick={() => (sourceFilter = 'all')}
+            >
+              Show all sources
+            </button>
+          </div>
+        </div>
+      {:else}
+        {#each filteredSources as source (source.id)}
+          <div class="group border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
+            <div class="flex items-start gap-3">
+              {#if source.kind === 'web'}
+                {@const favicon = source.url ? faviconState.faviconFor(source.url) : null}
+                <span
+                  class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-raised {favicon
+                    ? ''
+                    : 'text-muted'}"
+                >
+                  {#if favicon}
+                    <img src={favicon} alt="" class="h-5 w-5 rounded-sm object-contain" />
+                  {:else}
+                    <Globe2 size={15} />
+                  {/if}
+                </span>
+              {:else if source.kind === 'file-citation'}
+                <span
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                >
+                  <FileText size={15} />
+                </span>
+              {:else if source.kind === 'section'}
+                <span
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-primary"
+                >
+                  <Hash size={15} />
+                </span>
+              {:else if isImageSource(source)}
+                <button
+                  type="button"
+                  class="h-8 w-8 shrink-0 cursor-pointer overflow-hidden rounded-lg bg-raised"
+                  aria-label={`Preview ${source.title}`}
+                  title={`Preview ${source.title}`}
+                  onclick={() => (previewSource = source)}
+                >
+                  <img
+                    src={imageUrls.getUrl(source.url)}
+                    alt=""
+                    class="h-full w-full object-cover"
+                    onerror={(e: Event) =>
+                      void imageUrls.bindImage(
+                        source.url,
+                        source.mime,
+                        e.currentTarget as HTMLImageElement
+                      )}
+                  />
+                </button>
+              {:else}
+                <span
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+                >
+                  <FileText size={15} />
+                </span>
+              {/if}
+
+              <div class="min-w-0 flex-1">
+                <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-dimmed">
+                  {sourceLabel(source)}
+                </p>
+                {#if source.kind === 'web' && source.url}
+                  {@const url = source.url}
+                  <button
+                    type="button"
+                    class="mt-0.5 flex min-w-0 cursor-pointer items-center gap-1 text-left text-xs font-medium text-foreground hover:text-primary"
+                    title={`Open ${url} in browser`}
+                    onclick={() => openWebUrl(url)}
+                  >
+                    <span class="truncate">{source.title}</span>
+                  </button>
+                  <p class="mt-1 truncate text-[10px] text-dimmed" title={url}>
+                    {url}
+                  </p>
+                {:else if source.kind === 'web'}
+                  <p class="mt-0.5 text-xs font-medium text-foreground">{source.title}</p>
+                {:else if source.kind === 'file-citation'}
+                  <button
+                    type="button"
+                    class="mt-0.5 block max-w-full cursor-pointer text-left text-xs font-medium text-primary hover:text-primary/80"
+                    title={`Open ${source.path}${source.line ? ` at line ${source.line}` : ''}`}
+                    onclick={() => handleCitationClick(source)}
+                  >
+                    <span class="break-all">{citationDisplayText(source)}</span>
+                    {#if source.line}
+                      <span class="ml-1 text-[10px] text-dimmed tabular-nums">:{source.line}</span>
+                    {/if}
+                  </button>
+                {:else if source.kind === 'section'}
+                  <button
+                    type="button"
+                    class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-primary hover:text-primary/80"
+                    title={`Jump to section ${source.section} in this conversation`}
+                    onclick={() => handleSectionClick(source)}
+                  >
+                    <span class="truncate">{source.title}</span>
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-foreground hover:text-primary"
+                    title={isImageSource(source)
+                      ? `Preview ${source.title}`
+                      : `Open ${source.title}`}
+                    onclick={() => openFileInViewer(source)}
+                  >
+                    {source.title}
+                  </button>
+                {/if}
+                {#if source.kind === 'web' && source.detail}
+                  <p class="mt-1 line-clamp-2 text-[10px] leading-relaxed text-dimmed">
+                    {source.detail}
+                  </p>
+                {/if}
+              </div>
+
+              {#if source.kind === 'generated-image'}
+                <ImageIcon size={13} class="mt-1 shrink-0 text-dimmed" />
+              {/if}
+            </div>
+          </div>
+        {/each}
+      {/if}
     {:else if section === 'mcps'}
       {#if capabilitiesLoading}
         <div class="flex h-full items-center justify-center px-8 text-center">
