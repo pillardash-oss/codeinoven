@@ -1131,6 +1131,17 @@ class GeneratedSpecOutputError extends Error {
   }
 }
 
+class GeneratedBrainstormOutputError extends Error {
+  constructor(
+    readonly diagnostic: string,
+    readonly rejectedOutput: string,
+    readonly repairArtifactPath?: string
+  ) {
+    super(repairArtifactPath ? `${diagnostic} Repair artifact: ${repairArtifactPath}` : diagnostic)
+    this.name = 'GeneratedBrainstormOutputError'
+  }
+}
+
 class AssignmentApiRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -4016,10 +4027,7 @@ export class ChatEngine {
     const activeSessionOwner =
       this.sessionRegistry.get(activeSessionId)?.driverId ?? thread.sessionHarnessId
     const driverId =
-      activeBrainstorm?.driverId ??
-      activeSessionOwner ??
-      thread.settings?.harnessId ??
-      'opencode'
+      activeBrainstorm?.driverId ?? activeSessionOwner ?? thread.settings?.harnessId ?? 'opencode'
     const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
@@ -8964,10 +8972,13 @@ export class ChatEngine {
       !isZenFreeModel &&
       !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
     let lastError: Error | null = null
+    let repairError: GeneratedBrainstormOutputError | null = null
 
-    const attempts = structured ? ['structured', 'json', 'json_repair'] : ['json', 'json_repair']
+    const attempts = structured
+      ? ['structured', 'json', 'json_repair']
+      : ['json', 'json_repair', 'json_repair']
     const operationKey = `${projectId}:${threadId}`
-    for (const attempt of attempts) {
+    for (const [attemptIndex, attempt] of attempts.entries()) {
       const useStructuredOutput = attempt === 'structured'
       const isolated =
         driver instanceof OpenCodeDriver
@@ -9012,15 +9023,9 @@ export class ChatEngine {
             assignmentMode: false,
             loopMode: false
           },
-          text:
-            attempt === 'json_repair'
-              ? [
-                  source,
-                  'The previous JSON response failed validation.',
-                  `Validation error: ${lastError?.message ?? 'invalid Brainstorm shape'}`,
-                  'Correct the reported violation and return the complete Brainstorm object using the contract already supplied in this request.'
-                ].join('\n\n')
-              : source,
+          text: [source, repairError ? this.brainstormRepairInstruction(repairError) : '']
+            .filter(Boolean)
+            .join('\n\n'),
           attachments: [],
           systemPrompt: [
             useStructuredOutput
@@ -9048,13 +9053,7 @@ export class ChatEngine {
         }
         const streamed = await completion
         if (streamed !== undefined) {
-          return finish(
-            requireEvidenceDrivenBrainstorm(
-              useStructuredOutput
-                ? parseGeneratedBrainstormContent(streamed)
-                : parseGeneratedBrainstormFallbackContent(streamed)
-            )
-          )
+          return finish(this.parseBrainstormGeneratedOutput(streamed, useStructuredOutput))
         }
         const generated =
           isolated && driver instanceof OpenCodeDriver
@@ -9065,11 +9064,7 @@ export class ChatEngine {
         if (response.error) throw new Error(response.error)
         if (response.structuredOutput !== undefined) {
           return finish(
-            requireEvidenceDrivenBrainstorm(
-              useStructuredOutput
-                ? parseGeneratedBrainstormContent(response.structuredOutput)
-                : parseGeneratedBrainstormFallbackContent(response.structuredOutput)
-            )
+            this.parseBrainstormGeneratedOutput(response.structuredOutput, useStructuredOutput)
           )
         }
         const text = response.parts
@@ -9077,10 +9072,9 @@ export class ChatEngine {
           .map((part) => part.text)
           .join('\n')
         return finish(
-          requireEvidenceDrivenBrainstorm(
-            parseGeneratedBrainstormFallbackContent(
-              parseGeneratedJson(text, 'The Brainstorm agent returned invalid JSON')
-            )
+          this.parseBrainstormGeneratedOutput(
+            parseGeneratedJson(text, 'The Brainstorm agent returned invalid JSON'),
+            false
           )
         )
       } catch (error) {
@@ -9089,11 +9083,36 @@ export class ChatEngine {
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
         }
-        lastError = error instanceof Error ? error : new Error('The Brainstorm agent failed.')
+        const rejectedSource =
+          error instanceof GeneratedBrainstormOutputError
+            ? error
+            : error instanceof GeneratedJsonParseError
+              ? new GeneratedBrainstormOutputError(error.message, error.rawOutput)
+              : null
+        const rejected = rejectedSource
+          ? await this.prepareRejectedBrainstormRepair({
+              projectId,
+              threadId,
+              attempt: attemptIndex + 1,
+              format: useStructuredOutput ? 'structured' : 'json',
+              settings,
+              error: rejectedSource
+            })
+          : null
+        lastError =
+          rejected ?? (error instanceof Error ? error : new Error('The Brainstorm agent failed.'))
+        if (rejected) repairError = rejected
         if (this.userAbortedBrainstormOperations.has(operationKey)) {
           await this.failBrainstormConversationTurn(projectId, threadId, lastError, settings)
           throw lastError
         }
+        Logger.error('Brainstorm generation session rejected', {
+          projectId,
+          threadId,
+          sessionId,
+          structuredOutput: useStructuredOutput,
+          error: lastError.message
+        })
         if (useStructuredOutput) {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
           Logger.info('Structured Brainstorm generation failed; using JSON-only output:', {
@@ -9114,9 +9133,27 @@ export class ChatEngine {
         if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
       }
     }
-    const failure = lastError ?? new Error('The Brainstorm agent failed.')
+    const failure = repairError ?? lastError ?? new Error('The Brainstorm agent failed.')
     await this.failBrainstormConversationTurn(projectId, threadId, failure, settings)
     throw failure
+  }
+
+  private parseBrainstormGeneratedOutput(
+    value: unknown,
+    useStructuredOutput: boolean
+  ): BrainstormContent {
+    try {
+      return requireEvidenceDrivenBrainstorm(
+        useStructuredOutput
+          ? parseGeneratedBrainstormContent(value)
+          : parseGeneratedBrainstormFallbackContent(value)
+      )
+    } catch (error) {
+      throw new GeneratedBrainstormOutputError(
+        error instanceof Error ? error.message : 'Invalid Brainstorm output',
+        typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+      )
+    }
   }
 
   private async brainstormSourceWithConversationContext(
@@ -11855,6 +11892,84 @@ export class ChatEngine {
       error.repairArtifactPath
         ? `Read the rejected output and diagnostic at ${error.repairArtifactPath}. Correct that output and return one complete replacement JSON object matching the required schema.`
         : 'Correct the reported contract violation and return one complete replacement JSON object matching the required schema.',
+      'Do not explain the correction and do not return a partial patch.'
+    ].join('\n')
+  }
+
+  private async prepareRejectedBrainstormRepair(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: 'structured' | 'json'
+    settings: ThreadSettings
+    error: GeneratedBrainstormOutputError
+  }): Promise<GeneratedBrainstormOutputError> {
+    let artifactPath: string | undefined
+    try {
+      artifactPath = await this.persistRejectedBrainstormOutput(input)
+    } catch (artifactError) {
+      Logger.error('Rejected Brainstorm artifact persistence failed', {
+        projectId: input.projectId,
+        threadId: input.threadId,
+        attempt: input.attempt,
+        format: input.format,
+        error: rawErrorMessage(artifactError)
+      })
+    }
+    return new GeneratedBrainstormOutputError(
+      input.error.diagnostic,
+      input.error.rejectedOutput,
+      artifactPath
+    )
+  }
+
+  private async persistRejectedBrainstormOutput(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: 'structured' | 'json'
+    settings: ThreadSettings
+    error: GeneratedBrainstormOutputError
+  }): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.database, input.projectId, input.threadId)
+    const relativePath = join(
+      'err-brainstorm',
+      `attempt-${Math.max(1, input.attempt)}-${input.format}.json`
+    )
+    const artifactPath = join(featureArtifactDirectory(featureSlug), relativePath).replace(
+      /\\/gu,
+      '/'
+    )
+    const artifact = {
+      schemaVersion: 1,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      attempt: Math.max(1, input.attempt),
+      format: input.format,
+      harnessId: input.settings.harnessId || 'opencode',
+      providerId: input.settings.providerId,
+      modelId: input.settings.modelId,
+      diagnostic: input.error.diagnostic,
+      rejectedOutput: input.error.rejectedOutput,
+      createdAt: Date.now()
+    }
+    await this.storage.writeProjectSpecRaw(
+      input.projectId,
+      featureSlug,
+      relativePath,
+      `${JSON.stringify(artifact, null, 2)}\n`,
+      requireLocalProject(this.database, input.projectId)
+    )
+    return artifactPath
+  }
+
+  private brainstormRepairInstruction(error: GeneratedBrainstormOutputError): string {
+    return [
+      'The previous Brainstorm output failed deterministic validation.',
+      `Exact validator diagnostic: ${error.diagnostic}`,
+      error.repairArtifactPath
+        ? `Read the rejected output and diagnostic at ${error.repairArtifactPath}. Correct that output and return one complete replacement Brainstorm JSON object matching the required schema.`
+        : 'Correct the reported contract violation and return one complete replacement Brainstorm JSON object matching the required schema.',
       'Do not explain the correction and do not return a partial patch.'
     ].join('\n')
   }
