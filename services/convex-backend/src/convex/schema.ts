@@ -7,8 +7,8 @@ export default defineSchema({
     email: v.string(),
     displayName: v.string(),
     image: v.optional(v.string()),
-    memoriesUsedBytes: v.number(),
-    memoriesLimitBytes: v.number(),
+    usageJson: v.string(),
+    globalMemoriesJson: v.string(),
     updatedAt: v.number()
   }).index('by_auth_user_id', ['authUserId']),
 
