@@ -44,10 +44,12 @@ import {
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
+import { sendToRenderer } from './renderer-delivery'
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { NoteRepo } from '../database/repositories/note-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -1390,6 +1392,7 @@ export function registerIpcHandlers(
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
   const turnFeedbackRepo = new TurnFeedbackRepo(database)
+  const noteRepo = new NoteRepo(database)
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
@@ -4688,6 +4691,49 @@ export function registerIpcHandlers(
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     await threadManager.deleteThread(validProjectId, validThreadId)
   })
+  // ─── Thread notes (user-only scratch space) ─────────────────────────────
+  const NOTE_BODY_MAX = 100_000
+
+  function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      sendToRenderer(win.webContents, 'note:changed', projectId, threadId, hasNote)
+    }
+  }
+
+  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) return null
+    return noteRepo.get(validThreadId)
+  })
+  ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const validBody = validateBoundedString(body, 'Note body', 0, NOTE_BODY_MAX)
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) throw new Error('Thread not found')
+    const previous = noteRepo.get(validThreadId)
+    const now = Date.now()
+    const note = {
+      threadId: validThreadId,
+      body: validBody,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now
+    }
+    noteRepo.upsert(note)
+    broadcastNoteChanged(validProjectId, validThreadId, true)
+    return note
+  })
+  ipcMain.handle('note:delete', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) throw new Error('Thread not found')
+    noteRepo.delete(validThreadId)
+    broadcastNoteChanged(validProjectId, validThreadId, false)
+  })
+  ipcMain.handle('note:list', () => noteRepo.listThreadIds())
   ipcMain.handle(
     'thread:dismissSpecReview',
     async (_, projectId: unknown, threadId: unknown, specId: unknown, specVersion: unknown) => {

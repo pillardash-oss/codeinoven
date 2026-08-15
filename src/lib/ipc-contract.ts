@@ -124,6 +124,7 @@ import type {
   ThreadMessageCursor,
   ThreadMessagePage,
   UserMessageSummary,
+  ThreadNote,
   ThreadSettings,
   ThreadStatus,
   UsageEfficiencyKpis,
@@ -1499,6 +1500,11 @@ export interface IpcInvokeContract {
   'thread:harnessUsage': Contract<[projectId: string, threadId: string], HarnessUsage[]>
   'thread:efficiencyKpis': Contract<[projectId: string, threadId: string], UsageEfficiencyKpis>
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
+  'note:get': Contract<[projectId: string, threadId: string], ThreadNote | null>
+  'note:save': Contract<[projectId: string, threadId: string, body: string], ThreadNote>
+  'note:delete': Contract<[projectId: string, threadId: string], void>
+  /** Thread ids that currently have a note (renderer presence sync). */
+  'note:list': Contract<[], string[]>
   'thread:update': Contract<
     [
       projectId: string,
@@ -1702,6 +1708,8 @@ export interface IpcEventContract {
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
+  /** Note presence changed for a thread (saved or deleted). */
+  'note:changed': [projectId: string, threadId: string, hasNote: boolean]
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
