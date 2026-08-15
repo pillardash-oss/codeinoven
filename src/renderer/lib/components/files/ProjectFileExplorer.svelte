@@ -303,7 +303,8 @@
 
   /** Directory a newly created file should land in, based on the focused row. */
   function createTargetDirectory(target: EventTarget | null): string {
-    const row = target instanceof HTMLElement ? target.closest<HTMLElement>('[data-tree-path]') : null
+    const row =
+      target instanceof HTMLElement ? target.closest<HTMLElement>('[data-tree-path]') : null
     const path = row?.dataset.treePath
     if (!path) return activeDirectory()
     if (dropTargetIsDirectory(path)) return path
@@ -315,7 +316,7 @@
       return
     }
     const key = event.key
-    if ((event.metaKey || event.ctrlKey) && key.toLocaleLowerCase() === 'n') {
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && key.toLocaleLowerCase() === 'n') {
       event.preventDefault()
       void startCreate(createTargetDirectory(event.target), 'untitled.txt')
       return
