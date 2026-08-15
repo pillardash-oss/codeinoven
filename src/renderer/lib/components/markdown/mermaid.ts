@@ -75,23 +75,55 @@ function sanitizeSvg(svg: string): string {
 }
 
 /**
+ * A stalled step (cold dynamic-import fetch, dagre layout on a pathological
+ * graph) must never block the shared render queue — every later diagram in the
+ * session would otherwise wait behind it forever. Racing a timeout turns a
+ * stall into a rejection, so the queue always keeps draining and the diagram
+ * surfaces the failure instead of spinning indefinitely.
+ */
+const RENDER_TIMEOUT_MS = 30_000
+
+function withTimeout<T>(promise: Promise<T>, id: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Mermaid render timed out after ${RENDER_TIMEOUT_MS}ms (${id})`)),
+      RENDER_TIMEOUT_MS
+    )
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
+}
+
+/**
+ * Mermaid resolving with an empty SVG is a silent failure: the component would
+ * show a dead shell with no spinner, no error, and no way to recover. Treat it
+ * as a render failure so the caller can retry and surface a real message.
+ */
+function assertSvg(svg: string, id: string): string {
+  if (svg.trim() === '') {
+    throw new Error(`Mermaid produced no SVG output (${id})`)
+  }
+  return svg
+}
+
+/**
  * Mermaid owns global configuration, so renders are serialized. This prevents
  * simultaneous diagrams with different theme snapshots from racing. A failed
- * render is retried once with a fresh initialize: the first attempt can fail
- * transiently (cold-start import, render race), while a genuine syntax error
- * rethrows so the diagram can surface its message.
+ * or empty render is retried once with a fresh initialize: the first attempt
+ * can fail transiently (cold-start import, render race), while a genuine
+ * syntax error rethrows so the diagram can surface its message.
  */
 export function renderMermaid(id: string, source: string, theme: MermaidTheme): Promise<string> {
   const render = renderQueue.then(async () => {
-    const mermaid = await loadMermaid()
-    configureMermaid(mermaid, theme)
+    const mermaid = await withTimeout(loadMermaid(), id)
     try {
-      const { svg } = await mermaid.render(id, source)
-      return sanitizeSvg(svg)
+      const svg = await renderOnce(mermaid, id, source, theme)
+      return assertSvg(svg, id)
     } catch {
-      configureMermaid(mermaid, theme)
-      const { svg } = await mermaid.render(`${id}-retry`, source)
-      return sanitizeSvg(svg)
+      const svg = await renderOnce(mermaid, `${id}-retry`, source, theme)
+      return assertSvg(svg, `${id}-retry`)
     }
   })
 
@@ -100,4 +132,15 @@ export function renderMermaid(id: string, source: string, theme: MermaidTheme): 
     () => undefined
   )
   return render
+}
+
+async function renderOnce(
+  mermaid: (typeof import('mermaid'))['default'],
+  id: string,
+  source: string,
+  theme: MermaidTheme
+): Promise<string> {
+  configureMermaid(mermaid, theme)
+  const { svg } = await withTimeout(mermaid.render(id, source), id)
+  return sanitizeSvg(svg)
 }
