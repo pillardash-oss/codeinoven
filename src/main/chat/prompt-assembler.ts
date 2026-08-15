@@ -319,6 +319,7 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
   const harnessRepo = driver
     ? `the ${driver.id} CLI repository or its global config directories`
     : 'the agent harness CLI repository or its global config directories'
+  const citationRoot = projectPath.trim() ? projectPath : '<project-cwd>'
   return [
     `You are working inside ${APP_NAME}, a desktop control plane (UI wrapper) that coordinates agentic software engineering on a user's project. The user interacts with you through the ${APP_NAME} UI and has a specific project open in it.`,
     harnessLine,
@@ -335,7 +336,12 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents the agent or the user should read, plans, progress, walkthroughs, reports, test output, and temporary work.',
     '3. Keep it organized for a human: feature work (plan*.md, progress*.md, walkthroughs, reports, test output) goes in `.cio/work/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. Name files so a human can read them at a glance.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
-    '5. The platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite files there.'
+    '5. The platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite files there.',
+    '',
+    'CITATION & SOURCE RULES — apply to every report, answer, and artifact you produce:',
+    `1. Cite the source of every factual claim. Files must be cited with their full project-rooted path, e.g. \`${citationRoot}/src/app.html\` — never a bare filename like \`app.html\`, because a bare filename is not traceable.`,
+    '2. External references must be Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)` — never bare text such as "pr issue #155".',
+    '3. Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
   ].join('\n')
 }
 

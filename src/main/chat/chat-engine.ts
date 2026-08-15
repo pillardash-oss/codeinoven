@@ -247,6 +247,17 @@ interface PersistedProviderCatalog {
 const AUDIT_REPORT_JSON_CONTRACT =
   'Use these core JSON properties and exact spelling: {"executiveSummary":"string","findings":[{"id":"string","title":"string","severity":"critical|high|medium|low|info","description":"string","evidence":"string"}],"resolutionRecommendation":"string","conclusion":"string"}. Do not rename or omit core properties; in particular, the required key is resolutionRecommendation, not resolutionAndRecommendation or resolution_and_recommendation. Include auditedFiles and verification only when the Assignment audit evidence contract requires them, and do not add any other properties.'
 
+/** Every report and answer must carry traceable sources. Files are cited with
+ *  their full project-rooted path; external references are cited as Markdown
+ *  links — never as bare filenames or plain-text mentions the user cannot open.
+ *  Declared before the report-producing prompts so they can embed it. */
+export const CITATION_SYSTEM_INSTRUCTION = [
+  'Cite the source of every factual claim you report.',
+  'Cite local files with their full project-rooted path (e.g. `<project-cwd>/src/app.html`), never a bare filename such as `app.html` — the path must let the user open the exact file.',
+  'Cite external references as Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`, never as bare text such as "pr issue #155".',
+  'Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
+].join(' ')
+
 const AUDIT_GENERATION_SYSTEM_PROMPT = [
   `You are an independent ${APP_NAME} audit agent.`,
   'Audit the completed implementation strictly against the supplied approved specification.',
@@ -255,6 +266,7 @@ const AUDIT_GENERATION_SYSTEM_PROMPT = [
   'If the code safely requires deployment-provided production values but those external values are not yet configured, record an informational deployment-readiness note and allow implementation to pass. Treat a silent production fallback or hardcoded invented domain as an actionable finding.',
   'Report concrete evidence. Do not modify files.',
   'Write every human-facing string as readable Markdown: use short paragraphs, blank-line separation, and lists where useful. Do not repeat the report section headings inside field values.',
+  CITATION_SYSTEM_INSTRUCTION,
   AUDIT_REPORT_JSON_CONTRACT,
   'Return only the requested structured audit report.'
 ].join(' ')
@@ -276,6 +288,7 @@ const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
   'When the code uses a framework or technology with an installed MCP, skill, or other app utility, call utility_search, activate the relevant result, and invoke its validation/autofix analysis in non-writing mode. For Svelte, use the Svelte documentation and autofixer utility when available.',
   'A check that cannot safely be scoped must be recorded as not_applicable with the concrete reason; do not replace it with a whole-repository command.',
   'Record the exact repository revision, audited-file inventory, commands, target files, exit codes, concise factual evidence, utilities used or unavailable, and limitations.',
+  'Cite every finding to the exact project-rooted file path (e.g. `<project-cwd>/src/app.html`), never a bare filename such as `app.html`, and cite any external reference as a Markdown link.',
   'Never paste command, formatter, lint, typecheck, test, or build output into the report. The platform persists each matched command output as a versioned file under the current audit run and attaches its evidencePath after validation. Keep each evidence field to one short result sentence and do not return evidencePath yourself.',
   'Every failed check must link to at least one actionable finding. Never claim a check passed unless you executed it and observed exit code 0.',
   'Include exitCode only for checks that ran; omit it for not_applicable checks.',
@@ -576,6 +589,7 @@ const TEMPORARY_CHAT_SYSTEM_PROMPT = [
   'You may inspect project files and use read-only research tools.',
   'Do not modify files, create specifications or plans, run tests, execute shell commands, or perform any other mutating action.',
   'Do not ask to broaden the task. Respond only to the user request in this temporary chat.',
+  CITATION_SYSTEM_INSTRUCTION,
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
 
@@ -595,7 +609,8 @@ const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
   'This chat has no file-system access. Do not traverse, read, search, or modify local files.',
   'When you do not know an answer directly, search the internet using the web search and web fetch tools instead of inspecting files.',
-  'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.'
+  'Answer questions directly; use clarifying questions only when the request is genuinely ambiguous.',
+  'When you reference external content, cite it as a Markdown link (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`) — never a bare URL or a plain-text mention.'
 ].join(' ')
 
 /** Chat-only instruction when the user explicitly enables the File System mode. */
@@ -603,7 +618,8 @@ const FILE_SYSTEM_CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose assistant inside ${APP_NAME} with file-system access enabled.`,
   'The user explicitly granted this chat file operations. You may read and search files with the file tools available in this session.',
   'When you do not know an answer directly, search the internet using the web search and web fetch tools.',
-  'Do not modify files unless the user asks you to.'
+  'Do not modify files unless the user asks you to.',
+  CITATION_SYSTEM_INSTRUCTION
 ].join(' ')
 
 /** Tools available to a plain (web-only) chat thread — no file-system tools. */
@@ -619,6 +635,7 @@ export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   'Update the specification in your working plan to reflect the annotations, then implement it completely.',
   'Produce evidence, run the specified checks, update documentation, and make contextual commits.',
   'Stop and ask when the signed scope is ambiguous or insufficient.',
+  CITATION_SYSTEM_INSTRUCTION,
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
@@ -655,7 +672,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   `You are the Sr. Engineer conducting an evidence-driven research and discovery session, then creating a reviewable Brainstorm document. Submit the complete document through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
   'This is not a summary exercise. Before drafting, use the available read-only tools to inspect the actual project state and research current external facts when they materially affect the direction. Investigate relevant manifests, configuration, architecture, documentation, existing conventions, dependencies, and implementation constraints. Never claim that you inspected a source you did not inspect.',
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
-  'Ground factual claims in evidence. Cite project-relative file paths and relevant symbols or line locations for local findings; cite direct URLs for external findings. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
+  'Ground factual claims in evidence. Cite local findings with full project-rooted file paths and relevant symbols or line locations (e.g. `<project-cwd>/src/app.html:42`), never bare filenames such as `app.html`; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
   'The user must have substantive material to challenge and annotate. Present concrete findings, competing viable options, tradeoffs, risks, and one clearly justified recommendation. Preserve user-provided alternatives and distinguish confirmed user decisions from your recommendations. Do not silently convert a recommendation into a decision.',
   'Gather and preserve prerequisites, product direction, architecture, deployment, acceptance criteria, ownership constraints, decisions, and unresolved questions from the supplied conversation and research.',
   'Return title, summary, and exactly these required Markdown sections in order: Context (context), Goals (goals), Decisions (decisions), Open Questions (open_questions), Constraints (constraints), Proposed Direction (proposed_direction).',

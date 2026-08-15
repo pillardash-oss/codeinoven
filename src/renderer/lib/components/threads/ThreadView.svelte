@@ -106,7 +106,8 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
-  import { collectAgentSources } from '$lib/agent-sources'
+  import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
+  import { isAbsoluteCitationPath } from '$lib/agent-source-citations'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -1774,16 +1775,33 @@
     }
   })
 
-  /** Files uploaded to or produced in this chat — surfaced via the Sources panel. */
-  let sources = $derived(
-    collectAgentSources(messages).filter((source) => {
-      if (source.kind !== 'file-citation') return true
-      return (
-        citationPathsState.isValidPath(source.path) ||
-        citationPathsState.isKnownExternalPath(source.path)
-      )
-    })
-  )
+  /**
+   * Files uploaded to or produced in this chat — surfaced via the Sources panel.
+   * File citations are only listed when confirmed to exist on disk, and are
+   * shown with their full project-rooted path (`<project-cwd>/src/app.html`)
+   * so the user can open them without guessing where they live.
+   */
+  let sources = $derived.by((): AgentSource[] => {
+    const projectPath = project?.path?.trim()
+    return collectAgentSources(messages)
+      .filter((source) => {
+        if (source.kind !== 'file-citation') return true
+        return (
+          citationPathsState.isValidPath(source.path) ||
+          citationPathsState.isKnownExternalPath(source.path)
+        )
+      })
+      .map((source) => {
+        if (source.kind !== 'file-citation' || isAbsoluteCitationPath(source.path)) return source
+        if (!projectPath || !source.path) return source
+        const fullPath = `${projectPath.replace(/[\\/]+$/u, '')}/${source.path}`
+        return {
+          ...source,
+          path: fullPath,
+          title: source.line ? `${fullPath}:${source.line}` : fullPath
+        }
+      })
+  })
 
   /** Jump target for the header's history dropdown — loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */
