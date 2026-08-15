@@ -39,15 +39,15 @@
   /** Harnesses selectable in the filter — only harnesses that already have at
    *  least one custom base-URL provider. */
   let filterHarnesses = $derived.by(() => {
-    const seen = new Map<string, string>()
+    const seen: Record<string, true> = {}
+    const byId: Array<{ id: string; name: string }> = []
     for (const provider of baseUrlProviderStore.providers) {
-      if (!seen.has(provider.harnessId)) {
-        seen.set(provider.harnessId, providerName(provider.harnessId))
+      if (!seen[provider.harnessId]) {
+        seen[provider.harnessId] = true
+        byId.push({ id: provider.harnessId, name: providerName(provider.harnessId) })
       }
     }
-    return [...seen.entries()]
-      .map(([id, name]) => ({ id, name }))
-      .sort((left, right) => left.name.localeCompare(right.name))
+    return byId.sort((left, right) => left.name.localeCompare(right.name))
   })
 
   /** Multi-select harness filter; empty selection means "all harnesses". */

@@ -82,6 +82,7 @@ export interface RemoteRpcServices {
     | 'deleteThreadSession'
     | 'listProviderSnapshot'
     | 'getSessionStatus'
+    | 'getHarnessAuthStatus'
     | 'ensureSession'
     | 'sendPrompt'
     | 'steerPrompt'
