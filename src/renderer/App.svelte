@@ -963,6 +963,13 @@
       navigate(lastViewBeforeSettings)
       return
     }
+    // Focus inside the context sidebar: close its active tab (through Workspace's
+    // unsaved-changes confirmation) instead of clearing the thread.
+    const active = document.activeElement instanceof Element ? document.activeElement : null
+    if (active?.closest('[data-region="context-sidebar"]')) {
+      contextSidebarState.requestCloseActiveTab()
+      return
+    }
     // An open thread: deselect it back to the thread list.
     if (
       (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
