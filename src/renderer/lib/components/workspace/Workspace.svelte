@@ -3094,12 +3094,18 @@
         {#snippet terminalDockContent()}
           {@const activeDockTab = contextSidebarState.terminalActiveTab}
           {#if activeDockTab}
-            {#key activeDockTab.id}
-              <TerminalPanel
-                terminalId={activeDockTab.terminalId}
-                projectId={activeDockTab.projectId}
-              />
-            {/key}
+            {#if terminalFullscreenTabId === activeDockTab.id}
+              <div class="flex h-full items-center justify-center text-xs text-muted">
+                Terminal is open in fullscreen
+              </div>
+            {:else}
+              {#key activeDockTab.id}
+                <TerminalPanel
+                  terminalId={activeDockTab.terminalId}
+                  projectId={activeDockTab.projectId}
+                />
+              {/key}
+            {/if}
           {/if}
         {/snippet}
         <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
