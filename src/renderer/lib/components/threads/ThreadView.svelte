@@ -4133,7 +4133,7 @@
     assignmentError = ''
     if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
       contextUsageDisplay = undefined
-      liveAccountUsage = []
+      accountUsageFetchedAt = 0
     }
     syncAgentRole('seniorEngineer', selection)
     commitSettings(updated)
@@ -5644,10 +5644,13 @@
     const providerChanged = settings.providerId !== normalized.providerId
     settings = normalized
     if (harnessChanged || providerChanged) {
-      // Clear any usage shown for the previous harness/provider so the battery
-      // reflects only the newly selected configuration until its quota arrives.
+      // Reset only the single-harness context meter so the battery reflects
+      // the newly selected configuration. Preserve the live per-harness quota
+      // overlay: quota already fetched for harnesses used in this conversation
+      // stays visible and refreshes on the next hover. Force that hover to
+      // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
-      liveAccountUsage = []
+      accountUsageFetchedAt = 0
     }
     if (seniorModelChanged && normalized.engineeringMode) {
       syncAgentRole('seniorEngineer', {
