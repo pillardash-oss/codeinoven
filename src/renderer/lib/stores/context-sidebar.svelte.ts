@@ -124,6 +124,10 @@ export interface TemporaryChatContextTab {
   selectionAttached: boolean
   selectionMessageId: string | null
   autoPromptSent: boolean
+  /** Override for the auto-sent explain prompt, when the tab was opened to
+   *  explain a specific selection (e.g. an agent question) rather than the
+   *  generic "explain this selection" elaboration. */
+  autoPrompt?: string
   sessionStarted: boolean
   expired: boolean
   expiresAt: number
@@ -682,7 +686,8 @@ class ContextSidebarState {
     selection: string,
     initialContext: string,
     settings: ThreadSettings,
-    selectionAttached = true
+    selectionAttached = true,
+    autoPrompt?: string
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
 
@@ -727,6 +732,7 @@ class ContextSidebarState {
       selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
+      autoPrompt,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS

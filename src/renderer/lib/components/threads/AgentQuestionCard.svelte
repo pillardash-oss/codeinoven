@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronLeft, ChevronRight, Clock, Send, X } from '@lucide/svelte'
+  import { Check, ChevronLeft, ChevronRight, Clock, HelpCircle, Send, X } from '@lucide/svelte'
   import { onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
@@ -16,9 +16,11 @@
       answers: string[],
       nextQuestionIndex?: number
     ) => Promise<PendingAgentQuestionRequest>
+    /** Open the explain side chat for the given question, pausing its timeout. */
+    onExplain?: (requestId: string, question: AgentQuestion) => void
   }
 
-  let { request, onAnswer, onDismiss, onUpdate }: Props = $props()
+  let { request, onAnswer, onDismiss, onUpdate, onExplain }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -204,6 +206,14 @@
       working = false
       actionError = error instanceof Error ? error.message : 'The question could not be discarded.'
     }
+  }
+
+  function handleExplain(): void {
+    if (working || !onExplain) return
+    // Persisting progress without a next index clears the timeout, so the timer
+    // is paused while the user reads the explanation.
+    persistProgress(currentIndex, currentAnswers)
+    onExplain(request.requestId, question)
   }
 </script>
 
@@ -400,15 +410,29 @@
   </div>
 
   <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
-    <p class="text-[11px] text-muted">
-      {#if !currentAnswers.length}
-        Answer this question to continue
-      {:else if !allAnswered}
-        {answers.filter((answer) => answer.length > 0).length} of {total} answered
-      {:else}
-        Ready to send
+    <div class="flex min-w-0 items-center gap-2">
+      <p class="text-[11px] text-muted">
+        {#if !currentAnswers.length}
+          Answer this question to continue
+        {:else if !allAnswered}
+          {answers.filter((answer) => answer.length > 0).length} of {total} answered
+        {:else}
+          Ready to send
+        {/if}
+      </p>
+      {#if onExplain}
+        <button
+          class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          disabled={working}
+          onclick={handleExplain}
+          title="Explain this question to help you decide"
+          aria-label="Explain this question in a temporary read-only chat"
+        >
+          <HelpCircle size={13} />
+          Explain
+        </button>
       {/if}
-    </p>
+    </div>
     <button
       class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       disabled={!allAnswered || working}
