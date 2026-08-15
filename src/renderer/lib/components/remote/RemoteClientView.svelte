@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Check, Copy, ExternalLink, Globe2, RefreshCw } from '@lucide/svelte'
+  import { Check, CheckCircle2, Copy, ExternalLink, Globe2, RefreshCw } from '@lucide/svelte'
   import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
   import EnrollmentQr from '$lib/components/remote/EnrollmentQr.svelte'
   import StepUpApproval from '$lib/components/remote/StepUpApproval.svelte'
@@ -19,6 +19,17 @@
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let accountError = $state('')
+
+  const accountProfile = $derived(accountState.profile)
+  const accountInitials = $derived.by(() => {
+    const source = accountProfile?.displayName || accountProfile?.email || ''
+    return source
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('')
+  })
 
   let mobileAppUrl = $derived.by(() => {
     const apiOrigin = remoteStatus?.cloud.apiOrigin
@@ -104,11 +115,27 @@
     }
   }
 
-  async function syncAccountState(): Promise<void> {
-    try {
-      accountState = await invoke('account:getProfile')
-    } catch {
-      accountState = { status: 'signed-out', profile: null }
+  async function initializeRemoteAccess(): Promise<void> {
+    const [remoteResult, accountResult] = await Promise.allSettled([
+      invoke('remote:ensureGateway'),
+      invoke('account:getProfile')
+    ])
+
+    remoteStatus = remoteResult.status === 'fulfilled' ? remoteResult.value : null
+    accountState =
+      accountResult.status === 'fulfilled'
+        ? accountResult.value
+        : { status: 'signed-out', profile: null }
+    loading = false
+
+    if (
+      accountState.status === 'signed-in' &&
+      remoteStatus?.cloud.configured &&
+      !remoteStatus.cloud.desktopId &&
+      remoteStatus.cloud.state !== 'connecting' &&
+      remoteStatus.cloud.state !== 'enrollment-pending'
+    ) {
+      await beginCloudEnrollment()
     }
   }
 
@@ -122,26 +149,7 @@
     }
   }
 
-  async function syncRemoteStatus(): Promise<void> {
-    try {
-      remoteStatus = await invoke('remote:getStatus')
-    } catch {
-      remoteStatus = null
-    } finally {
-      loading = false
-    }
-  }
-
   onMount(() => {
-    // The gateway provides the LAN route for the same account-backed session.
-    // It is transport infrastructure, not a separate setup or pairing flow.
-    void invoke('remote:ensureGateway')
-      .then((status) => {
-        remoteStatus = status
-        loading = false
-      })
-      .catch(() => void syncRemoteStatus())
-    void syncAccountState()
     const unsubStatus = subscribe('remote:status', (status) => {
       remoteStatus = status
       loading = false
@@ -149,13 +157,23 @@
     const unsubAccount = subscribe('account:profileChanged', (state) => {
       accountState = state
       accountError = state.status === 'error' ? state.message : ''
-      if (state.status === 'signed-in' && !remoteStatus?.cloud.desktopId) {
+      if (
+        state.status === 'signed-in' &&
+        remoteStatus?.cloud.configured &&
+        !remoteStatus.cloud.desktopId &&
+        remoteStatus.cloud.state !== 'connecting' &&
+        remoteStatus.cloud.state !== 'enrollment-pending'
+      ) {
         void beginCloudEnrollment()
       }
     })
     const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
       pendingApprovals = approvals
     })
+    // Restored account sessions do not emit a fresh profile-change event. Load
+    // account and remote state together so an already signed-in user proceeds
+    // directly to desktop enrollment.
+    void initializeRemoteAccess()
     return () => {
       unsubStatus()
       unsubAccount()
@@ -181,6 +199,29 @@
       Connect through one account-backed workspace. The app uses LAN automatically when both devices
       are on the same network and falls back to the cloud relay everywhere else.
     </p>
+
+    {#if accountProfile}
+      <div class="mt-4 flex items-center gap-3 border-y py-3">
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-bold text-on-primary ring-1 ring-border"
+        >
+          {#if accountProfile.image}
+            <img class="h-full w-full object-cover" src={accountProfile.image} alt="" />
+          {:else}
+            <span aria-hidden="true">{accountInitials}</span>
+          {/if}
+        </span>
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-xs font-semibold text-foreground">
+            {accountProfile.displayName || accountProfile.email}
+          </p>
+          <p class="truncate text-[11px] text-muted">{accountProfile.email}</p>
+        </div>
+        <span class="flex shrink-0 items-center gap-1 text-[11px] font-medium text-success">
+          <CheckCircle2 size={13} /> Signed in
+        </span>
+      </div>
+    {/if}
 
     {#if loading}
       <p class="mt-3 text-xs text-muted" aria-live="polite">Loading remote access…</p>
@@ -346,16 +387,27 @@
           Check sign-in and enroll desktop
         </button>
       </div>
-    {:else}
-      {#if !remoteStatus.cloud.desktopId}
+    {:else if accountState.status === 'signed-in'}
+      {#if !remoteStatus.cloud.desktopId && remoteStatus.cloud.state === 'error'}
         <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
           <p class="text-xs font-semibold text-foreground">
-            You need a CodeInOven account before enrolling this desktop.
+            Your account is connected, but the pairing code could not be created.
           </p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Create it automatically by continuing with Google or Apple. GitHub sidebar access is
-            connected separately.
+            Retry desktop enrollment to generate a QR code and one-time code for your phone.
           </p>
+        </div>
+      {:else if !remoteStatus.cloud.desktopId}
+        <div
+          class="mt-3 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3"
+        >
+          <RefreshCw size={14} class="mt-0.5 shrink-0 text-primary" />
+          <div>
+            <p class="text-xs font-semibold text-foreground">Creating your pairing code</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              Your account is connected. CodeInOven is preparing the QR code for your phone.
+            </p>
+          </div>
         </div>
       {/if}
       <div class="mt-3 flex items-center justify-between gap-3 text-xs">
@@ -373,6 +425,8 @@
       {#if remoteStatus.cloud.lastError}
         <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
       {/if}
+    {:else}
+      <p class="mt-3 text-xs text-muted">Account status is unavailable. Refresh and try again.</p>
     {/if}
 
     {#if accountError}
@@ -389,7 +443,11 @@
           disabled={busy || !remoteStatus.cloud.configured}
           onclick={() => void beginCloudEnrollment()}
         >
-          {remoteStatus.cloud.desktopId ? 'Create new code' : 'Enroll desktop'}
+          {remoteStatus.cloud.desktopId
+            ? 'Create new code'
+            : busy
+              ? 'Creating pairing code…'
+              : 'Retry pairing'}
         </button>
         {#if remoteStatus.cloud.desktopId}
           <button
