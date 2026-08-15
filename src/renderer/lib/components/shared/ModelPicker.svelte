@@ -17,10 +17,10 @@
     Zap,
     X
   } from '@lucide/svelte'
-  import { resolveDefaultThinkingLevel } from '$lib/thinking-presets'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
-  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte.ts'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
