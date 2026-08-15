@@ -11,7 +11,16 @@ const CAPABILITY_NOUN =
 
 /** Phrasings that assert a capability is absent or unsupported. */
 const NEGATIVE_CLAIM =
-  /(?:does(?:n'?t| not) exist|is(?:n'?t| not) (?:available|installed|present|supported|accessible|bundled|included|here)|(?:is )?(?:not available|unavailable|not installed|not present|missing)|cannot be found|could not be found|not found|no such (?:thing|feature|capability|integration|tool|mcp|skill)|(?:there is|there's|there are|has) no|lacks)/giu
+  /(?:does(?:n'?t| not) exist|is(?:n'?t| not) (?:available|installed|present|supported|accessible|bundled|included|here)|(?:is )?(?:not available|unavailable|not installed|not present|missing)|cannot be found|could not be found|not found|no such (?:thing|feature|capability|integration|tool|mcp|skill)|(?:there is|there's|there are|has) no\b|lacks\b)/giu
+
+/**
+ * Words that indicate the "no X" phrasing is about implementation requirements
+ * or research findings ("no SDK dependency needed") rather than a harness
+ * capability being absent. When one appears right after a claim, the claim is
+ * not treated as a "capability is unavailable" conclusion.
+ */
+const REQUIREMENT_QUALIFIER =
+  /\b(?:need|needed|require|required|necessary|necessit|depend(?:ency|encies|s)?|we don'?t need|no longer)\b/iu
 
 /** Characters of context scanned around a negative claim for a capability noun. */
 const CONTEXT_WINDOW = 160
@@ -29,7 +38,18 @@ export function concludesCapabilityUnavailable(text: string): string | null {
     const start = Math.max(0, index - CONTEXT_WINDOW)
     const end = Math.min(text.length, index + match[0].length + CONTEXT_WINDOW)
     CAPABILITY_NOUN.lastIndex = 0
-    if (CAPABILITY_NOUN.test(text.slice(start, end))) return match[0]
+    if (!CAPABILITY_NOUN.test(text.slice(start, end))) continue
+    // A "no <capability>" claim followed by a requirement qualifier ("no SDK
+    // dependency needed", "no tool required") is a research/implementation
+    // finding, not a verdict that a harness capability is absent. Skip it.
+    // Only "no"-form claims get this check; "is not available", "does not
+    // exist", "missing", etc. always count.
+    if (/\b(?:there is no|there's no|there are no|has no|lacks|no such)\b/iu.test(match[0])) {
+      const tail = text.slice(index + match[0].length, index + match[0].length + 80)
+      REQUIREMENT_QUALIFIER.lastIndex = 0
+      if (REQUIREMENT_QUALIFIER.test(tail)) continue
+    }
+    return match[0]
   }
   return null
 }
