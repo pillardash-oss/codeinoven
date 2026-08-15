@@ -517,6 +517,10 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  // Keep the device awake while a scheduled auto-retry is due within the wake
+  // window, so a usage-limit reset fires even when the user is away.
+  powerWakeService.attachRetryScheduler(retryScheduler)
+  retryScheduler.attachChangeListener(() => powerWakeService?.onRetryScheduleChanged())
   updaterService.setChatEngine(chatEngine)
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
