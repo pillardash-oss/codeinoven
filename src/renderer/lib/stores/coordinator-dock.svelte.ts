@@ -1,4 +1,5 @@
 import { APP_SLUG } from '$shared/brand'
+import { untrack } from 'svelte'
 import type { Component, Snippet } from 'svelte'
 
 const AUTO_OPEN_STORAGE_KEY = `${APP_SLUG}.coordinator-auto-open.v1`
@@ -43,22 +44,33 @@ class CoordinatorDockState {
    * Publish a coordinator. Re-registering identical values keeps the existing
    * object so the sidebar never remounts the panel mid-coordination. Returns a
    * disposer for the caller's effect cleanup.
+   *
+   * Callers invoke this from inside a `$effect`. Reading/writing `registration`
+   * without `untrack` would make that effect depend on its own write — every
+   * rerun (even for unrelated reasons) nulls the registration in cleanup and
+   * immediately rewrites it, which is exactly the "effect reads and writes the
+   * same state" cycle Svelte's loop guard trips on. `untrack` keeps this
+   * bookkeeping invisible to the caller's reactive graph.
    */
   register(next: CoordinatorDockRegistration): () => void {
-    const current = this.registration
-    const unchanged =
-      current !== null &&
-      current.projectId === next.projectId &&
-      current.threadId === next.threadId &&
-      current.label === next.label &&
-      current.icon === next.icon &&
-      current.panel === next.panel
-    if (!unchanged) this.registration = next
+    untrack(() => {
+      const current = this.registration
+      const unchanged =
+        current !== null &&
+        current.projectId === next.projectId &&
+        current.threadId === next.threadId &&
+        current.label === next.label &&
+        current.icon === next.icon &&
+        current.panel === next.panel
+      if (!unchanged) this.registration = next
+    })
     return () => {
-      const active = this.registration
-      if (active && active.projectId === next.projectId && active.threadId === next.threadId) {
-        this.registration = null
-      }
+      untrack(() => {
+        const active = this.registration
+        if (active && active.projectId === next.projectId && active.threadId === next.threadId) {
+          this.registration = null
+        }
+      })
     }
   }
 
