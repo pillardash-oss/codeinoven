@@ -32,9 +32,6 @@
     height: number
     placement?: TerminalPlacement
     content: Snippet
-    /** Optional trailing action, rendered as the last item in the sidebar
-     *  header row after the separator (e.g. the amber thread-note indicator). */
-    trailing?: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
     onFullscreenTab?: (id: string) => void
@@ -59,7 +56,6 @@
     height,
     placement = 'right',
     content,
-    trailing,
     onSelect,
     onClose,
     onFullscreenTab,
@@ -380,9 +376,6 @@
         >
           <X size={13} />
         </button>
-      {/if}
-      {#if trailing}
-        {@render trailing()}
       {/if}
     </div>
   </div>

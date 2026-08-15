@@ -11,6 +11,8 @@
     badge?: 'completed' | 'attention' | 'error'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
+    /** Amber emphasis for attention-worthy tools (e.g. a thread note). */
+    tone?: 'warning'
     onSelect: () => void
   }
 </script>
@@ -46,9 +48,12 @@
       {@const Icon = item.icon}
       <button
         type="button"
-        class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {item.active
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {item.tone ===
+        'warning'
+          ? 'text-warning hover:bg-elevated'
+          : item.active
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
         aria-label={item.label}
         aria-current={item.active ? 'true' : undefined}
         title={item.label}

@@ -840,7 +840,23 @@
         ]
       : []
 
-    return [workspaceTools, sessionTools, coordination]
+    // The amber thread-note indicator sits alone at the very bottom, below its
+    // own hairline: it marks the selected thread's private note as something
+    // that needs attention and opens it on click.
+    const threadNote: ContextDockItem[] = threadNotesState.has(selectedThread.id)
+      ? [
+          {
+            id: 'note',
+            label: 'Note available',
+            icon: StickyNote,
+            active: false,
+            tone: 'warning',
+            onSelect: () => (dockNoteThread = selectedThread)
+          }
+        ]
+      : []
+
+    return [workspaceTools, sessionTools, coordination, threadNote]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -3242,19 +3258,6 @@
             {/key}
           {/if}
         {/snippet}
-        {#snippet contextSidebarTrailing()}
-          {#if workspaceState.selectedThread && threadNotesState.has(workspaceState.selectedThread.id)}
-            <button
-              type="button"
-              class="flex h-7 w-7 items-center justify-center rounded-md border border-warning/30 bg-surface text-warning transition-colors hover:bg-warning/10"
-              aria-label="Open the note for {workspaceState.selectedThread.title}"
-              title="Note available — open the thread note"
-              onclick={() => (dockNoteThread = workspaceState.selectedThread)}
-            >
-              <StickyNote size={14} />
-            </button>
-          {/if}
-        {/snippet}
         <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
           <ContextSidebar
             tabs={contextSidebarState.sidebarTabs}
@@ -3263,7 +3266,6 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            trailing={contextSidebarTrailing}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
