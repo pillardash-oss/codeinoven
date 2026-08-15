@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Eye, Trash2 } from '@lucide/svelte'
+  import { Eye, SquarePen, Trash2 } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import RichMarkdownEditor from '$lib/components/shared/RichMarkdownEditor.svelte'
   import MarkdownView from '$lib/components/markdown/MarkdownView.svelte'
@@ -27,6 +27,8 @@
   let error = $state<string | null>(null)
 
   let hasContent = $derived(bodyValue.trim().length > 0)
+  /** Whether the body differs from the last saved note — drives the Save state. */
+  let dirty = $derived(bodyValue !== (existing?.body ?? ''))
 
   $effect(() => {
     if (!open) return
@@ -56,7 +58,7 @@
   }
 
   async function saveNote(): Promise<void> {
-    if (!hasContent || saving) return
+    if (!dirty || !hasContent || saving) return
     saving = true
     error = null
     try {
@@ -84,13 +86,11 @@
   }
 </script>
 
-<Modal {open} title="Notes" size="lg" {onClose}>
+<Modal {open} title="Notes" size="lg" {onClose} closeOnBackdrop={false}>
   {#if loading}
     <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
   {:else}
     <div class="space-y-3">
-      <label class="text-xs font-medium text-muted" for="thread-note-body">Note</label>
-
       {#if mode === 'edit'}
         <RichMarkdownEditor
           id="thread-note-body"
@@ -134,12 +134,13 @@
       title={mode === 'edit' ? 'Read the note' : 'Edit the note'}
       onclick={() => (mode = mode === 'edit' ? 'read' : 'edit')}
     >
-      <Eye size={14} />
-      <span class="whitespace-nowrap tabular-nums">
-        <span class={mode === 'edit' ? 'text-foreground' : 'text-dimmed'}>read</span>
-        <span class="mx-0.5 text-dimmed">|</span>
-        <span class={mode === 'read' ? 'text-foreground' : 'text-dimmed'}>edit</span>
-      </span>
+      {#if mode === 'edit'}
+        <Eye size={14} />
+        read
+      {:else}
+        <SquarePen size={14} />
+        edit
+      {/if}
     </button>
     <div class="flex-1"></div>
     <button
@@ -152,7 +153,7 @@
     <button
       type="button"
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
-      disabled={!hasContent || saving}
+      disabled={!dirty || !hasContent || saving}
       onclick={() => void saveNote()}
     >
       {saving ? 'Saving…' : 'Save'}
