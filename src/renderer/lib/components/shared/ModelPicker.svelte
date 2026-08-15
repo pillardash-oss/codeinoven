@@ -47,8 +47,9 @@
     fast?: boolean
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
-    /** Current thinking level. When provided, the picker also manages the
-     *  thinking level (trigger badge + thinking section in the popover). */
+    /** Current thinking level. Whenever the selected model declares thinking
+     *  presets, the trigger shows the level badge and the popover exposes the
+     *  presets — no opt-in beyond passing the current value is needed. */
     thinkingLevel?: ThinkingLevel | null
     /** Thinking presets to display. Defaults to the selected model's declared
      *  presets — when the model declares none, thinking controls stay hidden. */
@@ -134,11 +135,26 @@
    * means the model does not reason and the thinking controls stay hidden.
    */
   let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
-  /** Thinking controls only appear when a level is tracked and the model offers presets. */
-  let supportsThinking = $derived(Boolean(thinkingLevel) && effectiveThinkingPresets.length > 0)
+  /** Thinking controls appear whenever the selected model declares presets —
+   *  the thinking level depends on the model, not on the caller's opt-in. */
+  let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
+  /**
+   * Fallback "current" level for the trigger when the caller does not track a
+   * thinking level yet: the model's declared default (custom providers) or its
+   * lowest preset, mirroring what selecting the model would apply.
+   */
+  let fallbackThinkingLevel = $derived(
+    baseUrlProviderStore.defaultThinkingLevel(
+      selectedProvider?.harnessId ?? harnessId,
+      providerId,
+      modelId
+    ) ?? resolveDefaultThinkingLevel(effectiveThinkingPresets, undefined, undefined)
+  )
   let currentThinkingLabel = $derived(
     effectiveThinkingPresets.find((preset) => preset.id === thinkingLevel)?.label ??
       thinkingLevel ??
+      effectiveThinkingPresets.find((preset) => preset.id === fallbackThinkingLevel)?.label ??
+      effectiveThinkingPresets[0]?.label ??
       ''
   )
   /**

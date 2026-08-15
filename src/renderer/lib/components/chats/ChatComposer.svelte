@@ -1407,6 +1407,11 @@
             onSelect={(providerId, modelId, harnessId) => {
               gateVisionSelection = { harnessId, providerId, modelId }
             }}
+            thinkingLevel={gateVisionSelection?.thinkingLevel}
+            onSelectThinking={(level) => {
+              if (!gateVisionSelection) return
+              gateVisionSelection = { ...gateVisionSelection, thinkingLevel: level }
+            }}
             {onToggleFavorite}
             {onReorderFavorite}
           />
