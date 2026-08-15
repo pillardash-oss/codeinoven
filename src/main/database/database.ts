@@ -10,8 +10,12 @@ import {
   AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL,
   DATABASE_SCHEMA_SQL,
   HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_MODELS_COLUMNS_SQL,
+  HARNESS_USAGE_MODELS_EXPECTED_COLUMNS,
   HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL,
   HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL,
+  TURN_FEEDBACK_COLUMNS_SQL,
+  TURN_FEEDBACK_EXPECTED_COLUMNS,
   TURN_FEEDBACK_SET_NULL_MIGRATION_SQL,
   USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL
 } from './schema'
@@ -643,15 +647,29 @@ export class Database {
     // First recover any database that crashed mid-rebuild before the rebuild
     // migrations ran inside a transaction: adopt a populated staging table
     // when the canonical table was recreated empty.
-    this.adoptInterruptedRebuild(connection, 'harness_usage_models', 'harness_usage_models_v2', [
-      'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread ON harness_usage_models(thread_id)',
-      'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness ON harness_usage_models(harness_id)'
-    ])
-    this.adoptInterruptedRebuild(connection, 'turn_feedback', 'turn_feedback_v2', [
-      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread ON turn_feedback(thread_id, created_at)',
-      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending ON turn_feedback(status, created_at)',
-      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature)'
-    ])
+    this.adoptInterruptedRebuild(
+      connection,
+      'harness_usage_models',
+      'harness_usage_models_v2',
+      HARNESS_USAGE_MODELS_EXPECTED_COLUMNS,
+      HARNESS_USAGE_MODELS_COLUMNS_SQL,
+      [
+        'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread ON harness_usage_models(thread_id)',
+        'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness ON harness_usage_models(harness_id)'
+      ]
+    )
+    this.adoptInterruptedRebuild(
+      connection,
+      'turn_feedback',
+      'turn_feedback_v2',
+      TURN_FEEDBACK_EXPECTED_COLUMNS,
+      TURN_FEEDBACK_COLUMNS_SQL,
+      [
+        'CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread ON turn_feedback(thread_id, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending ON turn_feedback(status, created_at)',
+        'CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature)'
+      ]
+    )
 
     const columns = (table: string): Array<{ name: string; notnull?: number }> =>
       connection.pragma(`table_info(${table})`) as Array<{ name: string; notnull?: number }>
@@ -701,13 +719,18 @@ export class Database {
    * (a crash between dropping the old table and renaming the populated staging
    * table). On the next startup the canonical table was recreated empty while
    * the staged data survived, so the migration guard no longer fires. When the
-   * staging table holds rows and the canonical table is empty, adopt the staged
-   * data — the staging table already carries the final schema.
+   * staging table holds rows and the canonical table is empty, the staged data
+   * is adopted — but only after its schema is validated against the columns the
+   * app relies on, and the data is copied into a canonical-shaped table so
+   * constraints (primary key, nullability, foreign keys, checks) are restored
+   * even when the staging table came from a bare copy that stripped them.
    */
   private adoptInterruptedRebuild(
     connection: DatabaseType,
     canonical: string,
     staging: string,
+    expectedColumns: readonly string[],
+    columnsSql: string,
     indexStatements: string[]
   ): void {
     const stagingExists = connection
@@ -726,12 +749,30 @@ export class Database {
       }
     ).count
     if (canonicalRows > 0) return
+
+    // Never adopt a staging table that lacks columns the rest of the app
+    // reads. A mismatched table is disposable; installing it would break every
+    // subsequent read of the canonical table.
+    const stagingColumns = connection.pragma(`table_info(${staging})`) as Array<{
+      name: string
+    }>
+    const stagingNames = new Set(stagingColumns.map((column) => column.name))
+    if (!expectedColumns.every((column) => stagingNames.has(column))) {
+      Logger.info(`Skipped adopting ${staging}: schema does not match ${canonical}`)
+      return
+    }
+
+    connection.exec(`DROP TABLE ${canonical}`)
+    connection.exec(`CREATE TABLE ${canonical} (${columnsSql})`)
     connection.exec(
-      `DROP TABLE ${canonical};
-       ALTER TABLE ${staging} RENAME TO ${canonical};`
+      `INSERT INTO ${canonical} (${expectedColumns.join(', ')})
+       SELECT ${expectedColumns.join(', ')} FROM ${staging}`
     )
+    connection.exec(`DROP TABLE ${staging}`)
     for (const index of indexStatements) connection.exec(index)
-    Logger.info(`Migrated ${canonical}: adopted populated staging table after interrupted rebuild`)
+    Logger.info(
+      `Migrated ${canonical}: adopted and normalized staging data after interrupted rebuild`
+    )
   }
 
   /**
