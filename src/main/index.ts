@@ -9,7 +9,8 @@ import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { AccountProfileRepo } from './database/repositories/account-profile-repo'
-import { mergeGlobalMemoryEntries } from './chat/memory-merge'
+import { loadDeviceIdentity } from './account/device-identity'
+import { readMemorySyncState } from './remote/memory-sync-state'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import {
@@ -605,21 +606,37 @@ async function bootPostPaintServices(): Promise<void> {
       storage,
       credentials: remoteCredentials,
       accountProfileRepo,
-      loadAccountProfileData: async () => ({
-        usage: await accountUsage.profileSummary(),
-        globalMemories: (await accountMemory.getEntries()).filter(
+      loadAccountProfileData: async () => {
+        const identity = await loadDeviceIdentity(storage)
+        const analytics = await accountUsage.profileSummary()
+        const globalMemories = (await accountMemory.getEntries()).filter(
           (entry) => entry.scope === 'global'
         )
-      }),
+        const syncState = await readMemorySyncState(storage)
+        return {
+          deviceId: identity.deviceId,
+          deviceLabel: identity.deviceLabel,
+          platform: identity.platform,
+          usage: {
+            deviceId: identity.deviceId,
+            deviceLabel: identity.deviceLabel,
+            platform: identity.platform,
+            messageCount: analytics.messageCount,
+            costUsd: analytics.costUsd,
+            tokens: analytics.tokens,
+            durationMs: analytics.durationMs,
+            activeDays: analytics.activityDays.length,
+            projects: await accountUsage.projectUsageSummary(),
+            updatedAt: Date.now()
+          },
+          globalMemories,
+          globalMemoryTombstones: syncState?.tombstones ?? []
+        }
+      },
       applyGlobalMemories: async (entries) => {
-        // Merge the cloud snapshot with what this device already holds so a
-        // device never loses its own entries when the list converges.
-        const incoming = entries.filter((entry) => entry.scope === 'global')
-        if (incoming.length === 0) return
-        const existing = (await accountMemory.getEntries()).filter(
-          (entry) => entry.scope === 'global'
-        )
-        await accountMemory.saveEntries(mergeGlobalMemoryEntries(existing, incoming))
+        // The server returns the tombstone-filtered union of every device's
+        // memories, so replacing the local list is what propagates deletions.
+        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
       },
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })

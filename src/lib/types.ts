@@ -1713,8 +1713,11 @@ export interface AccountProfile {
   email: string
   displayName: string
   image: string | null
-  usage: AccountUsageSummary
+  /** Per-device usage snapshots keyed by the desktop device id. */
+  usageByDevice: Record<string, SyncedDeviceUsage>
   globalMemories: MemoryEntry[]
+  /** Deleted global memory ids; deletions propagate to every device. */
+  globalMemoryTombstones: MemoryTombstone[]
   updatedAt: number
 }
 
@@ -1730,9 +1733,44 @@ export interface AccountSignInStart {
   url: string
 }
 
+/** A memory entry this device deleted; newer than the entry's `updatedAt` it wins. */
+export interface MemoryTombstone {
+  id: string
+  deletedAt: number
+}
+
+/** Compact per-project usage row synced inside a device usage snapshot. */
+export interface SyncedDeviceProject {
+  id: string
+  name: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  threadCount: number
+}
+
+/** Compact per-device usage snapshot synced to the account profile. */
+export interface SyncedDeviceUsage {
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  activeDays: number
+  projects: SyncedDeviceProject[]
+  updatedAt: number
+}
+
 export interface AccountProfileSyncPayload {
-  usage: AccountUsageSummary
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  usage: SyncedDeviceUsage
   globalMemories: MemoryEntry[]
+  globalMemoryTombstones: MemoryTombstone[]
 }
 
 /** A selectable option within an agent question. */

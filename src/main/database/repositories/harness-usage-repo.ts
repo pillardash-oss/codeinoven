@@ -11,6 +11,7 @@ import type {
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
   LocalProfileUsageBreakdown,
+  SyncedDeviceProject,
   ThinkingLevel,
   UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
@@ -500,6 +501,45 @@ export class HarnessUsageRepo {
       'SELECT * FROM harness_usage ORDER BY last_used_at DESC'
     )
     return rows.map(rowToHarnessUsage)
+  }
+
+  /**
+   * Top projects by runtime across the whole database, for the per-device
+   * usage snapshot synced to the account profile.
+   */
+  async projectUsageSummary(): Promise<SyncedDeviceProject[]> {
+    const rows = await this.aggregate<{
+      project_id: string
+      name: string
+      message_count: number
+      cost_usd: number
+      tokens_total: number
+      duration_ms: number
+      thread_count: number
+    }>(
+      `SELECT h.project_id AS project_id,
+              p.name AS name,
+              SUM(h.message_count) AS message_count,
+              SUM(h.cost_usd) AS cost_usd,
+              SUM(h.tokens_total) AS tokens_total,
+              SUM(h.duration_ms) AS duration_ms,
+              COUNT(DISTINCT h.thread_id) AS thread_count
+       FROM harness_usage h
+       JOIN projects p ON p.id = h.project_id
+       GROUP BY h.project_id, p.name
+       ORDER BY SUM(h.duration_ms) DESC
+       LIMIT 10`,
+      []
+    )
+    return rows.map((row) => ({
+      id: row.project_id,
+      name: row.name,
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total,
+      durationMs: row.duration_ms,
+      threadCount: row.thread_count
+    }))
   }
 
   /** App-wide totals and ranked breakdowns for the signed-in profile. */
