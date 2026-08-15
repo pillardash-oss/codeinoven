@@ -4905,7 +4905,8 @@
     const auditor = {
       harnessId: selected.harnessId,
       providerId: selected.providerId,
-      modelId: selected.modelId
+      modelId: selected.modelId,
+      thinkingLevel: selected.thinkingLevel
     }
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -5633,7 +5634,8 @@
         ? {
             harnessId: auditSettings.harnessId,
             providerId: auditSettings.providerId,
-            modelId: auditSettings.modelId
+            modelId: auditSettings.modelId,
+            thinkingLevel: auditSettings.thinkingLevel
           }
         : undefined
     const normalized: ThreadSettings = {
@@ -5656,7 +5658,8 @@
       syncAgentRole('seniorEngineer', {
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
-        modelId: normalized.modelId
+        modelId: normalized.modelId,
+        thinkingLevel: normalized.thinkingLevel
       })
     }
     // Persist immediately so the choice survives navigation away from this view.

@@ -375,14 +375,25 @@ function requireVersion(value: unknown): number {
 
 function validateAgentModelSelection(value: unknown, label: string): AgentModelSelection {
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`)
-  const fields = new Set(['harnessId', 'providerId', 'modelId'])
+  const fields = new Set(['harnessId', 'providerId', 'modelId', 'thinkingLevel'])
   for (const field of Object.keys(value)) {
     if (!fields.has(field)) throw new TypeError(`Unsupported ${label} field: ${field}`)
+  }
+  const thinkingLevel = value.thinkingLevel
+  if (
+    thinkingLevel !== undefined &&
+    (typeof thinkingLevel !== 'string' ||
+      !['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(thinkingLevel))
+  ) {
+    throw new TypeError(`${label} thinking level is invalid`)
   }
   return {
     harnessId: requireString(value.harnessId, `${label} harness ID`),
     providerId: requireString(value.providerId, `${label} provider ID`),
-    modelId: requireString(value.modelId, `${label} model ID`)
+    modelId: requireString(value.modelId, `${label} model ID`),
+    ...(thinkingLevel === undefined
+      ? {}
+      : { thinkingLevel: thinkingLevel as AgentModelSelection['thinkingLevel'] })
   }
 }
 
