@@ -1102,6 +1102,8 @@ export interface UtilityDefinitionFor<Kind extends UtilityKind = UtilityKind> {
   config: UtilityConfigMap[Kind]
   credentials: UtilityCredentialMetadata[]
   harnessBindings: HarnessUtilityBinding[]
+  /** App-seeded utility: cannot be deleted and only its config may change. */
+  appOwned: boolean
   createdAt: number
   updatedAt: number
 }

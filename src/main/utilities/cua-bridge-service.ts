@@ -186,6 +186,7 @@ export class CuaBridgeService {
       },
       credentials: [],
       harnessBindings: [binding],
+      appOwned: false,
       createdAt: now,
       updatedAt: now
     }
