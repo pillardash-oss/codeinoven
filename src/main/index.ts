@@ -95,24 +95,6 @@ let splashWindow: BrowserWindow | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
-// The database, IPC handlers, and remote gateway are process-wide resources.
-// Running two app instances against them causes duplicate startup work and port
-// collisions, so subsequent launches focus the existing window and exit.
-// Packaged startup smoke runs use isolated Chromium and application data roots,
-// so they must not be redirected to a developer instance that happens to be
-// running on the same machine. Normal launches retain single-instance behavior.
-const isPackagedSmoke = app.isPackaged && Boolean(process.env[PACKAGED_SMOKE_OUTPUT_ENV])
-const hasSingleInstanceLock = isPackagedSmoke || app.requestSingleInstanceLock()
-if (!hasSingleInstanceLock) app.quit()
-
-app.on('second-instance', () => {
-  const window = mainWindow
-  if (!window || window.isDestroyed()) return
-  if (window.isMinimized()) window.restore()
-  if (!window.isVisible()) window.show()
-  window.focus()
-})
-
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
  * button) or quits (Cmd+Q / Dock) while threads are still working, the close
@@ -868,7 +850,6 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
 void app
   .whenReady()
   .then(async () => {
-    if (!hasSingleInstanceLock) return
     startupTelemetry.mark('electron:ready')
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
