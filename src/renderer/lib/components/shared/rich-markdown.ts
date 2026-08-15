@@ -878,7 +878,7 @@ export function insertMarkdownLineBreak(root: HTMLElement): boolean {
     node = root.childNodes[Math.max(0, selection.anchorOffset - 1)] ?? root.lastChild ?? root
   }
   const block = currentBlock(root, node)
-  if (!block || block.tagName === 'LI' || block.tagName === 'PRE') return false
+  if (!block || block.tagName === 'PRE') return false
 
   const range = selection.getRangeAt(0)
   range.deleteContents()

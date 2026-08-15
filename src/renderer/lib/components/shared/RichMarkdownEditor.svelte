@@ -24,7 +24,6 @@
     containerClass?: string
     autofocus?: boolean
     disabled?: boolean
-    submitOnEnter?: boolean
     onValueChange?: (value: string) => void
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
@@ -42,7 +41,6 @@
     containerClass = '',
     autofocus = false,
     disabled = false,
-    submitOnEnter = false,
     onValueChange,
     onSubmit,
     onPaste,
@@ -648,12 +646,15 @@
 
       const blockTag = selectedBlockTag(editor)
 
-      if (event.shiftKey && submitOnEnter) {
+      // Shift+Enter always inserts a soft line break (never a new list item,
+      // never a submit) — regardless of whether this editor can submit.
+      if (event.shiftKey) {
         const historyEntry = captureHistoryEntry()
         if (insertMarkdownLineBreak(editor)) {
           event.preventDefault()
           emitEditorValue()
           commitHistory(historyEntry)
+          publishCaretText()
         }
         return
       }
@@ -663,16 +664,14 @@
         return
       }
     }
+    // Enter is never a send key: plain Enter keeps the browser's default
+    // newline/list behavior, and only Cmd/Ctrl+Enter submits.
     if (event.key !== 'Enter' || !onSubmit) return
     if (modifier) {
       event.preventDefault()
       onSubmit(true)
       return
     }
-    const blockTag = selectedBlockTag(editor)
-    if (!submitOnEnter || (blockTag !== 'P' && blockTag !== 'DIV')) return
-    event.preventDefault()
-    onSubmit()
   }
 
   function nodeHasText(node: Node): boolean {
