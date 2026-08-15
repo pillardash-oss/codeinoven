@@ -3238,6 +3238,10 @@
 
   // ─── Message queue & steer —───────────────────────────────────────────────
 
+  /** Shortcut label for the steer combo — macOS shows ⌘⇧, others Ctrl+Shift+. */
+  const steerModifierLabel =
+    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
+
   let queuedMessage = $state('')
   let queuedAttachments = $state<PromptAttachment[]>([])
   let queuedPromptContext = $state<string | undefined>()
@@ -7114,7 +7118,7 @@
                   <div class="flex items-center gap-1">
                     <button
                       class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
-                      title="Send this message to the agent now"
+                      title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
                       Steer

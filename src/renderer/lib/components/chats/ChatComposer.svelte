@@ -82,7 +82,9 @@
   } from '$shared/types'
 
   interface Props {
-    /** Called with the trimmed message and attachments when the user sends. */
+    /** Called with the trimmed message and attachments when the user sends.
+     *  `direct` is true when the message must be force-delivered as a steer
+     *  into a live turn (Cmd/Ctrl+Shift+Enter); busy parents queue otherwise. */
     onSend: (
       message: string,
       attachments: PromptAttachment[],
@@ -2023,7 +2025,7 @@
         : canStop
           ? 'Stop the running agent'
           : working
-            ? 'Queue — message sends when the agent finishes'
+            ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
             : `Send — ${sendModifierLabel}Enter`}
       disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
