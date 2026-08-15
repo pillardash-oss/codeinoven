@@ -384,6 +384,21 @@ CREATE TABLE IF NOT EXISTS remote_pairing_bootstraps (
 
 CREATE INDEX IF NOT EXISTS idx_remote_bootstraps_state ON remote_pairing_bootstraps(state);`
 
+/**
+ * Desktop account profile cache. Mirrors the last validated remote account
+ * profile (id, avatar, name, email, usage, global memories) so an app restart
+ * or an offline window never loses the signed-in identity. The row is replaced
+ * only when a fresh profile is fetched and removed only when the user
+ * explicitly signs out.
+ */
+export const ACCOUNT_PROFILE_SQL = `
+-- ─── Account profile cache (desktop) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS account_profile (
+  id           TEXT PRIMARY KEY NOT NULL,
+  profile_json TEXT NOT NULL,
+  cached_at    INTEGER NOT NULL
+);`
+
 export const MISC_TABLES_SQL =
   `
 -- ─── Brainstorm Workflow ──────────────────────────────────────────────
@@ -564,7 +579,9 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_assignment
   ON assignment_api_capabilities(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_thread
-  ON assignment_api_capabilities(thread_id);` + REMOTE_DEVICE_SQL
+  ON assignment_api_capabilities(thread_id);` +
+  REMOTE_DEVICE_SQL +
+  ACCOUNT_PROFILE_SQL
 
 export const PERSISTENCE_SQL = `
 -- ─── Provider sync cursors ────────────────────────────────────────────────
