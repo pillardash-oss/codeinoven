@@ -112,6 +112,8 @@ interface TurnState {
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
   attributionSequence: number
+  /** True once the agent has called utility_search this turn. */
+  searched: boolean
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -233,7 +235,8 @@ export class UtilityOrchestrationService {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
-      attributionSequence: 0
+      attributionSequence: 0,
+      searched: false
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
@@ -380,6 +383,7 @@ export class UtilityOrchestrationService {
     // confidently conclude the capability is not available in this session.
     // This must be distinguished from an ambiguous empty array.
     const notFound = query ? matches.length === 0 : ranked.length === 0
+    state.searched = true
     await this.audit(state, 'utility.searched', {
       query,
       fallback,
@@ -434,13 +438,15 @@ export class UtilityOrchestrationService {
       utilityId,
       kind: resolved.utility.kind
     })
+    const nudge = this.searchNudge(state, resolved)
     return {
       utility: {
         id: resolved.utility.id,
         name: resolved.utility.name,
         kind: resolved.utility.kind
       },
-      capability
+      capability,
+      ...(nudge ? { nudge } : {})
     }
   }
 
@@ -526,6 +532,18 @@ export class UtilityOrchestrationService {
       }
     }
     return undefined
+  }
+
+  /**
+   * Feedback (not an error/warning) delivered in an activate result when the
+   * agent uses an on-demand utility without having called utility_search this
+   * turn. Only fires when the gateway exists, so the agent necessarily has the
+   * search tool available to act on the nudge.
+   */
+  private searchNudge(state: TurnState, resolved: ResolvedUtility): string | null {
+    if (state.searched) return null
+    if (resolved.utility.activation !== 'on_demand') return null
+    return `You are using an on-demand app utility without calling ${UTILITY_SEARCH_TOOL_NAME} first in this turn. Before relying on or concluding anything about a capability that is not directly available in this session, search for it with ${UTILITY_SEARCH_TOOL_NAME} and check the returned notFound field.`
   }
 
   private isComputerUseUtility(resolved: ResolvedUtility): boolean {
