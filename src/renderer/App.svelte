@@ -832,6 +832,7 @@
     const target = fileSearchTargets.get(selection.action.id)
     if (!target) return
     fileSearchPaletteOpen = false
+    resetFileSearch()
     navigate('projects')
     workspaceState.requestProjectFileOpen(target.projectId, target.path)
   }
@@ -1507,6 +1508,7 @@
         emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
+        closeOnSelect={false}
         onClose={() => {
           fileSearchPaletteOpen = false
           resetFileSearch()
@@ -1526,6 +1528,7 @@
           : 'Type at least two characters to search all projects'}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
+        closeOnSelect={false}
         onClose={() => {
           threadSearchPaletteOpen = false
           resetThreadSearch()
