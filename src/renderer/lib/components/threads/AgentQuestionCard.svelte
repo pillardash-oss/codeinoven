@@ -410,7 +410,18 @@
   </div>
 
   <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
-    <div class="flex min-w-0 items-center gap-2">
+    {#if onExplain}
+      <button
+        class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={working}
+        onclick={handleExplain}
+        title="Explain this question to help you decide"
+        aria-label="Explain this question in a temporary read-only chat"
+      >
+        <HelpCircle size={13} />
+        Explain
+      </button>
+    {:else}
       <p class="text-[11px] text-muted">
         {#if !currentAnswers.length}
           Answer this question to continue
@@ -420,19 +431,7 @@
           Ready to send
         {/if}
       </p>
-      {#if onExplain}
-        <button
-          class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={working}
-          onclick={handleExplain}
-          title="Explain this question to help you decide"
-          aria-label="Explain this question in a temporary read-only chat"
-        >
-          <HelpCircle size={13} />
-          Explain
-        </button>
-      {/if}
-    </div>
+    {/if}
     <button
       class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       disabled={!allAnswered || working}
