@@ -6,6 +6,19 @@ const DESKTOP_AUTHORIZATION_TTL_MS = 2 * 60 * 1_000
 const ACCOUNT_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1_000
 const MAX_PROFILE_BYTES = 512 * 1_024
 
+const emptyUsage = (generatedAt: number): Record<string, unknown> => ({
+  messageCount: 0,
+  costUsd: 0,
+  tokens: 0,
+  durationMs: 0,
+  topHarnessId: null,
+  topModelId: null,
+  harnesses: [],
+  models: [],
+  activityDays: [],
+  generatedAt
+})
+
 const json = (value: unknown, status = 200): Response =>
   Response.json(value, {
     status,
@@ -184,6 +197,16 @@ export const desktopAuthorize = async (ctx: ActionCtx, request: Request): Promis
     callback.searchParams.set('error', 'unauthorized')
     return redirect(callback.toString())
   }
+  const now = Date.now()
+  await ctx.runMutation(internal.profiles.ensure, {
+    authUserId: session.user.id,
+    email: session.user.email,
+    displayName: session.user.name,
+    image: session.user.image ?? undefined,
+    usageJson: JSON.stringify(emptyUsage(now)),
+    globalMemoriesJson: '[]',
+    updatedAt: now
+  })
   const code = randomToken(32)
   await ctx.runMutation(internal.desktop_auth.createAuthorizationCode, {
     codeHash: await tokenHash(code),
@@ -194,6 +217,21 @@ export const desktopAuthorize = async (ctx: ActionCtx, request: Request): Promis
   })
   callback.searchParams.set('code', code)
   return redirect(callback.toString())
+}
+
+export const desktopRefresh = async (ctx: ActionCtx, request: Request): Promise<Response> => {
+  const authorization = request.headers.get('authorization')
+  const currentToken = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
+  if (!currentToken) return json({ error: 'unauthorized' }, 401)
+  const profileToken = randomToken(48)
+  const expiresAt = Date.now() + ACCOUNT_TOKEN_TTL_MS
+  const refreshed = await ctx.runMutation(internal.desktop_auth.refreshAccountToken, {
+    tokenHash: await tokenHash(currentToken),
+    replacementTokenHash: await tokenHash(profileToken),
+    replacementExpiresAt: expiresAt,
+    now: Date.now()
+  })
+  return refreshed ? json({ profileToken, expiresAt }) : json({ error: 'unauthorized' }, 401)
 }
 
 export const desktopExchange = async (ctx: ActionCtx, request: Request): Promise<Response> => {

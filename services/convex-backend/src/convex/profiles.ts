@@ -47,6 +47,33 @@ export const get = internalQuery({
   }
 })
 
+export const ensure = internalMutation({
+  args: {
+    authUserId: v.string(),
+    email: v.string(),
+    displayName: v.string(),
+    image: v.optional(v.string()),
+    usageJson: v.string(),
+    globalMemoriesJson: v.string(),
+    updatedAt: v.number()
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('accountProfiles')
+      .withIndex('by_auth_user_id', (query) => query.eq('authUserId', args.authUserId))
+      .unique()
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        email: args.email,
+        displayName: args.displayName,
+        image: args.image
+      })
+      return
+    }
+    await ctx.db.insert('accountProfiles', args)
+  }
+})
+
 export const save = internalMutation({
   args: {
     authUserId: v.string(),

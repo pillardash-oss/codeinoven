@@ -384,6 +384,9 @@
       if (state.status === 'signed-in') {
         signInOpen = false
         signInError = ''
+      } else if (state.status === 'error') {
+        signInOpen = true
+        signInError = state.message
       }
     })
   })

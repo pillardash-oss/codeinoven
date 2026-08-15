@@ -1721,6 +1721,7 @@ export interface AccountProfile {
 export type AccountProfileState =
   | { status: 'signed-out'; profile: null }
   | { status: 'pending'; profile: null }
+  | { status: 'error'; profile: null; message: string }
   | { status: 'signed-in'; profile: AccountProfile }
 
 export type AccountAuthProvider = 'google' | 'apple'

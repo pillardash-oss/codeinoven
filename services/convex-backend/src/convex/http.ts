@@ -1,6 +1,12 @@
 import { httpRouter } from 'convex/server'
 import { httpAction } from './_generated/server'
-import { accountProfile, desktopAuthorize, desktopExchange, desktopSignIn } from './account_http'
+import {
+  accountProfile,
+  desktopAuthorize,
+  desktopExchange,
+  desktopRefresh,
+  desktopSignIn
+} from './account_http'
 import { authComponent, createAuth } from './auth'
 import { health } from './system'
 
@@ -24,6 +30,11 @@ http.route({
   path: '/v1/desktop-auth/exchange',
   method: 'POST',
   handler: httpAction(desktopExchange)
+})
+http.route({
+  path: '/v1/desktop-auth/refresh',
+  method: 'POST',
+  handler: httpAction(desktopRefresh)
 })
 http.route({ path: '/v1/profile', method: 'GET', handler: httpAction(accountProfile) })
 http.route({ path: '/v1/profile', method: 'PUT', handler: httpAction(accountProfile) })
