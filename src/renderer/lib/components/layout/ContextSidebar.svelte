@@ -25,15 +25,6 @@
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
-  interface SidebarAction {
-    id: string
-    label: string
-    description: string
-    onSelect: () => void
-  }
-
-  const FULLSCREEN_KINDS = new Set(['terminal'])
-
   interface Props {
     tabs: ContextSidebarTab[]
     activeTabId: string | null
@@ -41,21 +32,23 @@
     height: number
     placement?: TerminalPlacement
     content: Snippet
-    actions: SidebarAction[]
-    /** Hide the "+" add-tab button and the empty-state action grid. Used in
-     *  chat mode where everything openable lives on the app header. */
-    hideAddButton?: boolean
+    /** Optional bottom bar, visually separated from the content by a border. */
+    footer?: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
     onFullscreenTab?: (id: string) => void
-    /** Callback for drag-to-reorder; position is relative to the target tab. */
+    /** Callback for drag-to-reorder; position is relative to the target tab.
+     *  Only terminals are tabbed, so this only ever reorders shells. */
     onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
     onWidthChange: (width: number) => void
     onHeightChange: (height: number) => void
     onTerminalPlacementChange: (placement: TerminalPlacement) => void
-    /** Fold the bottom terminal dock into its thin restore bar. Only wired for
-     *  the bottom dock; the right sidebar never collapses via this prop. */
+    /** Fold the bottom terminal dock away. Only wired for the bottom dock; the
+     *  right sidebar is closed from the context dock rail instead. */
     onTerminalDockToggle?: () => void
+    /** Spawn another shell. The terminal is the only tabbed tool, so it is the
+     *  only one that still offers a "+". */
+    onNewTerminal?: () => void
   }
 
   let {
@@ -65,8 +58,7 @@
     height,
     placement = 'right',
     content,
-    actions,
-    hideAddButton = false,
+    footer,
     onSelect,
     onClose,
     onFullscreenTab,
@@ -74,11 +66,22 @@
     onWidthChange,
     onHeightChange,
     onTerminalPlacementChange,
-    onTerminalDockToggle
+    onTerminalDockToggle,
+    onNewTerminal
   }: Props = $props()
 
   let resizing = $state(false)
   let activeTab = $derived(tabs.find((tab) => tab.id === activeTabId) ?? null)
+
+  // Every other tool opens from the context dock rail and owns the whole panel,
+  // so only shells get a tab strip — the rest get a plain titled header.
+  let terminalMode = $derived(activeTab?.kind === 'terminal')
+  let terminalTabs = $derived(tabs.filter((tab) => tab.kind === 'terminal'))
+  /** Other open panels of the active tool, e.g. several open files. Without a
+   *  strip these would be unreachable, so the header offers them in a picker. */
+  let siblingTabs = $derived(
+    activeTab && !terminalMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
+  )
 
   let dragTabId = $state<string | null>(null)
   let dropTargetId = $state<string | null>(null)
@@ -172,116 +175,161 @@
     onpointerdown={startResize}
   ></div>
 
+  {#snippet tabIcon(tab: ContextSidebarTab)}
+    {#if tab.kind === 'files'}
+      {#if tab.fileTabId}
+        <FileTypeIcon path={tab.path ?? tab.title} size={12} />
+      {:else}
+        <Files size={12} class="shrink-0" />
+      {/if}
+    {:else if tab.kind === 'diff'}
+      <FileDiff size={12} class="shrink-0" />
+    {:else if tab.kind === 'terminal'}
+      <SquareTerminal size={12} class="shrink-0" />
+    {:else if tab.kind === 'debugger'}
+      <Bug size={12} class="shrink-0 text-accent" />
+    {:else if tab.kind === 'sources'}
+      <Info size={12} class="shrink-0" />
+    {:else if tab.kind === 'temporary-chat'}
+      <MessageCircleDashed size={12} class="shrink-0 text-info" />
+    {:else if tab.kind === 'notifications'}
+      <Bell size={12} class="shrink-0" />
+    {:else if tab.kind === 'memory'}
+      <BrainCircuit size={12} class="shrink-0" />
+    {:else if tab.kind === 'git'}
+      <GitBranch size={12} class="shrink-0" />
+    {:else if tab.kind === 'cloud-deployment'}
+      <Cloud size={12} class="shrink-0" />
+    {:else if tab.kind === 'coordinator'}
+      <Network size={12} class="shrink-0 text-primary" />
+    {:else}
+      <Bot size={12} class="shrink-0 text-info" />
+    {/if}
+  {/snippet}
+
   <div class="flex h-10 shrink-0 items-center border-b border-border">
-    <div class="min-w-0 flex-1 overflow-x-auto">
-      <div class="flex h-10 min-w-max items-stretch">
-        {#each tabs as tab (tab.id)}
-          <div
-            class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
-            tab.id
-              ? 'bg-app text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
-              ? 'cursor-grab active:cursor-grabbing'
-              : ''}"
-            draggable={onMoveTab ? 'true' : 'false'}
-            role="listitem"
-            ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
-            ondragend={handleDragEnd}
-            ondragover={(e: DragEvent) => handleDragOver(e, tab)}
-            ondrop={(e: DragEvent) => handleDrop(e, tab)}
-            ondragleave={() => {
-              if (dropTargetId === tab.id) {
-                dropTargetId = null
-                dropPosition = null
-              }
-            }}
-          >
+    {#if terminalMode}
+      <div class="min-w-0 flex-1 overflow-x-auto">
+        <div class="flex h-10 min-w-max items-stretch">
+          {#each terminalTabs as tab (tab.id)}
             <div
-              class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                tab.id && dropPosition === 'before'
-                ? 'bg-primary opacity-100'
-                : 'opacity-0'}"
-            ></div>
-            <div
-              class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                tab.id && dropPosition === 'after'
-                ? 'bg-primary opacity-100'
-                : 'opacity-0'}"
-            ></div>
-            <button
-              type="button"
-              class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
-              aria-current={activeTabId === tab.id ? 'page' : undefined}
-              title={tab.title}
-              onclick={() => onSelect(tab.id)}
+              class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
+              tab.id
+                ? 'bg-app text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
+                ? 'cursor-grab active:cursor-grabbing'
+                : ''}"
+              draggable={onMoveTab ? 'true' : 'false'}
+              role="listitem"
+              ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
+              ondragend={handleDragEnd}
+              ondragover={(e: DragEvent) => handleDragOver(e, tab)}
+              ondrop={(e: DragEvent) => handleDrop(e, tab)}
+              ondragleave={() => {
+                if (dropTargetId === tab.id) {
+                  dropTargetId = null
+                  dropPosition = null
+                }
+              }}
             >
-              {#if tab.kind === 'files'}
-                {#if tab.fileTabId}
-                  <FileTypeIcon path={tab.path ?? tab.title} size={12} />
-                {:else}
-                  <Files size={12} class="shrink-0" />
-                {/if}
-              {:else if tab.kind === 'diff'}
-                <FileDiff size={12} class="shrink-0" />
-              {:else if tab.kind === 'terminal'}
-                <SquareTerminal size={12} class="shrink-0" />
-              {:else if tab.kind === 'debugger'}
-                <Bug size={12} class="shrink-0 text-accent" />
-              {:else if tab.kind === 'sources'}
-                <Info size={12} class="shrink-0" />
-              {:else if tab.kind === 'temporary-chat'}
-                <MessageCircleDashed size={12} class="shrink-0 text-info" />
-              {:else if tab.kind === 'notifications'}
-                <Bell size={12} class="shrink-0" />
-              {:else if tab.kind === 'memory'}
-                <BrainCircuit size={12} class="shrink-0" />
-              {:else if tab.kind === 'git'}
-                <GitBranch size={12} class="shrink-0" />
-              {:else if tab.kind === 'cloud-deployment'}
-                <Cloud size={12} class="shrink-0" />
-              {:else if tab.kind === 'coordinator'}
-                <Network size={12} class="shrink-0 text-primary" />
-              {:else}
-                <Bot size={12} class="shrink-0 text-info" />
-              {/if}
-              <span
-                class="truncate text-[11px] font-medium {tab.kind === 'files' && tab.preview
-                  ? 'italic'
-                  : ''}"
-              >
-                {tab.title}
-              </span>
-              {#if tab.kind === 'subagent' && tab.activity.status === 'running'}
-                <StatusBadge stage="working" animated title="Running" />
-              {/if}
-            </button>
-            {#if FULLSCREEN_KINDS.has(tab.kind) && onFullscreenTab}
+              <div
+                class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+                  tab.id && dropPosition === 'before'
+                  ? 'bg-primary opacity-100'
+                  : 'opacity-0'}"
+              ></div>
+              <div
+                class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+                  tab.id && dropPosition === 'after'
+                  ? 'bg-primary opacity-100'
+                  : 'opacity-0'}"
+              ></div>
               <button
                 type="button"
-                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                aria-label={`Fullscreen ${tab.title}`}
-                title="Fullscreen"
-                onclick={() => onFullscreenTab(tab.id)}
+                class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+                aria-current={activeTabId === tab.id ? 'page' : undefined}
+                title={tab.title}
+                onclick={() => onSelect(tab.id)}
               >
-                <Maximize2 size={11} />
+                {@render tabIcon(tab)}
+                <span class="truncate text-[11px] font-medium">{tab.title}</span>
               </button>
-            {/if}
-            <button
-              type="button"
-              class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-              aria-label={`Close ${tab.title}`}
-              title="Close tab"
-              onclick={() => onClose(tab.id)}
-            >
-              <X size={11} />
-            </button>
-          </div>
-        {/each}
+              {#if onFullscreenTab}
+                <button
+                  type="button"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  aria-label={`Fullscreen ${tab.title}`}
+                  title="Fullscreen"
+                  onclick={() => onFullscreenTab(tab.id)}
+                >
+                  <Maximize2 size={11} />
+                </button>
+              {/if}
+              <button
+                type="button"
+                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                aria-label={`Close ${tab.title}`}
+                title="Close terminal"
+                onclick={() => onClose(tab.id)}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          {/each}
+        </div>
       </div>
-    </div>
+    {:else if activeTab}
+      <div class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-foreground">
+        {@render tabIcon(activeTab)}
+        <span
+          class="truncate text-[11px] font-medium {activeTab.kind === 'files' && activeTab.preview
+            ? 'italic'
+            : ''}"
+        >
+          {activeTab.title}
+        </span>
+        {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
+          <StatusBadge stage="working" animated title="Running" />
+        {/if}
+        {#if siblingTabs.length > 1}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Switch to another open panel"
+              title="Switch open panel"
+            >
+              <span class="text-[10px] font-medium">{siblingTabs.length}</span>
+              <ChevronDown size={11} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="start"
+                sideOffset={6}
+                class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+              >
+                {#each siblingTabs as tab (tab.id)}
+                  <DropdownMenu.Item
+                    class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
+                    textValue={tab.title}
+                    onSelect={() => onSelect(tab.id)}
+                  >
+                    {@render tabIcon(tab)}
+                    <span class="min-w-0 flex-1 truncate text-xs text-foreground">{tab.title}</span>
+                    {#if tab.id === activeTabId}
+                      <span class="text-[10px] text-dimmed">open</span>
+                    {/if}
+                  </DropdownMenu.Item>
+                {/each}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        {/if}
+      </div>
+    {/if}
 
     <div class="flex shrink-0 items-center border-l border-border px-1">
-      {#if activeTab?.kind === 'terminal'}
+      {#if terminalMode}
         <button
           type="button"
           class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -299,6 +347,17 @@
             <PanelBottom size={13} />
           {/if}
         </button>
+        {#if onNewTerminal}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Open another terminal"
+            title="New terminal"
+            onclick={onNewTerminal}
+          >
+            <Plus size={13} />
+          </button>
+        {/if}
         {#if placement === 'bottom' && onTerminalDockToggle}
           <button
             type="button"
@@ -310,56 +369,16 @@
             <ChevronDown size={13} />
           </button>
         {/if}
-      {/if}
-      {#if !hideAddButton}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Add sidebar tab"
-            title="Add tab"
-            disabled={actions.length === 0}
-          >
-            <Plus size={13} />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={6}
-              class="z-50 min-w-48 rounded-lg border border-border bg-surface p-1 shadow-lg"
-            >
-              {#each actions as action (action.id)}
-                <DropdownMenu.Item
-                  class="flex items-center gap-2 rounded-md px-2.5 py-2 outline-none transition-colors data-[highlighted]:bg-elevated"
-                  textValue={action.label}
-                  onSelect={action.onSelect}
-                >
-                  {#if action.id === 'files'}
-                    <Files size={14} class="shrink-0 text-muted" />
-                  {:else if action.id === 'diff'}
-                    <FileDiff size={14} class="shrink-0 text-muted" />
-                  {:else if action.id === 'terminal'}
-                    <SquareTerminal size={14} class="shrink-0 text-muted" />
-                  {:else if action.id === 'debugger'}
-                    <Bug size={14} class="shrink-0 text-muted" />
-                  {:else if action.id === 'sources'}
-                    <Info size={14} class="shrink-0 text-muted" />
-                  {:else if action.id === 'cloud-deployments'}
-                    <Cloud size={14} class="shrink-0 text-muted" />
-                  {/if}
-                  <span class="min-w-0">
-                    <span class="block text-xs font-medium text-foreground">
-                      {action.label}
-                    </span>
-                    <span class="block text-[10px] text-dimmed">
-                      {action.description}
-                    </span>
-                  </span>
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+      {:else if activeTab}
+        <button
+          type="button"
+          class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={`Close ${activeTab.title}`}
+          title="Close panel"
+          onclick={() => onClose(activeTab.id)}
+        >
+          <X size={13} />
+        </button>
       {/if}
     </div>
   </div>
@@ -367,59 +386,20 @@
   <div class="min-h-0 flex-1 overflow-hidden">
     {#if tabs.length === 0}
       <div class="flex h-full items-center justify-center px-6">
-        {#if hideAddButton}
-          <p
-            class="max-w-64 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
-          >
-            Nothing open
-          </p>
-        {:else}
-          <div class="w-full max-w-64">
-            <p
-              class="mb-3 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
-            >
-              Open in sidebar
-            </p>
-            <div class="grid gap-2">
-              {#each actions as action (action.id)}
-                <button
-                  type="button"
-                  class="flex min-h-10 w-full items-center gap-3 rounded-lg border border-border bg-elevated px-3 py-2.5 text-left transition-colors hover:bg-overlay"
-                  onclick={action.onSelect}
-                >
-                  <span
-                    class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-raised text-muted"
-                  >
-                    {#if action.id === 'files'}
-                      <Files size={14} />
-                    {:else if action.id === 'diff'}
-                      <FileDiff size={14} />
-                    {:else if action.id === 'terminal'}
-                      <SquareTerminal size={14} />
-                    {:else if action.id === 'debugger'}
-                      <Bug size={14} />
-                    {:else if action.id === 'sources'}
-                      <Info size={14} />
-                    {:else if action.id === 'cloud-deployments'}
-                      <Cloud size={14} />
-                    {/if}
-                  </span>
-                  <span class="min-w-0">
-                    <span class="block text-xs font-medium text-foreground">
-                      {action.label}
-                    </span>
-                    <span class="block text-[10px] text-dimmed">
-                      {action.description}
-                    </span>
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
+        <p
+          class="max-w-64 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+        >
+          Nothing open
+        </p>
       </div>
     {:else}
       {@render content()}
     {/if}
   </div>
+
+  {#if footer}
+    <div class="flex h-10 shrink-0 items-center justify-end gap-2 border-t border-border px-2">
+      {@render footer()}
+    </div>
+  {/if}
 </aside>
