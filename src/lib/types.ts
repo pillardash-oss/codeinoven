@@ -2911,6 +2911,30 @@ export interface MemoryProposal {
   status: 'pending' | 'approved' | 'rejected'
 }
 
+/** Which bucket of memory an export/import targets. */
+export type MemoryExportKind = 'projects' | 'chats' | 'both' | 'project'
+
+/** The on-disk JSON shape written by a memory export and read by an import. */
+export interface MemoryExportFile {
+  format: 'codeinoven-memory'
+  version: 1
+  exportedAt: number
+  kind: MemoryExportKind
+  /** Present only when `kind === 'project'` (the sidebar project export). */
+  projectId?: string
+  entries: MemoryEntry[]
+}
+
+/** Preview of an imported memory file, returned before anything is applied. */
+export interface MemoryImportPreview {
+  format: string
+  version: number
+  kind: MemoryExportKind
+  projectId?: string
+  entryCount: number
+  entries: MemoryEntry[]
+}
+
 export interface AppConfig {
   theme: ThemePreference
   threadLimit: number

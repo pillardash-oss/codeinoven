@@ -476,6 +476,7 @@
             variant="sidebar"
             projectId={mobileState.selectedThread?.projectId ?? mobileState.selectedProject?.id}
             threadId={mobileState.selectedThread?.id}
+            allowTransfer={false}
           />
         {/await}
       </div>
