@@ -2,10 +2,10 @@ import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'elect
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile, writeFile, mkdir, stat } from 'fs/promises'
+import { lstat, readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
-import { basename, dirname, extname, join } from 'path'
+import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -2749,6 +2749,23 @@ export function registerIpcHandlers(
     } catch (error) {
       if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return false
       Logger.error('shell:revealPath rejected out-of-scope path:', error)
+      return false
+    }
+  })
+
+  // Reveal an agent-cited file that lives outside every project root in the OS
+  // file manager. Reveal-only: the path must be an existing absolute path to a
+  // regular file or directory (symlinks are rejected) and no content is ever
+  // read or opened, so no scope grant is needed.
+  privileged('shell:revealExternalPath', async (_event, path: unknown) => {
+    if (typeof path !== 'string' || path.length === 0 || path.length > 16_384) return false
+    if (path.includes('\0') || !isAbsolute(path)) return false
+    try {
+      const metadata = await lstat(path)
+      if (metadata.isSymbolicLink()) return false
+      shell.showItemInFolder(path)
+      return true
+    } catch {
       return false
     }
   })

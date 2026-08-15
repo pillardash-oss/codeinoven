@@ -95,10 +95,11 @@ export async function revealCitationFile(
     return
   }
   // Absolute citation outside the project root (e.g. Codex citations to files
-  // the user supplied) — reveal in the OS file manager. `shell:revealPath` is
-  // scope-gated in main, so out-of-scope paths fail safely.
+  // the user supplied) — reveal in the OS file manager. `shell:revealExternalPath`
+  // is a reveal-only probe: the path must exist and no content is read, so no
+  // scope grant is required.
   if (isAbsoluteCitationPath(targetPath)) {
-    const revealed = await invoke('shell:revealPath', targetPath).catch(() => false)
+    const revealed = await invoke('shell:revealExternalPath', targetPath).catch(() => false)
     if (!revealed) {
       toast.error('This local file is outside the active project or no longer exists.')
     }
