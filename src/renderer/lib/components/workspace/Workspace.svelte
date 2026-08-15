@@ -355,10 +355,8 @@
   })
 
   let projectCreateTrigger = $state(0)
-  let projectCreateDropdownTrigger = $state(0)
   let prevCreateThreadCount = 0
   let prevAddProjectCount = 0
-  let prevAddProjectChoicesCount = 0
   let prevNewChatCount = 0
   let prevProjectFileOpenCount = 0
   let creatingThread = false
@@ -422,18 +420,6 @@
     if (current !== prevAddProjectCount && workspaceState.consumeAddProjectRequest()) {
       prevAddProjectCount = current
       projectCreateTrigger++
-    }
-  })
-
-  /** React to Cmd/Ctrl+Shift+N → open the add-project creation options. */
-  $effect(() => {
-    const current = workspaceState.requestAddProjectChoicesCount
-    if (
-      current !== prevAddProjectChoicesCount &&
-      workspaceState.consumeAddProjectChoicesRequest()
-    ) {
-      prevAddProjectChoicesCount = current
-      projectCreateDropdownTrigger++
     }
   })
 
@@ -2132,7 +2118,6 @@
               onProjectCreated={handleProjectCreated}
               onExisting={handleExistingProject}
               triggerAddProject={projectCreateTrigger}
-              triggerAddProjectDropdown={projectCreateDropdownTrigger}
             />
           </div>
         {/if}

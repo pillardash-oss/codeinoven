@@ -271,22 +271,6 @@ class WorkspaceState {
     return true
   }
 
-  /** Incremented to signal ProjectCreateControl to open the creation-options dropdown. */
-  requestAddProjectChoicesCount = $state(0)
-  private consumedAddProjectChoicesRequestCount = 0
-
-  requestAddProjectChoices(): void {
-    this.requestAddProjectChoicesCount++
-  }
-
-  consumeAddProjectChoicesRequest(): boolean {
-    if (this.consumedAddProjectChoicesRequestCount === this.requestAddProjectChoicesCount) {
-      return false
-    }
-    this.consumedAddProjectChoicesRequestCount = this.requestAddProjectChoicesCount
-    return true
-  }
-
   /** A project added externally (e.g. from Scope view) that Workspace needs to pick up. */
   pendingAddedProject: Project | null = $state(null)
 
