@@ -1387,6 +1387,8 @@ export interface UsageEventDetails {
   harnessId: string | null
   providerId: string | null
   modelId: string | null
+  /** Reasoning effort in effect when the attempt ran, when known. */
+  thinkingLevel: ThinkingLevel | null
   utilityId: string | null
   rawProviderUsage: Record<string, unknown>
   tokens: NormalizedUsageTokens
@@ -1543,6 +1545,8 @@ export interface HarnessUsage {
   providerId: string
   /** Last model observed for this harness on the thread. */
   modelId?: string
+  /** Last thinking level observed for this harness on the thread. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this harness on the thread. */
   messageCount: number
   /** Cumulative USD cost, when the harness reports cost. */
@@ -1563,6 +1567,8 @@ export interface HarnessModelUsage {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort of the turns attributed to this model, when known. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this model on the thread. */
   messageCount: number
   /** Cumulative USD cost attributed to this model, when the harness reports cost. */
@@ -1613,6 +1619,8 @@ export interface LocalProfileAnalyticsRange {
 export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   harnessId?: string
   providerId?: string
+  /** Reasoning effort of the turns this row aggregates, when the data is recorded. */
+  thinkingLevel?: ThinkingLevel
   durationMs: number
 }
 
@@ -1830,6 +1838,8 @@ export interface AgentMessage {
   providerId?: string
   /** Agent harness that produced this message, e.g. opencode or claude-code. */
   harnessId?: string
+  /** Reasoning effort in effect when this message's turn ran, when known. */
+  thinkingLevel?: ThinkingLevel
   createdAt: number
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */

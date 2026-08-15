@@ -11,6 +11,7 @@ import type {
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
   LocalProfileUsageBreakdown,
+  ThinkingLevel,
   UsageCacheHitBreakdown,
   UsageEfficiencyKpis,
   UsageEvent
@@ -22,6 +23,7 @@ interface HarnessUsageRow {
   harness_id: string
   provider_id: string
   model_id: string | null
+  thinking_level: string | null
   message_count: number
   cost_usd: number
   tokens_in: number
@@ -40,6 +42,7 @@ interface HarnessModelUsageRow {
   harness_id: string
   provider_id: string
   model_id: string
+  thinking_level: string | null
   message_count: number
   cost_usd: number
   tokens_in: number
@@ -64,6 +67,7 @@ interface UsageAggregateRow {
 interface LocalUsageAggregateRow extends UsageAggregateRow {
   harness_id: string | null
   provider_id: string | null
+  thinking_level: string | null
 }
 
 interface LocalProjectAggregateRow extends UsageAggregateRow {
@@ -116,6 +120,7 @@ function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
     harnessId: row.harness_id,
     providerId: row.provider_id,
     ...(row.model_id ? { modelId: row.model_id } : {}),
+    ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
     tokens: tokensFromRow(row),
@@ -131,6 +136,7 @@ function rowToHarnessModelUsage(row: HarnessModelUsageRow): HarnessModelUsage {
     harnessId: row.harness_id,
     providerId: row.provider_id,
     modelId: row.model_id,
+    ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
     messageCount: row.message_count,
     costUsd: row.cost_usd,
     tokens: tokensFromRow(row),
@@ -168,12 +174,12 @@ export class HarnessUsageRepo {
     this.db.run(
       `INSERT OR IGNORE INTO usage_events(
         id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
-        harness_id, provider_id, model_id, utility_id, raw_provider_usage_json,
+        harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
         tokens_uncached_input, tokens_cached_input, tokens_cache_write,
         tokens_output, tokens_reasoning, raw_total, total_semantics,
         cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
         success, retry_cause, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       event.id,
       event.threadId,
       event.parentTurnId,
@@ -183,6 +189,7 @@ export class HarnessUsageRepo {
       event.harnessId,
       event.providerId,
       event.modelId,
+      event.thinkingLevel,
       event.utilityId,
       JSON.stringify(event.rawProviderUsage),
       event.tokens.uncachedInput,
@@ -600,10 +607,11 @@ export class HarnessUsageRepo {
           `SELECT model_id AS id,
                   harness_id,
                   provider_id,
+                  thinking_level,
                   ${aggregateSelect}
            FROM agent_messages
            WHERE ${messageRange} AND model_id IS NOT NULL
-           GROUP BY harness_id, provider_id, model_id
+           GROUP BY harness_id, provider_id, model_id, thinking_level
            ORDER BY message_count DESC, MAX(created_at) DESC`,
           [...params]
         ),
@@ -667,6 +675,7 @@ export class HarnessUsageRepo {
       id: row.id,
       ...(row.harness_id ? { harnessId: row.harness_id } : {}),
       ...(row.provider_id ? { providerId: row.provider_id } : {}),
+      ...(row.thinking_level ? { thinkingLevel: row.thinking_level as ThinkingLevel } : {}),
       messageCount: row.message_count,
       costUsd: row.cost_usd,
       tokens: row.tokens_total,
@@ -763,6 +772,7 @@ export class HarnessUsageRepo {
 
       const providerId = message.providerId ?? ''
       const modelId = message.modelId
+      const thinkingLevel = message.thinkingLevel ?? null
       const cost = messageCost(message) ?? 0
       const tokens = message.tokens
       const createdAt = message.createdAt
@@ -771,13 +781,14 @@ export class HarnessUsageRepo {
 
       statements.push({
         sql: `INSERT INTO harness_usage(
-          project_id, thread_id, harness_id, provider_id, model_id,
+          project_id, thread_id, harness_id, provider_id, model_id, thinking_level,
           message_count, cost_usd,
           tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
           duration_ms, first_used_at, last_used_at
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(project_id, thread_id, harness_id, provider_id) DO UPDATE SET
           model_id = COALESCE(excluded.model_id, harness_usage.model_id),
+          thinking_level = COALESCE(excluded.thinking_level, harness_usage.thinking_level),
           message_count = harness_usage.message_count + excluded.message_count,
           cost_usd = harness_usage.cost_usd + excluded.cost_usd,
           tokens_in = harness_usage.tokens_in + excluded.tokens_in,
@@ -795,6 +806,7 @@ export class HarnessUsageRepo {
           harnessId,
           providerId,
           modelId ?? null,
+          thinkingLevel,
           1,
           cost,
           tokens?.input ?? 0,
@@ -811,12 +823,12 @@ export class HarnessUsageRepo {
       if (modelId) {
         statements.push({
           sql: `INSERT INTO harness_usage_models(
-            thread_id, harness_id, provider_id, model_id,
+            thread_id, harness_id, provider_id, model_id, thinking_level,
             message_count, cost_usd,
             tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total,
             duration_ms, first_used_at, last_used_at
-          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-          ON CONFLICT(thread_id, harness_id, provider_id, model_id) DO UPDATE SET
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(thread_id, harness_id, provider_id, model_id, thinking_level) DO UPDATE SET
             message_count = harness_usage_models.message_count + excluded.message_count,
             cost_usd = harness_usage_models.cost_usd + excluded.cost_usd,
             tokens_in = harness_usage_models.tokens_in + excluded.tokens_in,
@@ -833,6 +845,7 @@ export class HarnessUsageRepo {
             harnessId,
             providerId,
             modelId,
+            thinkingLevel,
             1,
             cost,
             tokens?.input ?? 0,

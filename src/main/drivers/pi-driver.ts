@@ -698,7 +698,12 @@ export class PiDriver extends PersistentCliDriver {
     await client.setModel(model.provider, model.modelId)
     await client.setThinkingLevel(piThinkingLevel(options.settings.thinkingLevel))
 
-    this.setTurnProvenance(session.id, options.settings.providerId, options.settings.modelId)
+    this.setTurnProvenance(
+      session.id,
+      options.settings.providerId,
+      options.settings.modelId,
+      options.settings.thinkingLevel
+    )
     this.appendUserMessage(session, options)
     this.activeTurns.add(session.id)
 
@@ -718,7 +723,12 @@ export class PiDriver extends PersistentCliDriver {
         references.push(`Attached file: ${path}`)
       }
     }
-    const prompt = [options.systemPrompt ? options.systemPrompt : '', inlineSvg, ...references, options.text]
+    const prompt = [
+      options.systemPrompt ? options.systemPrompt : '',
+      inlineSvg,
+      ...references,
+      options.text
+    ]
       .filter(Boolean)
       .join('\n\n')
 
@@ -921,7 +931,11 @@ export class PiDriver extends PersistentCliDriver {
     return client
   }
 
-  private handleRpcEvent(record: Record<string, unknown>, sessionId: string, projectPath: string): void {
+  private handleRpcEvent(
+    record: Record<string, unknown>,
+    sessionId: string,
+    projectPath: string
+  ): void {
     this.requireSession(projectPath, sessionId)
       .then((session) => {
         const result = this.parseJsonLine(record, { session, sessionId, projectPath })

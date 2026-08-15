@@ -183,6 +183,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
+  thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
   created_at      INTEGER NOT NULL,
@@ -214,6 +215,73 @@ CREATE INDEX IF NOT EXISTS idx_agent_messages_analytics
  */
 export const AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL = `
 ALTER TABLE agent_messages ADD COLUMN tokens_total INTEGER;`
+
+/**
+ * One-time migration for databases created before `thinking_level` existed on
+ * `agent_messages`. Historical rows keep `NULL` ("unknown") until their thread
+ * is next hydrated, when the chat engine stamps the thread's current level.
+ */
+export const AGENT_MESSAGES_THINKING_LEVEL_MIGRATION_SQL = `
+ALTER TABLE agent_messages ADD COLUMN thinking_level TEXT;`
+
+/**
+ * One-time migration for databases created before `thinking_level` existed on
+ * `usage_events`. Existing rows keep `NULL` ("unknown").
+ */
+export const USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL = `
+ALTER TABLE usage_events ADD COLUMN thinking_level TEXT;`
+
+/**
+ * One-time migration for databases created before `thinking_level` existed on
+ * `harness_usage`. The column mirrors `model_id`: the last observed level for
+ * the (project, thread, harness, provider) key.
+ */
+export const HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL = `
+ALTER TABLE harness_usage ADD COLUMN thinking_level TEXT;`
+
+/**
+ * One-time migration for databases created before `harness_usage_models` broke
+ * usage down per thinking level. SQLite cannot change a PRIMARY KEY in place,
+ * so the table is rebuilt with `thinking_level` added to the key; pre-migration
+ * rows carry `NULL` ("unknown") and merge into a single row per model.
+ */
+export const HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL = `
+CREATE TABLE harness_usage_models_v2 (
+  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  thinking_level       TEXT,
+  message_count        INTEGER NOT NULL DEFAULT 0,
+  cost_usd             REAL NOT NULL DEFAULT 0,
+  tokens_in            INTEGER NOT NULL DEFAULT 0,
+  tokens_out           INTEGER NOT NULL DEFAULT 0,
+  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
+  tokens_total         INTEGER NOT NULL DEFAULT 0,
+  duration_ms          INTEGER NOT NULL DEFAULT 0,
+  first_used_at        INTEGER NOT NULL,
+  last_used_at         INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
+);
+INSERT INTO harness_usage_models_v2(
+  thread_id, harness_id, provider_id, model_id, thinking_level,
+  message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning,
+  tokens_cache_read, tokens_cache_write, tokens_total, duration_ms,
+  first_used_at, last_used_at
+) SELECT
+  thread_id, harness_id, provider_id, model_id, NULL,
+  message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning,
+  tokens_cache_read, tokens_cache_write, tokens_total, duration_ms,
+  first_used_at, last_used_at
+FROM harness_usage_models;
+DROP TABLE harness_usage_models;
+ALTER TABLE harness_usage_models_v2 RENAME TO harness_usage_models;
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
+  ON harness_usage_models(thread_id);
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
+  ON harness_usage_models(harness_id);`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -555,6 +623,7 @@ CREATE TABLE IF NOT EXISTS harness_usage (
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT,
+  thinking_level       TEXT,
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -587,15 +656,17 @@ CREATE TABLE IF NOT EXISTS harness_usage_messages (
 CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
   ON harness_usage_messages(thread_id);
 
--- Per-model cost breakdown for each (thread, harness, provider). One row per
--- model a harness used on a thread, with cumulative cost/tokens/duration so the
--- battery popover (and a future usage settings page) can show what each model
--- consumed. Rows cascade-delete with their thread.
+-- Per-model cost breakdown for each (thread, harness, provider, thinking level).
+-- One row per model+thinking-level a harness used on a thread, with cumulative
+-- cost/tokens/duration so the battery popover (and the usage settings page) can
+-- show what each model consumed at each reasoning effort. Rows cascade-delete
+-- with their thread.
 CREATE TABLE IF NOT EXISTS harness_usage_models (
   thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT NOT NULL,
+  thinking_level       TEXT,
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -607,7 +678,7 @@ CREATE TABLE IF NOT EXISTS harness_usage_models (
   duration_ms          INTEGER NOT NULL DEFAULT 0,
   first_used_at        INTEGER NOT NULL,
   last_used_at         INTEGER NOT NULL,
-  PRIMARY KEY (thread_id, harness_id, provider_id, model_id)
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
 );
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
@@ -630,6 +701,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   harness_id            TEXT,
   provider_id           TEXT,
   model_id              TEXT,
+  thinking_level        TEXT,
   utility_id            TEXT,
   raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
   tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
