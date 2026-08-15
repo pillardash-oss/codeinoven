@@ -84,6 +84,7 @@ function usageEvent(
     harnessId: 'codex',
     providerId: 'openai',
     modelId: 'gpt-test',
+    thinkingLevel: null,
     utilityId: null,
     rawProviderUsage: {},
     tokens: {

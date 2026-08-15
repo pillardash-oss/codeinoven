@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Check, ChevronLeft, ChevronRight, LogIn, RefreshCw } from '@lucide/svelte'
+  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, RefreshCw } from '@lucide/svelte'
   import { Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
@@ -9,12 +9,20 @@
     AccountUsageBreakdown,
     LocalProfileAnalytics,
     LocalProfileAnalyticsRange,
-    LocalProfileProjectBreakdown
+    LocalProfileModelPerformance,
+    LocalProfileProjectBreakdown,
+    LocalProfileUsageBreakdown,
+    ThinkingLevel,
+    TurnOutcomeTaskType
   } from '$shared/types'
+  import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+
+  type ThinkingFilter = 'all' | ThinkingLevel | 'unknown'
+  type TaskFilter = 'all' | TurnOutcomeTaskType
 
   interface CalendarDay {
     date: string
@@ -141,6 +149,56 @@
   const maxProviderTokens = $derived(
     usage.providers.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
+
+  let thinkingFilter = $state<ThinkingFilter>('all')
+  let taskFilter = $state<TaskFilter>('all')
+
+  const mostUsedModel = $derived<LocalProfileUsageBreakdown | null>(usage.models[0] ?? null)
+  const availableThinkingLevels = $derived(
+    usage.models
+      .map((model) => model.thinkingLevel ?? 'unknown')
+      .filter((level, index, all) => all.indexOf(level) === index)
+  )
+  const filteredModels = $derived(
+    usage.models.filter((model) =>
+      thinkingFilter === 'all' ? true : (model.thinkingLevel ?? 'unknown') === thinkingFilter
+    )
+  )
+  const filteredPerformance = $derived(
+    usage.modelPerformance.filter((entry) =>
+      taskFilter === 'all' ? true : entry.taskType === taskFilter
+    )
+  )
+
+  function thinkingLevelLabel(level: ThinkingLevel | 'unknown'): string {
+    if (level === 'unknown') return 'Unknown'
+    return (
+      STANDARD_THINKING_PRESETS.find((preset) => preset.id === level)?.label ??
+      level.charAt(0).toUpperCase() + level.slice(1)
+    )
+  }
+
+  function taskTypeLabel(taskType: TurnOutcomeTaskType): string {
+    switch (taskType) {
+      case 'main':
+        return 'Main work'
+      case 'audit':
+        return 'Audit'
+      case 'assignment':
+        return 'Assignment'
+    }
+  }
+
+  function successRateLabel(entry: LocalProfileModelPerformance): string {
+    if (entry.outcomes === 0) return 'No sessions yet'
+    return `${Math.round((entry.successRate ?? 0) * 100)}%`
+  }
+
+  function successRateWidth(entry: LocalProfileModelPerformance): string {
+    const rate = entry.successRate
+    if (rate === null) return '0%'
+    return `${Math.max(4, Math.min(100, rate * 100))}%`
+  }
 
   function localDateKey(date: Date): string {
     const year = date.getFullYear()
@@ -489,6 +547,79 @@
     </div>
   </section>
 
+  {#if mostUsedModel}
+    <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
+      <div class="border-b px-4 py-3">
+        <h2 id="most-used-heading" class="text-sm font-semibold">Most used model</h2>
+        <p class="mt-0.5 text-xs text-muted">Your top model across projects in this period.</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-4 px-4 py-4">
+        <div class="flex min-w-0 items-center gap-3">
+          {#if getAgentIcon(mostUsedModel.harnessId)}
+            <img
+              class="h-10 w-10 shrink-0 rounded-lg object-contain"
+              src={getAgentIcon(mostUsedModel.harnessId)?.iconUrl}
+              alt=""
+            />
+          {:else}
+            <span class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-elevated">
+              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={18} />
+            </span>
+          {/if}
+          <div class="min-w-0">
+            <p class="flex items-center gap-2 truncate text-base font-semibold">
+              <span class="truncate">{mostUsedModel.id}</span>
+              {#if mostUsedModel.thinkingLevel}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] capitalize text-muted"
+                  title={`Thinking level: ${mostUsedModel.thinkingLevel}`}
+                  aria-label={`Thinking level: ${mostUsedModel.thinkingLevel}`}
+                >
+                  <Brain size={10} />
+                  {thinkingLevelLabel(mostUsedModel.thinkingLevel)}
+                </span>
+              {/if}
+            </p>
+            <p class="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
+              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={13} />
+              <span class="truncate">
+                {formatIdentifier(mostUsedModel.providerId ?? '')} · {formatIdentifier(
+                  mostUsedModel.harnessId ?? ''
+                )}
+              </span>
+            </p>
+          </div>
+        </div>
+        <dl class="ml-auto grid flex-1 grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
+          <div>
+            <dt class="text-[11px] text-dimmed">Responses</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
+              {formatNumber(mostUsedModel.messageCount)}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[11px] text-dimmed">Tokens</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
+              {formatNumber(mostUsedModel.tokens)}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[11px] text-dimmed">Estimated cost</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
+              {formatCost(mostUsedModel.costUsd)}
+            </dd>
+          </div>
+          <div>
+            <dt class="text-[11px] text-dimmed">Runtime</dt>
+            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
+              {formatDuration(mostUsedModel.durationMs)}
+            </dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+  {/if}
+
   <section class="mt-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -724,10 +855,51 @@
     <section class="rounded-xl border" aria-labelledby="model-usage-heading">
       <div class="border-b px-4 py-3">
         <h2 id="model-usage-heading" class="text-sm font-semibold">Models</h2>
-        <p class="mt-0.5 text-xs text-muted">Most used: {usage.topModelId ?? 'No usage yet'}</p>
+        <p class="mt-0.5 text-xs text-muted">
+          {#if usage.models.length > 0}
+            Breakdown by thinking level in this period.
+          {:else}
+            Most used: {usage.topModelId ?? 'No usage yet'}
+          {/if}
+        </p>
+        {#if availableThinkingLevels.length > 0}
+          <div
+            class="mt-3 flex flex-wrap items-center gap-1"
+            role="group"
+            aria-label="Filter models by thinking level"
+          >
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium {thinkingFilter ===
+              'all'
+                ? 'bg-overlay text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              aria-pressed={thinkingFilter === 'all'}
+              onclick={() => (thinkingFilter = 'all')}
+            >
+              All
+            </button>
+            {#each availableThinkingLevels as level (level)}
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1 rounded-lg px-2.5 text-[11px] font-medium capitalize {thinkingFilter ===
+                level
+                  ? 'bg-overlay text-foreground'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                aria-pressed={thinkingFilter === level}
+                onclick={() => (thinkingFilter = level)}
+              >
+                {#if level !== 'unknown'}
+                  <Brain size={11} />
+                {/if}
+                {thinkingLevelLabel(level)}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
       <div class="divide-y">
-        {#each usage.models.slice(0, 8) as model (`${model.harnessId}:${model.providerId}:${model.id}`)}
+        {#each filteredModels.slice(0, 8) as model (`${model.harnessId}:${model.providerId}:${model.id}:${model.thinkingLevel}`)}
           <div class="px-4 py-3">
             <div class="flex items-center justify-between gap-4 text-xs">
               <span class="flex min-w-0 items-center gap-1.5 truncate font-semibold">
@@ -740,6 +912,16 @@
                 {/if}
                 <VendorIcon name={model.providerId ?? model.id} size={15} />
                 <span class="truncate">{model.id}</span>
+                {#if model.thinkingLevel}
+                  <span
+                    class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                    title={`Thinking level: ${model.thinkingLevel}`}
+                    aria-label={`Thinking level: ${model.thinkingLevel}`}
+                  >
+                    <Brain size={9} />
+                    {model.thinkingLevel}
+                  </span>
+                {/if}
               </span>
               <span class="shrink-0 tabular-nums text-muted">
                 {formatNumber(model.tokens)} tokens · {formatCost(model.costUsd)}
@@ -763,6 +945,101 @@
       </div>
     </section>
   </div>
+
+  <section class="mt-4 rounded-xl border" aria-labelledby="model-performance-heading">
+    <div class="border-b px-4 py-3">
+      <h2 id="model-performance-heading" class="text-sm font-semibold">Best model by feedback</h2>
+      <p class="mt-0.5 text-xs text-muted">
+        Success rate from your sessions: continuing positively, switching context, or leaving the
+        thread until cleanup scores a pass; a corrective follow-up scores a miss.
+      </p>
+      {#if usage.modelPerformance.length > 0}
+        <div
+          class="mt-3 flex flex-wrap items-center gap-1"
+          role="group"
+          aria-label="Filter model performance by task type"
+        >
+          <button
+            type="button"
+            class="flex h-7 items-center rounded-lg px-2.5 text-[11px] font-medium {taskFilter ===
+            'all'
+              ? 'bg-overlay text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-pressed={taskFilter === 'all'}
+            onclick={() => (taskFilter = 'all')}
+          >
+            All tasks
+          </button>
+          {#each ['main', 'audit', 'assignment'] as task (task)}
+            <button
+              type="button"
+              class="flex h-7 items-center rounded-lg px-2.5 text-[11px] font-medium {taskFilter ===
+              task
+                ? 'bg-overlay text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              aria-pressed={taskFilter === task}
+              onclick={() => (taskFilter = task as TaskFilter)}
+            >
+              {taskTypeLabel(task as TurnOutcomeTaskType)}
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <div class="divide-y">
+      {#each filteredPerformance.slice(0, 10) as entry (`${entry.harnessId}:${entry.providerId}:${entry.modelId}:${entry.thinkingLevel}:${entry.taskType}`)}
+        <div class="px-4 py-3">
+          <div class="flex items-center justify-between gap-4 text-xs">
+            <span class="flex min-w-0 items-center gap-1.5 truncate font-semibold">
+              {#if getAgentIcon(entry.harnessId)}
+                <img
+                  class="h-4 w-4 shrink-0 object-contain"
+                  src={getAgentIcon(entry.harnessId)?.iconUrl}
+                  alt=""
+                />
+              {/if}
+              <VendorIcon name={entry.providerId || entry.modelId} size={15} />
+              <span class="truncate">{entry.modelId}</span>
+              {#if entry.thinkingLevel}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                  title={`Thinking level: ${entry.thinkingLevel}`}
+                  aria-label={`Thinking level: ${entry.thinkingLevel}`}
+                >
+                  <Brain size={9} />
+                  {entry.thinkingLevel}
+                </span>
+              {/if}
+              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-muted">
+                {taskTypeLabel(entry.taskType)}
+              </span>
+            </span>
+            <span class="shrink-0 tabular-nums text-muted">
+              {successRateLabel(entry)}
+            </span>
+          </div>
+          <div class="mt-2 h-1 overflow-hidden rounded-full bg-raised">
+            <div
+              class="h-full rounded-full {entry.successRate !== null && entry.successRate >= 0.5
+                ? 'bg-primary'
+                : 'bg-danger/70'}"
+              style:width={successRateWidth(entry)}
+            ></div>
+          </div>
+          <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+            {entry.outcomes} sessions · {entry.successes} passed{entry.corrected > 0
+              ? ` · ${entry.corrected} corrected`
+              : ''}
+          </p>
+        </div>
+      {:else}
+        <p class="px-4 py-8 text-center text-xs text-muted">
+          Scores appear as you use agents: after a turn, continuing or moving on counts as a pass,
+          and a corrective follow-up counts as a miss.
+        </p>
+      {/each}
+    </div>
+  </section>
 
   <section class="mt-4 rounded-xl border" aria-labelledby="utility-usage-heading">
     <div class="border-b px-4 py-3">
