@@ -183,6 +183,11 @@ export interface Thread {
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
+  /** Harness that created the bound session. A session never migrates across
+   *  harnesses: even when `settings.harnessId` changes (mid-run switch), this
+   *  field keeps identifying the driver that owns `sessionId` so the old
+   *  session is read/synced through the correct driver. */
+  sessionHarnessId?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
