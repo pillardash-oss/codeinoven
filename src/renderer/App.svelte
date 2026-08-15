@@ -1062,6 +1062,12 @@
       e.preventDefault()
       if (e.repeat) return
 
+      // When the file tree has focus, Cmd/Ctrl+N creates a new file there
+      // instead of starting a new thread. The tree's own handler manages it.
+      const active =
+        document.activeElement instanceof Element ? document.activeElement : null
+      if (active?.closest('[data-region="file-tree"]')) return
+
       if (activeView === 'scope') {
         if (scopeState.activeProjectId) {
           const bucketId =
