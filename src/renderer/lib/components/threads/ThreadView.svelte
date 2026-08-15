@@ -18,6 +18,7 @@
 
   import {
     AudioLines,
+    Brain,
     Check,
     ChevronDown,
     Copy,
@@ -67,7 +68,7 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -5999,6 +6000,19 @@
     return msg.harnessId ?? settings.harnessId
   }
 
+  /** Thinking level used for the message's turn, when its model reasons. */
+  function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
+    if (!msg.modelId) return null
+    const modelId = fastBaseModelId(msg.modelId)
+    const model =
+      allModels.find(
+        (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
+      ) ?? allModels.find((m) => m.id === modelId)
+    const presets = model?.thinkingPresets ?? []
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
+  }
+
   function messageHarnessName(msg: AgentMessage): string {
     const id = messageHarnessId(msg)
     return getAgentIcon(id)?.name ?? id
@@ -6761,6 +6775,7 @@
                 msgIndex === latestTurnInfo.startIndex && latestTurnInfo.active}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
+              {@const msgThinking = messageThinkingLevel(msg)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
@@ -6796,6 +6811,7 @@
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
                         {modelLabel}
+                        thinkingLevel={msgThinking}
                         providerName={provider?.name}
                         {harnessId}
                         {harnessName}
@@ -6941,6 +6957,16 @@
                                     />
                                   {/if}
                                 </span>
+                                {#if msgThinking}
+                                  <span
+                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                                    title={`Thinking level: ${msgThinking}`}
+                                    aria-label={`Thinking level: ${msgThinking}`}
+                                  >
+                                    <Brain size={9} />
+                                    {msgThinking}
+                                  </span>
+                                {/if}
                               {/if}
                               <span class="text-[10px] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span

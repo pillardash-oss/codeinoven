@@ -2,6 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import {
     AudioLines,
+    Brain,
     Check,
     Clock3,
     Copy,
@@ -23,10 +24,11 @@
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import { messageId } from '$shared/id'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
   import {
@@ -45,6 +47,7 @@
     PromptAttachment,
     PromptReference,
     ProviderCatalog,
+    ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
 
@@ -146,6 +149,36 @@
   // ─── Turn attribution (harness / model / time) ─────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
+
+  /** Thinking level used for the chat's turns, when the chat's model reasons. */
+  let thinkingLevel = $derived.by((): ThinkingLevel | null => {
+    const modelId = tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === fastBaseModelId(modelId) &&
+          (!tab.settings.providerId || m.providerId === tab.settings.providerId)
+      ) ?? allModels.find((m) => m.id === fastBaseModelId(modelId))
+    const presets = model?.thinkingPresets ?? []
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, tab.settings.thinkingLevel) ?? null
+  })
+
+  /** Thinking level used for a specific message's turn, when its model reasons. */
+  function messageThinkingLevel(message: AgentMessage): ThinkingLevel | null {
+    const modelId = message.modelId ?? tab.settings.modelId
+    if (!modelId) return null
+    const model =
+      allModels.find(
+        (m) =>
+          m.id === fastBaseModelId(modelId) &&
+          (!message.providerId || m.providerId === message.providerId)
+      ) ?? allModels.find((m) => m.id === fastBaseModelId(modelId))
+    const presets = model?.thinkingPresets ?? []
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, tab.settings.thinkingLevel) ?? null
+  }
 
   /** Provider catalog entry for the message, falling back to the chat's model. */
   function messageProvider(message: AgentMessage): ProviderCatalog | undefined {
@@ -783,6 +816,7 @@
                   latest={tab.busy}
                   startTime={turnStartTime(messageIndex)}
                   {modelLabel}
+                  {thinkingLevel}
                   {providerName}
                   harnessId={tab.settings.harnessId}
                   {harnessName}
@@ -802,6 +836,7 @@
                 latest={tab.busy}
                 startTime={turnStartTime(messageIndex)}
                 {modelLabel}
+                {thinkingLevel}
                 {providerName}
                 harnessId={tab.settings.harnessId}
                 {harnessName}
@@ -1015,6 +1050,7 @@
 {#snippet turnFooter(message: AgentMessage, messageIndex: number)}
   {@const msgModelLabel = messageModelLabel(message)}
   {@const msgFastVariant = fastVariantForModelId(message.modelId ?? tab.settings.modelId)}
+  {@const msgThinking = messageThinkingLevel(message)}
   {@const msgDuration = turnDuration(messageIndex)}
   <div class="flex items-center gap-1.5">
     <div class="flex items-center gap-0.5">
@@ -1066,6 +1102,16 @@
             />
           {/if}
         </span>
+        {#if msgThinking}
+          <span
+            class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+            title={`Thinking level: ${msgThinking}`}
+            aria-label={`Thinking level: ${msgThinking}`}
+          >
+            <Brain size={9} />
+            {msgThinking}
+          </span>
+        {/if}
       {/if}
       <span class="text-[10px] text-dimmed"
         >· {formatTime(message.completedAt ?? message.createdAt)}</span
