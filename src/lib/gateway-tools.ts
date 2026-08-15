@@ -1,4 +1,3 @@
-import { IMAGE_DESCRIPTOR_INPUT_SCHEMA, IMAGE_DESCRIPTOR_TOOL_NAME } from './image-descriptor'
 import { UTILITY_KIND_VALUES } from './types'
 
 /** Stable app-owned gateway tool names. */
@@ -77,15 +76,6 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/invoke',
     sentWhen: 'After a utility has been activated for the current turn'
-  },
-  {
-    name: IMAGE_DESCRIPTOR_TOOL_NAME,
-    description:
-      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "path" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The tool accepts up to 8 images per call, so batch several frames at once; call it again for more. If the media is a video the model cannot read, extract frames with ffmpeg first and pass them as separate image entries. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
-    inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
-    route: '/image_descriptor',
-    sentWhen:
-      'Whenever a model receives an image it cannot see directly and needs to reason about its contents'
   }
 ]
 

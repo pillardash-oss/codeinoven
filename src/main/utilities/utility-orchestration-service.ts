@@ -19,7 +19,6 @@ import {
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME
 } from '../../lib/gateway-tools'
-import { IMAGE_DESCRIPTOR_TOOL_NAME } from '../../lib/image-descriptor'
 import {
   StdioMcpClient,
   MCP_TIMEOUT_MS,
@@ -72,8 +71,6 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
-  /** Whether the selected primary model is text-only and needs image description. */
-  modelNeedsImageDescriptor: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -169,8 +166,6 @@ export class UtilityOrchestrationService {
         return (state, input) => this.activate(state, input)
       case UTILITY_INVOKE_TOOL_NAME:
         return (state, input) => this.invoke(state, input)
-      case IMAGE_DESCRIPTOR_TOOL_NAME:
-        return (state, input) => this.describeImages(state, input)
       default:
         return null
     }
@@ -217,9 +212,7 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = GATEWAY_TOOLS.filter((tool) =>
-      tool.name === IMAGE_DESCRIPTOR_TOOL_NAME ? request.modelNeedsImageDescriptor : hasOnDemand
-    )
+    const gatewayTools = hasOnDemand ? GATEWAY_TOOLS : []
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -269,8 +262,8 @@ export class UtilityOrchestrationService {
         'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
-        'Describe images directly: POST /image_descriptor with {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
-        'Treat these endpoints exactly like utility_search, utility_activate, utility_invoke, and image_descriptor tool calls.'
+        'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
+        'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
       ].join('\n'),
       cleanup
     }
@@ -496,31 +489,6 @@ export class UtilityOrchestrationService {
     }
     await this.audit(state, 'utility.invoked', { utilityId, operation })
     return result
-  }
-
-  /**
-   * Direct `image_descriptor` tool handler. Unlike the on-demand utility path
-   * this is always exposed by the gateway, so text-only models can describe
-   * images without any registry configuration.
-   */
-  private async describeImages(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
-    const executor = this.imageDescriptorExecutor
-    if (!executor) {
-      throw new Error('The image descriptor vision model is not configured')
-    }
-    const results = await executor({
-      images: resolveImageEntries(input),
-      projectId: state.request.projectId,
-      threadId: state.request.threadId,
-      projectPath: state.request.projectPath,
-      sessionId: state.request.sessionId,
-      pinnedSelection: this.pinnedImageDescriptorSelection(state)
-    })
-    await this.audit(state, 'utility.invoked', {
-      utilityId: 'codeinoven:image-descriptor',
-      operation: 'describe'
-    })
-    return { results }
   }
 
   /** Vision model pinned by an eligible, configured image-descriptor utility. */
@@ -792,6 +760,7 @@ function gatewayUtility(
     harnessBindings: [
       { harnessId: request.harnessId, strategy: 'mcp', transportName: 'utilities' }
     ],
+    appOwned: false,
     createdAt: now,
     updatedAt: now
   }

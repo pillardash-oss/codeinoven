@@ -15,6 +15,7 @@ import type {
 } from '../../lib/types'
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { generateId } from '../../lib/utils'
+import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const REGISTRY_PATH = 'utilities/registry.json'
@@ -32,6 +33,9 @@ const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
 const SENSITIVE_CONFIG_KEY = /(api[-_]?key|authorization|credential|password|secret|token)/iu
 const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brave', 'custom'])
 
+/** Stable id of the app-seeded image-descriptor utility. */
+export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
+
 interface UtilityRegistryFile {
   version: number
   utilities: UtilityDefinition[]
@@ -44,26 +48,86 @@ interface UtilityRegistryFile {
  */
 export class UtilityRegistryService {
   private mutationQueue: Promise<void> = Promise.resolve()
+  /** True once the app-owned defaults are known to exist in the registry file. */
+  private appDefaultsSeeded = false
+  /** In-flight seeding guard so concurrent callers share one seed write. */
+  private seeding: Promise<void> | null = null
 
   constructor(private readonly storage: StorageEngine) {}
 
+  /** Every public entry point first guarantees the app-owned default utility. */
+  private async ensureAppDefaultsSeeded(): Promise<void> {
+    if (this.appDefaultsSeeded) return
+    if (this.seeding) {
+      await this.seeding
+      return
+    }
+    this.seeding = this.performSeed().finally(() => {
+      this.seeding = null
+    })
+    await this.seeding
+  }
+
+  /** Idempotently seed the app-owned image-descriptor utility when missing. */
+  private async performSeed(): Promise<void> {
+    const registry = await this.loadRaw()
+    if (registry.utilities.some((utility) => utility.id === APP_IMAGE_DESCRIPTOR_UTILITY_ID)) {
+      this.appDefaultsSeeded = true
+      return
+    }
+    const now = Date.now()
+    registry.utilities.push({
+      id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+      kind: 'image_descriptor',
+      name: 'Image descriptor',
+      description:
+        'Describes images with a vision-capable model so text-only agents can reason about screenshots, video frames, and other media. Pick a vision model to pin it; otherwise the app chooses one automatically.',
+      enabled: true,
+      activation: 'on_demand',
+      scope: { level: 'global' },
+      config: { harnessId: '', providerId: '', modelId: '' },
+      credentials: [],
+      harnessBindings: listHarnesses().map((harness) => ({
+        harnessId: harness.id,
+        strategy: 'native',
+        nativeCapability: 'image_descriptor'
+      })),
+      appOwned: true,
+      createdAt: now,
+      updatedAt: now
+    } satisfies UtilityDefinition)
+    await this.storage.write(REGISTRY_PATH, registry)
+    this.appDefaultsSeeded = true
+  }
+
+  /** Raw registry read that never triggers seeding (used by the seed itself). */
+  private async loadRaw(): Promise<UtilityRegistryFile> {
+    const stored = await this.storage.read<unknown>(REGISTRY_PATH)
+    if (stored === null) return { version: REGISTRY_VERSION, utilities: [] }
+    return parseRegistry(stored)
+  }
+
   async list(): Promise<UtilityDefinition[]> {
+    await this.ensureAppDefaultsSeeded()
     return structuredClone((await this.load()).utilities)
   }
 
   async get(id: string): Promise<UtilityDefinition | null> {
     assertId(id, 'Utility ID')
+    await this.ensureAppDefaultsSeeded()
     const utility = (await this.load()).utilities.find((candidate) => candidate.id === id)
     return utility ? structuredClone(utility) : null
   }
 
   async create(input: UtilityDefinitionInput): Promise<UtilityDefinition> {
     const normalized = normalizeInput(input)
+    await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
       const utility = {
         ...normalized,
         id: generateId(),
+        appOwned: false,
         createdAt: now,
         updatedAt: now
       } as UtilityDefinition
@@ -77,6 +141,7 @@ export class UtilityRegistryService {
       throw new TypeError('Utility bundle must contain at least one utility')
     }
     const normalized = inputs.map((input) => normalizeInput(input))
+    await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const now = Date.now()
       const utilities = normalized.map(
@@ -84,6 +149,7 @@ export class UtilityRegistryService {
           ({
             ...input,
             id: generateId(),
+            appOwned: false,
             createdAt: now,
             updatedAt: now
           }) as UtilityDefinition
@@ -96,10 +162,25 @@ export class UtilityRegistryService {
   async update(id: string, patch: UtilityDefinitionPatch): Promise<UtilityDefinition> {
     assertId(id, 'Utility ID')
     assertUpdate(patch)
+    await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const index = registry.utilities.findIndex((candidate) => candidate.id === id)
       const current = registry.utilities[index]
       if (!current) throw new Error(`Utility not found: ${id}`)
+      if (
+        current.appOwned &&
+        (patch.name ??
+          patch.description ??
+          patch.enabled ??
+          patch.activation ??
+          patch.scope ??
+          patch.credentials ??
+          patch.harnessBindings) !== undefined
+      ) {
+        throw new Error(
+          'The app-owned image descriptor utility only allows picking a vision model; everything else is locked'
+        )
+      }
 
       const normalized = normalizeInput({
         kind: current.kind,
@@ -115,6 +196,7 @@ export class UtilityRegistryService {
       const updated = {
         ...normalized,
         id: current.id,
+        appOwned: current.appOwned,
         createdAt: current.createdAt,
         updatedAt: Date.now()
       } as UtilityDefinition
@@ -125,9 +207,13 @@ export class UtilityRegistryService {
 
   async delete(id: string): Promise<boolean> {
     assertId(id, 'Utility ID')
+    await this.ensureAppDefaultsSeeded()
     return this.mutate(async (registry) => {
       const index = registry.utilities.findIndex((candidate) => candidate.id === id)
       if (index === -1) return false
+      if (registry.utilities[index].appOwned) {
+        throw new Error('The app-owned image descriptor utility cannot be deleted')
+      }
       registry.utilities.splice(index, 1)
       return true
     })
@@ -135,6 +221,7 @@ export class UtilityRegistryService {
 
   async search(options: UtilitySearchOptions = {}): Promise<UtilityDefinition[]> {
     assertSearchOptions(options)
+    await this.ensureAppDefaultsSeeded()
     const query = options.query?.trim().toLocaleLowerCase() ?? ''
     const kindSet = options.kinds ? new Set(options.kinds) : null
     return (await this.list())
@@ -152,6 +239,7 @@ export class UtilityRegistryService {
 
   async resolve(context: UtilityResolutionContext): Promise<ResolvedUtility[]> {
     assertResolutionContext(context)
+    await this.ensureAppDefaultsSeeded()
     const resolvedCapabilities = new Set(
       (context.nativeCapabilities ?? []).map(normalizeCapability)
     )
@@ -251,6 +339,7 @@ function parseStoredUtility(value: unknown, index: number): UtilityDefinition {
   return {
     ...normalized,
     id,
+    appOwned: value['appOwned'] === true,
     createdAt: value['createdAt'],
     updatedAt: value['updatedAt']
   } as UtilityDefinition
@@ -351,9 +440,9 @@ function parseConfig(kind: UtilityKind, value: unknown): UtilityConfigMap[Utilit
       }
     case 'image_descriptor':
       return {
-        harnessId: identifier(value['harnessId'], 'Image descriptor harness ID'),
-        providerId: identifier(value['providerId'], 'Image descriptor provider ID'),
-        modelId: boundedString(value['modelId'], 'Image descriptor model ID', 1, 256)
+        harnessId: optionalString(value['harnessId'], 'Image descriptor harness ID', 256) ?? '',
+        providerId: optionalString(value['providerId'], 'Image descriptor provider ID', 256) ?? '',
+        modelId: optionalString(value['modelId'], 'Image descriptor model ID', 256) ?? ''
       }
   }
 }
