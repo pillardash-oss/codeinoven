@@ -366,6 +366,7 @@ export class CodexDriver extends PersistentCliDriver {
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
         effort: codexEffort(options.settings.thinkingLevel),
+        ...(requiresDisabledReasoningSummary(options.settings.modelId) ? { summary: 'none' } : {}),
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
       })
       const turn = recordValue(turnResult['turn'])
@@ -1390,6 +1391,11 @@ function codexEffort(value: ThreadSettings['thinkingLevel']): string {
   // cross-harness alias used by the app and by lightweight internal turns.
   if (value === 'minimal') return 'low'
   return value
+}
+
+/** GPT-5.3 Codex Spark rejects the Responses API reasoning.summary parameter. */
+function requiresDisabledReasoningSummary(modelId: string): boolean {
+  return modelId.toLowerCase().startsWith('gpt-5.3-codex-spark')
 }
 
 function normalizeAppServerItem(
