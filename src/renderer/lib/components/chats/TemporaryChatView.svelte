@@ -176,6 +176,12 @@
           (!message.providerId || m.providerId === message.providerId)
       ) ?? allModels.find((m) => m.id === fastBaseModelId(modelId))
     const presets = model?.thinkingPresets ?? []
+    // A model known not to reason never shows a thinking badge, even when a
+    // generic level was stamped onto its rows.
+    if (model && presets.length === 0) return null
+    // Prefer the level actually persisted for this turn (historical truth),
+    // falling back to the chat's current level for legacy/live messages.
+    if (message.thinkingLevel) return message.thinkingLevel
     if (presets.length === 0) return null
     return resolveDefaultThinkingLevel(presets, undefined, tab.settings.thinkingLevel) ?? null
   }
