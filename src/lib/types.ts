@@ -1320,7 +1320,15 @@ export interface AgentTokenUsage {
 
 /** Model or utility operation responsible for one persisted usage event. */
 export type UsageEventFeature =
-  'main' | 'title' | 'memory' | 'image_descriptor' | 'computer_use' | 'web' | 'audit' | 'assignment'
+  | 'main'
+  | 'title'
+  | 'memory'
+  | 'image_descriptor'
+  | 'search_nudge'
+  | 'computer_use'
+  | 'web'
+  | 'audit'
+  | 'assignment'
 
 /** Whether and how a provider-reported total can be interpreted. */
 export type UsageTotalSemantics =

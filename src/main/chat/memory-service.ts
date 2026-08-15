@@ -199,7 +199,7 @@ function readPositiveIntEnv(name: string): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
-export type AuxiliaryFeature = 'memory' | 'title'
+export type AuxiliaryFeature = 'memory' | 'title' | 'search_nudge'
 
 export interface AuxiliaryUsageEntry {
   feature: AuxiliaryFeature
@@ -1049,6 +1049,14 @@ export class MemoryService {
         unavailableCalls: 0
       },
       title: {
+        calls: 0,
+        inputChars: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
+        unavailableCalls: 0
+      },
+      search_nudge: {
         calls: 0,
         inputChars: 0,
         inputTokens: 0,

@@ -13917,7 +13917,8 @@ export class ChatEngine {
               info.projectId,
               info.threadId,
               info.projectPath,
-              thread.settings
+              thread.settings,
+              parentTurnId ?? ''
             ))
           if (confirmed) {
             this.searchNudgeAttempts.set(sessionId, 1)
@@ -14292,7 +14293,7 @@ export class ChatEngine {
   }
 
   private recordAuxiliaryUsageEvent(input: {
-    feature: 'memory' | 'image_descriptor'
+    feature: 'memory' | 'image_descriptor' | 'search_nudge'
     threadId: string
     parentTurnId: string
     featureCallId: string
@@ -14308,8 +14309,8 @@ export class ChatEngine {
     const outputTokens =
       reported?.output ?? estimateTokens(input.response ? assistantText(input.response) : '')
     const cost = input.response?.cost ?? null
-    if (input.feature === 'memory') {
-      this.memoryService.recordAuxiliaryUsage('memory', inputTokens, input.inputText.length, {
+    if (input.feature === 'memory' || input.feature === 'search_nudge') {
+      this.memoryService.recordAuxiliaryUsage(input.feature, inputTokens, input.inputText.length, {
         outputTokens,
         costUsd: cost,
         costStatus: cost === null ? 'unavailable' : 'known'
@@ -15302,7 +15303,8 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     projectPath: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    parentTurnId: string
   ): Promise<boolean> {
     const evidence = answerText.slice(0, 6_000)
     const isolated =
@@ -15324,6 +15326,7 @@ export class ChatEngine {
     )
     const completion = this.waitForSessionCompletion(sessionId, 45_000, 'Nudge judgment')
     let response: AgentMessage | undefined
+    let failure: string | null = null
     try {
       const prompt: SendPromptOptions = {
         sessionId,
@@ -15357,9 +15360,29 @@ export class ChatEngine {
       const verdict = assistantText(response).trim()
       return /^yes\b/im.test(verdict)
     } catch (error) {
+      failure = rawErrorMessage(error)
       Logger.dev('Utility-search nudge judgment failed; skipping nudge:', error)
       return false
     } finally {
+      // Record the judge's provider call so every provider-billed model call is
+      // visible in the user's usage view, not just main and other auxiliary
+      // turns. Fails safe: estimation never throws into the idle finalization.
+      try {
+        this.recordAuxiliaryUsageEvent({
+          feature: 'search_nudge',
+          threadId,
+          parentTurnId,
+          featureCallId: 'search-nudge-judge',
+          attempt: 1,
+          harnessId: driver.id,
+          settings,
+          inputText: evidence,
+          response,
+          failure
+        })
+      } catch (error) {
+        Logger.dev('Utility-search nudge usage recording failed:', error)
+      }
       this.clearCompletionWaiter(sessionId)
       this.sessionRegistry.delete(sessionId)
       this.reasoningTimes.delete(sessionId)
