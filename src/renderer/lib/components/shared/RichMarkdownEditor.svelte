@@ -24,8 +24,10 @@
     containerClass?: string
     autofocus?: boolean
     disabled?: boolean
-    submitOnEnter?: boolean
     onValueChange?: (value: string) => void
+    /** Fired only by Cmd/Ctrl+Enter (send) or Cmd/Ctrl+Shift+Enter (steer).
+     *  `direct` is true for the steer combo, false/undefined for plain send —
+     *  busy callers queue on send and force-deliver on steer. */
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
     inlineBadges?: readonly RichInlineBadge[]
@@ -42,7 +44,6 @@
     containerClass = '',
     autofocus = false,
     disabled = false,
-    submitOnEnter = false,
     onValueChange,
     onSubmit,
     onPaste,
@@ -563,22 +564,40 @@
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       const selection = window.getSelection()
-      const codeBlock = selection?.anchorNode?.parentElement?.closest?.(
+      let codeBlock = selection?.anchorNode?.parentElement?.closest?.(
         '[data-editor-codeblock]'
       ) as HTMLElement | null
+      // A collapsed caret can also sit at the editor level, stranded right after a
+      // trailing code block (or before a leading one) — e.g. after pasting text
+      // that ends in a code block, or when autofocus lands on a draft that ends in
+      // one. ArrowDown/ArrowUp must still be able to exit the block then.
+      const stranded =
+        selection?.isCollapsed &&
+        selection.anchorNode === editor &&
+        ((event.key === 'ArrowDown' &&
+          selection.anchorOffset === editor.childNodes.length &&
+          editor.lastElementChild?.matches('[data-editor-codeblock]')) ||
+          (event.key === 'ArrowUp' &&
+            selection.anchorOffset === 0 &&
+            editor.firstElementChild?.matches('[data-editor-codeblock]')))
+      if (!codeBlock && stranded) {
+        codeBlock = (
+          event.key === 'ArrowDown' ? editor.lastElementChild : editor.firstElementChild
+        ) as HTMLElement | null
+      }
       if (codeBlock) {
         const codeEl = codeBlock.querySelector('code')
         if (!codeEl) return
-        const atEnd = event.key === 'ArrowDown' && isCursorAtBoundary(codeEl, false)
-        const atStart = event.key === 'ArrowUp' && isCursorAtBoundary(codeEl, true)
+        const atEnd = event.key === 'ArrowDown' && (stranded || isCursorAtBoundary(codeEl, false))
+        const atStart = event.key === 'ArrowUp' && (stranded || isCursorAtBoundary(codeEl, true))
         if (atEnd || atStart) {
           event.preventDefault()
           const p = document.createElement('p')
           p.innerHTML = '<br>'
-          if (atEnd) {
-            codeBlock.parentNode?.insertBefore(p, codeBlock.nextSibling)
-          } else {
+          if (atStart) {
             codeBlock.parentNode?.insertBefore(p, codeBlock)
+          } else {
+            codeBlock.parentNode?.insertBefore(p, codeBlock.nextSibling)
           }
           emitEditorValue()
           placeCaretAtEnd(p)
@@ -646,14 +665,27 @@
         return
       }
 
+      // Cmd/Ctrl+Enter sends; Cmd/Ctrl+Shift+Enter force-sends (steers) the
+      // message into the live turn mid-turn. Checked before the Shift+Enter
+      // soft-break branch so the modifier combos always submit instead of
+      // inserting a newline. A bare Enter never submits.
+      if (modifier && onSubmit) {
+        event.preventDefault()
+        onSubmit(event.shiftKey)
+        return
+      }
+
       const blockTag = selectedBlockTag(editor)
 
-      if (event.shiftKey && submitOnEnter) {
+      // Shift+Enter always inserts a soft line break (never a new list item,
+      // never a submit) — regardless of whether this editor can submit.
+      if (event.shiftKey) {
         const historyEntry = captureHistoryEntry()
         if (insertMarkdownLineBreak(editor)) {
           event.preventDefault()
           emitEditorValue()
           commitHistory(historyEntry)
+          publishCaretText()
         }
         return
       }
@@ -663,16 +695,6 @@
         return
       }
     }
-    if (event.key !== 'Enter' || !onSubmit) return
-    if (modifier) {
-      event.preventDefault()
-      onSubmit(true)
-      return
-    }
-    const blockTag = selectedBlockTag(editor)
-    if (!submitOnEnter || (blockTag !== 'P' && blockTag !== 'DIV')) return
-    event.preventDefault()
-    onSubmit()
   }
 
   function nodeHasText(node: Node): boolean {
@@ -793,6 +815,24 @@
     replaceEditorContent(markdown)
     if (bookmark) restoreSelection(bookmark)
     else placeCaretAtEnd(editor)
+    // The bookmark is measured on the pre-render DOM, which can be much longer than
+    // the re-rendered markdown (fence markers, soft breaks and code headers collapse
+    // away), so it overshoots and strands the caret at the editor level — typically
+    // right after a trailing code block, where typing is impossible and ArrowDown
+    // cannot leave the block. Snap a stranded caret to the end of the last block
+    // (inside a trailing code block's <code> element), which is where the caret
+    // belongs after a paste that ends in a code block.
+    const selection = window.getSelection()
+    if (selection?.anchorNode === editor && editor.lastElementChild) {
+      const lastBlock = editor.lastElementChild as HTMLElement
+      if (lastBlock.matches('[data-editor-codeblock]')) {
+        const code = lastBlock.querySelector('code')
+        if (code) placeCaretAtEnd(code)
+        else placeCaretAtEnd(lastBlock)
+      } else {
+        placeCaretAtEnd(lastBlock)
+      }
+    }
     if (markdown !== value) {
       value = markdown
       onValueChange?.(markdown)

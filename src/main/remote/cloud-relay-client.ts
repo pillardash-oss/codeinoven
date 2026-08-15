@@ -1,4 +1,4 @@
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import { randomBytes } from 'node:crypto'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'

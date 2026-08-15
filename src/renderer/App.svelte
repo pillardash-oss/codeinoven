@@ -1,5 +1,29 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { Component } from 'svelte'
+  import {
+    Bell,
+    Blocks,
+    BookOpen,
+    Brain,
+    FileSearch,
+    FolderOpen,
+    FolderPlus,
+    GitBranch,
+    Info,
+    Keyboard,
+    LayoutDashboard,
+    ListTree,
+    MessageSquarePlus,
+    MessagesSquare,
+    Server,
+    SlidersHorizontal,
+    SquarePen,
+    Terminal,
+    User,
+    Users,
+    Wrench
+  } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -28,15 +52,20 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
-  import { loadProjectIcons } from '$lib/project-icons'
+  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
+  import {
+    getInlineFileTypeIconDataUri,
+    getInlineFolderTypeIconDataUri
+  } from '$lib/components/files/file-type-icons'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
     captureElementSelection,
@@ -47,11 +76,13 @@
     DEFAULT_SCOPE_BUCKET_ID,
     DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
     type AppConfig,
     type AppConfigPatch,
     type Project,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
   import type {
     AgentNotificationPayload,
@@ -77,7 +108,8 @@
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
-    defaultMergeMethod: 'squash'
+    defaultMergeMethod: 'squash',
+    maxDiffLines: 100
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -92,14 +124,28 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  let threadSearchPaletteOpen = $state(false)
+  let threadSearchActions = $state<ActionDefinition[]>([])
+  let threadSearchLoading = $state(false)
+  let threadSearchTimer: number | null = null
+  let threadSearchRequest = 0
+  let newProjectSpotlightOpen = $state(false)
+  /** Stored custom project icon data-URLs (project.id → url), for palette badges. */
+  let projectIconUrls = $state(new Map<string, string>())
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
     projectId: string
     path: string
+    kind: 'file' | 'directory'
+  }
+
+  interface ThreadSearchTarget {
+    thread: Thread
   }
 
   const fileSearchTargets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
+  const threadSearchTargets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   const applicationSource = {
     id: 'application',
@@ -114,6 +160,7 @@
       description: 'Browse projects and engineering threads',
       category: 'navigation',
       source: applicationSource,
+      icon: FolderOpen,
       keywords: ['workspace', 'threads']
     },
     {
@@ -122,6 +169,7 @@
       description: 'Browse standalone conversations',
       category: 'navigation',
       source: applicationSource,
+      icon: MessagesSquare,
       keywords: ['conversations', 'messages']
     },
     {
@@ -130,6 +178,7 @@
       description: 'Review work across projects',
       category: 'navigation',
       source: applicationSource,
+      icon: LayoutDashboard,
       keywords: ['board', 'overview']
     },
     {
@@ -138,6 +187,7 @@
       description: 'Browse threads across all projects',
       category: 'navigation',
       source: applicationSource,
+      icon: ListTree,
       keywords: ['timeline', 'all']
     }
   ] satisfies ActionDefinition[]
@@ -146,26 +196,56 @@
     id: SettingsSection
     label: string
     keywords: string[]
+    icon: Component
   }> = [
-    { id: 'general', label: 'General', keywords: ['appearance', 'theme', 'preferences'] },
-    { id: 'memory', label: 'Memory', keywords: ['instructions', 'knowledge'] },
+    {
+      id: 'general',
+      label: 'General',
+      keywords: ['appearance', 'theme', 'preferences'],
+      icon: SlidersHorizontal
+    },
+    {
+      id: 'memory',
+      label: 'Memory',
+      keywords: ['instructions', 'knowledge'],
+      icon: Brain
+    },
     {
       id: 'audits',
       label: 'Agents',
-      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review']
+      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
+      icon: Users
     },
-    { id: 'harnesses', label: 'Harnesses', keywords: ['models', 'providers', 'harnesses'] },
+    {
+      id: 'harnesses',
+      label: 'Harnesses',
+      keywords: ['models', 'providers', 'harnesses'],
+      icon: Blocks
+    },
     {
       id: 'utilities',
       label: 'Utilities',
-      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools']
+      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
+      icon: Wrench
     },
-    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'] },
-    { id: 'profile', label: 'Profile', keywords: ['account', 'usage', 'activity', 'cloud'] },
+    {
+      id: 'keymap',
+      label: 'Keymap',
+      keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
+      icon: Keyboard
+    },
+    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
+    {
+      id: 'profile',
+      label: 'Profile',
+      keywords: ['account', 'usage', 'activity', 'cloud'],
+      icon: User
+    },
     {
       id: 'about',
       label: 'About',
-      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug']
+      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
+      icon: Info
     }
   ]
 
@@ -179,6 +259,7 @@
     description: `Open the ${tab.label} settings tab`,
     category: 'navigation',
     source: applicationSource,
+    icon: tab.icon,
     keywords: ['settings', 'preferences', ...tab.keywords],
     ...(tab.id === 'general' ? { shortcut: ['Ctrl', ','] } : {})
   }))
@@ -186,14 +267,19 @@
   let paletteContextActions = $derived.by((): ActionDefinition[] => {
     const workspaceVisible =
       activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
+    const hasLocalProjects = scopeState.projectRecords.some(
+      (project) => !project.hidden && project.source === 'local' && project.path
+    )
     const actions: ActionDefinition[] = [
       {
         id: 'app:new-project',
         title: 'Create new project',
-        description: 'Add a local or remote project',
+        description: 'Choose how to add a project — local folder or SSH',
         category: 'command',
         source: applicationSource,
-        keywords: ['add', 'folder', 'repository']
+        icon: FolderPlus,
+        shortcut: ['Ctrl', 'Shift', 'N'],
+        keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
       },
       {
         id: 'app:notifications',
@@ -201,21 +287,19 @@
         description: 'Open or close the notifications sidebar',
         category: 'navigation',
         source: applicationSource,
+        icon: Bell,
         keywords: ['alerts', 'completed', 'attention']
       }
     ]
 
-    if (
-      scopeState.projectRecords.some(
-        (project) => !project.hidden && project.source === 'local' && project.path
-      )
-    ) {
+    if (hasLocalProjects) {
       actions.push({
         id: 'app:file-search',
         title: 'Search files across projects',
         description: 'Find and open a file from any local project',
         category: 'file',
         source: applicationSource,
+        icon: FileSearch,
         keywords: ['quick open', 'find', 'workspace']
       })
     }
@@ -227,6 +311,7 @@
         description: 'Start a standalone conversation',
         category: 'command',
         source: applicationSource,
+        icon: MessageSquarePlus,
         shortcut: ['Ctrl', 'N'],
         keywords: ['conversation', 'message']
       })
@@ -240,6 +325,7 @@
         description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -254,6 +340,7 @@
         description: `Create a thread in ${workspaceState.activeProject.name}`,
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -261,13 +348,38 @@
 
     const thread = workspaceVisible ? workspaceState.selectedThread : null
     if (thread) {
+      const threadProject = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
       actions.push(
+        {
+          id: 'app:terminal',
+          title: 'Open terminal',
+          description: 'Open a terminal for this thread',
+          category: 'navigation',
+          source: applicationSource,
+          icon: Terminal,
+          keywords: ['shell', 'console', 'command line', 'run']
+        },
+        {
+          id: 'app:git',
+          title: 'Open git panel',
+          description: 'View changes, commits and branches for this project',
+          category: 'navigation',
+          source: applicationSource,
+          icon: GitBranch,
+          keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
+          ...(threadProject?.changeTrackingMode !== 'git'
+            ? { disabledReason: 'This project does not use Git tracking' }
+            : {})
+        },
         {
           id: 'app:memory',
           title: 'Toggle memory sidebar',
           description: 'View the memory context available to this thread',
           category: 'navigation',
           source: applicationSource,
+          icon: Brain,
           keywords: ['prompt', 'instructions', 'context']
         },
         {
@@ -276,9 +388,23 @@
           description: 'View sources attached to this conversation',
           category: 'navigation',
           source: applicationSource,
+          icon: BookOpen,
           keywords: ['citations', 'references', 'attachments']
         }
       )
+    }
+
+    if (hasLocalProjects) {
+      // Unshifted last so it always lands first in the palette.
+      actions.unshift({
+        id: 'app:thread-search',
+        title: 'Search threads across projects',
+        description: 'Find a conversation by title or message content in any project',
+        category: 'thread',
+        source: applicationSource,
+        icon: MessagesSquare,
+        keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
+      })
     }
 
     return actions
@@ -288,7 +414,9 @@
     ...paletteContextActions,
     ...navigationActions,
     ...settingsActions,
-    ...actionContext.actions
+    // Harness-bound actions (model pickers, slash commands) belong to the inline
+    // menus — the global Cmd+K surface keeps app-level and cross-harness actions.
+    ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
 
   /** Content view to return to when leaving Settings or Scope — persisted in the
@@ -310,6 +438,7 @@
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
+      appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
     } catch {
@@ -325,6 +454,7 @@
     applyTheme()
     try {
       config = await invoke('config:update', patch)
+      appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
     } catch {
@@ -501,8 +631,7 @@
 
     switch (selection.action.id) {
       case 'app:new-project':
-        navigate('projects')
-        workspaceState.requestAddProject()
+        openNewProjectSpotlight()
         return
       case 'app:new-chat':
         navigate('chats')
@@ -522,9 +651,24 @@
       case 'app:file-search':
         openFileSearchPalette()
         return
+      case 'app:thread-search':
+        openThreadSearchPalette()
+        return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
+      case 'app:terminal': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
+        return
+      }
+      case 'app:git': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openGit(thread.projectId, thread.id)
+        return
+      }
       case 'app:memory': {
         const thread = workspaceState.selectedThread
         if (!thread) return
@@ -600,6 +744,10 @@
       fileSearchPaletteOpen = false
       resetFileSearch()
     }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
+    }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
       return
@@ -632,10 +780,7 @@
       projects.map(async (project) => {
         try {
           const entries = await invoke('projectFiles:search', project.id, query, 'all')
-          return {
-            project,
-            entries: entries.filter((entry) => entry.kind === 'file').slice(0, 12)
-          }
+          return { project, entries: entries.slice(0, 12) }
         } catch {
           return { project, entries: [] }
         }
@@ -643,25 +788,39 @@
     )
     if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
 
+    const resolved = await Promise.all(
+      projectResults.flatMap(({ project, entries }) =>
+        entries.map(async (entry) => ({
+          project,
+          entry,
+          iconUri:
+            entry.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(entry.name)
+              : await getInlineFileTypeIconDataUri(entry.path)
+        }))
+      )
+    )
+    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
+
     const targets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
     const actions: ActionDefinition[] = []
-    for (const { project, entries } of projectResults) {
-      for (const entry of entries) {
-        const id = actionId(`file:${project.id}:${entry.path}`)
-        targets.set(id, { projectId: project.id, path: entry.path })
-        actions.push({
-          id,
-          title: entry.name,
-          description: `${project.name} · ${entry.path}`,
-          category: 'file',
-          source: {
-            id: `project:${project.id}`,
-            label: project.name,
-            kind: 'app'
-          },
-          keywords: [project.name, entry.path]
-        })
-      }
+    for (const { project, entry, iconUri } of resolved) {
+      const id = actionId(`file:${project.id}:${entry.path}`)
+      targets.set(id, { projectId: project.id, path: entry.path, kind: entry.kind })
+      actions.push({
+        id,
+        title: entry.name,
+        description: `${project.name} · ${entry.path}`,
+        category: 'file',
+        source: {
+          id: `project:${project.id}`,
+          label: project.name,
+          kind: 'app',
+          ...(project.color ? { color: project.color } : {})
+        },
+        iconUri,
+        keywords: [project.name, entry.path, entry.name]
+      })
     }
     fileSearchTargets.clear()
     for (const [id, target] of targets) fileSearchTargets.set(id, target)
@@ -691,8 +850,118 @@
     const target = fileSearchTargets.get(selection.action.id)
     if (!target) return
     fileSearchPaletteOpen = false
-    navigate('projects')
-    workspaceState.requestProjectFileOpen(target.projectId, target.path)
+    resetFileSearch()
+    workspaceState.requestProjectFileOpen(target.projectId, target.path, target.kind)
+  }
+
+  function backToCommandPaletteFromFileSearch(): void {
+    fileSearchPaletteOpen = false
+    resetFileSearch()
+    commandPaletteOpen = true
+  }
+
+  function resetThreadSearch(): void {
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    threadSearchRequest++
+    threadSearchLoading = false
+    threadSearchActions = []
+    threadSearchTargets.clear()
+  }
+
+  function openThreadSearchPalette(): void {
+    resetThreadSearch()
+    threadSearchPaletteOpen = true
+  }
+
+  async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
+    let results: ThreadSearchResult[]
+    try {
+      results = await invoke('threads:search', query, { limit: 50 })
+    } catch {
+      results = []
+    }
+    if (request !== threadSearchRequest || !threadSearchPaletteOpen) return
+
+    const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
+    const actions: ActionDefinition[] = []
+    for (const result of results) {
+      const thread = result.thread
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const project = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
+      const id = actionId(`thread:${thread.projectId}:${thread.id}`)
+      targets.set(id, { thread })
+      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
+      // Threads carry their project's icon and color, not a generic thread icon.
+      const projectIconUri = project
+        ? (getProjectIcon(project, projectIconUrls.get(project.id)) ?? undefined)
+        : undefined
+      actions.push({
+        id,
+        title: thread.title,
+        description: snippet
+          ? `${project?.name ?? thread.projectId} · ${snippet}`
+          : (project?.name ?? thread.projectId),
+        category: 'thread',
+        source: {
+          id: `project:${thread.projectId}`,
+          label: project?.name ?? thread.projectId,
+          kind: 'app',
+          ...(project?.color ? { color: project.color } : {})
+        },
+        ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
+        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
+      })
+    }
+    threadSearchTargets.clear()
+    for (const [id, target] of targets) threadSearchTargets.set(id, target)
+    threadSearchActions = actions.slice(0, 60)
+    threadSearchLoading = false
+  }
+
+  function handleThreadSearchQuery(query: string): void {
+    if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
+    const request = ++threadSearchRequest
+    const normalized = query.trim()
+    if (normalized.length < 2) {
+      threadSearchLoading = false
+      threadSearchActions = []
+      threadSearchTargets.clear()
+      return
+    }
+
+    threadSearchLoading = true
+    threadSearchTimer = window.setTimeout(() => {
+      threadSearchTimer = null
+      void searchThreadsAcrossProjects(normalized, request)
+    }, 160)
+  }
+
+  /** Preserve the current content view / project sidebar state when opening a
+   *  searched thread — never force the Projects view. Reuses the notification
+   *  open logic, which handles scope state, the threads view and chats. */
+  async function openThreadFromSearch(thread: Thread): Promise<void> {
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+    await openThreadFromNotification(thread, project)
+  }
+
+  function handleThreadSearchSelection(selection: ActionSelection): void {
+    const target = threadSearchTargets.get(selection.action.id)
+    if (!target) return
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    void openThreadFromSearch(target.thread)
+  }
+
+  function backToCommandPaletteFromThreadSearch(): void {
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    commandPaletteOpen = true
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -701,6 +970,7 @@
       //    without waiting for the (larger) thread payload.
       const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
+      projectIconUrls = icons
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
       // 2. Tasks — recent rows only, via the bounded hydration query. The full
@@ -759,6 +1029,32 @@
     workspaceState.pendingAddedProject = project
   }
 
+  function openNewProjectSpotlight(): void {
+    newProjectSpotlightOpen = true
+  }
+
+  /** Spotlight flow: land on the new project (Projects view) with its fresh thread focused. */
+  async function handleSpotlightProjectCreated(project: Project): Promise<void> {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    await handleProjectCreated(project)
+  }
+
+  /** Spotlight flow: a picked folder already exists as a project — focus it. */
+  function handleSpotlightExistingProject(project: Project): void {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    const thread = scopeState.allScopeThreads
+      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
+      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+    if (thread) {
+      workspaceState.openThread(thread, project)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+    }
+  }
+
   async function openScopeThread(thread: Thread): Promise<void> {
     navigate('projects')
     const project =
@@ -777,7 +1073,10 @@
    * - Threads view → stay there (no scope sidebar).
    * - Chat notification → switch to the chats view.
    */
-  async function openThreadFromNotification(thread: Thread, project: Project): Promise<void> {
+  async function openThreadFromNotification(
+    thread: Thread,
+    project: Project | null
+  ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
       activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
@@ -950,6 +1249,11 @@
       resetFileSearch()
       return
     }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
+      return
+    }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
       return
@@ -961,6 +1265,13 @@
     // On a Settings page: leave back to the previous view.
     if (isSettingsView(activeView)) {
       navigate(lastViewBeforeSettings)
+      return
+    }
+    // Focus inside the context sidebar: close its active tab (through Workspace's
+    // unsaved-changes confirmation) instead of clearing the thread.
+    const active = document.activeElement instanceof Element ? document.activeElement : null
+    if (active?.closest('[data-region="context-sidebar"]')) {
+      contextSidebarState.requestCloseActiveTab()
       return
     }
     // An open thread: deselect it back to the thread list.
@@ -1058,9 +1369,23 @@
       e.preventDefault()
       navigate('settings')
     }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      if (e.repeat) return
+      // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
+      if (activeView === 'chats') return
+      if (commandPaletteOpen) commandPaletteOpen = false
+      openNewProjectSpotlight()
+      return
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
+
+      // When the file tree has focus, Cmd/Ctrl+N creates a new file there
+      // instead of starting a new thread. The tree's own handler manages it.
+      const active = document.activeElement instanceof Element ? document.activeElement : null
+      if (active?.closest('[data-region="file-tree"]')) return
 
       if (activeView === 'scope') {
         if (scopeState.activeProjectId) {
@@ -1196,7 +1521,7 @@
         open={commandPaletteOpen}
         actions={paletteActions}
         title="Search actions"
-        placeholder="Search models, modes, skills, MCP, and commands…"
+        placeholder="Search actions, threads, and files…"
         emptyLabel="No matching actions"
         onSelect={handlePaletteSelection}
         onClose={() => (commandPaletteOpen = false)}
@@ -1213,12 +1538,55 @@
         title="Search files across projects"
         placeholder="Type at least two characters…"
         emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+        headerIcon={FileSearch}
+        headerIconBadge
+        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
+        serverFiltered
+        onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
+        closeOnSelect={false}
         onClose={() => {
           fileSearchPaletteOpen = false
           resetFileSearch()
         }}
+      />
+    {/await}
+  {/if}
+  {#if threadSearchPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
+      <ThreadSearchPalette
+        open={threadSearchPaletteOpen}
+        actions={threadSearchActions}
+        title="Search threads across projects"
+        placeholder="Search thread titles and messages across all projects…"
+        emptyLabel={threadSearchLoading
+          ? 'Searching threads…'
+          : 'Type at least two characters to search all projects'}
+        headerIcon={MessagesSquare}
+        headerIconBadge
+        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+        serverFiltered
+        onBack={backToCommandPaletteFromThreadSearch}
+        onQueryChange={handleThreadSearchQuery}
+        onSelect={handleThreadSearchSelection}
+        closeOnSelect={false}
+        onClose={() => {
+          threadSearchPaletteOpen = false
+          resetThreadSearch()
+        }}
+      />
+    {/await}
+  {/if}
+  {#if newProjectSpotlightOpen}
+    {#await import('$lib/components/shared/ProjectCreateControl.svelte') then { default: ProjectCreateControl }}
+      <ProjectCreateControl
+        mode="spotlight"
+        open={newProjectSpotlightOpen}
+        onClose={() => (newProjectSpotlightOpen = false)}
+        projects={scopeState.projectRecords}
+        onProjectCreated={handleSpotlightProjectCreated}
+        onExisting={handleSpotlightExistingProject}
       />
     {/await}
   {/if}

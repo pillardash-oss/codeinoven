@@ -756,6 +756,8 @@ export interface AgentModelSelection {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort for the role. When absent, the thread's own level is used. */
+  thinkingLevel?: ThinkingLevel
 }
 
 export type AgentRole = 'seniorEngineer' | 'worker' | 'auditor'
@@ -1102,6 +1104,8 @@ export interface UtilityDefinitionFor<Kind extends UtilityKind = UtilityKind> {
   config: UtilityConfigMap[Kind]
   credentials: UtilityCredentialMetadata[]
   harnessBindings: HarnessUtilityBinding[]
+  /** App-seeded utility: cannot be deleted and only its config may change. */
+  appOwned: boolean
   createdAt: number
   updatedAt: number
 }
@@ -1316,7 +1320,15 @@ export interface AgentTokenUsage {
 
 /** Model or utility operation responsible for one persisted usage event. */
 export type UsageEventFeature =
-  'main' | 'title' | 'memory' | 'image_descriptor' | 'computer_use' | 'web' | 'audit' | 'assignment'
+  | 'main'
+  | 'title'
+  | 'memory'
+  | 'image_descriptor'
+  | 'search_nudge'
+  | 'computer_use'
+  | 'web'
+  | 'audit'
+  | 'assignment'
 
 /** Whether and how a provider-reported total can be interpreted. */
 export type UsageTotalSemantics =
@@ -1375,6 +1387,8 @@ export interface UsageEventDetails {
   harnessId: string | null
   providerId: string | null
   modelId: string | null
+  /** Reasoning effort in effect when the attempt ran, when known. */
+  thinkingLevel: ThinkingLevel | null
   utilityId: string | null
   rawProviderUsage: Record<string, unknown>
   tokens: NormalizedUsageTokens
@@ -1531,6 +1545,8 @@ export interface HarnessUsage {
   providerId: string
   /** Last model observed for this harness on the thread. */
   modelId?: string
+  /** Last thinking level observed for this harness on the thread. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this harness on the thread. */
   messageCount: number
   /** Cumulative USD cost, when the harness reports cost. */
@@ -1551,6 +1567,8 @@ export interface HarnessModelUsage {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort of the turns attributed to this model, when known. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this model on the thread. */
   messageCount: number
   /** Cumulative USD cost attributed to this model, when the harness reports cost. */
@@ -1601,6 +1619,8 @@ export interface LocalProfileAnalyticsRange {
 export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   harnessId?: string
   providerId?: string
+  /** Reasoning effort of the turns this row aggregates, when the data is recorded. */
+  thinkingLevel?: ThinkingLevel
   durationMs: number
 }
 
@@ -1633,7 +1653,58 @@ export interface LocalProfileAnalytics {
   utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
+  /** Harness/provider/model/thinking-level performance scored on session outcomes. */
+  modelPerformance: LocalProfileModelPerformance[]
+  /** What the scored sessions cost to gather in this period. */
+  feedbackCost: LocalProfileFeedbackCost
   generatedAt: number
+}
+
+/** Lifecycle of one scored user session awaiting a positive/negative signal. */
+export type TurnOutcomeStatus = 'pending' | 'success' | 'corrected'
+
+/** What resolved a pending turn outcome into its final status. */
+export type TurnOutcomeSignal = 'continued' | 'switched' | 'cleaned_up' | 'corrective_feedback'
+
+/** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
+export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
+
+/** Aggregated feedback performance for one (harness, provider, model, thinking level). */
+export interface LocalProfileModelPerformance {
+  harnessId: string
+  providerId: string
+  modelId: string
+  thinkingLevel: ThinkingLevel | null
+  taskType: TurnOutcomeTaskType
+  /** Number of resolved session outcomes for this combination. */
+  outcomes: number
+  /** Sessions that ended successfully (continued, switched away, or left until cleanup). */
+  successes: number
+  /** Sessions the user corrected with a follow-up message. */
+  corrected: number
+  /** successes / outcomes, or null before any outcome is resolved. */
+  successRate: number | null
+  /** Average of the 0/1 per-outcome scores. */
+  averageScore: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  /** Sum of priced outcome cost in USD for this combination. */
+  costUsd: number
+  /** Sum of reported tokens across the outcomes. */
+  tokensTotal: number
+  lastUsedAt: number
+}
+
+/** What a resolved feedback session cost to gather (scoped to a period). */
+export interface LocalProfileFeedbackCost {
+  /** Resolved session outcomes in the period. */
+  outcomes: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  costUsd: number
+  knownCostUsd: number
+  estimatedCostUsd: number
+  tokensTotal: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */
@@ -1818,6 +1889,8 @@ export interface AgentMessage {
   providerId?: string
   /** Agent harness that produced this message, e.g. opencode or claude-code. */
   harnessId?: string
+  /** Reasoning effort in effect when this message's turn ran, when known. */
+  thinkingLevel?: ThinkingLevel
   createdAt: number
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */
@@ -2875,6 +2948,9 @@ export interface AppConfig {
   resumeWorkOnRestart: boolean
   /** Default PR merge method used by the Git panel, pre-selected when merging. */
   defaultMergeMethod: PrMergeMethod
+  /** Hunks whose changed lines exceed this are collapsed with a notice so huge
+   *  diffs do not hurt diff-view performance. */
+  maxDiffLines: number
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2904,6 +2980,7 @@ export type AppConfigPatch = Partial<
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
+    | 'maxDiffLines'
   >
 >
 

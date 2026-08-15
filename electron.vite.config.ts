@@ -24,10 +24,10 @@ export default defineConfig(({ mode }) => {
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
           env.MAIN_VITE_REMOTE_API_ORIGIN ?? 'https://mobile.codeinoven.com'
         ),
-        // Keep interactive account authentication on the dedicated account host.
-        // The API origin above remains the mobile/relay service boundary.
+        // Keep interactive account authentication on the stable mobile gateway.
+        // Coolify resolves the current Convex account service at runtime.
         __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://auth.codeinoven.com'
+          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://mobile.codeinoven.com'
         )
       },
       build: {

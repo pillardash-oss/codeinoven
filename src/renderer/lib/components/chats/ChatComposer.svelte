@@ -8,7 +8,6 @@
     Paperclip,
     Square,
     Wrench,
-    Brain,
     X,
     Folder,
     GitBranch,
@@ -83,7 +82,9 @@
   } from '$shared/types'
 
   interface Props {
-    /** Called with the trimmed message and attachments when the user sends. */
+    /** Called with the trimmed message and attachments when the user sends.
+     *  `direct` is true when the message must be force-delivered as a steer
+     *  into a live turn (Cmd/Ctrl+Shift+Enter); busy parents queue otherwise. */
     onSend: (
       message: string,
       attachments: PromptAttachment[],
@@ -361,6 +362,8 @@
   let gateDonotAsk = $state(false)
   let gateDirect = $state<boolean | undefined>(undefined)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
+  /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
+  const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
   let mentionOpen = $state(false)
@@ -377,9 +380,10 @@
   // Dropdown open state
   let plusMenuOpen = $state(false)
   let modelMenuOpen = $state(false)
-  let thinkingMenuOpen = $state(false)
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
+  /** Open state of the thinking-level dropdown inside the shared model picker. */
+  let thinkingMenuOpen = $state(false)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
@@ -424,16 +428,16 @@
   function closeAllMenus(): void {
     plusMenuOpen = false
     modelMenuOpen = false
-    thinkingMenuOpen = false
     inferenceMenuOpen = false
     permissionMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   function showModelMenu(): void {
     modelMenuOpen = true
     plusMenuOpen = false
-    thinkingMenuOpen = false
     inferenceMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   function showThinkingMenu(): void {
@@ -463,30 +467,6 @@
     }
     modelWasOpen = modelMenuOpen
   })
-
-  let thinkingWasOpen = false
-  $effect(() => {
-    if (thinkingWasOpen && !thinkingMenuOpen && !modelMenuOpen) {
-      focusComposerAtEnd()
-    }
-    thinkingWasOpen = thinkingMenuOpen
-  })
-
-  $effect(() => {
-    if (thinkingMenuOpen) {
-      void tick().then(() => {
-        const firstItem = document.querySelector('[data-thinking-index="0"]')
-        if (firstItem instanceof HTMLElement) {
-          firstItem.focus()
-        }
-      })
-    }
-  })
-
-  function toggleThinkingMenu(): void {
-    if (thinkingMenuOpen) closeAllMenus()
-    else showThinkingMenu()
-  }
 
   function toggleInferenceMenu(): void {
     if (inferenceMenuOpen) closeAllMenus()
@@ -684,6 +664,7 @@
     }
 
     if (action.id === 'selector:thinking') {
+      // Thinking level lives in the shared model picker's dropdown — open it directly.
       showThinkingMenu()
       return
     }
@@ -839,6 +820,12 @@
     slashOpen = Boolean(slashMatch)
     slashQuery = slashMatch?.[2] ?? ''
     slashIndex = 0
+    // A query that matches no actions is almost certainly a path being typed
+    // (e.g. `cd /usr/local/bin`), not a command — close the menu so Enter and
+    // the rest of the text behave normally.
+    if (slashOpen && slashActions.length === 0) {
+      slashOpen = false
+    }
   }
 
   function selectMention(mention: ComposerMentionEntry): void {
@@ -985,8 +972,11 @@
   }
 
   function selectThinking(preset: ThinkingPreset): void {
-    thinkingMenuOpen = false
-    const updated = { ...resolved, thinkingLevel: preset.id as ThinkingLevel }
+    const level = preset.id as ThinkingLevel
+    // The picker may re-emit the level it already applied during a model
+    // change — skip the redundant commit.
+    if (resolved.thinkingLevel === level) return
+    const updated = { ...resolved, thinkingLevel: level }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
   }
@@ -1262,6 +1252,18 @@
         selectSlashAction(slashActions[slashIndex], 'keyboard')
         return
       }
+      if (e.key === 'Enter' && slashActions[slashIndex]) {
+        // The rich editor only submits when the caret sits in a plain paragraph
+        // (P/DIV). When the slash is typed after text that renders as a heading,
+        // list, code block, etc. the editor's own Enter handler would let the
+        // browser insert a newline instead of running the command — so the slash
+        // menu claims Enter here, in the bubbling phase, before the default
+        // action fires. For plain paragraphs the editor already submitted and
+        // closed the menu, making this branch a no-op.
+        e.preventDefault()
+        selectSlashAction(slashActions[slashIndex], 'keyboard')
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         slashOpen = false
@@ -1417,6 +1419,11 @@
             label={gateVisionSelection ? undefined : 'Choose a vision model'}
             onSelect={(providerId, modelId, harnessId) => {
               gateVisionSelection = { harnessId, providerId, modelId }
+            }}
+            thinkingLevel={gateVisionSelection?.thinkingLevel}
+            onSelectThinking={(level) => {
+              if (!gateVisionSelection) return
+              gateVisionSelection = { ...gateVisionSelection, thinkingLevel: level }
             }}
             {onToggleFavorite}
             {onReorderFavorite}
@@ -1696,7 +1703,6 @@
       {autofocus}
       {disabled}
       ariaLabel="Message"
-      submitOnEnter
       onValueChange={handleComposerValueChange}
       onSubmit={submit}
       onPaste={handlePaste}
@@ -1923,7 +1929,7 @@
       </div>
     {/if}
 
-    <!-- Shared model selector -->
+    <!-- Shared model selector — model + thinking level in one control -->
     <ModelPicker
       {providers}
       {projectId}
@@ -1933,88 +1939,15 @@
       {favoriteModels}
       {recentModels}
       bind:open={modelMenuOpen}
+      bind:thinkingMenuOpen
       onSelect={selectModel}
       {onToggleFavorite}
       {onReorderFavorite}
       fast={inferenceMode === 'fast'}
+      thinkingLevel={resolved.thinkingLevel}
+      {thinkingPresets}
+      onSelectThinking={(level) => selectThinking({ id: level, label: level })}
     />
-
-    <!-- Thinking level — only for models that support reasoning -->
-    {#if supportsThinking}
-      <div class="relative">
-        <button
-          type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={`Thinking strategy: ${thinkingPresets.find((preset) => preset.id === resolved.thinkingLevel)?.label ?? resolved.thinkingLevel}`}
-          title="Thinking strategy"
-          onclick={toggleThinkingMenu}
-        >
-          <Brain size={12} />
-          <span class="composer-control-label capitalize"
-            >{thinkingPresets.find((p) => p.id === resolved.thinkingLevel)?.label ??
-              resolved.thinkingLevel}</span
-          >
-        </button>
-
-        {#if thinkingMenuOpen}
-          <button
-            class="fixed inset-0 z-30 cursor-default"
-            aria-label="Close menu"
-            onclick={closeAllMenus}
-          ></button>
-          <div
-            class="absolute bottom-9 left-0 z-40 w-44 overflow-hidden rounded-xl border bg-surface shadow-lg"
-          >
-            <div class="p-1">
-              {#each thinkingPresets as preset, i (preset.id)}
-                <button
-                  data-thinking-index={i}
-                  class="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {resolved.thinkingLevel ===
-                  preset.id
-                    ? 'text-primary'
-                    : 'text-foreground'}"
-                  title={preset.description ?? `Set thinking to ${preset.label}`}
-                  onclick={() => selectThinking(preset)}
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      const buttons = document.querySelectorAll('[data-thinking-index]')
-                      const currentIndex = Array.from(buttons).indexOf(
-                        event.currentTarget as HTMLElement
-                      )
-                      const nextIndex =
-                        event.key === 'ArrowDown'
-                          ? Math.min(currentIndex + 1, buttons.length - 1)
-                          : Math.max(currentIndex - 1, 0)
-                      const next = buttons[nextIndex] as HTMLElement
-                      if (next) next.focus()
-                      return
-                    }
-                    if (event.key === 'Escape') {
-                      event.preventDefault()
-                      closeAllMenus()
-                      return
-                    }
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      selectThinking(preset)
-                      return
-                    }
-                  }}
-                >
-                  <span class="flex flex-col">
-                    <span class="capitalize">{preset.label}</span>
-                    {#if preset.description}
-                      <span class="text-[10px] text-muted">{preset.description}</span>
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     <!-- Fast inference — native harness tier or catalog-provided fast variant -->
     {#if fastVariant}
@@ -2113,8 +2046,8 @@
         : canStop
           ? 'Stop the running agent'
           : working
-            ? 'Queue — message sends when the agent finishes'
-            : 'Send'}
+            ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
+            : `Send — ${sendModifierLabel}Enter`}
       disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
     >

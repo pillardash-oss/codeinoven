@@ -17,6 +17,7 @@ export type SettingsSection =
   | 'audits'
   | 'harnesses'
   | 'utilities'
+  | 'keymap'
   | 'remote'
   | 'cloud-deployments'
   | 'about'
@@ -32,6 +33,7 @@ export type MainView =
   | 'settings-audits'
   | 'settings-harnesses'
   | 'settings-utilities'
+  | 'settings-keymap'
   | 'settings-remote'
   | 'settings-cloud-deployments'
   | 'settings-about'
@@ -119,6 +121,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-audits',
   'settings-harnesses',
   'settings-utilities',
+  'settings-keymap',
   'settings-remote',
   'settings-about'
 ]
@@ -129,6 +132,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'audits',
   'harnesses',
   'utilities',
+  'keymap',
   'remote',
   'cloud-deployments',
   'about'

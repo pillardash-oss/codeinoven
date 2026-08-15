@@ -32,7 +32,7 @@ performance-sensitive changes. -->
 
 ## Checklist
 
-- [ ] I read `CONTRIBUTING.md` and `APP-BIBLE.md`.
+- [ ] I read `CONTRIBUTING.md` and `docs/APP-BIBLE.md`.
 - [ ] I committed contextually, scoped to my files, with a clear message.
 - [ ] If this promotes `dev` to `nightly`, I bumped `package.json` with
       `bun run version:bump`; if it promotes `nightly` to `main`, the version is unchanged from

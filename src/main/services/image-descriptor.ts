@@ -19,7 +19,7 @@ import {
   type ImageDescriptorEntry
 } from '../../lib/image-descriptor'
 import type { HarnessCapabilities } from '../drivers/driver.interface'
-import type { ImageDescriptorBatchCapability } from '../image-descriptor-provider'
+import type { ImageDescriptorBatchCapability } from '../providers/image-descriptor-provider'
 
 export {
   decideImageDescriptorBatch,
@@ -34,7 +34,7 @@ export {
   type ImageDescriptorSingleCall,
   type ImageDescriptorResult,
   type ResolvedImageEntry
-} from '../image-descriptor-provider'
+} from '../providers/image-descriptor-provider'
 
 /** Maximum images a single batched vision turn will accept. */
 export const IMAGE_DESCRIPTOR_BATCH_MAX_IMAGES = IMAGE_DESCRIPTOR_MAX_IMAGES

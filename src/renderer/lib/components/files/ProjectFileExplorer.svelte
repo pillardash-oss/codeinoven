@@ -301,11 +301,26 @@
     })
   }
 
+  /** Directory a newly created file should land in, based on the focused row. */
+  function createTargetDirectory(target: EventTarget | null): string {
+    const row =
+      target instanceof HTMLElement ? target.closest<HTMLElement>('[data-tree-path]') : null
+    const path = row?.dataset.treePath
+    if (!path) return activeDirectory()
+    if (dropTargetIsDirectory(path)) return path
+    return parentDirectory(path)
+  }
+
   function handleTreeKeydown(event: KeyboardEvent): void {
     if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
       return
     }
     const key = event.key
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && key.toLocaleLowerCase() === 'n') {
+      event.preventDefault()
+      void startCreate(createTargetDirectory(event.target), 'untitled.txt')
+      return
+    }
     if (key !== 'ArrowDown' && key !== 'ArrowUp' && key !== 'ArrowRight' && key !== 'ArrowLeft') {
       return
     }
@@ -414,14 +429,15 @@
     }
   }
 
-  async function startCreate(directory: string): Promise<void> {
+  async function startCreate(directory: string, value = ''): Promise<void> {
     if (directory) {
       projectFilesWorkspace.markDirectoryExpanded(projectId, directory)
       await projectFilesWorkspace.loadDirectory(projectId, directory)
     }
-    inlineEdit = { kind: 'create', directory, value: '' }
+    inlineEdit = { kind: 'create', directory, value }
     await tick()
     inlineInput?.focus()
+    inlineInput?.select()
   }
 
   async function startRename(entry: ProjectFileEntry): Promise<void> {

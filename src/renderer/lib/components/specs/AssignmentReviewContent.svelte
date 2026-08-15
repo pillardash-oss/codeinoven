@@ -69,16 +69,6 @@
     onAnnotateSection
   }: Props = $props()
 
-  const thinkingLevels: ThinkingLevel[] = [
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-    'ultra'
-  ]
-
   function graphMarkdown(): string {
     const lines = ['```mermaid', 'flowchart LR']
     for (const task of content.tasks) {
@@ -365,24 +355,16 @@
                 updatePhaseModel(phase.id, providerId, modelId, harnessId)}
               {onToggleFavorite}
               {onReorderFavorite}
-            />
-            <select
-              class="rounded-lg border bg-surface px-2 py-2 text-[11px] text-muted"
-              aria-label={`Thinking level for ${phase.title}`}
-              value={selectedPhaseModel.thinkingLevel}
-              onchange={(event: Event & { currentTarget: HTMLSelectElement }) =>
+              thinkingLevel={selectedPhaseModel.thinkingLevel}
+              onSelectThinking={(level) =>
                 updatePhaseModel(
                   phase.id,
                   selectedPhaseModel.providerId,
                   selectedPhaseModel.modelId,
                   selectedPhaseModel.harnessId,
-                  event.currentTarget.value as ThinkingLevel
+                  level
                 )}
-            >
-              {#each thinkingLevels as level (level)}
-                <option value={level}>{level}</option>
-              {/each}
-            </select>
+            />
           </div>
         {/if}
       </div>
@@ -481,24 +463,16 @@
                       updateTaskModel(task.id, providerId, modelId, harnessId)}
                     {onToggleFavorite}
                     {onReorderFavorite}
-                  />
-                  <select
-                    class="rounded-lg border bg-elevated px-2 py-2 text-[11px] text-muted"
-                    aria-label={`Thinking level for ${task.title}`}
-                    value={selectedTaskModel.thinkingLevel}
-                    onchange={(event: Event & { currentTarget: HTMLSelectElement }) =>
+                    thinkingLevel={selectedTaskModel.thinkingLevel}
+                    onSelectThinking={(level) =>
                       updateTaskModel(
                         task.id,
                         selectedTaskModel.providerId,
                         selectedTaskModel.modelId,
                         selectedTaskModel.harnessId,
-                        event.currentTarget.value as ThinkingLevel
+                        level
                       )}
-                  >
-                    {#each thinkingLevels as level (level)}
-                      <option value={level}>{level}</option>
-                    {/each}
-                  </select>
+                  />
                 </div>
               {/if}
             </div>

@@ -170,7 +170,9 @@
   }
 
   function onComposerKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // Enter is never a send key — only Cmd/Ctrl+Enter sends, so plain Enter and
+    // Shift+Enter always insert newlines without risking a premature send.
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       void send()
     }

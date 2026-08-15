@@ -1,7 +1,7 @@
 <script lang="ts">
   import { CircleAlert, FileCheck2, Loader2 } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     state?: Thread['auditState'] | 'failed'
@@ -78,6 +78,10 @@
       providerId,
       modelId
     })
+  }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    onModelChange({ ...settings, thinkingLevel: level })
   }
 </script>
 
@@ -158,6 +162,8 @@
         label={invalidShapeRecovery ? 'Change model' : 'Change auditor'}
         variant="action"
         onSelect={chooseModel}
+        thinkingLevel={settings.thinkingLevel}
+        onSelectThinking={chooseThinking}
         {onToggleFavorite}
         {onReorderFavorite}
       />

@@ -639,6 +639,9 @@ function replaceInlineMatch(
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  // Markdown inline formatting must never fire inside a code block — code like
+  // `const x = `foo`` or `**not bold**` has to stay literal.
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
 
   const textNode = selection.anchorNode
   const endOffset = selection.anchorOffset
@@ -878,7 +881,7 @@ export function insertMarkdownLineBreak(root: HTMLElement): boolean {
     node = root.childNodes[Math.max(0, selection.anchorOffset - 1)] ?? root.lastChild ?? root
   }
   const block = currentBlock(root, node)
-  if (!block || block.tagName === 'LI' || block.tagName === 'PRE') return false
+  if (!block || block.tagName === 'PRE') return false
 
   const range = selection.getRangeAt(0)
   range.deleteContents()

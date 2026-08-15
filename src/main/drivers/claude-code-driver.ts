@@ -16,10 +16,10 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
-import type { StorageEngine } from '../storage-engine'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { Logger } from '../logger'
-import { SecretVault } from '../secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { Logger } from '../system/logger'
+import { SecretVault } from '../storage/secret-vault'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -29,6 +29,7 @@ import type {
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions,
@@ -60,6 +61,17 @@ const CLAUDE_USAGE_TIMEOUT_MS = 12_000
 const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
 /** Bounded wait for the `claude auth status` pre-flight probe. */
 const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
+/**
+ * How long a first-party session spawn may hold the credential-refresh gate
+ * while it resolves authentication. The gate exists because Claude Code's
+ * macOS keychain OAuth store races when two processes refresh a single-use
+ * token concurrently (anthropics/claude-code#76905); it is released early as
+ * soon as the session proves authentication, and this bound keeps unrelated
+ * threads/projects from ever stalling indefinitely.
+ */
+const AUTH_CONFIRM_TIMEOUT_MS = 1_500
+/** Poll interval while waiting for a spawned session to prove authentication. */
+const AUTH_CONFIRM_POLL_MS = 200
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -1015,6 +1027,19 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Cached `claude auth status` verdict per project, so a fresh thread never
    *  re-spawns the CLI for auth on every message. */
   private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
+  /**
+   * Sessions whose live process has already proven authentication this run.
+   * Once any live session authenticates, the shared keychain credential is
+   * fresh, so concurrent spawns are safe and the credential-refresh gate is
+   * skipped for every other thread and project.
+   */
+  private readonly authenticatedSessions = new Set<string>()
+  /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
+  private readonly firstPartySessions = new Set<string>()
+  /** Held while a first-party session spawn may be refreshing the credential. */
+  private authSlotHeld = false
+  /** Resolved when the current credential-refresh window closes. */
+  private authSlot: Promise<void> = Promise.resolve()
   private usageProbeSequence = 0
 
   constructor(
@@ -1028,7 +1053,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     let anthropicCatalog: ProviderCatalog
     try {
-      const models = await discoverClaudeModels(projectPath)
+      const models = await this.runAuthSerialized(() => discoverClaudeModels(projectPath))
       if (models.length === 0) throw new Error('Claude Code returned no account-selectable models')
       anthropicCatalog = {
         id: 'anthropic',
@@ -1282,6 +1307,100 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   /**
+   * Serialize the credential-refresh window for first-party session spawns.
+   * Claude Code's macOS keychain OAuth store races when two processes refresh
+   * a single-use token concurrently and the loser wipes the shared credential
+   * (anthropics/claude-code#76905), forcing repeated re-logins. Only the first
+   * spawn that has not yet authenticated may touch the credential; every other
+   * thread/project waits only until that session proves authentication, then
+   * spawns freely. Custom base-URL providers never share the Anthropic OAuth
+   * credential, so they bypass the gate entirely.
+   */
+  override async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
+    const firstParty = !opts.settings.providerId || opts.settings.providerId === 'anthropic'
+    if (firstParty) this.firstPartySessions.add(opts.sessionId)
+    if (firstParty && !this.hasLiveAuthenticatedSession()) {
+      const release = await this.acquireAuthSlot()
+      try {
+        if (this.hasLiveAuthenticatedSession()) {
+          await super.sendPrompt(projectPath, opts)
+          return
+        }
+        await super.sendPrompt(projectPath, opts)
+        await this.waitForAuthConfirmation(opts.sessionId)
+      } finally {
+        release()
+      }
+      return
+    }
+    await super.sendPrompt(projectPath, opts)
+  }
+
+  /**
+   * Whether any live session has already authenticated this run. The shared
+   * credential is considered fresh in that case, so no serialization is needed.
+   */
+  private hasLiveAuthenticatedSession(): boolean {
+    const live = this.activeSessionIds()
+    return live.some(
+      (sessionId) =>
+        this.firstPartySessions.has(sessionId) && this.authenticatedSessions.has(sessionId)
+    )
+  }
+
+  /**
+   * Claim the credential-refresh window, waiting for any in-flight window to
+   * close first. The window covers the CLI's silent OAuth refresh at process
+   * startup — only one first-party spawn may be inside it at a time.
+   */
+  private async acquireAuthSlot(): Promise<() => void> {
+    for (;;) {
+      if (this.authSlotHeld) {
+        await this.authSlot
+        continue
+      }
+      this.authSlotHeld = true
+      break
+    }
+    let release: (() => void) | undefined
+    this.authSlot = new Promise<void>((resolve) => (release = resolve))
+    return () => {
+      release?.()
+      this.authSlotHeld = false
+    }
+  }
+
+  /**
+   * Run an auth-touching CLI operation under the credential-refresh gate. The
+   * gate is engaged only while no live session has authenticated; once one has,
+   * the credential is fresh and the operation runs with full concurrency.
+   */
+  private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.hasLiveAuthenticatedSession()) return operation()
+    const release = await this.acquireAuthSlot()
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
+  }
+
+  /**
+   * Hold the credential-refresh window until the guarded session proves
+   * authentication, exits, or the bound expires — the window in which the CLI
+   * may refresh the shared keychain credential. Resolving early on
+   * authentication lets the next concurrent spawn proceed without a refresh.
+   */
+  private async waitForAuthConfirmation(sessionId: string): Promise<void> {
+    const deadline = Date.now() + AUTH_CONFIRM_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (this.authenticatedSessions.has(sessionId)) return
+      if (!this.activeSessionIds().includes(sessionId)) return
+      await new Promise<void>((resolve) => setTimeout(resolve, AUTH_CONFIRM_POLL_MS))
+    }
+  }
+
+  /**
    * Pre-flight probe of the first-party Anthropic credential. Shells
    * `claude auth status --json` and trusts its `loggedIn` verdict, letting the
    * CLI's own silent OAuth refresh run before a turn is dispatched. The result
@@ -1322,6 +1441,29 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
     return authenticated
+  }
+
+  /**
+   * Current authentication state of the shared first-party credential, probed
+   * through the credential-refresh gate so a thread-open check can never race
+   * a concurrent refresh (anthropics/claude-code#76905). Probe failures are
+   * reported as authenticated so real errors still surface at message time.
+   */
+  async getAuthStatus(projectPath: string): Promise<HarnessAuthStatus> {
+    const authenticated = await this.runAuthSerialized(() =>
+      this.probeFirstPartyAuthentication(projectPath)
+    )
+    if (!authenticated) {
+      return {
+        state: 'unauthenticated',
+        accounts: [],
+        detail: 'Claude Code could not authenticate with the stored credential.'
+      }
+    }
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'anthropic', label: 'Anthropic', method: 'oauth', active: true }]
+    }
   }
 
   /**
@@ -1464,101 +1606,104 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
     }
     try {
-      const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
-        const child = spawn(
-          'claude',
-          [
-            '--print',
-            '--output-format',
-            'stream-json',
-            '--input-format',
-            'stream-json',
-            '--verbose'
-          ],
-          {
-            cwd: projectPath,
-            env: buildHarnessEnvironment(),
-            stdio: ['pipe', 'pipe', 'pipe']
-          }
-        )
-        let buffer = ''
-        let settled = false
-        const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
-        const finish = (value: Record<string, unknown> | null): void => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          if (!child.killed) child.kill()
-          resolve(value)
-        }
-        let rateLimitsPayload: Record<string, unknown> | null = null
-        let rateLimitsResponded = false
-        let contextPayload: Record<string, unknown> | null = null
-        let contextResponded = false
-        const attemptFinish = (): void => {
-          if (settled) return
-          // If the session has no plan rate limits, stop waiting for context and
-          // report nothing. Otherwise wait for both responses so quota and
-          // context are reported together; the timeout covers a missing response.
-          if (rateLimitsResponded && rateLimitsPayload === null) {
-            finish({ rateLimits: null, context: contextPayload })
-            return
-          }
-          if (rateLimitsResponded && contextResponded) {
-            finish({ rateLimits: rateLimitsPayload, context: contextPayload })
-          }
-        }
-        const consume = (line: string): void => {
-          if (!line.trim()) return
-          const payload = record(JSON.parse(line) as unknown)
-          if (!payload) return
-          if (payload['type'] !== 'control_response') return
-          const response = record(payload['response'])
-          const inner = record(response?.['response'])
-          const requestId = string(response?.['request_id'])
-          if (requestId === 'usage') {
-            rateLimitsResponded = true
-            const rateLimits = record(inner?.['rate_limits'])
-            rateLimitsPayload =
-              inner?.['rate_limits_available'] === true && rateLimits ? inner : null
-          } else if (requestId === 'context') {
-            contextResponded = true
-            contextPayload = inner
-          }
-          attemptFinish()
-        }
-        child.stdout?.on('data', (chunk: Buffer) => {
-          buffer += chunk.toString()
-          const lines = buffer.split(/\r?\n/u)
-          buffer = lines.pop() ?? ''
-          for (const line of lines) {
-            try {
-              consume(line)
-            } catch {
-              // Ignore malformed side-channel output.
+      const telemetry = await this.runAuthSerialized(
+        () =>
+          new Promise<Record<string, unknown> | null>((resolve) => {
+            const child = spawn(
+              'claude',
+              [
+                '--print',
+                '--output-format',
+                'stream-json',
+                '--input-format',
+                'stream-json',
+                '--verbose'
+              ],
+              {
+                cwd: projectPath,
+                env: buildHarnessEnvironment(),
+                stdio: ['pipe', 'pipe', 'pipe']
+              }
+            )
+            let buffer = ''
+            let settled = false
+            const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
+            const finish = (value: Record<string, unknown> | null): void => {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
+              if (!child.killed) child.kill()
+              resolve(value)
             }
-          }
-        })
-        child.on('error', () => finish(null))
-        child.on('exit', () => {
-          if (!settled) finish(null)
-        })
-        // Send both control requests immediately; `--print` waits on stdin.
-        child.stdin?.write(
-          `${JSON.stringify({
-            type: 'control_request',
-            request_id: 'usage',
-            request: { subtype: 'get_usage' }
-          })}\n`
-        )
-        child.stdin?.write(
-          `${JSON.stringify({
-            type: 'control_request',
-            request_id: 'context',
-            request: { subtype: 'get_context_usage' }
-          })}\n`
-        )
-      })
+            let rateLimitsPayload: Record<string, unknown> | null = null
+            let rateLimitsResponded = false
+            let contextPayload: Record<string, unknown> | null = null
+            let contextResponded = false
+            const attemptFinish = (): void => {
+              if (settled) return
+              // If the session has no plan rate limits, stop waiting for context and
+              // report nothing. Otherwise wait for both responses so quota and
+              // context are reported together; the timeout covers a missing response.
+              if (rateLimitsResponded && rateLimitsPayload === null) {
+                finish({ rateLimits: null, context: contextPayload })
+                return
+              }
+              if (rateLimitsResponded && contextResponded) {
+                finish({ rateLimits: rateLimitsPayload, context: contextPayload })
+              }
+            }
+            const consume = (line: string): void => {
+              if (!line.trim()) return
+              const payload = record(JSON.parse(line) as unknown)
+              if (!payload) return
+              if (payload['type'] !== 'control_response') return
+              const response = record(payload['response'])
+              const inner = record(response?.['response'])
+              const requestId = string(response?.['request_id'])
+              if (requestId === 'usage') {
+                rateLimitsResponded = true
+                const rateLimits = record(inner?.['rate_limits'])
+                rateLimitsPayload =
+                  inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+              } else if (requestId === 'context') {
+                contextResponded = true
+                contextPayload = inner
+              }
+              attemptFinish()
+            }
+            child.stdout?.on('data', (chunk: Buffer) => {
+              buffer += chunk.toString()
+              const lines = buffer.split(/\r?\n/u)
+              buffer = lines.pop() ?? ''
+              for (const line of lines) {
+                try {
+                  consume(line)
+                } catch {
+                  // Ignore malformed side-channel output.
+                }
+              }
+            })
+            child.on('error', () => finish(null))
+            child.on('exit', () => {
+              if (!settled) finish(null)
+            })
+            // Send both control requests immediately; `--print` waits on stdin.
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'usage',
+                request: { subtype: 'get_usage' }
+              })}\n`
+            )
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'context',
+                request: { subtype: 'get_context_usage' }
+              })}\n`
+            )
+          })
+      )
       return this.mapAccountUsage(telemetry)
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
@@ -1568,6 +1713,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
   override dispose(): void {
     this.authProbeCache.clear()
+    this.authenticatedSessions.clear()
+    this.firstPartySessions.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
@@ -1580,6 +1727,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
+    if (claudeAuthenticationResult(entry) === true) {
+      this.authenticatedSessions.add(context.sessionId)
+    }
     this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
     if (type === 'rate_limit_event' && !latestAssistant(context)) {

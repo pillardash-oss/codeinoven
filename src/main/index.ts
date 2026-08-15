@@ -4,44 +4,55 @@ import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
-import { Logger } from './logger'
+import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
-import { StorageEngine } from './storage-engine'
-import { registerHydrationIpcHandlers } from './hydration-ipc'
-import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
-import { WindowStateService } from './window-state'
-import { setNotificationService, setPowerWakeService, broadcastThreadUpdate } from './thread-events'
+import { StorageEngine } from './storage/storage-engine'
+import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
+import {
+  installFilePreviewProtocol,
+  registerFilePreviewScheme
+} from './editor/file-preview-protocol'
+import { WindowStateService } from './system/window-state'
+import {
+  setNotificationService,
+  setPowerWakeService,
+  broadcastThreadUpdate
+} from './chat/thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
-} from './production-housekeeping'
-import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
-import { PrivilegedIpcValidator } from './ipc-validation'
+} from './system/production-housekeeping'
+import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
+import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 import type { Thread } from '../lib/types'
-import { startupTelemetry } from './startup-telemetry'
-import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './lifecycle-diagnostics'
-import type { ChatEngine } from './chat-engine'
-import type { HarnessManifestService } from './harness-manifest-service'
-import type { ComputerUsePipService } from './computer-use-pip-service'
-import type { UpdaterService } from './updater-service'
-import type { PowerWakeService } from './power-wake-service'
-import type { RetrySchedulerService } from './retry-scheduler-service'
-import { ModelPricingService } from './model-pricing-service'
-import { ThreadCreationCoordinator } from './thread-creation-coordinator'
-import type { PtyService } from './pty-service'
-import type { ProviderConnectionService } from './provider-connection'
-import type { HarnessUpdateService } from './harness-update-service'
-import type { HarnessInstallService } from './harness-install-service'
-import type { NotificationService } from './notification-service'
+import { startupTelemetry } from './system/startup-telemetry'
+import {
+  handleFatalStartupFailure,
+  installProcessCrashDiagnostics
+} from './system/lifecycle-diagnostics'
+import type { ChatEngine } from './chat/chat-engine'
+import type { HarnessManifestService } from './agents/harness-manifest-service'
+import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
+import type { UpdaterService } from './notifications/updater-service'
+import type { PowerWakeService } from './system/power-wake-service'
+import type { RetrySchedulerService } from './system/retry-scheduler-service'
+import { ModelPricingService } from './providers/model-pricing-service'
+import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
+import type { PtyService } from './system/pty-service'
+import type { ProviderConnectionService } from './providers/provider-connection'
+import type { HarnessUpdateService } from './agents/harness-update-service'
+import type { HarnessInstallService } from './agents/harness-install-service'
+import type { NotificationService } from './notifications/notification-service'
 import type { RemoteModeController } from './remote/remote-mode'
 import type { DeviceCredentialService } from './remote/device-credential-service'
-import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
-import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
-import { sendToRenderer } from './renderer-delivery'
-import { hasNativeSplashHandoff, signalNativeSplashReady } from './native-splash-handoff'
+import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
+import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
+import { sendToRenderer } from './ipc/renderer-delivery'
+import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
+import { instanceRegistry } from './system/instance-registry'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -94,24 +105,6 @@ let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
-
-// The database, IPC handlers, and remote gateway are process-wide resources.
-// Running two app instances against them causes duplicate startup work and port
-// collisions, so subsequent launches focus the existing window and exit.
-// Packaged startup smoke runs use isolated Chromium and application data roots,
-// so they must not be redirected to a developer instance that happens to be
-// running on the same machine. Normal launches retain single-instance behavior.
-const isPackagedSmoke = app.isPackaged && Boolean(process.env[PACKAGED_SMOKE_OUTPUT_ENV])
-const hasSingleInstanceLock = isPackagedSmoke || app.requestSingleInstanceLock()
-if (!hasSingleInstanceLock) app.quit()
-
-app.on('second-instance', () => {
-  const window = mainWindow
-  if (!window || window.isDestroyed()) return
-  if (window.isMinimized()) window.restore()
-  if (!window.isVisible()) window.show()
-  window.focus()
-})
 
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
@@ -180,17 +173,23 @@ function requestCloseConfirmation(): void {
     app.quit()
     return
   }
-  const working = getActiveThreadProjects()
+  // When another live instance can keep a project's threads running, working
+  // threads don't need to gate this instance's close — a surviving instance can
+  // continue them. The renderer still owns the unsaved-file gate, which is
+  // reported separately, so closing never silently drops unsaved editor state.
+  const working = instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects()
   sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
 }
 
 ipcMain.handle('app:confirmClose', async () => {
-  // The user approved the forced close while threads are working. Terminate
-  // every still-streaming harness connection (SIGTERM to local harness
-  // processes) so no agent keeps working after the app exits, then proceed.
+  // The user approved the forced close while threads are working. When another
+  // live instance exists it can continue those threads, so this instance just
+  // walks away without SIGTERM'ing the shared harness processes. Otherwise
+  // terminate every still-streaming harness connection so no agent keeps
+  // working after the app exits, then proceed.
   quitConfirmed = true
   try {
-    if (chatEngine) {
+    if (chatEngine && !instanceRegistry.hasOtherLiveInstance()) {
       await chatEngine.terminateActiveConnections()
     }
   } catch (error) {
@@ -487,15 +486,15 @@ async function bootPostPaintServices(): Promise<void> {
     { PowerWakeService },
     { RetrySchedulerService }
   ] = await Promise.all([
-    import('./ipc-handlers'),
+    import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
-    import('./project-files-service'),
-    import('./chat-engine'),
-    import('./harness-manifest-service'),
-    import('./computer-use-pip-service'),
-    import('./updater-service'),
-    import('./power-wake-service'),
-    import('./retry-scheduler-service')
+    import('./editor/project-files-service'),
+    import('./chat/chat-engine'),
+    import('./agents/harness-manifest-service'),
+    import('./utilities/computer-use-pip-service'),
+    import('./notifications/updater-service'),
+    import('./system/power-wake-service'),
+    import('./system/retry-scheduler-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -565,17 +564,17 @@ async function bootPostPaintServices(): Promise<void> {
       { NotificationService },
       { RestartRecoveryService }
     ] = await Promise.all([
-      import('./pty-service'),
-      import('./provider-connection'),
-      import('./harness-update-service'),
-      import('./harness-install-service'),
+      import('./system/pty-service'),
+      import('./providers/provider-connection'),
+      import('./agents/harness-update-service'),
+      import('./agents/harness-install-service'),
       import('./remote/remote-mode'),
       import('./remote/remote-rpc'),
       import('./remote/device-credential-service'),
       import('./database/repositories/harness-usage-repo'),
-      import('./memory-service'),
-      import('./notification-service'),
-      import('./restart-recovery-service')
+      import('./chat/memory-service'),
+      import('./notifications/notification-service'),
+      import('./system/restart-recovery-service')
     ])
 
     ptyService = new PtyService(storage, database)
@@ -603,7 +602,7 @@ async function bootPostPaintServices(): Promise<void> {
       storage,
       credentials: remoteCredentials,
       loadAccountProfileData: async () => ({
-        usage: accountUsage.profileSummary(),
+        usage: await accountUsage.profileSummary(),
         globalMemories: (await accountMemory.getEntries()).filter(
           (entry) => entry.scope === 'global'
         )
@@ -629,9 +628,9 @@ async function bootPostPaintServices(): Promise<void> {
     harnessUpdateService.register()
     harnessInstallService.register()
 
-    const { registerProviderAccountIpc } = await import('./provider-account-ipc')
-    const { registerBaseUrlProviderIpc } = await import('./base-url-provider-ipc')
-    const { registerUtilityIpc } = await import('./utility-ipc')
+    const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
+    const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
+    const { registerUtilityIpc } = await import('./ipc/utility-ipc')
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
@@ -686,6 +685,21 @@ async function bootPostPaintServices(): Promise<void> {
         // reopened. `interrupted` is not a notifiable status, so this cannot
         // fire spurious OS notifications.
         for (const thread of recovery.recovered) {
+          broadcastThreadUpdate(thread)
+        }
+      }
+      // Threads whose turns demonstrably completed before the stop are finalized
+      // as `completed`, never resumed. Broadcast their corrected status too so the
+      // sidebar doesn't linger on the stale "working" indicator.
+      if (recovery.completed.length > 0) {
+        Logger.info('Finalized completed interrupted threads', {
+          inspected: recovery.inspected,
+          completed: recovery.completed.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+        for (const thread of recovery.completed) {
           broadcastThreadUpdate(thread)
         }
       }
@@ -868,8 +882,11 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
 void app
   .whenReady()
   .then(async () => {
-    if (!hasSingleInstanceLock) return
     startupTelemetry.mark('electron:ready')
+    // Register this process in the instance registry before any window exists so
+    // the close gate can later tell whether other live instances can keep a
+    // project's threads running.
+    instanceRegistry.start()
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
@@ -1144,10 +1161,17 @@ async function runShutdownPipeline(): Promise<void> {
     Logger.error('Window state flush failed during shutdown:', error)
   }
 
-  try {
-    await chatEngine?.dispose()
-  } catch (error) {
-    Logger.error('Chat engine disposal failed during shutdown:', error)
+  // When another live instance can continue the project's threads, this
+  // instance exits without disposing the chat engine — disposal kills every
+  // agent-owned harness process, which would destroy threads the surviving
+  // instance is still working on. The threads' durable state lives in the
+  // shared DB, so the other instance resumes them seamlessly.
+  if (!instanceRegistry.hasOtherLiveInstance()) {
+    try {
+      await chatEngine?.dispose()
+    } catch (error) {
+      Logger.error('Chat engine disposal failed during shutdown:', error)
+    }
   }
 
   try {
@@ -1163,6 +1187,8 @@ async function runShutdownPipeline(): Promise<void> {
   } catch (error) {
     Logger.error('Database close failed during shutdown:', error)
   }
+
+  instanceRegistry.stop()
 
   app.quit()
 }
