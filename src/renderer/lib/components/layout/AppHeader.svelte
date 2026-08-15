@@ -26,7 +26,6 @@
     AppWindow,
     Archive,
     Bell,
-    Bug,
     Check,
     ChevronDown,
     ChevronLeft,
@@ -38,7 +37,6 @@
     GitMergeConflict,
     GitPullRequest,
     History,
-    Info,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -46,12 +44,9 @@
     Pencil,
     Pin,
     PinOff,
-    PanelRight,
-    SquareTerminal,
     Timeline,
     Trash2,
-    X,
-    BrainCircuit
+    X
   } from '@lucide/svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
@@ -381,42 +376,6 @@
     workspaceState.jumpToMessage?.(id)
   }
 
-  function toggleMemory(): void {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    showHistory = false
-    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'memory') {
-      contextSidebarState.hide()
-      return
-    }
-    contextSidebarState.openMemory(thread.projectId, thread.id)
-  }
-
-  /** Toggle the Sources panel for the selected thread (chat mode header button). */
-  function toggleSources(): void {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    showHistory = false
-    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'sources') {
-      contextSidebarState.hide()
-      return
-    }
-    contextSidebarState.openSources(thread.projectId, thread.id)
-  }
-
-  /** Toggle the agent debugger panel — dev-only. */
-  function toggleDebugger(): void {
-    if (!import.meta.env.DEV) return
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    showHistory = false
-    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'debugger') {
-      contextSidebarState.hide()
-      return
-    }
-    contextSidebarState.openDebugger(thread.projectId, thread.id)
-  }
-
   $effect(() => {
     memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
   })
@@ -447,68 +406,6 @@
   }
 
   void editorPreference.load()
-
-  let contextSidebarOpen = $derived(
-    Boolean(workspaceState.selectedThread && contextSidebarState.visible)
-  )
-
-  /** True while the sources panel is the active sidebar tab. */
-  let sourcesOpen = $derived(
-    Boolean(
-      workspaceState.selectedThread &&
-      contextSidebarState.visible &&
-      contextSidebarState.sidebarActiveTab?.kind === 'sources'
-    )
-  )
-
-  /** True while the agent debugger is the active sidebar tab. */
-  let debuggerOpen = $derived(
-    Boolean(
-      import.meta.env.DEV &&
-      workspaceState.selectedThread &&
-      contextSidebarState.visible &&
-      contextSidebarState.sidebarActiveTab?.kind === 'debugger'
-    )
-  )
-
-  /** Whether the terminal area is currently visible (dock at the bottom, or a
-   * focused terminal tab inside the sidebar when not docked). */
-  let terminalOpen = $derived(
-    contextSidebarState.terminalPlacement === 'bottom'
-      ? contextSidebarState.terminalDockVisible
-      : Boolean(contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'terminal')
-  )
-
-  function openTerminal(): void {
-    const thread = workspaceState.selectedThread
-    if (!thread) return
-    const tab = contextSidebarState.activeTab
-    const terminalActive =
-      tab?.kind === 'terminal' && tab.projectId === thread.projectId && tab.threadId === thread.id
-
-    if (contextSidebarState.terminalPlacement === 'bottom') {
-      // Terminal lives in its own bottom dock — the button toggles just the
-      // dock; the right sidebar is never affected.
-      if (terminalActive && contextSidebarState.terminalDockVisible) {
-        contextSidebarState.toggleTerminalDock()
-      } else {
-        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
-      }
-      return
-    }
-
-    // Terminal lives in the sidebar — toggle the whole context panel.
-    if (contextSidebarState.visible && terminalActive) {
-      contextSidebarState.hide()
-    } else {
-      contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
-    }
-  }
-
-  function toggleContextSidebar(): void {
-    if (!workspaceState.selectedThread) return
-    contextSidebarState.toggle()
-  }
 
   // ─── Git status chip ─────────────────────────────────────────────────────
 
@@ -1212,23 +1109,6 @@
       </div>
     {/if}
 
-    <!-- Memory — always available and toggles its thread-scoped sidebar tab. -->
-    {#if !onSettings && !onScope && workspaceState.selectedThread}
-      <button
-        class="relative flex h-8 items-center gap-1.5 px-2 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-        aria-label={`Toggle memory (${memoryProposalState.pendingCount} pending proposals)`}
-        title="Toggle memory"
-        onclick={toggleMemory}
-      >
-        <BrainCircuit size={15} />
-        {#if memoryProposalState.hasPending}
-          <div class="absolute -top-0.5 -right-0.5 flex items-start">
-            <StatusBadge kind="attention" title="Memory proposals needing attention" />
-          </div>
-        {/if}
-      </button>
-    {/if}
-
     <!-- Editor preference — hidden in chat mode, scope view, and when no project is selected -->
     {#if !chatMode && !onScope && workspaceState.activeProject}
       <div class="relative flex items-center">
@@ -1393,54 +1273,6 @@
       </button>
     {/if}
 
-    <!-- Terminal — only when a thread is open in a terminal-hosting view, never in chat mode or scope view -->
-    {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.terminalAvailable}
-      <button
-        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {terminalOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={terminalOpen ? 'Hide terminal' : 'Show terminal'}
-        title={terminalOpen ? 'Hide terminal' : 'Show terminal'}
-        onclick={openTerminal}
-      >
-        <SquareTerminal size={16} />
-      </button>
-    {/if}
-
-    {#if chatMode}
-      {#if workspaceState.selectedThread}
-        <!-- Sources — chat mode surfaces the sources panel on the header -->
-        <button
-          class="relative flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {sourcesOpen
-            ? 'bg-elevated text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          aria-label={sourcesOpen ? 'Close sources' : 'Open sources'}
-          title={sourcesOpen ? 'Close sources' : 'Show sources for this chat'}
-          onclick={toggleSources}
-        >
-          <Info size={15} />
-          <span class="header-control-label text-[11px] font-medium">Sources</span>
-          {#if workspaceState.sources.length > 0}
-            <span class="header-control-label text-[11px] font-medium tabular-nums text-dimmed"
-              >{workspaceState.sources.length}</span
-            >
-          {/if}
-        </button>
-        {#if import.meta.env.DEV}
-          <button
-            class="relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150 {debuggerOpen
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
-            title={debuggerOpen ? 'Hide debugger' : 'Show debugger'}
-            onclick={toggleDebugger}
-          >
-            <Bug size={16} />
-          </button>
-        {/if}
-      {/if}
-    {/if}
-
     <!-- Notification bell — available in all views -->
     <button
       class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
@@ -1463,19 +1295,6 @@
         </div>
       {/if}
     </button>
-
-    {#if !chatMode && !onSettings && !onScope && workspaceState.selectedThread}
-      <button
-        class="flex h-8 w-8 items-center justify-center transition-colors duration-150 {contextSidebarOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-muted hover:bg-elevated hover:text-foreground'}"
-        aria-label={contextSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-        title={contextSidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
-        onclick={toggleContextSidebar}
-      >
-        <PanelRight size={16} />
-      </button>
-    {/if}
   </div>
 </header>
 
