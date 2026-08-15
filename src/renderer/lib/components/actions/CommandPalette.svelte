@@ -4,6 +4,7 @@
   import { tick } from 'svelte'
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
+  import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
 
   interface Props {
     open: boolean
@@ -127,7 +128,7 @@
             <kbd
               class="rounded-md border border-border-strong bg-raised px-1.5 py-0.5 font-sans text-[10px] font-medium text-dimmed"
             >
-              {shortcutLabel}
+              {displayShortcutLabel(shortcutLabel)}
             </kbd>
           {/if}
           <span class="text-[10px] font-medium text-dimmed">ESC</span>
@@ -213,7 +214,7 @@
                 <kbd
                   class="min-w-5 rounded-md border border-border-strong bg-raised px-1 py-0.5 text-center font-sans text-[10px] font-medium text-dimmed"
                 >
-                  {key}
+                  {displayShortcutKey(key)}
                 </kbd>
               {/each}
             </span>
