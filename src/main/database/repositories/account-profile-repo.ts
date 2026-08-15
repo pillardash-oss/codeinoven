@@ -59,9 +59,10 @@ function parseCachedProfile(raw: string): AccountProfile | null {
       typeof profile['displayName'] !== 'string' ||
       (profile['image'] !== null && typeof profile['image'] !== 'string') ||
       typeof profile['updatedAt'] !== 'number' ||
-      typeof profile['usage'] !== 'object' ||
-      profile['usage'] === null ||
-      !Array.isArray(profile['globalMemories'])
+      typeof profile['usageByDevice'] !== 'object' ||
+      profile['usageByDevice'] === null ||
+      !Array.isArray(profile['globalMemories']) ||
+      !Array.isArray(profile['globalMemoryTombstones'])
     ) {
       return null
     }

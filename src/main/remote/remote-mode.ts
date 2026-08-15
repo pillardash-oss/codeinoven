@@ -28,9 +28,10 @@ import type {
   AccountProfileState,
   AccountProfileSyncPayload,
   AccountSignInStart,
-  AccountUsageBreakdown,
-  AccountUsageSummary,
-  MemoryEntry
+  MemoryEntry,
+  MemoryTombstone,
+  SyncedDeviceProject,
+  SyncedDeviceUsage
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
@@ -51,6 +52,12 @@ import {
   writeRemoteDeviceName,
   writeRemoteModeState
 } from './remote-state'
+import {
+  mergeTombstones,
+  readMemorySyncState,
+  tombstonesForDeletions,
+  writeMemorySyncState
+} from './memory-sync-state'
 
 declare global {
   /** Public remote-service origin injected by the Electron production build. */
@@ -298,70 +305,102 @@ function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
-function parseUsageBreakdown(value: unknown): AccountUsageBreakdown[] | null {
-  if (!Array.isArray(value)) return null
-  const rows: AccountUsageBreakdown[] = []
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
-    const row = item as Record<string, unknown>
-    const messageCount = finiteNumber(row['messageCount'])
-    const costUsd = finiteNumber(row['costUsd'])
-    const tokens = finiteNumber(row['tokens'])
-    if (
-      typeof row['id'] !== 'string' ||
-      messageCount === null ||
-      costUsd === null ||
-      tokens === null
-    ) {
-      return null
-    }
-    rows.push({ id: row['id'], messageCount, costUsd, tokens })
+function parseSyncedDeviceProject(value: unknown): SyncedDeviceProject | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const messageCount = finiteNumber(row['messageCount'])
+  const costUsd = finiteNumber(row['costUsd'])
+  const tokens = finiteNumber(row['tokens'])
+  const durationMs = finiteNumber(row['durationMs'])
+  const threadCount = finiteNumber(row['threadCount'])
+  if (
+    typeof row['id'] !== 'string' ||
+    typeof row['name'] !== 'string' ||
+    messageCount === null ||
+    costUsd === null ||
+    tokens === null ||
+    durationMs === null ||
+    threadCount === null
+  ) {
+    return null
   }
-  return rows
+  return {
+    id: row['id'],
+    name: row['name'],
+    messageCount,
+    costUsd,
+    tokens,
+    durationMs,
+    threadCount
+  }
 }
 
-function parseAccountUsage(value: unknown): AccountUsageSummary | null {
+function parseSyncedDeviceUsage(value: unknown): SyncedDeviceUsage | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const messageCount = finiteNumber(record['messageCount'])
   const costUsd = finiteNumber(record['costUsd'])
   const tokens = finiteNumber(record['tokens'])
   const durationMs = finiteNumber(record['durationMs'])
-  const generatedAt = finiteNumber(record['generatedAt'])
-  const harnesses = parseUsageBreakdown(record['harnesses'])
-  const models = parseUsageBreakdown(record['models'])
+  const activeDays = finiteNumber(record['activeDays'])
+  const updatedAt = finiteNumber(record['updatedAt'])
   if (
+    typeof record['deviceId'] !== 'string' ||
+    typeof record['deviceLabel'] !== 'string' ||
+    typeof record['platform'] !== 'string' ||
     messageCount === null ||
     costUsd === null ||
     tokens === null ||
     durationMs === null ||
-    generatedAt === null ||
-    !harnesses ||
-    !models ||
-    !Array.isArray(record['activityDays'])
+    activeDays === null ||
+    updatedAt === null ||
+    !Array.isArray(record['projects'])
   ) {
     return null
   }
-  const activityDays = record['activityDays'].flatMap((item) => {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
-    const day = item as Record<string, unknown>
-    const dayCount = finiteNumber(day['messageCount'])
-    return typeof day['date'] === 'string' && dayCount !== null
-      ? [{ date: day['date'], messageCount: dayCount }]
-      : []
-  })
+  const projects: SyncedDeviceProject[] = []
+  for (const item of record['projects'].slice(0, 10)) {
+    const project = parseSyncedDeviceProject(item)
+    if (!project) return null
+    projects.push(project)
+  }
   return {
+    deviceId: record['deviceId'],
+    deviceLabel: record['deviceLabel'],
+    platform: record['platform'],
     messageCount,
     costUsd,
     tokens,
     durationMs,
-    topHarnessId: typeof record['topHarnessId'] === 'string' ? record['topHarnessId'] : null,
-    topModelId: typeof record['topModelId'] === 'string' ? record['topModelId'] : null,
-    harnesses,
-    models,
-    activityDays,
-    generatedAt
+    activeDays,
+    projects,
+    updatedAt
   }
+}
+
+function parseUsageByDevice(value: unknown): Record<string, SyncedDeviceUsage> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const byDevice: Record<string, SyncedDeviceUsage> = {}
+  for (const [deviceId, raw] of Object.entries(value as Record<string, unknown>)) {
+    const usage = parseSyncedDeviceUsage(raw)
+    if (!usage || usage.deviceId !== deviceId) return null
+    byDevice[deviceId] = usage
+  }
+  return byDevice
+}
+
+function parseMemoryTombstones(value: unknown): MemoryTombstone[] | null {
+  if (!Array.isArray(value)) return null
+  const tombstones: MemoryTombstone[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const tombstone = item as Record<string, unknown>
+    if (typeof tombstone['id'] !== 'string' || typeof tombstone['deletedAt'] !== 'number') {
+      return null
+    }
+    tombstones.push({ id: tombstone['id'], deletedAt: tombstone['deletedAt'] })
+  }
+  return tombstones
 }
 
 function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
@@ -416,16 +455,18 @@ function parseAccountProfile(value: unknown): AccountProfile | null {
   const raw = wrapper['profile']
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const profile = raw as Record<string, unknown>
-  const usage = parseAccountUsage(profile['usage'])
+  const usageByDevice = parseUsageByDevice(profile['usageByDevice'] ?? {})
   const globalMemories = parseGlobalMemories(profile['globalMemories'])
+  const globalMemoryTombstones = parseMemoryTombstones(profile['globalMemoryTombstones'] ?? [])
   if (
     typeof profile['id'] !== 'string' ||
     typeof profile['email'] !== 'string' ||
     typeof profile['displayName'] !== 'string' ||
     (profile['image'] !== null && typeof profile['image'] !== 'string') ||
     typeof profile['updatedAt'] !== 'number' ||
-    !usage ||
-    !globalMemories
+    !usageByDevice ||
+    !globalMemories ||
+    !globalMemoryTombstones
   ) {
     return null
   }
@@ -434,8 +475,9 @@ function parseAccountProfile(value: unknown): AccountProfile | null {
     email: profile['email'],
     displayName: profile['displayName'],
     image: profile['image'],
-    usage,
+    usageByDevice,
     globalMemories,
+    globalMemoryTombstones,
     updatedAt: profile['updatedAt']
   }
 }
@@ -1449,15 +1491,35 @@ export class RemoteModeController {
     const cached = await this.readCachedAccountProfile()
     try {
       const local = await this.loadAccountProfileData()
+      const now = Date.now()
+      const syncState = await readMemorySyncState(this.storage)
+      const localIds = local.globalMemories.map((entry) => entry.id)
+      // Entries that were part of the last synced snapshot but are gone locally
+      // now were deleted — record a tombstone so the deletion sticks server-side.
+      const newTombstones = syncState
+        ? tombstonesForDeletions(syncState.lastSnapshotIds, localIds, now)
+        : []
+      const tombstones = mergeTombstones(
+        [...(syncState?.tombstones ?? []), ...local.globalMemoryTombstones, ...newTombstones],
+        now
+      )
       const response = await this.accountRequest({
         method: 'PUT',
-        body: JSON.stringify(local)
+        body: JSON.stringify({
+          ...local,
+          globalMemoryTombstones: tombstones
+        })
       })
       if (!response || response.status === 401) return { status: 'signed-out', profile: null }
       if (!response.ok) throw new Error('Account profile sync failed')
       const profile = parseAccountProfile(await response.json())
       if (!profile) throw new Error('Account profile response is invalid')
       await this.applyGlobalMemories?.(profile.globalMemories)
+      await writeMemorySyncState(this.storage, {
+        lastSnapshotIds: profile.globalMemories.map((entry) => entry.id),
+        tombstones: profile.globalMemoryTombstones,
+        updatedAt: now
+      })
       const withImage = await this.loadProfileImage(profile)
       await this.cacheAccountProfile(withImage)
       return { status: 'signed-in', profile: withImage }

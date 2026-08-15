@@ -7,8 +7,11 @@ export default defineSchema({
     email: v.string(),
     displayName: v.string(),
     image: v.optional(v.string()),
+    /** Per-device usage map: { [deviceId]: compact usage snapshot }. */
     usageJson: v.string(),
     globalMemoriesJson: v.string(),
+    /** Deleted global memory ids (id -> deletedAt); drives cross-device deletions. */
+    globalMemoryTombstonesJson: v.optional(v.string()),
     updatedAt: v.number()
   }).index('by_auth_user_id', ['authUserId']),
 
