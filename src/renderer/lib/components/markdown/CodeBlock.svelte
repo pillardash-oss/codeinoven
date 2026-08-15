@@ -2,6 +2,7 @@
   import { Check, Copy, WrapText } from '@lucide/svelte'
   import { copyText } from '$lib/copy-text'
   import { highlightCode } from './markdown'
+  import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
 
   interface Props {
     code: string
@@ -12,8 +13,9 @@
   let { code, lang }: Props = $props()
 
   let copied = $state(false)
-  let wrapped = $state(false)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+
+  const wrapped = $derived(wrapTextState.wrapped)
 
   const html = $derived(highlightCode(code, lang))
 
@@ -37,10 +39,10 @@
     <div class="flex items-center gap-1">
       <button
         class="flex items-center rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-        aria-label={wrapped ? 'Unwrap code' : 'Wrap code'}
-        title={wrapped ? 'Unwrap code' : 'Wrap code'}
+        aria-label={wrapToggleLabel(wrapped)}
+        title={wrapToggleLabel(wrapped)}
         aria-pressed={wrapped}
-        onclick={() => (wrapped = !wrapped)}
+        onclick={() => wrapTextState.toggle()}
       >
         <WrapText size={12} class={wrapped ? 'text-primary' : ''} />
       </button>

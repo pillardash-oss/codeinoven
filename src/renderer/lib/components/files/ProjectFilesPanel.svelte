@@ -26,6 +26,7 @@
   import { diffDetails } from './file-diff'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
@@ -126,7 +127,7 @@
   let breadcrumbParts = $derived(activeTab?.path.split('/') ?? [])
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
-  let wrapLines = $state(false)
+  const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
   let fullscreenExplorerOpen = $state(false)
   let fullscreenPendingPath = $state<string | null>(null)
@@ -567,7 +568,7 @@
             mutationDisabled={deletedAtCheckpoint || mutationPending}
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => (wrapLines = !wrapLines)}
+            onToggleWrap={() => wrapTextState.toggle()}
             onFullscreen={() => (fullscreenOpen = true)}
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
@@ -910,7 +911,7 @@
             hideFullscreen
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => (wrapLines = !wrapLines)}
+            onToggleWrap={() => wrapTextState.toggle()}
             onFullscreen={() => (fullscreenOpen = true)}
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
