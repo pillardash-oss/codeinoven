@@ -7,6 +7,7 @@ import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  AgentProviderIssueKind,
   AgentRateLimitWindow,
   AgentTokenUsage,
   AgentUsageCredits,
@@ -16,6 +17,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
@@ -688,6 +690,37 @@ function mergeAssistantRecord(existing: AgentMessage, incoming: AgentMessage): A
   }
 }
 
+/**
+ * Classify a Claude Code `system`/`api_retry` stream event. The SDK emits this
+ * for ANY retryable provider failure — connection errors (no HTTP status),
+ * overloaded servers (529), 5xx responses, and 429 rate limiting — so the issue
+ * kind must come from the event's `error`/`error_status` rather than treating
+ * every retry as an exhausted usage limit.
+ */
+function claudeApiRetryKind(
+  error: string | undefined,
+  statusCode: number | undefined
+): AgentProviderIssueKind {
+  switch (error) {
+    case 'rate_limit':
+      return 'rate_limit'
+    case 'overloaded':
+    case 'server_error':
+      return 'provider_unavailable'
+    case 'billing_error':
+      return 'billing'
+    case 'authentication_failed':
+    case 'oauth_org_not_allowed':
+      return 'authentication'
+    default:
+      break
+  }
+  if (statusCode === undefined) return 'network'
+  if (statusCode === 429) return 'rate_limit'
+  if (statusCode >= 500) return 'provider_unavailable'
+  return classifyProviderIssue('', statusCode)
+}
+
 /** Map one documented Claude Code stream-json record to CodeInOven's stable shapes. */
 export function mapClaudeCodeRecord(
   value: unknown,
@@ -703,6 +736,8 @@ export function mapClaudeCodeRecord(
     const delayMs = numberProperty(entry, 'retry_delay_ms', 'retryDelayMs') ?? 0
     const rawError =
       serializeContent(entry['error']) ?? 'Claude Code is retrying the provider request'
+    const statusCode = numberProperty(entry, 'error_status', 'errorStatus')
+    const kind = claudeApiRetryKind(string(entry['error']), statusCode)
     return {
       nativeSessionId,
       events: [
@@ -712,11 +747,12 @@ export function mapClaudeCodeRecord(
           status: {
             state: 'waiting',
             issue: {
-              kind: 'rate_limit',
+              kind,
               message: 'Claude Code is waiting before retrying the provider request.',
               rawError,
               harnessId: 'claude-code',
               retryable: true,
+              ...(statusCode === undefined ? {} : { statusCode }),
               ...(delayMs > 0 ? { retryAt: Date.now() + delayMs } : {})
             }
           }
