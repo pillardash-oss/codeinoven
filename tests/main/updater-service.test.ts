@@ -65,7 +65,8 @@ function defaultConfig(): AppConfig {
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
-    defaultMergeMethod: 'squash'
+    defaultMergeMethod: 'squash',
+    maxDiffLines: 100
   }
 }
 

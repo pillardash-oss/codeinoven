@@ -171,6 +171,19 @@
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
   }
 
+  function saveMaxDiffLines(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < 10 || value > 5000) {
+      input.value = String(config.maxDiffLines)
+      return
+    }
+
+    void updateConfig({ maxDiffLines: value })
+  }
+
   async function exportDiagnostics(): Promise<void> {
     diagnosticsBusy = true
     diagnosticsResult = ''
@@ -569,6 +582,33 @@
                   seconds
                 </label>
               </div>
+            </div>
+          </div>
+
+          <!-- Diff view -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Diff view</h3>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Maximum diff lines</p>
+                <p class="text-xs text-dimmed">
+                  Hunks larger than this are collapsed with a notice so huge diffs stay responsive
+                </p>
+              </div>
+              <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                <input
+                  class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                  type="number"
+                  min="10"
+                  max="5000"
+                  step="1"
+                  value={config.maxDiffLines}
+                  disabled={!settingsReady}
+                  aria-label="Maximum diff lines per hunk"
+                  onchange={saveMaxDiffLines}
+                />
+                lines
+              </label>
             </div>
           </div>
         </div>
