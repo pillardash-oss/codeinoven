@@ -234,6 +234,7 @@ export interface EncodedAgentMessage {
   completedAt: number | null
   cost: number | null
   tokensJson: string | null
+  tokensTotal: number | null
   rateLimitsJson: string | null
   creditsJson: string | null
   contextWindow: number | null
@@ -270,6 +271,7 @@ export function encodeAgentMessage(
   const completedAt = message.completedAt ?? null
   const cost = message.cost ?? null
   const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
+  const tokensTotal = message.tokens?.total ?? null
   const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
   const creditsJson = message.credits ? JSON.stringify(message.credits) : null
   const contextWindow = message.contextWindow ?? null
@@ -322,6 +324,7 @@ export function encodeAgentMessage(
     completedAt,
     cost,
     tokensJson,
+    tokensTotal,
     rateLimitsJson,
     creditsJson,
     contextWindow,
@@ -343,9 +346,9 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       model_id, provider_id, harness_id,
       references_json, project_references_json,
       created_at, completed_at, cost,
-      tokens_json, rate_limits_json, usage_credits_json,
+      tokens_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -364,6 +367,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       completed_at = excluded.completed_at,
       cost = excluded.cost,
       tokens_json = excluded.tokens_json,
+      tokens_total = excluded.tokens_total,
       rate_limits_json = excluded.rate_limits_json,
       usage_credits_json = excluded.usage_credits_json,
       context_window = excluded.context_window,
@@ -391,6 +395,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.completedAt,
       encoded.cost,
       encoded.tokensJson,
+      encoded.tokensTotal,
       encoded.rateLimitsJson,
       encoded.creditsJson,
       encoded.contextWindow,

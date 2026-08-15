@@ -5,7 +5,7 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import { DATABASE_SCHEMA_SQL } from './schema'
+import { AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL, DATABASE_SCHEMA_SQL } from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -68,6 +68,7 @@ export class Database {
     this.db.pragma('optimize = 0x10002')
 
     this.startMaintenanceWorker()
+    this.backfillAgentMessageTokensTotal()
 
     Logger.info('SQLite database initialised', {
       path: this.path,
@@ -615,6 +616,79 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
+    this.applyTokensTotalMigration(connection)
+  }
+
+  /**
+   * Databases created before `tokens_total` existed get the column via a
+   * guarded ALTER TABLE (SQLite cannot ADD a STORED generated column). Fresh
+   * installs already carry the column from the CREATE TABLE.
+   */
+  private applyTokensTotalMigration(connection: DatabaseType): void {
+    const columns = connection.pragma('table_info(agent_messages)') as Array<{ name: string }>
+    if (columns.some((column) => column.name === 'tokens_total')) return
+    connection.exec(AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL)
+    Logger.info('Migrated agent_messages: added tokens_total column')
+  }
+
+  /**
+   * Non-blocking backfill of `tokens_total` from `tokens_json`, run on the
+   * maintenance worker connection so a large table never blocks the main
+   * thread or startup. Small rowid-chunked UPDATEs keep each write lock brief
+   * so concurrent message ingestion is not starved. Idempotent and resumable:
+   * a completed run records a `db_meta` marker, and rows written afterwards
+   * already carry `tokens_total` from the encoder.
+   */
+  private async backfillAgentMessageTokensTotal(): Promise<void> {
+    if (this.path === ':memory:' || this.db === null) return
+    try {
+      const marked = await this.queryViaWorker(
+        "SELECT 1 AS done FROM db_meta WHERE key = 'tokens_total_backfilled'",
+        [],
+        1
+      )
+      if ((marked.rows.length ?? 0) > 0) return
+      const bounds = await this.queryViaWorker(
+        `SELECT COALESCE(MIN(rowid), 0) AS min_id, COALESCE(MAX(rowid), 0) AS max_id
+         FROM agent_messages
+         WHERE tokens_total IS NULL AND tokens_json IS NOT NULL`,
+        [],
+        100
+      )
+      const minRow = bounds.rows[0] as { min_id?: number; max_id?: number } | undefined
+      const minId = minRow?.min_id ?? 0
+      const maxId = minRow?.max_id ?? 0
+      if (minId === 0 && maxId === 0) {
+        await this.executeViaWorker(
+          "INSERT OR IGNORE INTO db_meta(key, value) VALUES('tokens_total_backfilled', '1')",
+          []
+        )
+        return
+      }
+      const CHUNK_SIZE = 2000
+      for (let start = minId; start <= maxId; start += CHUNK_SIZE) {
+        const end = Math.min(start + CHUNK_SIZE - 1, maxId)
+        const result = await this.executeViaWorker(
+          `UPDATE agent_messages
+           SET tokens_total = CAST(json_extract(tokens_json, '$.total') AS INTEGER)
+           WHERE tokens_total IS NULL AND tokens_json IS NOT NULL AND rowid >= ? AND rowid <= ?`,
+          [start, end]
+        )
+        if (!result.ok) {
+          Logger.error('agent_messages.tokens_total backfill failed', {
+            error: result.error ?? 'unknown'
+          })
+          return
+        }
+      }
+      await this.executeViaWorker(
+        "INSERT OR IGNORE INTO db_meta(key, value) VALUES('tokens_total_backfilled', '1')",
+        []
+      )
+      Logger.info('Migrated agent_messages: tokens_total backfill complete')
+    } catch (error) {
+      Logger.error('agent_messages.tokens_total backfill aborted', { error: String(error) })
+    }
   }
 }
 

@@ -85,6 +85,9 @@ interface LocalProjectAggregateRow extends UsageAggregateRow {
  */
 const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title'] as const
 
+/** Upper bound for profile analytics result sets (worker bounded reads). */
+const ANALYTICS_MAX_ROWS = 100_000
+
 function tokensFromRow(
   row: Pick<
     HarnessUsageRow | HarnessModelUsageRow,
@@ -493,35 +496,40 @@ export class HarnessUsageRepo {
   }
 
   /** App-wide totals and ranked breakdowns for the signed-in profile. */
-  profileSummary(): AccountUsageSummary {
-    const harnessRows = this.db.all<UsageAggregateRow>(
-      `SELECT harness_id AS id,
-              SUM(message_count) AS message_count,
-              SUM(cost_usd) AS cost_usd,
-              SUM(tokens_total) AS tokens_total,
-              SUM(duration_ms) AS duration_ms
-       FROM harness_usage
-       GROUP BY harness_id
-       ORDER BY message_count DESC, MAX(last_used_at) DESC`
-    )
-    const modelRows = this.db.all<UsageAggregateRow>(
-      `SELECT model_id AS id,
-              SUM(message_count) AS message_count,
-              SUM(cost_usd) AS cost_usd,
-              SUM(tokens_total) AS tokens_total,
-              SUM(duration_ms) AS duration_ms
-       FROM harness_usage_models
-       GROUP BY model_id
-       ORDER BY message_count DESC, MAX(last_used_at) DESC`
-    )
-    const activityDays = this.db.all<{ date: string; message_count: number }>(
-      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-              COUNT(*) AS message_count
-       FROM agent_messages
-       WHERE role = 'assistant' AND harness_id IS NOT NULL
-       GROUP BY date
-       ORDER BY date ASC`
-    )
+  async profileSummary(): Promise<AccountUsageSummary> {
+    const [harnessRows, modelRows, activityRows] = await Promise.all([
+      this.aggregate<UsageAggregateRow>(
+        `SELECT harness_id AS id,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                SUM(tokens_total) AS tokens_total,
+                SUM(duration_ms) AS duration_ms
+         FROM harness_usage
+         GROUP BY harness_id
+         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
+        []
+      ),
+      this.aggregate<UsageAggregateRow>(
+        `SELECT model_id AS id,
+                SUM(message_count) AS message_count,
+                SUM(cost_usd) AS cost_usd,
+                SUM(tokens_total) AS tokens_total,
+                SUM(duration_ms) AS duration_ms
+         FROM harness_usage_models
+         GROUP BY model_id
+         ORDER BY message_count DESC, MAX(last_used_at) DESC`,
+        []
+      ),
+      this.aggregate<{ date: string; message_count: number }>(
+        `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                COUNT(*) AS message_count
+         FROM agent_messages
+         WHERE role = 'assistant' AND harness_id IS NOT NULL
+         GROUP BY date
+         ORDER BY date ASC`,
+        []
+      )
+    ])
     const toBreakdown = (row: UsageAggregateRow): AccountUsageBreakdown => ({
       id: row.id,
       messageCount: row.message_count,
@@ -530,7 +538,7 @@ export class HarnessUsageRepo {
     })
     const harnesses = harnessRows.map(toBreakdown)
     const models = modelRows.map(toBreakdown)
-    const activity: AccountActivityDay[] = activityDays.map((row) => ({
+    const activity: AccountActivityDay[] = activityRows.map((row) => ({
       date: row.date,
       messageCount: row.message_count
     }))
@@ -549,10 +557,10 @@ export class HarnessUsageRepo {
   }
 
   /** Range-aware local Profile analytics derived from persisted assistant messages. */
-  profileAnalytics(range: LocalProfileAnalyticsRange): LocalProfileAnalytics {
+  async profileAnalytics(range: LocalProfileAnalyticsRange): Promise<LocalProfileAnalytics> {
     const aggregateSelect = `COUNT(*) AS message_count,
               SUM(COALESCE(cost, 0)) AS cost_usd,
-              SUM(COALESCE(CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+              SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
               SUM(CASE
                     WHEN completed_at IS NOT NULL AND completed_at > created_at
                     THEN completed_at - created_at
@@ -564,95 +572,97 @@ export class HarnessUsageRepo {
        AND created_at < ?`
     const params = [range.startAt, range.endAt] as const
 
-    const harnessRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT harness_id AS id,
-              harness_id,
-              NULL AS provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange}
-       GROUP BY harness_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const providerRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT provider_id AS id,
-              NULL AS harness_id,
-              provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange} AND provider_id IS NOT NULL
-       GROUP BY provider_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const modelRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT model_id AS id,
-              harness_id,
-              provider_id,
-              ${aggregateSelect}
-       FROM agent_messages
-       WHERE ${messageRange} AND model_id IS NOT NULL
-       GROUP BY harness_id, provider_id, model_id
-       ORDER BY message_count DESC, MAX(created_at) DESC`,
-      ...params
-    )
-    const projectRows = this.db.all<LocalProjectAggregateRow>(
-      `SELECT p.id,
-              p.name,
-              p.color,
-              p.icon_type,
-              p.icon,
-              COUNT(*) AS message_count,
-              SUM(COALESCE(m.cost, 0)) AS cost_usd,
-              SUM(COALESCE(CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-              SUM(CASE
-                    WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
-                    THEN m.completed_at - m.created_at
-                    ELSE 0
-                  END) AS duration_ms,
-              COUNT(DISTINCT t.id) AS thread_count,
-              COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
-              MAX(m.created_at) AS last_active_at
-       FROM agent_messages m
-       JOIN threads t ON t.id = m.thread_id
-       JOIN projects p ON p.id = t.project_id
-       WHERE m.role = 'assistant'
-         AND m.harness_id IS NOT NULL
-         AND m.created_at >= ?
-         AND m.created_at < ?
-       GROUP BY p.id
-       ORDER BY message_count DESC, last_active_at DESC`,
-      ...params
-    )
-    const utilityRows = this.db.all<LocalUsageAggregateRow>(
-      `SELECT feature AS id,
-              NULL AS harness_id,
-              NULL AS provider_id,
-              COUNT(*) AS message_count,
-              SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-              SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
-                  + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
-                  + COALESCE(tokens_reasoning, 0)) AS tokens_total,
-              0 AS duration_ms
-       FROM usage_events
-       WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
-         AND created_at >= ?
-         AND created_at < ?
-       GROUP BY feature
-       ORDER BY message_count DESC, feature ASC`,
-      ...PROFILE_UTILITY_FEATURES,
-      ...params
-    )
-    const activityRows = this.db.all<{ date: string; message_count: number }>(
-      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-              COUNT(*) AS message_count
-       FROM agent_messages
-       WHERE ${messageRange}
-       GROUP BY date
-       ORDER BY date ASC`,
-      ...params
-    )
+    const [harnessRows, providerRows, modelRows, projectRows, utilityRows, activityRows] =
+      await Promise.all([
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT harness_id AS id,
+                  harness_id,
+                  NULL AS provider_id,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange}
+           GROUP BY harness_id
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT provider_id AS id,
+                  NULL AS harness_id,
+                  provider_id,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange} AND provider_id IS NOT NULL
+           GROUP BY provider_id
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT model_id AS id,
+                  harness_id,
+                  provider_id,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange} AND model_id IS NOT NULL
+           GROUP BY harness_id, provider_id, model_id
+           ORDER BY message_count DESC, MAX(created_at) DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalProjectAggregateRow>(
+          `SELECT p.id,
+                  p.name,
+                  p.color,
+                  p.icon_type,
+                  p.icon,
+                  COUNT(*) AS message_count,
+                  SUM(COALESCE(m.cost, 0)) AS cost_usd,
+                  SUM(COALESCE(m.tokens_total, CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+                  SUM(CASE
+                        WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
+                        THEN m.completed_at - m.created_at
+                        ELSE 0
+                      END) AS duration_ms,
+                  COUNT(DISTINCT t.id) AS thread_count,
+                  COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
+                  MAX(m.created_at) AS last_active_at
+           FROM agent_messages m
+           JOIN threads t ON t.id = m.thread_id
+           JOIN projects p ON p.id = t.project_id
+           WHERE m.role = 'assistant'
+             AND m.harness_id IS NOT NULL
+             AND m.created_at >= ?
+             AND m.created_at < ?
+           GROUP BY p.id
+           ORDER BY message_count DESC, last_active_at DESC`,
+          [...params]
+        ),
+        this.aggregate<LocalUsageAggregateRow>(
+          `SELECT feature AS id,
+                  NULL AS harness_id,
+                  NULL AS provider_id,
+                  COUNT(*) AS message_count,
+                  SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+                  SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
+                      + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
+                      + COALESCE(tokens_reasoning, 0)) AS tokens_total,
+                  0 AS duration_ms
+           FROM usage_events
+           WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
+             AND created_at >= ?
+             AND created_at < ?
+           GROUP BY feature
+           ORDER BY message_count DESC, feature ASC`,
+          [...PROFILE_UTILITY_FEATURES, ...params]
+        ),
+        this.aggregate<{ date: string; message_count: number }>(
+          `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                  COUNT(*) AS message_count
+           FROM agent_messages
+           WHERE ${messageRange}
+           GROUP BY date
+           ORDER BY date ASC`,
+          [...params]
+        )
+      ])
     const toUsageBreakdown = (row: LocalUsageAggregateRow): LocalProfileUsageBreakdown => ({
       id: row.id,
       ...(row.harness_id ? { harnessId: row.harness_id } : {}),
@@ -705,6 +715,17 @@ export class HarnessUsageRepo {
       activityDays,
       generatedAt: Date.now()
     }
+  }
+
+  /**
+   * Run an aggregate read on the maintenance worker connection so large
+   * analytics scans never block the Electron main thread (primary-connection
+   * fallback for in-memory test databases). Bounded far above any real result
+   * set; the caller's SQL must not contain LIMIT.
+   */
+  private async aggregate<T>(sql: string, params: unknown[]): Promise<T[]> {
+    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS)
+    return result.rows as T[]
   }
 
   /**

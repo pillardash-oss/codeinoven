@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
   context_window  INTEGER,
@@ -198,7 +199,21 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_timeline
-  ON agent_messages(thread_id, session_id, created_at, id);`
+  ON agent_messages(thread_id, session_id, created_at, id);
+
+-- Analytics range scans (Profile): role/harness_id are low-cardinality
+-- filters over a created_at window, so leading with created_at bounds the scan.
+CREATE INDEX IF NOT EXISTS idx_agent_messages_analytics
+  ON agent_messages(created_at, role, harness_id);`
+
+/**
+ * One-time migration for databases created before `tokens_total` existed.
+ * SQLite cannot ADD a STORED generated column via ALTER TABLE, so the column
+ * is added as a plain nullable integer and backfilled in small chunks on the
+ * maintenance worker after startup (see Database.applySchema).
+ */
+export const AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL = `
+ALTER TABLE agent_messages ADD COLUMN tokens_total INTEGER;`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -643,7 +658,11 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_thread
   ON usage_events(thread_id, created_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
-  ON usage_events(parent_turn_id, feature, created_at);`
+  ON usage_events(parent_turn_id, feature, created_at);
+
+-- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
+CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
+  ON usage_events(feature, created_at);`
 
 /** Canonical fresh-install schema. There are no historical migrations. */
 export const DATABASE_SCHEMA_SQL = [
