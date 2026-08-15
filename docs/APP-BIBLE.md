@@ -46,7 +46,7 @@ CodeInOven should feel like a **precision instrument for professionals**:
 
 ## 3. Design System
 
-> Distilled from `DESIGN.md`. Note: `DESIGN.md` contains sections inherited from an earlier product (business/sales copy, SvelteKit dock navigation, `apps/app/src` paths). The token system, typography, layout density, motion, and accessibility rules below are canon for CodeInOven; interpret domain-specific examples through the lens of an agent workstation.
+> Distilled from [`docs/DESIGN.md`](DESIGN.md). Note: `DESIGN.md` contains sections inherited from an earlier product (business/sales copy, SvelteKit dock navigation, `apps/app/src` paths). The token system, typography, layout density, motion, and accessibility rules below are canon for CodeInOven; interpret domain-specific examples through the lens of an agent workstation.
 
 ### 3.1 Visual direction
 
