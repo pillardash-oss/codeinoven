@@ -97,8 +97,8 @@
   /** The three ways to view the project workspace — Projects, Scope, Threads. */
   const projectViewOptions: Array<{ id: ProjectViewMode; label: string; icon: Component }> = [
     { id: 'projects', label: 'Projects', icon: FolderKanban },
-    { id: 'scope', label: 'Scope', icon: Kanban },
-    { id: 'threads', label: 'Threads', icon: Timeline }
+    { id: 'threads', label: 'Threads', icon: Timeline },
+    { id: 'scope', label: 'Scope', icon: Kanban }
   ]
 
   /**
@@ -233,9 +233,9 @@
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
 
-  async function onPrimaryNavClick(
-    view: 'projects' | 'chats' | 'scope' | 'threads'
-  ): Promise<void> {
+  /** Navigate to a primary view without any sidebar toggling — used by the
+   *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
+  async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
     if (view === 'threads') {
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
@@ -260,19 +260,57 @@
       scopeState.clearSidebarContext()
     }
     if (view === 'scope') {
-      if (activeView === 'scope') {
-        navigate('projects')
-      } else {
-        const projectId =
-          workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
-        if (projectId) await scopeState.activateProject(projectId)
-        scopeState.clearSidebarContext()
-        navigate('scope')
-      }
-    } else if (view === activeView) {
-      sidebarState.toggle()
+      const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
+      if (projectId) await scopeState.activateProject(projectId)
+      scopeState.clearSidebarContext()
+      navigate('scope')
     } else {
       navigate(view)
+    }
+  }
+
+  async function onPrimaryNavClick(
+    view: 'projects' | 'chats' | 'scope' | 'threads'
+  ): Promise<void> {
+    const isCurrent = view === activeView
+    await navigateToView(view)
+    // The primary nav button toggles the sidebar when already on a project view
+    // (Scope, when already on scope, exits back to Projects instead).
+    if (isCurrent && view !== 'scope') {
+      sidebarState.toggle()
+    }
+  }
+
+  /** Cmd/Ctrl+3 — Projects view with the scope sidebar active for the current
+   *  thread (or project). Idempotent: never turns scope state off. */
+  async function openProjectWithScopeState(): Promise<void> {
+    if (activeView !== 'projects') {
+      await navigateToView('projects')
+      // Coming back from another view — restore a stashed scope context first.
+      if (scopeState.stashedSidebarContext) {
+        scopeState.restoreStashedSidebarContext()
+        if (scopeState.stashedProjectThreadId) {
+          void restoreThread(scopeState.stashedProjectThreadId)
+        }
+        return
+      }
+    }
+    if (scopeState.sidebarContext) return
+
+    const project = workspaceState.activeProject
+    if (!project) return
+
+    const thread = workspaceState.selectedThread
+    const targetProjectId = thread?.projectId ?? project.id
+
+    const allThreads: Thread[] = await invoke('thread:listAll')
+    scopeState.setThreads(allThreads)
+    await scopeState.activateProject(targetProjectId)
+
+    if (thread) {
+      scopeState.showSidebarForThread(thread)
+    } else {
+      scopeState.showSidebarForProject(targetProjectId)
     }
   }
 
@@ -512,7 +550,9 @@
   })
 
   /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
-   *  flow; Escape cancels the confirm while it is open. */
+   *  flow; Escape cancels the confirm while it is open. Cmd/Ctrl+0-4 switch
+   *  primary views: 0 chats, 1 projects, 2 threads, 3 projects with scope state,
+   *  4 scope. */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && showThreadDeleteConfirm) {
       event.preventDefault()
@@ -520,11 +560,23 @@
       return
     }
     if (event.repeat || event.isComposing) return
-    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'd') return
-    if (event.altKey || event.shiftKey) return
-    if (!workspaceState.selectedThread) return
-    event.preventDefault()
-    showThreadDeleteConfirm = true
+    const modifier = event.metaKey || event.ctrlKey
+    if (!modifier || event.altKey || event.shiftKey) return
+    const key = event.key.toLowerCase()
+    if (key === 'd') {
+      if (!workspaceState.selectedThread) return
+      event.preventDefault()
+      showThreadDeleteConfirm = true
+      return
+    }
+    if (key === '0' || key === '1' || key === '2' || key === '3' || key === '4') {
+      event.preventDefault()
+      if (key === '0') void navigateToView('chats')
+      else if (key === '1') void navigateToView('projects')
+      else if (key === '2') void navigateToView('threads')
+      else if (key === '3') void openProjectWithScopeState()
+      else void navigateToView('scope')
+    }
   }
 
   let showChangeScope = $state(false)

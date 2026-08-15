@@ -11,6 +11,7 @@
     FolderPlus,
     GitBranch,
     Info,
+    Keyboard,
     LayoutDashboard,
     ListTree,
     MessageSquarePlus,
@@ -219,6 +220,12 @@
       label: 'Utilities',
       keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
       icon: Wrench
+    },
+    {
+      id: 'keymap',
+      label: 'Keymap',
+      keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
+      icon: Keyboard
     },
     { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
     {
