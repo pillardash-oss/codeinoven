@@ -1102,6 +1102,14 @@ export class ThreadManager {
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)
     }
 
+    // A fork carries the parent's history, so it is a completed thread, not an
+    // empty "New Thread" draft. Keep it out of the todo slice and out of the
+    // renderer's empty-new-thread reuse logic; it becomes active again only
+    // when the user actually writes on it.
+    const completed = await this.setStatus(destinationProjectId, forked.id, 'completed', {
+      read: true
+    })
+
     // Link fork to parent via branch metadata
     const branchMeta = {
       parentThreadId: threadId,
@@ -1121,7 +1129,7 @@ export class ThreadManager {
     await mkdir(branchDir, { recursive: true })
     await writeFile(join(branchDir, 'origin.json'), JSON.stringify(branchMeta, null, 2))
 
-    return forked
+    return completed
   }
 
   // ── Worker-routed paged reads ───────────────────────────────────────────
