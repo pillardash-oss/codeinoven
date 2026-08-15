@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS threads (
   settings             TEXT,
   context_usage        TEXT,
   session_id           TEXT,
+  session_harness_id   TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
   audit_state          TEXT CHECK(audit_state IN ('offered','running','report_ready','reworking')),

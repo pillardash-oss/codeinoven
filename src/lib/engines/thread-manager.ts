@@ -783,11 +783,21 @@ export class ThreadManager {
     return updated
   }
 
-  /** Bind a harness session id to the thread. */
-  async setSessionId(projectId: string, threadId: string, sessionId: string): Promise<Thread> {
+  /** Bind a harness session id to the thread, recording the harness that owns it. */
+  async setSessionId(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    harnessId?: string
+  ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
-    const updated: Thread = { ...existing, sessionId, updatedAt: Date.now() }
+    const updated: Thread = {
+      ...existing,
+      sessionId,
+      ...(harnessId ? { sessionHarnessId: harnessId } : {}),
+      updatedAt: Date.now()
+    }
 
     this.threadRepo.upsert(updated)
     return updated
@@ -799,6 +809,7 @@ export class ThreadManager {
 
     const updated: Thread = { ...existing, updatedAt: Date.now() }
     delete updated.sessionId
+    delete updated.sessionHarnessId
 
     this.threadRepo.upsert(updated)
     return updated

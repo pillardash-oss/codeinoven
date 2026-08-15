@@ -1979,7 +1979,14 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // Pending provider questions belong to the thread's bound session, which
+    // after a mid-run harness switch is owned by the original harness even
+    // when settings point at a new one.
+    const driverId =
+      thread.sessionHarnessId ??
+      this.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.settings?.harnessId ??
+      'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     const providerRequests = await driver.listPendingQuestions(projectPath)
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
@@ -2821,17 +2828,22 @@ export class ChatEngine {
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
 
-    // A harness switch orphans the old harness's session. Capture it before the
-    // binding below is reset so it can be released (best-effort) once the
-    // replacement session is created successfully.
-    const previousHarnessId = thread.settings?.harnessId
-    const switchedHarness = Boolean(previousHarnessId && previousHarnessId !== driverId)
+    // A harness switch orphans the old harness's session. The thread's bound
+    // session belongs to the harness that created it — after a mid-run switch
+    // `settings.harnessId` already points at the new harness while `sessionId`
+    // still lives in the old one, so the switch is detected by comparing the
+    // session OWNER (persisted or registered) with the requested driver, never
+    // the current settings. Capture the previous session before the binding
+    // below is reset so it can be fully synced and released (best-effort)
+    // before the new harness takes over.
+    const sessionOwner = thread.sessionId
+      ? (thread.sessionHarnessId ?? this.sessionRegistry.get(thread.sessionId)?.driverId)
+      : undefined
+    const switchedHarness = Boolean(thread.sessionId && sessionOwner && sessionOwner !== driverId)
+    const previousHarnessId = switchedHarness ? sessionOwner : undefined
     const previousSessionId = switchedHarness ? thread.sessionId : undefined
 
-    let sessionId =
-      thread.settings?.harnessId && thread.settings.harnessId !== driverId
-        ? undefined
-        : thread.sessionId
+    let sessionId = switchedHarness ? undefined : thread.sessionId
     if (sessionId && thread.settings?.engineeringMode) {
       this.planningSessions.add(sessionId)
     }
@@ -2869,7 +2881,7 @@ export class ChatEngine {
     }
     if (!sessionId) {
       sessionId = await driver.createSession(projectPath, thread.title)
-      await this.threadManager.setSessionId(projectId, threadId, sessionId)
+      await this.threadManager.setSessionId(projectId, threadId, sessionId, driverId)
       if (rotatedPlanningSession) {
         this.preparedImplementationSessions.add(sessionId)
         Logger.info('Prepared a clean implementation session for the approved specification', {
@@ -2994,6 +3006,41 @@ export class ChatEngine {
   ): Promise<void> {
     this.retireSessionState(previousSessionId)
     const previousDriver = this.drivers.get(previousHarnessId)
+    // The orphaned session's transcript must land in the app mirror before its
+    // native session is destroyed, so the user never loses the old harness's
+    // final output when they switch harnesses. Best-effort and non-throwing:
+    // the idle sync usually already mirrored the completed turn.
+    if (previousDriver?.loadMessages) {
+      try {
+        const previousMessages = stampHarnessId(
+          await previousDriver.loadMessages(projectPath, previousSessionId),
+          previousHarnessId
+        )
+        if (previousMessages.length > 0) {
+          const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+          const merged = restoreMirrorThinkingLevel(
+            mergeAgentMessages(mirror, previousMessages),
+            mirror
+          )
+          await this.threadManager.upsertMessages(projectId, threadId, merged, previousSessionId)
+          Logger.info('Synced orphaned harness session transcript before release', {
+            projectId,
+            threadId,
+            previousHarnessId,
+            previousSessionId,
+            messageCount: previousMessages.length
+          })
+        }
+      } catch (error) {
+        Logger.info('Orphaned harness session transcript sync skipped', {
+          projectId,
+          threadId,
+          previousHarnessId,
+          previousSessionId,
+          detail: rawErrorMessage(error)
+        })
+      }
+    }
     if (!previousDriver?.deleteSession) {
       Logger.info('Orphaned harness session has no deletable native session', {
         projectId,
@@ -3032,7 +3079,15 @@ export class ChatEngine {
     if (!thread.sessionId) {
       return this.threadManager.loadMessages(projectId, threadId)
     }
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // The thread's bound session belongs to the harness that created it, not
+    // necessarily the one currently selected in settings: after a mid-run
+    // harness switch `settings.harnessId` points at the new harness while
+    // `sessionId` still lives in the old one. Always read through the session's
+    // owning driver (registry first, persisted owner second) so the old
+    // transcript syncs completely and the new harness never sees a foreign id.
+    const registeredOwner = this.sessionRegistry.get(thread.sessionId)?.driverId
+    const driverId =
+      registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'opencode'
     try {
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
       this.registerSession(
@@ -3147,7 +3202,14 @@ export class ChatEngine {
       throw new Error('Sub-agent session does not belong to this thread')
     }
 
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // Child sessions belong to the harness that owns the parent session, which
+    // after a mid-run harness switch is the thread's persisted owner rather
+    // than the currently selected harness.
+    const driverId =
+      thread.sessionHarnessId ??
+      (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.driverId : undefined) ??
+      thread.settings?.harnessId ??
+      'opencode'
     const { projectPath } = await this.resolve(projectId, driverId, threadId)
     const owner: ChildSessionInfo = {
       projectId,
@@ -3946,7 +4008,18 @@ export class ChatEngine {
     if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
       throw new Error('The harness turn finished before the steer message could be delivered')
     }
-    const driverId = activeBrainstorm?.driverId ?? thread.settings?.harnessId ?? 'opencode'
+    // Steering targets the ACTIVE session, which belongs to the harness that
+    // created it — after a mid-run harness switch the active session still
+    // lives in the old harness while `settings.harnessId` points at the new
+    // one. Resolve the driver by the active session's owner so a steer after a
+    // switch reaches the running turn instead of a foreign harness.
+    const activeSessionOwner =
+      this.sessionRegistry.get(activeSessionId)?.driverId ?? thread.sessionHarnessId
+    const driverId =
+      activeBrainstorm?.driverId ??
+      activeSessionOwner ??
+      thread.settings?.harnessId ??
+      'opencode'
     const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
@@ -14936,7 +15009,12 @@ export class ChatEngine {
       threadId,
       projectPath,
       permissionLevel,
-      driverId,
+      // A session id is owned by the harness that created it and never
+      // migrates: when the user switches harness, `ensureSession` binds a
+      // fresh session id from the new driver and retires the old one. Preserve
+      // the registered owner so a settings-derived re-registration (mid-run
+      // harness switch) can never clobber which driver owns the session.
+      driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
