@@ -25,6 +25,9 @@
     autofocus?: boolean
     disabled?: boolean
     onValueChange?: (value: string) => void
+    /** Fired only by Cmd/Ctrl+Enter (send) or Cmd/Ctrl+Shift+Enter (steer).
+     *  `direct` is true for the steer combo, false/undefined for plain send —
+     *  busy callers queue on send and force-deliver on steer. */
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
     inlineBadges?: readonly RichInlineBadge[]
@@ -644,6 +647,16 @@
         return
       }
 
+      // Cmd/Ctrl+Enter sends; Cmd/Ctrl+Shift+Enter force-sends (steers) the
+      // message into the live turn mid-turn. Checked before the Shift+Enter
+      // soft-break branch so the modifier combos always submit instead of
+      // inserting a newline. A bare Enter never submits.
+      if (modifier && onSubmit) {
+        event.preventDefault()
+        onSubmit(event.shiftKey)
+        return
+      }
+
       const blockTag = selectedBlockTag(editor)
 
       // Shift+Enter always inserts a soft line break (never a new list item,
@@ -663,14 +676,6 @@
         event.preventDefault()
         return
       }
-    }
-    // Enter is never a send key: plain Enter keeps the browser's default
-    // newline/list behavior, and only Cmd/Ctrl+Enter submits.
-    if (event.key !== 'Enter' || !onSubmit) return
-    if (modifier) {
-      event.preventDefault()
-      onSubmit(true)
-      return
     }
   }
 

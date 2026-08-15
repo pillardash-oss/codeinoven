@@ -363,6 +363,9 @@
   let showQueueMenu = $state(false)
   /** Bumped to remount the composer with a restored draft after editing the queue. */
   let composerRestoreKey = $state(0)
+  /** Shortcut label for the steer combo — macOS shows ⌘⇧, others Ctrl+Shift+. */
+  const steerModifierLabel =
+    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
   /** Attachments to restore into the composer after an Edit of the queue. */
   let restoredAttachments = $state<PromptAttachment[]>([])
   /** True while a user-initiated stop is settling — suppresses the expected
@@ -379,9 +382,9 @@
     if (!prompt || tab.expired) return
     touch()
     // While the agent is working, the message is queued unless the user
-    // force-sends it (Cmd/Ctrl+Enter) as an intervention.
-    if (tab.busy && !direct) {
-      queued = {
+    // force-sends it (Cmd/Ctrl+Shift+Enter) as a steer intervention.
+    if (tab.busy) {
+      const pending: QueuedTemporaryPrompt = {
         text: prompt,
         attachments,
         selections: tab.selectionAttached ? [...tab.selections] : [],
@@ -389,6 +392,11 @@
       }
       tab.selections = []
       tab.selectionAttached = false
+      if (direct) {
+        await steerQueuedMessage(pending)
+      } else {
+        queued = pending
+      }
       return
     }
     const temporaryChatId = tab.temporaryChatId
@@ -466,12 +474,17 @@
     }
   }
 
-  /** Send the queued message immediately as an intervention into the live turn. */
-  async function steerQueuedMessage(): Promise<void> {
-    const pending = queued
+  /**
+   * Steer — deliver a message into the live temporary-chat turn as an
+   * intervention (Cmd/Ctrl+Shift+Enter in the composer, or the queue card's
+   * Steer button). If the turn finished before delivery the message is
+   * restored to the queue instead of being lost.
+   */
+  async function steerQueuedMessage(pendingOverride?: QueuedTemporaryPrompt): Promise<void> {
+    const pending = pendingOverride ?? queued
     if (!pending || !tab.busy || tab.expired) return
     showQueueMenu = false
-    queued = null
+    if (!pendingOverride) queued = null
     touch()
     const temporaryChatId = tab.temporaryChatId
     const outgoing = userMessage(
@@ -856,7 +869,7 @@
                   <button
                     type="button"
                     class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
-                    title="Send this message to the agent now"
+                    title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                     onclick={() => void steerQueuedMessage()}
                   >
                     Steer
