@@ -245,9 +245,12 @@ ALTER TABLE harness_usage ADD COLUMN thinking_level TEXT;`
  * because SQLite treats NULLs as distinct inside a composite PRIMARY KEY —
  * NULL levels would fragment one model's usage into a row per message instead
  * of accumulating it. SQLite cannot change a PRIMARY KEY in place, so the
- * table is always rebuilt rather than altered.
+ * table is always rebuilt rather than altered. The temp table is dropped first
+ * so a partially-failed earlier run (which can leave `harness_usage_models_v2`
+ * behind) never blocks database initialization on retry.
  */
 const HARNESS_USAGE_MODELS_V2_DDL = `
+DROP TABLE IF EXISTS harness_usage_models_v2;
 CREATE TABLE harness_usage_models_v2 (
   thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   harness_id           TEXT NOT NULL,
@@ -325,6 +328,7 @@ ${HARNESS_USAGE_MODELS_REBUILD_EPILOGUE}`
  * SET NULL` and preserves all existing rows.
  */
 export const TURN_FEEDBACK_SET_NULL_MIGRATION_SQL = `
+DROP TABLE IF EXISTS turn_feedback_v2;
 CREATE TABLE turn_feedback_v2 (
   id             TEXT PRIMARY KEY NOT NULL,
   thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,

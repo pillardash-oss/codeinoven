@@ -75,6 +75,37 @@ describe('harness_usage_models thinking-level migration', () => {
     expect(rows[0]?.tokens_total).toBe(480)
   })
 
+  it('recovers when a partially-failed run left harness_usage_models_v2 behind', () => {
+    const db = new Database(':memory:')
+    db.exec(preThinkingLevelHarnessUsageModelsSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    db.exec(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x',5,3.0,300,150,30,0,0,480,3000,100,200)`
+    )
+    // Simulate the earlier migration failing midway: the v2 CREATE succeeded,
+    // the copy aborted on the missing column, and the temp table was left over.
+    db.exec(`CREATE TABLE harness_usage_models_v2 (id TEXT)`)
+    db.exec(`INSERT INTO harness_usage_models_v2(id) VALUES('leftover')`)
+
+    // Regression: the retry must not abort with "table ... already exists".
+    expect(() => db.exec(HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL)).not.toThrow()
+
+    const rows = db.prepare('SELECT * FROM harness_usage_models').all() as Array<{
+      thinking_level: string
+      message_count: number
+    }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.thinking_level).toBe('')
+    expect(rows[0]?.message_count).toBe(5)
+    // The leftover temp table was dropped, not left polluting the schema.
+    const leftover = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'harness_usage_models_v2'"
+      )
+      .get()
+    expect(leftover).toBeUndefined()
+  })
+
   it('normalizes a nullable thinking_level to NOT NULL so unknown rows accumulate', () => {
     const db = new Database(':memory:')
     db.exec(legacyHarnessUsageModelsSql())
@@ -177,6 +208,27 @@ describe('turn_feedback SET NULL migration', () => {
     expect(row.parent_turn_id).toBe('turn-1')
     expect(row.model_id).toBe('gpt-x')
     expect(row.score).toBe(1)
+  })
+
+  it('recovers when a partially-failed run left turn_feedback_v2 behind', () => {
+    const db = new Database(':memory:')
+    db.exec(legacyTurnFeedbackSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    db.exec(
+      `INSERT INTO turn_feedback(id, thread_id, parent_turn_id, created_at, status, score, feature, harness_id, provider_id, model_id)
+       VALUES('o1','t1','turn-1',1000,'success',1,'main','opencode','openai','gpt-x')`
+    )
+    db.exec(`CREATE TABLE turn_feedback_v2 (id TEXT)`)
+    db.exec(`INSERT INTO turn_feedback_v2(id) VALUES('leftover')`)
+
+    expect(() => db.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)).not.toThrow()
+
+    const row = db.prepare('SELECT * FROM turn_feedback').get() as { parent_turn_id: string }
+    expect(row.parent_turn_id).toBe('turn-1')
+    const leftover = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'turn_feedback_v2'")
+      .get()
+    expect(leftover).toBeUndefined()
   })
 
   it('keeps resolved cleanup outcomes after the thread row is deleted', () => {
