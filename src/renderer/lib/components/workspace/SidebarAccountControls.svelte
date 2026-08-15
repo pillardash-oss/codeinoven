@@ -87,26 +87,23 @@
   {#if profile}
     <button
       type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[10px] font-bold text-on-primary ring-1 ring-border transition-opacity hover:opacity-80"
+      class="flex h-8 min-w-0 flex-1 shrink-0 items-center gap-2 overflow-hidden rounded-lg pr-2 transition-colors hover:bg-elevated"
       title="Open {profile.displayName || profile.email}'s profile"
       aria-label="Open {profile.displayName || profile.email}'s profile"
       onclick={() => navigate('settings-profile')}
     >
-      {#if profile.image}
-        <img class="h-full w-full object-cover" src={profile.image} alt="" />
-      {:else}
-        <span aria-hidden="true">{initials}</span>
-      {/if}
-    </button>
-
-    <button
-      type="button"
-      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open settings (⌘,)"
-      aria-label="Open settings"
-      onclick={() => navigate('settings')}
-    >
-      <Settings size={15} />
+      <span
+        class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[10px] font-bold text-on-primary ring-1 ring-border"
+      >
+        {#if profile.image}
+          <img class="h-full w-full object-cover" src={profile.image} alt="" />
+        {:else}
+          <span aria-hidden="true">{initials}</span>
+        {/if}
+      </span>
+      <span class="min-w-0 flex-1 truncate text-left text-[13px] font-medium text-foreground">
+        {profile.displayName || profile.email}
+      </span>
     </button>
 
     {#if enrolled}
@@ -140,7 +137,18 @@
     </button>
   {/if}
 
-  <div class={profile ? 'ml-auto' : ''}>
+  <div class="ml-auto flex shrink-0 items-center gap-1">
+    {#if profile}
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Open settings (⌘,)"
+        aria-label="Open settings"
+        onclick={() => navigate('settings')}
+      >
+        <Settings size={15} />
+      </button>
+    {/if}
     {#if !updaterState.status.canAutoUpdate}
       <button
         type="button"
