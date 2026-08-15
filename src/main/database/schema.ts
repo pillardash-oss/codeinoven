@@ -734,7 +734,41 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
 
 -- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
 CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
-  ON usage_events(feature, created_at);`
+  ON usage_events(feature, created_at);
+
+-- ─── Turn outcome feedback (session scoring) ─────────────────────────────
+-- One row per completed user turn, opened "pending" when a successful turn
+-- finishes and resolved when the user signals the outcome: they continued
+-- positively, corrected the answer, switched away to another thread, or left
+-- the thread idle until cleanup. Scores (0/1) feed the "best model by
+-- feedback" profile section, keyed by harness/provider/model/thinking level
+-- and the task kind (main/audit/assignment).
+CREATE TABLE IF NOT EXISTS turn_feedback (
+  id             TEXT PRIMARY KEY NOT NULL,
+  thread_id      TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  parent_turn_id TEXT NOT NULL UNIQUE,
+  session_id     TEXT,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+  score          REAL NOT NULL DEFAULT 0,
+  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
+  task_slug      TEXT,
+  harness_id     TEXT,
+  provider_id    TEXT,
+  model_id       TEXT,
+  thinking_level TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
+  ON turn_feedback(thread_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
+  ON turn_feedback(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
+  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
 
 /** Canonical fresh-install schema. There are no historical migrations. */
 export const DATABASE_SCHEMA_SQL = [

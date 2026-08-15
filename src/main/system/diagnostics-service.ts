@@ -23,7 +23,8 @@ export type AuxiliaryUsageReport = Record<AuxiliaryFeature, AuxiliaryUsageTotals
 function emptyAuxiliaryUsage(): AuxiliaryUsageReport {
   return {
     memory: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 },
-    title: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
+    title: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 },
+    search_nudge: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
   }
 }
 

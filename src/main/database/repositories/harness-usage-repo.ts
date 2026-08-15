@@ -722,6 +722,8 @@ export class HarnessUsageRepo {
       utilities,
       projects,
       activityDays,
+      // Feedback scoring lives in TurnFeedbackRepo; the IPC layer overlays it.
+      modelPerformance: [],
       generatedAt: Date.now()
     }
   }
