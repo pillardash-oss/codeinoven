@@ -88,11 +88,20 @@
     await onSelect({ action, query: query.trim(), method })
   }
 
-  function handleInlineKeydown(event: KeyboardEvent): void {
-    if (!open || mode !== 'inline' || event.key !== 'Escape') return
-    event.preventDefault()
-    event.stopPropagation()
-    onClose()
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (!open) return
+    if (mode === 'inline' && event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      onClose()
+      return
+    }
+    // Alt/Cmd+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
+    if (onBack && event.key === 'ArrowLeft' && (event.altKey || event.metaKey)) {
+      event.preventDefault()
+      event.stopPropagation()
+      onBack()
+    }
   }
 
   function categoryLabel(action: ActionDefinition): string {
@@ -100,7 +109,7 @@
   }
 </script>
 
-<svelte:window onkeydown={handleInlineKeydown} />
+<svelte:window onkeydown={handleWindowKeydown} />
 
 {#snippet paletteBody()}
   <Command.Root
