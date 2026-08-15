@@ -10,9 +10,16 @@ import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
-import { installFilePreviewProtocol, registerFilePreviewScheme } from './editor/file-preview-protocol'
+import {
+  installFilePreviewProtocol,
+  registerFilePreviewScheme
+} from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
-import { setNotificationService, setPowerWakeService, broadcastThreadUpdate } from './chat/thread-events'
+import {
+  setNotificationService,
+  setPowerWakeService,
+  broadcastThreadUpdate
+} from './chat/thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
@@ -22,7 +29,10 @@ import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
 import type { Thread } from '../lib/types'
 import { startupTelemetry } from './system/startup-telemetry'
-import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
+import {
+  handleFatalStartupFailure,
+  installProcessCrashDiagnostics
+} from './system/lifecycle-diagnostics'
 import type { ChatEngine } from './chat/chat-engine'
 import type { HarnessManifestService } from './agents/harness-manifest-service'
 import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
@@ -592,7 +602,7 @@ async function bootPostPaintServices(): Promise<void> {
       storage,
       credentials: remoteCredentials,
       loadAccountProfileData: async () => ({
-        usage: accountUsage.profileSummary(),
+        usage: await accountUsage.profileSummary(),
         globalMemories: (await accountMemory.getEntries()).filter(
           (entry) => entry.scope === 'global'
         )
