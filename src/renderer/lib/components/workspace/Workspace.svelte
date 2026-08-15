@@ -1339,6 +1339,21 @@
     wasActive = nowActive
   })
 
+  /** Cmd/Ctrl+W while the context sidebar has focus closes its active tab
+   *  (through the unsaved-changes confirmation) rather than the thread. */
+  $effect(() => {
+    const request = contextSidebarState.closeActiveTabRequest
+    if (request === 0) return
+    const focused = document.activeElement instanceof Element ? document.activeElement : null
+    const region = focused?.closest<HTMLElement>('[data-region="context-sidebar"]')
+    const placement = region?.dataset.placement
+    const tabId =
+      placement === 'bottom'
+        ? contextSidebarState.terminalActiveTabId
+        : contextSidebarState.sidebarActiveTabId
+    if (tabId) closeContextTab(tabId)
+  })
+
   /** Explicit timeline expansion. The initial shell intentionally carries
    * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {

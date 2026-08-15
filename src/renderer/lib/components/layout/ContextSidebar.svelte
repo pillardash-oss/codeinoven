@@ -158,6 +158,8 @@
     : 'border-l'}"
   class:select-none={resizing}
   aria-label="Context sidebar"
+  data-region="context-sidebar"
+  data-placement={placement}
 >
   <div
     class="absolute z-10 transition-colors hover:bg-primary/20 {placement === 'bottom'

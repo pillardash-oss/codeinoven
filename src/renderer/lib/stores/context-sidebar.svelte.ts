@@ -199,6 +199,9 @@ class ContextSidebarState {
   width = $state(480)
   terminalHeight = $state(320)
   terminalPlacement = $state<TerminalPlacement>('right')
+  /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
+   *  consumer (Workspace) can run the close-through-confirmation flow. */
+  closeActiveTabRequest = $state(0)
 
   get tabs(): ContextSidebarTab[] {
     return this.activeContext?.tabs ?? EMPTY_TABS
@@ -1000,6 +1003,12 @@ class ContextSidebarState {
     if (context.tabs.length === 0) {
       context.visible = false
     }
+  }
+
+  /** Signal Workspace to close the active tab through its confirmation flow
+   *  (unsaved-file dialog). The tab is not closed here — Workspace decides. */
+  requestCloseActiveTab(): void {
+    this.closeActiveTabRequest += 1
   }
 
   reorder(id: string, targetId: string, position: 'before' | 'after'): void {
