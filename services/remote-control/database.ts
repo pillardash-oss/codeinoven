@@ -3,7 +3,6 @@
 import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
-  AccountProfileRecord,
   DesktopAuthorizationCodeRecord,
   DesktopRecord,
   EnrollmentRecord,
@@ -88,13 +87,6 @@ CREATE TABLE IF NOT EXISTS users (
   image_url TEXT,
   password_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS account_profiles (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  usage_json TEXT NOT NULL DEFAULT '{}',
-  global_memories_json TEXT NOT NULL DEFAULT '[]',
-  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS desktop_authorization_codes (
@@ -260,28 +252,6 @@ export class RemoteControlDatabase {
       .run(input.id, input.email, input.displayName, input.image, now)
   }
 
-  accountProfile(userId: string): AccountProfileRecord | null {
-    return (
-      (this.db.prepare('SELECT * FROM account_profiles WHERE user_id = ?').get(userId) as
-        AccountProfileRecord | undefined) ?? null
-    )
-  }
-
-  saveAccountProfile(userId: string, usageJson: string, globalMemoriesJson: string): number {
-    const updatedAt = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO account_profiles(user_id, usage_json, global_memories_json, updated_at)
-         VALUES(?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           usage_json = excluded.usage_json,
-           global_memories_json = excluded.global_memories_json,
-           updated_at = excluded.updated_at`
-      )
-      .run(userId, usageJson, globalMemoriesJson, updatedAt)
-    return updatedAt
-  }
-
   createDesktopAuthorizationCode(input: {
     codeHash: string
     userId: string
@@ -370,21 +340,6 @@ export class RemoteControlDatabase {
     })()
   }
 
-  findUserIdByAccountTokenHash(hash: string): string | null {
-    const now = Date.now()
-    const record = this.db
-      .prepare(
-        `SELECT user_id FROM account_tokens
-         WHERE token_hash = ? AND expires_at > ? AND revoked_at IS NULL`
-      )
-      .get(hash, now) as { user_id: string } | undefined
-    if (!record) return null
-    this.db
-      .prepare('UPDATE account_tokens SET last_used_at = ? WHERE token_hash = ?')
-      .run(now, hash)
-    return record.user_id
-  }
-
   rememberOAuthSession(session: AuthenticatedSession): void {
     const now = Date.now()
     this.db
@@ -452,14 +407,6 @@ export class RemoteControlDatabase {
     return (
       (this.db
         .prepare('SELECT * FROM desktops WHERE token_hash = ? AND revoked_at IS NULL')
-        .get(hash) as DesktopRecord | undefined) ?? null
-    )
-  }
-
-  findDesktopByProfileTokenHash(hash: string): DesktopRecord | null {
-    return (
-      (this.db
-        .prepare('SELECT * FROM desktops WHERE profile_token_hash = ? AND revoked_at IS NULL')
         .get(hash) as DesktopRecord | undefined) ?? null
     )
   }
