@@ -715,6 +715,7 @@
         <div class="mx-auto max-w-2xl">
           <ChatComposer
             placeholder="Ask a read-only question…"
+            autofocus
             disabled={tab.busy}
             settings={tab.settings}
             onSettingsChange={updateSettings}
