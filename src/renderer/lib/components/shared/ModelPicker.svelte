@@ -744,15 +744,11 @@
 <div>
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
     <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
-      <button
-        type="button"
+      <Popover.Trigger
         class={modelButtonClasses}
         aria-label={`Select model, currently ${selectedLabel}`}
         title={`Select model — ${selectedLabel}`}
-        aria-haspopup="dialog"
-        aria-expanded={open}
         {disabled}
-        onclick={() => (open = true)}
       >
         {#if selectedProvider}
           <span class="flex shrink-0 items-center gap-0.5">
@@ -772,7 +768,7 @@
             aria-label="Fast inference"
           />
         {/if}
-      </button>
+      </Popover.Trigger>
       {#if supportsThinking}
         <DropdownMenu.Root>
           <DropdownMenu.Trigger
