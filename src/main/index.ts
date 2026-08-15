@@ -8,6 +8,7 @@ import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
+import { AccountProfileRepo } from './database/repositories/account-profile-repo'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import {
@@ -585,6 +586,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
     remoteCredentials = new DeviceCredentialService(database)
+    const accountProfileRepo = new AccountProfileRepo(database)
     const accountUsage = new HarnessUsageRepo(database)
     const accountMemory = new MemoryService(storage)
     remoteMode = new RemoteModeController({
@@ -601,6 +603,7 @@ async function bootPostPaintServices(): Promise<void> {
       }),
       storage,
       credentials: remoteCredentials,
+      accountProfileRepo,
       loadAccountProfileData: async () => ({
         usage: await accountUsage.profileSummary(),
         globalMemories: (await accountMemory.getEntries()).filter(

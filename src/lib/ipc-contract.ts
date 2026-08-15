@@ -177,6 +177,7 @@ export interface IpcInvokeContract {
     import('./types').AccountSignInStart
   >
   'account:syncProfile': Contract<[], import('./types').AccountProfileState>
+  'account:signOut': Contract<[], void>
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -428,6 +429,19 @@ export interface IpcInvokeContract {
       }
     ],
     import('./types').MemoryProposal
+  >
+  'memory:export': Contract<
+    [kind: import('./types').MemoryExportKind, projectId?: string],
+    string | null
+  >
+  'memory:import': Contract<[], import('./types').MemoryImportPreview | null>
+  'memory:importApply': Contract<
+    [
+      preview: import('./types').MemoryImportPreview,
+      kind: import('./types').MemoryExportKind,
+      projectId?: string
+    ],
+    { added: number; skipped: number }
   >
   'agent:compact': Contract<[projectId: string, threadId: string], void>
   'agent:answerQuestion': Contract<

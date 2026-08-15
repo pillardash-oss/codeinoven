@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, RefreshCw } from '@lucide/svelte'
-  import { Popover } from 'bits-ui'
+  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
+  import { AlertDialog, Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
     AccountProfileState,
@@ -78,6 +78,7 @@
   let loading = $state(true)
   let errorMessage = $state('')
   let signInOpen = $state(false)
+  let signOutOpen = $state(false)
   let accountBusy = $state(false)
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
@@ -372,6 +373,23 @@
     }
   }
 
+  async function signOut(): Promise<void> {
+    if (accountBusy) return
+    accountBusy = true
+    signInError = ''
+    try {
+      await invoke('account:signOut')
+      accountState = { status: 'signed-out', profile: null }
+      signInOpen = false
+      signOutOpen = false
+    } catch {
+      signOutOpen = false
+      signInError = 'Sign-out could not be completed. Try again in a moment.'
+    } finally {
+      accountBusy = false
+    }
+  }
+
   function handleWindowFocus(): void {
     if (accountState.status === 'pending') void refreshAccount()
   }
@@ -468,6 +486,21 @@
               <p class="mt-3 text-xs leading-relaxed text-muted">
                 Your account is connected. Local analytics remain available on this device.
               </p>
+              {#if signInError}
+                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+                  {signInError}
+                </p>
+              {/if}
+              <button
+                type="button"
+                class="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg border text-xs font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+                title="Sign out of CodeInOven"
+                disabled={accountBusy}
+                onclick={() => (signOutOpen = true)}
+              >
+                <LogOut size={14} />
+                Sign out
+              </button>
             {:else if accountState.status === 'pending'}
               <p class="text-sm font-semibold">Finish signing in</p>
               <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -1090,6 +1123,36 @@
     </div>
   </section>
 </div>
+
+<AlertDialog.Root open={signOutOpen} onOpenChange={(open) => (signOutOpen = open)}>
+  <AlertDialog.Portal>
+    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Sign out of CodeInOven?
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        Your saved profile will be removed from this device and you will be signed out. You can sign
+        in again anytime.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+          onclick={() => void signOut()}
+        >
+          Sign out
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>
 
 <style>
   .activity-columns {

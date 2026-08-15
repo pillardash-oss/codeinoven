@@ -43,6 +43,7 @@ import {
 } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
+import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
 import {
   readRemoteDeviceNames,
@@ -86,6 +87,8 @@ export interface RemoteModeOptions {
   storage?: import('../storage/storage-engine').StorageEngine | null
   /** Device credential service backing per-device identity and revocation. */
   credentials?: DeviceCredentialService | null
+  /** SQLite repository used to cache the validated account profile locally. */
+  accountProfileRepo?: AccountProfileRepo | null
   /**
    * Called whenever the live remote-session state changes (a phone connects or
    * disconnects). Lets the host keep the device awake while a session is live.
@@ -426,6 +429,7 @@ export class RemoteModeController {
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage/storage-engine').StorageEngine | null
   private readonly credentials: DeviceCredentialService | null
+  private readonly accountProfileRepo: AccountProfileRepo | null
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
@@ -437,6 +441,8 @@ export class RemoteModeController {
   private accountSignInTimeout: ReturnType<typeof setTimeout> | null = null
   private accountTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
   private accountTokenRefreshPromise: Promise<AccountSessionConfig> | null = null
+  /** Bumped on sign-out so in-flight profile refreshes never re-broadcast stale state. */
+  private accountProfileGeneration = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
@@ -460,6 +466,7 @@ export class RemoteModeController {
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
     this.credentials = options.credentials ?? null
+    this.accountProfileRepo = options.accountProfileRepo ?? null
     this.vault = this.storage ? new SecretVault(this.storage) : null
     this.onSessionActiveChange = options.onSessionActiveChange
     this.loadAccountProfileData = options.loadAccountProfileData
@@ -1014,6 +1021,7 @@ export class RemoteModeController {
     ipcMain.handle('account:syncProfile', (): Promise<AccountProfileState> =>
       this.syncAccountProfile()
     )
+    ipcMain.handle('account:signOut', (): Promise<void> => this.signOutAccount())
   }
 
   private async accountRequest(init?: RequestInit): Promise<Response | null> {
@@ -1070,7 +1078,33 @@ export class RemoteModeController {
     }
   }
 
+  /**
+   * Current account profile, served from the SQLite cache first so a restart
+   * (or an offline window) never loses the signed-in identity. When a cached
+   * profile exists the live fetch runs in the background and broadcasts a fresh
+   * copy via `account:profileChanged` when it lands.
+   */
   async accountProfile(): Promise<AccountProfileState> {
+    const cached = await this.readCachedAccountProfile()
+    if (cached) {
+      void this.refreshAccountProfileInBackground()
+      return { status: 'signed-in', profile: cached }
+    }
+    try {
+      return await this.fetchAccountProfile()
+    } catch (error) {
+      Logger.dev('Account profile could not be fetched:', error)
+      return {
+        status:
+          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
+            ? 'pending'
+            : 'signed-out',
+        profile: null
+      }
+    }
+  }
+
+  private async fetchAccountProfile(): Promise<AccountProfileState> {
     const response = await this.accountRequest()
     if (!response || response.status === 401) {
       return {
@@ -1084,7 +1118,78 @@ export class RemoteModeController {
     if (!response.ok) throw new Error('Account profile is unavailable')
     const profile = parseAccountProfile(await response.json())
     if (!profile) throw new Error('Account profile response is invalid')
-    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+    const withImage = await this.loadProfileImage(profile)
+    await this.cacheAccountProfile(withImage)
+    return { status: 'signed-in', profile: withImage }
+  }
+
+  /**
+   * Revalidate a cached profile from the network without disturbing the state
+   * already served. Network failures are deliberately swallowed — the cached
+   * signed-in identity stays until a successful fetch or an explicit sign-out.
+   */
+  private async refreshAccountProfileInBackground(): Promise<void> {
+    const generation = this.accountProfileGeneration
+    try {
+      const state = await this.fetchAccountProfile()
+      if (generation !== this.accountProfileGeneration) return
+      // A background probe must never drop a cached identity — only a successful
+      // fetch (or an explicit sign-out) changes what the user sees.
+      if (state.status !== 'signed-in') {
+        Logger.dev('Account profile revalidation is not signed in; keeping the cached profile')
+        return
+      }
+      this.broadcastAccountProfile(state)
+    } catch (error) {
+      Logger.dev('Account profile refresh deferred; keeping the cached profile:', error)
+    }
+  }
+
+  private async readCachedAccountProfile(): Promise<AccountProfile | null> {
+    try {
+      return this.accountProfileRepo?.load() ?? null
+    } catch (error) {
+      Logger.dev('Could not read the cached account profile:', error)
+      return null
+    }
+  }
+
+  private async cacheAccountProfile(profile: AccountProfile): Promise<void> {
+    try {
+      this.accountProfileRepo?.save(profile)
+    } catch (error) {
+      Logger.dev('Could not cache the account profile:', error)
+    }
+  }
+
+  private async clearCachedAccountProfile(): Promise<void> {
+    try {
+      this.accountProfileRepo?.clear()
+    } catch (error) {
+      Logger.dev('Could not clear the cached account profile:', error)
+    }
+  }
+
+  /**
+   * Explicit account sign-out: revoke the persisted session token, remove the
+   * session config, and delete the cached profile (the only thing that removes
+   * the cached identity). Remote-device enrollment is independent and untouched.
+   */
+  async signOutAccount(): Promise<void> {
+    this.accountProfileGeneration++
+    const config =
+      this.accountConfig ??
+      (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
+      null
+    if (config?.profileTokenRef && this.vault) {
+      await this.vault.remove(config.profileTokenRef).catch(() => undefined)
+    }
+    if (this.storage) {
+      await this.storage.remove(ACCOUNT_CONFIG_PATH).catch(() => undefined)
+    }
+    this.accountConfig = null
+    await this.clearCachedAccountProfile()
+    this.broadcastAccountProfile({ status: 'signed-out', profile: null })
   }
 
   async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
@@ -1190,6 +1295,7 @@ export class RemoteModeController {
             this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef, expiresAt }
             await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
             this.scheduleAccountTokenRefresh(expiresAt)
+            this.accountProfileGeneration++
             const profile = await this.syncAccountProfile()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
@@ -1316,17 +1422,25 @@ export class RemoteModeController {
 
   async syncAccountProfile(): Promise<AccountProfileState> {
     if (!this.loadAccountProfileData) return this.accountProfile()
-    const local = await this.loadAccountProfileData()
-    const response = await this.accountRequest({
-      method: 'PUT',
-      body: JSON.stringify(local)
-    })
-    if (!response || response.status === 401) return { status: 'signed-out', profile: null }
-    if (!response.ok) throw new Error('Account profile sync failed')
-    const profile = parseAccountProfile(await response.json())
-    if (!profile) throw new Error('Account profile response is invalid')
-    await this.applyGlobalMemories?.(profile.globalMemories)
-    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+    const cached = await this.readCachedAccountProfile()
+    try {
+      const local = await this.loadAccountProfileData()
+      const response = await this.accountRequest({
+        method: 'PUT',
+        body: JSON.stringify(local)
+      })
+      if (!response || response.status === 401) return { status: 'signed-out', profile: null }
+      if (!response.ok) throw new Error('Account profile sync failed')
+      const profile = parseAccountProfile(await response.json())
+      if (!profile) throw new Error('Account profile response is invalid')
+      await this.applyGlobalMemories?.(profile.globalMemories)
+      const withImage = await this.loadProfileImage(profile)
+      await this.cacheAccountProfile(withImage)
+      return { status: 'signed-in', profile: withImage }
+    } catch (error) {
+      if (cached) return { status: 'signed-in', profile: cached }
+      throw error
+    }
   }
 
   private scheduleAccountProfileSync(delayMs: number): void {
