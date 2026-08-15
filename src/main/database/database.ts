@@ -626,7 +626,12 @@ export class Database {
     const connection = this.requireDb()
     connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
     this.applyTokensTotalMigration(connection)
-    this.applyThinkingLevelMigrations(connection)
+    // Rebuild migrations must be atomic: each drops the old table before
+    // renaming the populated staging table. Outside a transaction a crash in
+    // that window would leave the canonical table missing (or empty) while the
+    // staged data survives; SQLite rolls an interrupted transaction back on
+    // the next open, so the source table is always intact on retry.
+    connection.transaction(() => this.applyThinkingLevelMigrations(connection))()
   }
 
   /**
@@ -635,6 +640,19 @@ export class Database {
    * fresh installs, which already carry the columns from the CREATE TABLE.
    */
   private applyThinkingLevelMigrations(connection: DatabaseType): void {
+    // First recover any database that crashed mid-rebuild before the rebuild
+    // migrations ran inside a transaction: adopt a populated staging table
+    // when the canonical table was recreated empty.
+    this.adoptInterruptedRebuild(connection, 'harness_usage_models', 'harness_usage_models_v2', [
+      'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread ON harness_usage_models(thread_id)',
+      'CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness ON harness_usage_models(harness_id)'
+    ])
+    this.adoptInterruptedRebuild(connection, 'turn_feedback', 'turn_feedback_v2', [
+      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread ON turn_feedback(thread_id, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending ON turn_feedback(status, created_at)',
+      'CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature)'
+    ])
+
     const columns = (table: string): Array<{ name: string; notnull?: number }> =>
       connection.pragma(`table_info(${table})`) as Array<{ name: string; notnull?: number }>
 
@@ -676,6 +694,44 @@ export class Database {
       connection.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)
       Logger.info('Migrated turn_feedback: thread reference now SET NULL on delete')
     }
+  }
+
+  /**
+   * Recovery for databases that crashed in the pre-transaction migration window
+   * (a crash between dropping the old table and renaming the populated staging
+   * table). On the next startup the canonical table was recreated empty while
+   * the staged data survived, so the migration guard no longer fires. When the
+   * staging table holds rows and the canonical table is empty, adopt the staged
+   * data — the staging table already carries the final schema.
+   */
+  private adoptInterruptedRebuild(
+    connection: DatabaseType,
+    canonical: string,
+    staging: string,
+    indexStatements: string[]
+  ): void {
+    const stagingExists = connection
+      .prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(staging)
+    if (!stagingExists) return
+    const stagingRows = (
+      connection.prepare(`SELECT COUNT(*) AS count FROM ${staging}`).get() as {
+        count: number
+      }
+    ).count
+    if (stagingRows <= 0) return
+    const canonicalRows = (
+      connection.prepare(`SELECT COUNT(*) AS count FROM ${canonical}`).get() as {
+        count: number
+      }
+    ).count
+    if (canonicalRows > 0) return
+    connection.exec(
+      `DROP TABLE ${canonical};
+       ALTER TABLE ${staging} RENAME TO ${canonical};`
+    )
+    for (const index of indexStatements) connection.exec(index)
+    Logger.info(`Migrated ${canonical}: adopted populated staging table after interrupted rebuild`)
   }
 
   /**

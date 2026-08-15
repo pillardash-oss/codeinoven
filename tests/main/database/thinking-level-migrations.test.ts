@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import Database from 'better-sqlite3'
+import { mkdtempSync, rmSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import type { Worker } from 'node:worker_threads'
+import DatabaseConstructor from 'better-sqlite3'
 import {
+  DATABASE_SCHEMA_SQL,
   HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL,
   HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL,
   TURN_FEEDBACK_SET_NULL_MIGRATION_SQL
 } from '../../../src/main/database/schema'
+import { Database } from '../../../src/main/database/database'
 
 function legacyHarnessUsageModelsSql(): string {
   return `
@@ -43,7 +49,7 @@ function preThinkingLevelHarnessUsageModelsSql(): string {
 
 describe('harness_usage_models thinking-level migration', () => {
   it('migrates a table created before thinking_level existed (missing column)', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(preThinkingLevelHarnessUsageModelsSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     // The legacy table keyed per model without a level, so one accumulated row.
@@ -76,7 +82,7 @@ describe('harness_usage_models thinking-level migration', () => {
   })
 
   it('recovers when a partially-failed run left harness_usage_models_v2 behind', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(preThinkingLevelHarnessUsageModelsSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     db.exec(
@@ -107,7 +113,7 @@ describe('harness_usage_models thinking-level migration', () => {
   })
 
   it('normalizes a nullable thinking_level to NOT NULL so unknown rows accumulate', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(legacyHarnessUsageModelsSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     // The nullable-column bug: two rows with NULL level for the same model
@@ -182,7 +188,7 @@ describe('turn_feedback SET NULL migration', () => {
   }
 
   it('switches the thread FK to SET NULL and preserves rows', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(legacyTurnFeedbackSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     db.exec(
@@ -211,7 +217,7 @@ describe('turn_feedback SET NULL migration', () => {
   })
 
   it('recovers when a partially-failed run left turn_feedback_v2 behind', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(legacyTurnFeedbackSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     db.exec(
@@ -232,7 +238,7 @@ describe('turn_feedback SET NULL migration', () => {
   })
 
   it('keeps resolved cleanup outcomes after the thread row is deleted', () => {
-    const db = new Database(':memory:')
+    const db = new DatabaseConstructor(':memory:')
     db.exec(legacyTurnFeedbackSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
     db.exec(
@@ -254,5 +260,91 @@ describe('turn_feedback SET NULL migration', () => {
     expect(row.status).toBe('success')
     expect(row.signal).toBe('cleaned_up')
     expect(row.score).toBe(1)
+  })
+})
+
+describe('interrupted-rebuild recovery', () => {
+  // A maintenance worker cannot share a file database with a second WAL
+  // connection from a bare test, so the Database is given a no-op factory.
+  // The worker never actually answers, but init() completes without spawning.
+  const noopWorkerFactory = (): Worker =>
+    ({
+      on: () => undefined,
+      once: () => undefined,
+      postMessage: () => undefined,
+      terminate: () => Promise.resolve(0)
+    }) as unknown as Worker
+
+  it('adopts the populated staging table when a crash left the canonical table missing', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cio-migration-recovery-'))
+    const path = join(dir, 'app.db')
+    try {
+      // Build the full fresh database, then simulate the pre-transaction crash
+      // window: the old table was dropped and the rename never ran, so the
+      // populated *_v2 staging tables survived while the canonical tables are
+      // gone (the next startup recreates them empty).
+      const raw = new DatabaseConstructor(path)
+      raw.exec(DATABASE_SCHEMA_SQL)
+      raw.exec(
+        `INSERT INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+         VALUES('p', 'Project', '/p', 'local', 'openai', 'default', 70, 'manual', 1, 1)`
+      )
+      raw.exec(
+        `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+         VALUES('t1', 'p', '', 'Thread', 'created', 0, 0, 1, 'default', 1, 1, 1)`
+      )
+      raw.exec(`CREATE TABLE harness_usage_models_v2 AS SELECT * FROM harness_usage_models`)
+      raw.exec(
+        `INSERT INTO harness_usage_models_v2(thread_id, harness_id, provider_id, model_id, thinking_level, message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning, tokens_cache_read, tokens_cache_write, tokens_total, duration_ms, first_used_at, last_used_at)
+         VALUES('t1','opencode','openai','gpt-x','high',5,3.0,300,150,30,0,0,480,3000,100,200)`
+      )
+      raw.exec(`DROP TABLE harness_usage_models`)
+
+      raw.exec('CREATE TABLE turn_feedback_v2 AS SELECT * FROM turn_feedback')
+      raw.exec(
+        `INSERT INTO turn_feedback_v2(id, thread_id, parent_turn_id, created_at, status, score, feature, harness_id, provider_id, model_id)
+         VALUES('o1','t1','turn-1',1000,'success',1,'main','opencode','openai','gpt-x')`
+      )
+      raw.exec(`DROP TABLE turn_feedback`)
+      raw.close()
+
+      // The fixed Database.init() must adopt both staging tables instead of
+      // recreating empty canonicals and losing the data.
+      const db = new Database(path, noopWorkerFactory)
+      await db.init()
+      try {
+        const model = db.get(
+          'SELECT thinking_level, message_count, tokens_total FROM harness_usage_models'
+        ) as { thinking_level: string; message_count: number; tokens_total: number }
+        expect(model).toEqual({ thinking_level: 'high', message_count: 5, tokens_total: 480 })
+
+        const feedback = db.get('SELECT parent_turn_id, status, model_id FROM turn_feedback') as {
+          parent_turn_id: string
+          status: string
+          model_id: string
+        }
+        expect(feedback).toEqual({
+          parent_turn_id: 'turn-1',
+          status: 'success',
+          model_id: 'gpt-x'
+        })
+
+        // The staging tables were consumed, not left polluting the schema.
+        expect(
+          db.get(
+            "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'harness_usage_models_v2'"
+          )
+        ).toBeUndefined()
+        expect(
+          db.get(
+            "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'turn_feedback_v2'"
+          )
+        ).toBeUndefined()
+      } finally {
+        db.close()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
