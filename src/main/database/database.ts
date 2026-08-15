@@ -9,7 +9,8 @@ import {
   AGENT_MESSAGES_THINKING_LEVEL_MIGRATION_SQL,
   AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL,
   DATABASE_SCHEMA_SQL,
-  HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL,
   HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL,
   TURN_FEEDBACK_SET_NULL_MIGRATION_SQL,
   USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL
@@ -654,10 +655,15 @@ export class Database {
     )
     // Rebuild when the column is missing entirely OR is still nullable: SQLite
     // treats NULLs as distinct inside a composite PRIMARY KEY, so a nullable
-    // level would let one model's usage fragment into a row per message.
-    if (!modelLevel || modelLevel.notnull === 0) {
-      connection.exec(HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL)
-      Logger.info('Migrated harness_usage_models: rebuilt with NOT NULL thinking_level in key')
+    // level would let one model's usage fragment into a row per message. The
+    // missing-column variant must not reference the column (it does not exist);
+    // the nullable variant normalizes NULLs to '' and merges duplicates.
+    if (!modelLevel) {
+      connection.exec(HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated harness_usage_models: added NOT NULL thinking_level to key')
+    } else if (modelLevel.notnull === 0) {
+      connection.exec(HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated harness_usage_models: normalized nullable thinking_level in key')
     }
     // Rebuild turn_feedback when its thread reference still cascade-deletes:
     // resolved outcomes (including cleanup passes) must survive thread deletion

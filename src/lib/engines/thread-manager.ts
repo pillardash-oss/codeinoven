@@ -5,6 +5,7 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
+import { TurnFeedbackRepo } from '../../main/database/repositories/turn-feedback-repo'
 import {
   AgentMessageRepo,
   type ProviderDeltaSyncResult,
@@ -106,6 +107,7 @@ export class ThreadManager {
   private projectRepo: ProjectRepo
   private agentMessageRepo: AgentMessageRepo
   private harnessUsageRepo: HarnessUsageRepo
+  private turnFeedbackRepo: TurnFeedbackRepo
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -123,6 +125,7 @@ export class ThreadManager {
     this.projectRepo = new ProjectRepo(db)
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
+    this.turnFeedbackRepo = new TurnFeedbackRepo(db)
   }
 
   /** Distinct harness ids used across a thread's session, newest first. */
@@ -528,6 +531,15 @@ export class ThreadManager {
     const assignmentIds = this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
+    }
+    // The user left these threads without complaining; every pending session
+    // outcome counts as a successful (cleaned_up) session before the rows are
+    // removed. The resolution runs on this single choke point so renderer,
+    // remote, and capacity-eviction deletions all score consistently, and the
+    // rows keep their attribution for the model-performance analytics (their
+    // thread reference is SET NULL, never cascade-deleted).
+    for (const candidate of deletionOrder) {
+      this.turnFeedbackRepo.resolvePendingForThread(candidate.id, 'success', 'cleaned_up', 1)
     }
     this.db.transaction(() => {
       for (const assignmentId of assignmentIds) {

@@ -1391,9 +1391,6 @@ export class ChatEngine {
       broadcastThreadUpdate,
       async (thread) => {
         await this.deleteThreadSession(thread.projectId, thread.id)
-        // The user left this thread without complaining; its completed turns
-        // count as successful sessions before the rows are cascade-deleted.
-        this.turnFeedbackRepo.resolvePendingForThread(thread.id, 'success', 'cleaned_up', 1)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
         await this.storage.remove(this.coordinatorHandoffQueuePath(thread.projectId, thread.id))
       },

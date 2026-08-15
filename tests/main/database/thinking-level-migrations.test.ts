@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import {
-  HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL,
   TURN_FEEDBACK_SET_NULL_MIGRATION_SQL
 } from '../../../src/main/database/schema'
 
@@ -23,8 +24,58 @@ function legacyHarnessUsageModelsSql(): string {
   `
 }
 
+function preThinkingLevelHarnessUsageModelsSql(): string {
+  return `
+    CREATE TABLE threads (id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE harness_usage_models (
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      harness_id TEXT NOT NULL, provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
+      message_count INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,
+      tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+      tokens_reasoning INTEGER NOT NULL DEFAULT 0, tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_write INTEGER NOT NULL DEFAULT 0, tokens_total INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0, first_used_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL,
+      PRIMARY KEY (thread_id, harness_id, provider_id, model_id)
+    );
+  `
+}
+
 describe('harness_usage_models thinking-level migration', () => {
-  it('rebuilds the table with a NOT NULL thinking_level so unknown rows accumulate', () => {
+  it('migrates a table created before thinking_level existed (missing column)', () => {
+    const db = new Database(':memory:')
+    db.exec(preThinkingLevelHarnessUsageModelsSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    // The legacy table keyed per model without a level, so one accumulated row.
+    db.exec(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x',5,3.0,300,150,30,0,0,480,3000,100,200)`
+    )
+
+    // Regression: the earlier rebuild referenced thinking_level, which does not
+    // exist here, and failed with "no such column: thinking_level".
+    expect(() => db.exec(HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL)).not.toThrow()
+
+    const cols = db.pragma('table_info(harness_usage_models)') as Array<{
+      name: string
+      notnull: number
+      pk: number
+    }>
+    const level = cols.find((c) => c.name === 'thinking_level')
+    expect(level?.notnull).toBe(1)
+
+    // Legacy rows carry the '' unknown sentinel, keyed by the new 5-column PK.
+    const rows = db.prepare('SELECT * FROM harness_usage_models').all() as Array<{
+      thinking_level: string
+      message_count: number
+      tokens_total: number
+    }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.thinking_level).toBe('')
+    expect(rows[0]?.message_count).toBe(5)
+    expect(rows[0]?.tokens_total).toBe(480)
+  })
+
+  it('normalizes a nullable thinking_level to NOT NULL so unknown rows accumulate', () => {
     const db = new Database(':memory:')
     db.exec(legacyHarnessUsageModelsSql())
     db.exec(`INSERT INTO threads(id) VALUES('t1')`)
@@ -37,7 +88,7 @@ describe('harness_usage_models thinking-level migration', () => {
       `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x',NULL,3,2.0,200,100,20,0,0,320,2000,150,250)`
     )
 
-    db.exec(HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL)
+    db.exec(HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL)
 
     const cols = db.pragma('table_info(harness_usage_models)') as Array<{
       name: string
