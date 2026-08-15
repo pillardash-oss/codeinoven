@@ -361,6 +361,8 @@
   let gateDonotAsk = $state(false)
   let gateDirect = $state<boolean | undefined>(undefined)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
+  /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
+  const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
   let mentionOpen = $state(false)
@@ -1714,7 +1716,6 @@
       {autofocus}
       {disabled}
       ariaLabel="Message"
-      submitOnEnter
       onValueChange={handleComposerValueChange}
       onSubmit={submit}
       onPaste={handlePaste}
@@ -2132,7 +2133,7 @@
           ? 'Stop the running agent'
           : working
             ? 'Queue — message sends when the agent finishes'
-            : 'Send'}
+            : `Send — ${sendModifierLabel}Enter`}
       disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
     >

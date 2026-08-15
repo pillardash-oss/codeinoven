@@ -6504,7 +6504,6 @@
                       bind:value={editingText}
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
-                      submitOnEnter
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
                     <div class="mt-1.5 flex items-center justify-end gap-1.5">

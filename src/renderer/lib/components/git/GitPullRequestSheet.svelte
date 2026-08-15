@@ -768,6 +768,12 @@
           class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              void createPullRequest()
+            }
+          }}
         />
       </div>
       <div>
@@ -781,7 +787,13 @@
           id="pr-body"
           class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
-          bind:value={body}></textarea>
+          bind:value={body}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              void createPullRequest()
+            }
+          }}></textarea>
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
