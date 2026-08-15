@@ -44,6 +44,7 @@
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
   import TemporaryChatView from '../chats/TemporaryChatView.svelte'
@@ -736,6 +737,21 @@
     contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
   }
 
+  /** The coordinator published by the thread on screen, if it coordinates work. */
+  let coordinator = $derived(
+    coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
+  )
+
+  function openCoordinatorTab(): void {
+    if (!coordinator) return
+    coordinatorDockState.setAutoOpen(true)
+    contextSidebarState.openCoordinator(
+      coordinator.projectId,
+      coordinator.threadId,
+      coordinator.label
+    )
+  }
+
   /** Terminals toggle their own region: the bottom dock when docked there,
    *  otherwise the right sidebar like every other tool. */
   function toggleTerminal(): void {
@@ -853,7 +869,21 @@
       })
     }
 
-    return [workspaceTools, sessionTools]
+    // The coordinator sits alone at the bottom, below its own hairline: it is
+    // the thread's own supervision surface, not a general workspace tool.
+    const coordination: ContextDockItem[] = coordinator
+      ? [
+          {
+            id: 'coordinator',
+            label: coordinator.label,
+            icon: coordinator.icon,
+            active: dockKindActive('coordinator'),
+            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+          }
+        ]
+      : []
+
+    return [workspaceTools, sessionTools, coordination]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -945,6 +975,9 @@
     if (tab.kind === 'files' && tab.fileTabId) {
       projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
     }
+    // Closing the coordinator is a dismissal: it stays undocked until the user
+    // brings it back from the rail, otherwise it would reappear immediately.
+    if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
@@ -3248,6 +3281,10 @@
                 />
               {:else if activeContextTab.kind === 'notifications'}
                 <NotificationPanel />
+              {:else if activeContextTab.kind === 'coordinator'}
+                {#if coordinator}
+                  {@render coordinator.panel()}
+                {/if}
               {:else if activeContextTab.kind === 'memory'}
                 <MemoryPanel
                   variant="sidebar"

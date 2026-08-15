@@ -14,6 +14,7 @@
     Info,
     Maximize2,
     MessageCircleDashed,
+    Network,
     PanelBottom,
     PanelRight,
     Plus,
@@ -238,6 +239,8 @@
                 <GitBranch size={12} class="shrink-0" />
               {:else if tab.kind === 'cloud-deployment'}
                 <Cloud size={12} class="shrink-0" />
+              {:else if tab.kind === 'coordinator'}
+                <Network size={12} class="shrink-0 text-primary" />
               {:else}
                 <Bot size={12} class="shrink-0 text-info" />
               {/if}
