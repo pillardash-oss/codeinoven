@@ -257,6 +257,19 @@ class ContextSidebarState {
     )
   }
 
+  /**
+   * Whether the bottom terminal dock is folded into its thin restore bar.
+   * True while the dock is closed but terminal tabs still exist, so a user can
+   * expand the shell back to its previous height from the chevron bar.
+   */
+  get terminalDockCollapsed(): boolean {
+    return (
+      this.terminalPlacement === 'bottom' &&
+      this.activeContext?.terminalDockOpen === false &&
+      this.terminalTabs.length > 0
+    )
+  }
+
   /** Toggle the bottom terminal dock without touching the sidebar. */
   toggleTerminalDock(): void {
     const context = this.activeContext
