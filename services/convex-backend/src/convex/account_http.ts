@@ -298,7 +298,7 @@ export const accountProfile = async (ctx: ActionCtx, request: Request): Promise<
     return json({ error: 'invalid-profile' }, 400)
   }
   const updatedAt = Date.now()
-  await ctx.runMutation(internal.profiles.save, {
+  const mergedMemories = await ctx.runMutation(internal.profiles.save, {
     authUserId: identity.id,
     email: identity.email,
     displayName: identity.name,
@@ -314,7 +314,9 @@ export const accountProfile = async (ctx: ActionCtx, request: Request): Promise<
       displayName: identity.name,
       image: identity.image ?? null,
       usage: record['usage'],
-      globalMemories: record['globalMemories'],
+      // The server returns the per-entry merged union (not the request echo) so
+      // every device adopts memories written on other devices.
+      globalMemories: mergedMemories ?? record['globalMemories'],
       updatedAt
     }
   })

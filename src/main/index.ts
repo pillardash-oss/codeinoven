@@ -9,6 +9,7 @@ import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
 import { AccountProfileRepo } from './database/repositories/account-profile-repo'
+import { mergeGlobalMemoryEntries } from './chat/memory-merge'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import {
@@ -611,7 +612,14 @@ async function bootPostPaintServices(): Promise<void> {
         )
       }),
       applyGlobalMemories: async (entries) => {
-        await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
+        // Merge the cloud snapshot with what this device already holds so a
+        // device never loses its own entries when the list converges.
+        const incoming = entries.filter((entry) => entry.scope === 'global')
+        if (incoming.length === 0) return
+        const existing = (await accountMemory.getEntries()).filter(
+          (entry) => entry.scope === 'global'
+        )
+        await accountMemory.saveEntries(mergeGlobalMemoryEntries(existing, incoming))
       },
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
