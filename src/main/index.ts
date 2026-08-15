@@ -42,6 +42,7 @@ import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trust
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
 import { sendToRenderer } from './renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './native-splash-handoff'
+import { instanceRegistry } from './instance-registry'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -162,17 +163,23 @@ function requestCloseConfirmation(): void {
     app.quit()
     return
   }
-  const working = getActiveThreadProjects()
+  // When another live instance can keep a project's threads running, working
+  // threads don't need to gate this instance's close — a surviving instance can
+  // continue them. The renderer still owns the unsaved-file gate, which is
+  // reported separately, so closing never silently drops unsaved editor state.
+  const working = instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects()
   sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
 }
 
 ipcMain.handle('app:confirmClose', async () => {
-  // The user approved the forced close while threads are working. Terminate
-  // every still-streaming harness connection (SIGTERM to local harness
-  // processes) so no agent keeps working after the app exits, then proceed.
+  // The user approved the forced close while threads are working. When another
+  // live instance exists it can continue those threads, so this instance just
+  // walks away without SIGTERM'ing the shared harness processes. Otherwise
+  // terminate every still-streaming harness connection so no agent keeps
+  // working after the app exits, then proceed.
   quitConfirmed = true
   try {
-    if (chatEngine) {
+    if (chatEngine && !instanceRegistry.hasOtherLiveInstance()) {
       await chatEngine.terminateActiveConnections()
     }
   } catch (error) {
@@ -851,6 +858,10 @@ void app
   .whenReady()
   .then(async () => {
     startupTelemetry.mark('electron:ready')
+    // Register this process in the instance registry before any window exists so
+    // the close gate can later tell whether other live instances can keep a
+    // project's threads running.
+    instanceRegistry.start()
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
@@ -1125,10 +1136,17 @@ async function runShutdownPipeline(): Promise<void> {
     Logger.error('Window state flush failed during shutdown:', error)
   }
 
-  try {
-    await chatEngine?.dispose()
-  } catch (error) {
-    Logger.error('Chat engine disposal failed during shutdown:', error)
+  // When another live instance can continue the project's threads, this
+  // instance exits without disposing the chat engine — disposal kills every
+  // agent-owned harness process, which would destroy threads the surviving
+  // instance is still working on. The threads' durable state lives in the
+  // shared DB, so the other instance resumes them seamlessly.
+  if (!instanceRegistry.hasOtherLiveInstance()) {
+    try {
+      await chatEngine?.dispose()
+    } catch (error) {
+      Logger.error('Chat engine disposal failed during shutdown:', error)
+    }
   }
 
   try {
@@ -1144,6 +1162,8 @@ async function runShutdownPipeline(): Promise<void> {
   } catch (error) {
     Logger.error('Database close failed during shutdown:', error)
   }
+
+  instanceRegistry.stop()
 
   app.quit()
 }
