@@ -162,14 +162,21 @@
         >
           <span
             class={[
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-[9px] font-bold uppercase tracking-wide',
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border',
               selectedActionId === action.id && !action.disabledReason
                 ? 'border-border-strong bg-surface text-foreground'
                 : 'border-border bg-raised text-dimmed'
             ]}
             aria-hidden="true"
           >
-            {categoryLabel(action).slice(0, 2)}
+            {#if action.icon}
+              {@const Icon = action.icon}
+              <Icon size={13} strokeWidth={1.9} />
+            {:else}
+              <span class="text-[9px] font-bold uppercase tracking-wide">
+                {categoryLabel(action).slice(0, 2)}
+              </span>
+            {/if}
           </span>
 
           <span class="min-w-0 flex-1">
