@@ -113,6 +113,7 @@ interface CloudAccessConfig {
 interface AccountSessionConfig {
   apiOrigin: string
   profileTokenRef: string
+  expiresAt?: number
 }
 
 interface EnrollmentResponse {
@@ -135,6 +136,9 @@ export function remoteEnvInt(name: string, fallback: number): number {
 const CLOUD_REQUEST_TIMEOUT_MS = 15_000
 const CLOUD_ENROLLMENT_RETRY_INITIAL_MS = 5_000
 const CLOUD_ENROLLMENT_RETRY_MAX_MS = 5 * 60_000
+const ACCOUNT_TOKEN_REFRESH_LEAD_MS = 7 * 24 * 60 * 60_000
+const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
+const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
 
 function cloudResponseIsTerminal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
@@ -431,6 +435,8 @@ export class RemoteModeController {
   private accountConfig: AccountSessionConfig | null = null
   private accountSignInServer: Server | null = null
   private accountSignInTimeout: ReturnType<typeof setTimeout> | null = null
+  private accountTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  private accountTokenRefreshPromise: Promise<AccountSessionConfig> | null = null
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
@@ -915,6 +921,8 @@ export class RemoteModeController {
    */
   async dispose(): Promise<void> {
     this.closeAccountSignInListener()
+    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
+    this.accountTokenRefreshTimer = null
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
@@ -1015,12 +1023,15 @@ export class RemoteModeController {
       (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
       null
     this.accountConfig = accountConfig
+    const freshAccountConfig = accountConfig
+      ? await this.ensureFreshAccountToken(accountConfig)
+      : null
     const cloudConfig =
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
-    const tokenRef = accountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
+    const tokenRef = freshAccountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
     if (!tokenRef) return null
     const token = await this.vault.resolve(tokenRef)
-    const apiOrigin = accountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
+    const apiOrigin = freshAccountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
     return fetchWithDeadline(
       new URL('/v1/profile', apiOrigin),
       {
@@ -1063,7 +1074,10 @@ export class RemoteModeController {
     const response = await this.accountRequest()
     if (!response || response.status === 401) {
       return {
-        status: this.cloudStatus.state === 'enrollment-pending' ? 'pending' : 'signed-out',
+        status:
+          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
+            ? 'pending'
+            : 'signed-out',
         profile: null
       }
     }
@@ -1104,6 +1118,11 @@ export class RemoteModeController {
     this.accountSignInServer = null
   }
 
+  private failAccountSignIn(message: string): void {
+    this.closeAccountSignInListener()
+    this.broadcastAccountProfile({ status: 'error', profile: null, message })
+  }
+
   private accountCallbackResponse(response: ServerResponse, status: number, message: string): void {
     response.writeHead(status, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -1119,15 +1138,22 @@ export class RemoteModeController {
     return new Promise((resolve, reject) => {
       const server = createServer((request, response) => {
         void (async () => {
+          let terminalCallback = false
           try {
             const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1')
             if (request.method !== 'GET' || requestUrl.pathname !== '/account/callback') {
               this.accountCallbackResponse(response, 404, 'This callback is not valid.')
               return
             }
+            terminalCallback = true
             const callbackState = requestUrl.searchParams.get('state')
             const code = requestUrl.searchParams.get('code')
             if (callbackState !== state || !code) {
+              this.broadcastAccountProfile({
+                status: 'error',
+                profile: null,
+                message: 'The browser callback could not be verified. Start sign-in again.'
+              })
               this.accountCallbackResponse(
                 response,
                 400,
@@ -1147,15 +1173,23 @@ export class RemoteModeController {
             )
             const payload = (await exchange.json()) as Record<string, unknown>
             const profileToken = payload['profileToken']
-            if (!exchange.ok || typeof profileToken !== 'string' || profileToken.length === 0) {
+            const expiresAt = payload['expiresAt']
+            if (
+              !exchange.ok ||
+              typeof profileToken !== 'string' ||
+              profileToken.length === 0 ||
+              typeof expiresAt !== 'number' ||
+              !Number.isFinite(expiresAt)
+            ) {
               throw new Error('Account credential exchange failed')
             }
             const profileTokenRef = await this.vault!.save(
               profileToken,
               this.accountConfig?.profileTokenRef
             )
-            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef }
+            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef, expiresAt }
             await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
+            this.scheduleAccountTokenRefresh(expiresAt)
             const profile = await this.syncAccountProfile()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
@@ -1165,18 +1199,23 @@ export class RemoteModeController {
             )
           } catch (error) {
             Logger.error('Desktop account sign-in callback failed:', error)
+            this.broadcastAccountProfile({
+              status: 'error',
+              profile: null,
+              message: 'The browser returned to CodeInOven, but the account could not be connected.'
+            })
             this.accountCallbackResponse(
               response,
               500,
               'CodeInOven could not finish connecting your account. Return to the app and try again.'
             )
           } finally {
-            this.closeAccountSignInListener()
+            if (terminalCallback) this.closeAccountSignInListener()
           }
         })()
       })
       server.once('error', (error) => {
-        this.closeAccountSignInListener()
+        this.failAccountSignIn('CodeInOven could not open a local callback port. Try again.')
         reject(error)
       })
       server.listen(0, '127.0.0.1', () => {
@@ -1188,12 +1227,85 @@ export class RemoteModeController {
           return
         }
         this.accountSignInTimeout = setTimeout(
-          () => this.closeAccountSignInListener(),
+          () =>
+            this.failAccountSignIn('Sign-in timed out. Start again to open a new secure callback.'),
           5 * 60 * 1_000
         )
+        this.broadcastAccountProfile({ status: 'pending', profile: null })
         resolve(`http://127.0.0.1:${address.port}/account/callback`)
       })
     })
+  }
+
+  private scheduleAccountTokenRefresh(expiresAt: number): void {
+    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
+    const delay = Math.min(
+      ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS,
+      Math.max(60_000, expiresAt - Date.now() - ACCOUNT_TOKEN_REFRESH_LEAD_MS)
+    )
+    this.accountTokenRefreshTimer = setTimeout(() => {
+      this.accountTokenRefreshTimer = null
+      const config = this.accountConfig
+      if (!config) return
+      void this.ensureFreshAccountToken(config).catch((error) => {
+        Logger.dev('Account token refresh unavailable:', error)
+      })
+    }, delay)
+  }
+
+  private async ensureFreshAccountToken(
+    config: AccountSessionConfig
+  ): Promise<AccountSessionConfig> {
+    if (!config.expiresAt || config.expiresAt - Date.now() > ACCOUNT_TOKEN_REFRESH_LEAD_MS) {
+      if (config.expiresAt) this.scheduleAccountTokenRefresh(config.expiresAt)
+      return config
+    }
+    if (this.accountTokenRefreshPromise) return this.accountTokenRefreshPromise
+    this.accountTokenRefreshPromise = (async () => {
+      try {
+        if (!this.vault || !this.storage) return config
+        const currentToken = await this.vault.resolve(config.profileTokenRef)
+        const response = await fetchWithDeadline(
+          new URL('/v1/desktop-auth/refresh', config.apiOrigin),
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${currentToken}` }
+          },
+          CLOUD_REQUEST_TIMEOUT_MS
+        )
+        const payload = (await response.json()) as Record<string, unknown>
+        const profileToken = payload['profileToken']
+        const expiresAt = payload['expiresAt']
+        if (
+          !response.ok ||
+          typeof profileToken !== 'string' ||
+          !profileToken ||
+          typeof expiresAt !== 'number' ||
+          !Number.isFinite(expiresAt)
+        ) {
+          throw new Error('Account token refresh failed')
+        }
+        const profileTokenRef = await this.vault.save(profileToken, config.profileTokenRef)
+        const refreshed = { ...config, profileTokenRef, expiresAt }
+        this.accountConfig = refreshed
+        await this.storage.write(ACCOUNT_CONFIG_PATH, refreshed)
+        this.scheduleAccountTokenRefresh(expiresAt)
+        return refreshed
+      } catch (error) {
+        this.accountTokenRefreshTimer = setTimeout(() => {
+          this.accountTokenRefreshTimer = null
+          void this.ensureFreshAccountToken(config).catch(() => undefined)
+        }, ACCOUNT_TOKEN_REFRESH_RETRY_MS)
+        if (!config.expiresAt || config.expiresAt > Date.now()) {
+          Logger.dev('Account token refresh deferred; current token remains valid:', error)
+          return config
+        }
+        throw error
+      } finally {
+        this.accountTokenRefreshPromise = null
+      }
+    })()
+    return this.accountTokenRefreshPromise
   }
 
   private broadcastAccountProfile(state: AccountProfileState): void {
@@ -1300,7 +1412,11 @@ export class RemoteModeController {
       payload.profileToken,
       previous?.profileTokenRef ?? accountConfig?.profileTokenRef
     )
-    this.accountConfig = { apiOrigin: this.cloudApiOrigin, profileTokenRef }
+    this.accountConfig = {
+      apiOrigin: this.cloudApiOrigin,
+      profileTokenRef,
+      expiresAt: accountConfig?.expiresAt
+    }
     await this.storage.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
     this.cloudConfig = {
       apiOrigin: this.cloudApiOrigin,

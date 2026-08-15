@@ -75,6 +75,12 @@
       remoteStatus = status
     })
   })
+
+  $effect(() => {
+    return subscribe('account:profileChanged', (state) => {
+      accountState = state
+    })
+  })
 </script>
 
 <div class="flex items-center gap-1 px-2 py-1.5">

@@ -148,7 +148,7 @@
     })
     const unsubAccount = subscribe('account:profileChanged', (state) => {
       accountState = state
-      accountError = ''
+      accountError = state.status === 'error' ? state.message : ''
       if (state.status === 'signed-in' && !remoteStatus?.cloud.desktopId) {
         void beginCloudEnrollment()
       }
@@ -292,13 +292,18 @@
           </div>
         {/if}
       </div>
-    {:else if !remoteStatus.cloud.desktopId && accountState.status === 'signed-out'}
+    {:else if !remoteStatus.cloud.desktopId && (accountState.status === 'signed-out' || accountState.status === 'error')}
       <div class="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
         <p class="text-xs font-semibold text-foreground">Sign in before enrolling this desktop</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           Continue with Google or Apple. If the account does not exist, it is created automatically.
           GitHub sidebar access remains separate.
         </p>
+        {#if accountError}
+          <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {accountError}
+          </p>
+        {/if}
         <div class="mt-3 flex flex-col gap-2 sm:flex-row">
           <button
             type="button"
