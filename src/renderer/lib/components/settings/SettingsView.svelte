@@ -25,6 +25,7 @@
     Download,
     Globe,
     Info,
+    Keyboard,
     Loader2,
     Monitor,
     Moon,
@@ -41,6 +42,7 @@
   import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
+  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
@@ -99,6 +101,7 @@
     { id: 'audits', label: 'Agents', icon: UsersRound },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
     { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
     { id: 'profile', label: 'Profile', icon: UserRound },
@@ -630,6 +633,8 @@
       <ProvidersView />
     {:else if section === 'utilities'}
       <UtilitiesView />
+    {:else if section === 'keymap'}
+      <KeymapSettingsTab />
     {:else if section === 'remote'}
       <RemoteSettingsTab />
     {:else if section === 'cloud-deployments'}
