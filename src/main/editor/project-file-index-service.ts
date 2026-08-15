@@ -65,15 +65,21 @@ export class ProjectFileIndexService {
     projectId: string,
     root: string,
     query: string,
-    category: 'all' | 'rules'
+    category: 'all' | 'rules',
+    projectName?: string
   ): Promise<ProjectFileEntry[]> {
     const words = query.trim().toLocaleLowerCase().split(/\s+/u).filter(Boolean)
+    // A query term may match the project name too (e.g. "app.html codeinoven"),
+    // so results surface across a project whose display name the user typed.
+    const projectHaystack = projectName ? `${projectName.toLocaleLowerCase()} ` : ''
     const index = await this.indexForProject(projectId, root)
     const matches: RankedProjectEntry[] = []
 
     for (const indexed of index.entries) {
       if (category === 'rules' && indexed.ruleScore === 0) continue
-      if (!words.every((word) => indexed.normalizedPath.includes(word))) continue
+      if (!words.every((word) => `${projectHaystack}${indexed.normalizedPath}`.includes(word))) {
+        continue
+      }
 
       const queryScore = words.reduce(
         (score, word) =>

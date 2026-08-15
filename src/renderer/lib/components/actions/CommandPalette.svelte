@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Command, Dialog } from 'bits-ui'
-  import { CornerDownLeft, Search, X } from '@lucide/svelte'
+  import { ArrowLeft, CornerDownLeft, X, Zap } from '@lucide/svelte'
   import { tick } from 'svelte'
+  import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
@@ -22,6 +23,15 @@
     closeOnSelect?: boolean
     shortcutLabel?: string
     onQueryChange?: (query: string) => void
+    /** Icon shown at the left of the search input; defaults to an action icon. */
+    headerIcon?: Component
+    /** Render the header icon inside a colored badge to signal a switched mode. */
+    headerIconBadge?: boolean
+    headerIconBadgeClass?: string
+    /** Results are already filtered/ranked by the server — skip the client re-filter. */
+    serverFiltered?: boolean
+    /** Render a < Back button in the footer to return to a previous surface. */
+    onBack?: () => void
   }
 
   let {
@@ -38,7 +48,12 @@
     maxResults = 60,
     closeOnSelect = true,
     shortcutLabel,
-    onQueryChange
+    onQueryChange,
+    headerIcon = Zap,
+    headerIconBadge = false,
+    headerIconBadgeClass = '',
+    serverFiltered = false,
+    onBack
   }: Props = $props()
 
   let query = $state('')
@@ -47,7 +62,11 @@
   let selectionMethod: ActionSelection['method'] = 'keyboard'
   let wasOpen = false
 
-  let visibleActions = $derived(filterActions(actions, query, { limit: maxResults }))
+  let visibleActions = $derived(
+    serverFiltered
+      ? actions.slice(0, maxResults)
+      : filterActions(actions, query, { limit: maxResults })
+  )
 
   $effect(() => {
     if (open && !wasOpen) {
@@ -95,7 +114,20 @@
     }}
   >
     <header class="flex h-11 items-center gap-2 border-b border-border px-3">
-      <Search size={15} class="shrink-0 text-dimmed" aria-hidden="true" />
+      {#if headerIconBadge}
+        {@const Icon = headerIcon}
+        <span
+          class={[
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border',
+            headerIconBadgeClass
+          ]}
+        >
+          <Icon size={15} strokeWidth={1.9} aria-hidden="true" />
+        </span>
+      {:else}
+        {@const Icon = headerIcon}
+        <Icon size={15} class="shrink-0 text-dimmed" aria-hidden="true" />
+      {/if}
       <Command.Input
         bind:ref={inputElement}
         bind:value={query}
@@ -170,7 +202,9 @@
             ]}
             aria-hidden="true"
           >
-            {#if action.icon}
+            {#if action.iconUri}
+              <img src={action.iconUri} class="h-4 w-4 shrink-0" alt="" />
+            {:else if action.icon}
               {@const Icon = action.icon}
               <Icon size={13} strokeWidth={1.9} />
             {:else}
@@ -188,11 +222,26 @@
               >
                 {categoryLabel(action)}
               </span>
-              <span
-                class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
-              >
-                {action.source.label}
-              </span>
+              {#if action.source.color}
+                <span
+                  class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[9px] font-medium"
+                  style="color: {action.source.color}; border-color: color-mix(in srgb, {action
+                    .source.color} 35%, transparent); background-color: color-mix(in srgb, {action
+                    .source.color} 12%, transparent)"
+                >
+                  <span
+                    class="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style="background: {action.source.color}"
+                  ></span>
+                  <span class="truncate">{action.source.label}</span>
+                </span>
+              {:else}
+                <span
+                  class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                >
+                  {action.source.label}
+                </span>
+              {/if}
             </span>
             {#if action.disabledReason}
               <span class="mt-0.5 block truncate text-[11px] text-danger">
@@ -232,8 +281,22 @@
     <footer
       class="flex h-8 items-center justify-between border-t border-border bg-raised px-3 text-[10px] text-dimmed"
     >
-      <span class="tabular-nums">{visibleActions.length} actions</span>
-      <span>↑↓ Navigate · Enter Run</span>
+      <span class="flex min-w-0 items-center gap-2">
+        {#if onBack}
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Back to actions"
+            title="Back to actions"
+            onclick={onBack}
+          >
+            <ArrowLeft size={12} aria-hidden="true" />
+            Back
+          </button>
+        {/if}
+        <span class="tabular-nums">{visibleActions.length} actions</span>
+      </span>
+      <span class="shrink-0">↑↓ Navigate · Enter Run</span>
     </footer>
   </Command.Root>
 {/snippet}

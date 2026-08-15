@@ -62,6 +62,10 @@
   import { loadProjectIcons } from '$lib/project-icons'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
+  import {
+    getInlineFileTypeIconDataUri,
+    getInlineFolderTypeIconDataUri
+  } from '$lib/components/files/file-type-icons'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
     captureElementSelection,
@@ -131,6 +135,7 @@
   interface FileSearchTarget {
     projectId: string
     path: string
+    kind: 'file' | 'directory'
   }
 
   interface ThreadSearchTarget {
@@ -773,10 +778,7 @@
       projects.map(async (project) => {
         try {
           const entries = await invoke('projectFiles:search', project.id, query, 'all')
-          return {
-            project,
-            entries: entries.filter((entry) => entry.kind === 'file').slice(0, 12)
-          }
+          return { project, entries: entries.slice(0, 12) }
         } catch {
           return { project, entries: [] }
         }
@@ -784,25 +786,39 @@
     )
     if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
 
+    const resolved = await Promise.all(
+      projectResults.flatMap(({ project, entries }) =>
+        entries.map(async (entry) => ({
+          project,
+          entry,
+          iconUri:
+            entry.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(entry.name)
+              : await getInlineFileTypeIconDataUri(entry.path)
+        }))
+      )
+    )
+    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
+
     const targets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
     const actions: ActionDefinition[] = []
-    for (const { project, entries } of projectResults) {
-      for (const entry of entries) {
-        const id = actionId(`file:${project.id}:${entry.path}`)
-        targets.set(id, { projectId: project.id, path: entry.path })
-        actions.push({
-          id,
-          title: entry.name,
-          description: `${project.name} · ${entry.path}`,
-          category: 'file',
-          source: {
-            id: `project:${project.id}`,
-            label: project.name,
-            kind: 'app'
-          },
-          keywords: [project.name, entry.path]
-        })
-      }
+    for (const { project, entry, iconUri } of resolved) {
+      const id = actionId(`file:${project.id}:${entry.path}`)
+      targets.set(id, { projectId: project.id, path: entry.path, kind: entry.kind })
+      actions.push({
+        id,
+        title: entry.name,
+        description: `${project.name} · ${entry.path}`,
+        category: 'file',
+        source: {
+          id: `project:${project.id}`,
+          label: project.name,
+          kind: 'app',
+          ...(project.color ? { color: project.color } : {})
+        },
+        iconUri,
+        keywords: [project.name, entry.path, entry.name]
+      })
     }
     fileSearchTargets.clear()
     for (const [id, target] of targets) fileSearchTargets.set(id, target)
@@ -833,8 +849,13 @@
     if (!target) return
     fileSearchPaletteOpen = false
     resetFileSearch()
-    navigate('projects')
-    workspaceState.requestProjectFileOpen(target.projectId, target.path)
+    workspaceState.requestProjectFileOpen(target.projectId, target.path, target.kind)
+  }
+
+  function backToCommandPaletteFromFileSearch(): void {
+    fileSearchPaletteOpen = false
+    resetFileSearch()
+    commandPaletteOpen = true
   }
 
   function resetThreadSearch(): void {
@@ -883,7 +904,8 @@
         source: {
           id: `project:${thread.projectId}`,
           label: project?.name ?? thread.projectId,
-          kind: 'app'
+          kind: 'app',
+          ...(project?.color ? { color: project.color } : {})
         },
         icon: MessagesSquare,
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
@@ -913,19 +935,13 @@
     }, 160)
   }
 
+  /** Preserve the current content view / project sidebar state when opening a
+   *  searched thread — never force the Projects view. Reuses the notification
+   *  open logic, which handles scope state, the threads view and chats. */
   async function openThreadFromSearch(thread: Thread): Promise<void> {
-    if (thread.projectId === INBOX_PROJECT_ID) {
-      navigate('chats')
-    } else {
-      navigate('projects')
-    }
     const project =
       scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
-    workspaceState.openThread(thread, project)
-    void scopeState.ensureBoardLoaded(thread.projectId)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    scopeState.updateThread(updated)
-    workspaceState.updateThread(updated)
+    await openThreadFromNotification(thread, project)
   }
 
   function handleThreadSearchSelection(selection: ActionSelection): void {
@@ -934,6 +950,12 @@
     threadSearchPaletteOpen = false
     resetThreadSearch()
     void openThreadFromSearch(target.thread)
+  }
+
+  function backToCommandPaletteFromThreadSearch(): void {
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    commandPaletteOpen = true
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -1044,7 +1066,10 @@
    * - Threads view → stay there (no scope sidebar).
    * - Chat notification → switch to the chats view.
    */
-  async function openThreadFromNotification(thread: Thread, project: Project): Promise<void> {
+  async function openThreadFromNotification(
+    thread: Thread,
+    project: Project | null
+  ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
       activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
@@ -1489,7 +1514,7 @@
         open={commandPaletteOpen}
         actions={paletteActions}
         title="Search actions"
-        placeholder="Search models, modes, skills, MCP, and commands…"
+        placeholder="Search actions, threads, and files…"
         emptyLabel="No matching actions"
         onSelect={handlePaletteSelection}
         onClose={() => (commandPaletteOpen = false)}
@@ -1506,6 +1531,11 @@
         title="Search files across projects"
         placeholder="Type at least two characters…"
         emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+        headerIcon={FileSearch}
+        headerIconBadge
+        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
+        serverFiltered
+        onBack={backToCommandPaletteFromFileSearch}
         onQueryChange={handleFileSearchQuery}
         onSelect={handleFileSearchSelection}
         closeOnSelect={false}
@@ -1526,6 +1556,11 @@
         emptyLabel={threadSearchLoading
           ? 'Searching threads…'
           : 'Type at least two characters to search all projects'}
+        headerIcon={MessagesSquare}
+        headerIconBadge
+        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+        serverFiltered
+        onBack={backToCommandPaletteFromThreadSearch}
         onQueryChange={handleThreadSearchQuery}
         onSelect={handleThreadSearchSelection}
         closeOnSelect={false}

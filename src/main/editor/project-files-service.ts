@@ -99,7 +99,8 @@ export class ProjectFilesService {
     category: 'all' | 'rules'
   ): Promise<ProjectFileEntry[]> {
     const root = await this.projectRoot(projectId)
-    return this.fileIndex.search(projectId, root, query, category)
+    const project = await this.projects.getProject(projectId)
+    return this.fileIndex.search(projectId, root, query, category, project?.name)
   }
 
   invalidateProject(projectId: string): void {

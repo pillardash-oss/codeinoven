@@ -438,7 +438,7 @@
     if (current !== prevProjectFileOpenCount && !loading) {
       prevProjectFileOpenCount = current
       const request = workspaceState.consumeProjectFileOpenRequest()
-      if (request) void openProjectFileFromCommand(request.projectId, request.path)
+      if (request) void openProjectFileFromCommand(request.projectId, request.path, request.kind)
     }
   })
 
@@ -1852,12 +1852,23 @@
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
-  async function openProjectFileFromCommand(projectId: string, path: string): Promise<void> {
+  async function openProjectFileFromCommand(
+    projectId: string,
+    path: string,
+    kind: 'file' | 'directory'
+  ): Promise<void> {
     const project = projects.find((candidate) => candidate.id === projectId)
     if (!project || project.source !== 'local' || !project.path) return
 
-    navigate('projects')
-    const projectThread =
+    // Preserve the current content view (remember the project sidebar state)
+    // instead of forcing the Projects view. Chats cannot host a project file.
+    if (mode === 'chats') {
+      navigate('projects')
+    } else if (!active) {
+      navigate(mode)
+    }
+
+    let projectThread: Thread | null =
       selectedThread?.projectId === projectId
         ? selectedThread
         : allThreads
@@ -1867,16 +1878,31 @@
     if (projectThread) {
       await openThread(projectThread)
     } else {
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-      workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
-      rendererRecovery.setSelectedProject(project.id)
-      contextSidebarState.activateThread(project.id, '')
+      // No thread yet — create one so the file opens inside a real thread context.
+      await createThreadInProject(project)
+      projectThread =
+        workspaceState.selectedThread?.projectId === projectId
+          ? workspaceState.selectedThread
+          : null
+      if (!projectThread) {
+        workspaceState.clearThread()
+        workspaceState.activeProject = project
+        workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
+        rendererRecovery.setSelectedProject(project.id)
+        contextSidebarState.activateThread(project.id, '')
+      }
     }
 
     await projectFilesWorkspace.loadDirectory(project.id, '')
     contextSidebarState.openFiles(project.id, projectThread?.id ?? '')
-    await projectFilesWorkspace.openFile(project.id, path)
+    if (kind === 'directory') {
+      await projectFilesWorkspace.revealFile(project.id, path)
+      projectFilesWorkspace.markDirectoryExpanded(project.id, path)
+      await projectFilesWorkspace.loadDirectory(project.id, path, true)
+    } else {
+      await projectFilesWorkspace.openFile(project.id, path)
+      await projectFilesWorkspace.revealFile(project.id, path)
+    }
   }
 
   async function openScopedThread(thread: Thread): Promise<void> {
