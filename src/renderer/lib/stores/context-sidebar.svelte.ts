@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { gitState } from './git.svelte'
+import { APP_SLUG } from '$shared/brand'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -8,8 +9,19 @@ const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
+const TERMINAL_PLACEMENT_STORAGE_KEY = `${APP_SLUG}.terminal-placement.v1`
 
 export type TerminalPlacement = 'right' | 'bottom'
+
+function loadTerminalPlacement(): TerminalPlacement {
+  if (typeof window === 'undefined') return 'right'
+  try {
+    const raw = window.localStorage.getItem(TERMINAL_PLACEMENT_STORAGE_KEY)
+    return raw === 'bottom' ? 'bottom' : 'right'
+  } catch {
+    return 'right'
+  }
+}
 
 export interface TerminalContextTab {
   id: string
@@ -198,7 +210,7 @@ class ContextSidebarState {
   private temporaryChatExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   width = $state(480)
   terminalHeight = $state(320)
-  terminalPlacement = $state<TerminalPlacement>('right')
+  terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
   /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
    *  consumer (Workspace) can run the close-through-confirmation flow. */
   closeActiveTabRequest = $state(0)
@@ -283,6 +295,13 @@ class ContextSidebarState {
   /** Move terminals between the sidebar and the bottom dock. */
   setTerminalPlacement(placement: TerminalPlacement): void {
     this.terminalPlacement = placement
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(TERMINAL_PLACEMENT_STORAGE_KEY, placement)
+      } catch {
+        // Terminal placement is cosmetic; unavailable storage must not break the app.
+      }
+    }
     const context = this.activeContext
     if (!context) return
     if (placement === 'bottom') {
