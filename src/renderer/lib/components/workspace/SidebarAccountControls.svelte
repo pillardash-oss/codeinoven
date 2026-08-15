@@ -93,7 +93,7 @@
       onclick={() => navigate('settings-profile')}
     >
       <span
-        class="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[10px] font-bold text-on-primary ring-1 ring-border"
+        class="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-[10px] font-bold text-on-primary ring-1 ring-border"
       >
         {#if profile.image}
           <img class="h-full w-full object-cover" src={profile.image} alt="" />
