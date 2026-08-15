@@ -70,7 +70,7 @@
     isThreadWorking,
     type ScopeBucket
   } from '$shared/types'
-  import type { Component } from 'svelte'
+  import { tick, type Component } from 'svelte'
 
   type View = MainView
 
@@ -503,6 +503,29 @@
   let threadRenameValue = $state('')
 
   let showThreadDeleteConfirm = $state(false)
+  /** Delete button inside the confirm modal — focused on open so Enter deletes. */
+  let deleteConfirmButton = $state<HTMLButtonElement>()
+
+  $effect(() => {
+    if (!showThreadDeleteConfirm) return
+    void tick().then(() => deleteConfirmButton?.focus())
+  })
+
+  /** Cmd/Ctrl+D deletes the actively opened thread through the normal confirm
+   *  flow; Escape cancels the confirm while it is open. */
+  function handleWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && showThreadDeleteConfirm) {
+      event.preventDefault()
+      showThreadDeleteConfirm = false
+      return
+    }
+    if (event.repeat || event.isComposing) return
+    if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'd') return
+    if (event.altKey || event.shiftKey) return
+    if (!workspaceState.selectedThread) return
+    event.preventDefault()
+    showThreadDeleteConfirm = true
+  }
 
   let showChangeScope = $state(false)
 
@@ -588,6 +611,8 @@
     }
   }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <header
   class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4"
@@ -1055,6 +1080,7 @@
             Cancel
           </button>
           <button
+            bind:this={deleteConfirmButton}
             type="button"
             class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
             title="Permanently delete this thread"
