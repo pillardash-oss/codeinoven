@@ -16,6 +16,7 @@
     PullRequestCompare,
     PullRequestReference,
     ProviderCatalog,
+    ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
   import {
@@ -473,6 +474,14 @@
     threadSettings.commit(composeSettings)
   }
 
+  function chooseComposeThinking(level: ThinkingLevel): void {
+    composeSettings = {
+      ...composeSettings,
+      thinkingLevel: level
+    }
+    threadSettings.commit(composeSettings)
+  }
+
   onDestroy(clearComposeTimers)
 
   $effect(() => {
@@ -591,6 +600,8 @@
                     side="top"
                     variant="action"
                     onSelect={chooseComposeModel}
+                    thinkingLevel={composeSettings.thinkingLevel}
+                    onSelectThinking={chooseComposeThinking}
                     onToggleFavorite={(providerId, modelId, harnessId) =>
                       rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                     onReorderFavorite={(draggedKey, targetKey, position) =>

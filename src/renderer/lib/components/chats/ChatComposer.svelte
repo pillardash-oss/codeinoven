@@ -8,7 +8,6 @@
     Paperclip,
     Square,
     Wrench,
-    Brain,
     X,
     Folder,
     GitBranch,
@@ -379,7 +378,6 @@
   // Dropdown open state
   let plusMenuOpen = $state(false)
   let modelMenuOpen = $state(false)
-  let thinkingMenuOpen = $state(false)
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
 
@@ -426,7 +424,6 @@
   function closeAllMenus(): void {
     plusMenuOpen = false
     modelMenuOpen = false
-    thinkingMenuOpen = false
     inferenceMenuOpen = false
     permissionMenuOpen = false
   }
@@ -434,15 +431,6 @@
   function showModelMenu(): void {
     modelMenuOpen = true
     plusMenuOpen = false
-    thinkingMenuOpen = false
-    inferenceMenuOpen = false
-  }
-
-  function showThinkingMenu(): void {
-    if (!supportsThinking) return
-    thinkingMenuOpen = true
-    plusMenuOpen = false
-    modelMenuOpen = false
     inferenceMenuOpen = false
   }
 
@@ -451,7 +439,6 @@
     inferenceMenuOpen = true
     plusMenuOpen = false
     modelMenuOpen = false
-    thinkingMenuOpen = false
   }
 
   // Prior-open tracking for the focus-on-close edge detection below. This is a
@@ -465,30 +452,6 @@
     }
     modelWasOpen = modelMenuOpen
   })
-
-  let thinkingWasOpen = false
-  $effect(() => {
-    if (thinkingWasOpen && !thinkingMenuOpen && !modelMenuOpen) {
-      focusComposerAtEnd()
-    }
-    thinkingWasOpen = thinkingMenuOpen
-  })
-
-  $effect(() => {
-    if (thinkingMenuOpen) {
-      void tick().then(() => {
-        const firstItem = document.querySelector('[data-thinking-index="0"]')
-        if (firstItem instanceof HTMLElement) {
-          firstItem.focus()
-        }
-      })
-    }
-  })
-
-  function toggleThinkingMenu(): void {
-    if (thinkingMenuOpen) closeAllMenus()
-    else showThinkingMenu()
-  }
 
   function toggleInferenceMenu(): void {
     if (inferenceMenuOpen) closeAllMenus()
@@ -686,7 +649,8 @@
     }
 
     if (action.id === 'selector:thinking') {
-      showThinkingMenu()
+      // Thinking lives inside the shared model picker — open it.
+      showModelMenu()
       return
     }
 
@@ -993,8 +957,11 @@
   }
 
   function selectThinking(preset: ThinkingPreset): void {
-    thinkingMenuOpen = false
-    const updated = { ...resolved, thinkingLevel: preset.id as ThinkingLevel }
+    const level = preset.id as ThinkingLevel
+    // The picker may re-emit the level it already applied during a model
+    // change — skip the redundant commit.
+    if (resolved.thinkingLevel === level) return
+    const updated = { ...resolved, thinkingLevel: level }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
   }
@@ -1739,7 +1706,6 @@
           onclick={() => {
             plusMenuOpen = !plusMenuOpen
             modelMenuOpen = false
-            thinkingMenuOpen = false
           }}
         >
           <Plus size={15} class="transition-transform {plusMenuOpen ? 'rotate-45' : ''}" />
@@ -1893,7 +1859,6 @@
             permissionMenuOpen = !permissionMenuOpen
             plusMenuOpen = false
             modelMenuOpen = false
-            thinkingMenuOpen = false
           }}
         >
           {#if resolved.permissionLevel === 'full_access'}
@@ -1942,7 +1907,7 @@
       </div>
     {/if}
 
-    <!-- Shared model selector -->
+    <!-- Shared model selector — model + thinking level in one control -->
     <ModelPicker
       {providers}
       {projectId}
@@ -1956,84 +1921,10 @@
       {onToggleFavorite}
       {onReorderFavorite}
       fast={inferenceMode === 'fast'}
+      thinkingLevel={resolved.thinkingLevel}
+      {thinkingPresets}
+      onSelectThinking={(level) => selectThinking({ id: level, label: level })}
     />
-
-    <!-- Thinking level — only for models that support reasoning -->
-    {#if supportsThinking}
-      <div class="relative">
-        <button
-          type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={`Thinking strategy: ${thinkingPresets.find((preset) => preset.id === resolved.thinkingLevel)?.label ?? resolved.thinkingLevel}`}
-          title="Thinking strategy"
-          onclick={toggleThinkingMenu}
-        >
-          <Brain size={12} />
-          <span class="composer-control-label capitalize"
-            >{thinkingPresets.find((p) => p.id === resolved.thinkingLevel)?.label ??
-              resolved.thinkingLevel}</span
-          >
-        </button>
-
-        {#if thinkingMenuOpen}
-          <button
-            class="fixed inset-0 z-30 cursor-default"
-            aria-label="Close menu"
-            onclick={closeAllMenus}
-          ></button>
-          <div
-            class="absolute bottom-9 left-0 z-40 w-44 overflow-hidden rounded-xl border bg-surface shadow-lg"
-          >
-            <div class="p-1">
-              {#each thinkingPresets as preset, i (preset.id)}
-                <button
-                  data-thinking-index={i}
-                  class="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {resolved.thinkingLevel ===
-                  preset.id
-                    ? 'text-primary'
-                    : 'text-foreground'}"
-                  title={preset.description ?? `Set thinking to ${preset.label}`}
-                  onclick={() => selectThinking(preset)}
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      const buttons = document.querySelectorAll('[data-thinking-index]')
-                      const currentIndex = Array.from(buttons).indexOf(
-                        event.currentTarget as HTMLElement
-                      )
-                      const nextIndex =
-                        event.key === 'ArrowDown'
-                          ? Math.min(currentIndex + 1, buttons.length - 1)
-                          : Math.max(currentIndex - 1, 0)
-                      const next = buttons[nextIndex] as HTMLElement
-                      if (next) next.focus()
-                      return
-                    }
-                    if (event.key === 'Escape') {
-                      event.preventDefault()
-                      closeAllMenus()
-                      return
-                    }
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      selectThinking(preset)
-                      return
-                    }
-                  }}
-                >
-                  <span class="flex flex-col">
-                    <span class="capitalize">{preset.label}</span>
-                    {#if preset.description}
-                      <span class="text-[10px] text-muted">{preset.description}</span>
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     <!-- Fast inference — native harness tier or catalog-provided fast variant -->
     {#if fastVariant}

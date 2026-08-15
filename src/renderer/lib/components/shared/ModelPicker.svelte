@@ -3,6 +3,8 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { Popover } from 'bits-ui'
   import {
+    Brain,
+    Check,
     ChevronRight,
     Clock,
     Cpu,
@@ -15,13 +17,15 @@
     Zap,
     X
   } from '@lucide/svelte'
+  import { resolveDefaultThinkingLevel } from '$lib/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte.ts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ProviderCatalog, ProviderModel } from '$shared/types'
+  import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
 
   interface Props {
     providers: ProviderCatalog[]
@@ -43,7 +47,17 @@
     fast?: boolean
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
+    /** Current thinking level. When provided, the picker also manages the
+     *  thinking level (trigger badge + thinking section in the popover). */
+    thinkingLevel?: ThinkingLevel | null
+    /** Thinking presets to display. Defaults to the selected model's declared
+     *  presets — when the model declares none, thinking controls stay hidden. */
+    thinkingPresets?: ThinkingPreset[]
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    /** Fired when the thinking level changes — either from an explicit preset
+     *  click, or automatically when a newly selected model no longer supports
+     *  the previous level. */
+    onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
     onReorderFavorite?: (
@@ -68,7 +82,10 @@
     label,
     fast = false,
     visionOnly = false,
+    thinkingLevel = null,
+    thinkingPresets,
     onSelect,
+    onSelectThinking,
     onToggleFavorite,
     onReorderFavorite
   }: Props = $props()
@@ -109,6 +126,20 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
+  )
+  /**
+   * Thinking presets offered by the selected model. Callers may override them
+   * (e.g. the composer falls back to the standard presets while the catalog is
+   * still cold); otherwise the model's declared presets decide — none declared
+   * means the model does not reason and the thinking controls stay hidden.
+   */
+  let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
+  /** Thinking controls only appear when a level is tracked and the model offers presets. */
+  let supportsThinking = $derived(Boolean(thinkingLevel) && effectiveThinkingPresets.length > 0)
+  let currentThinkingLabel = $derived(
+    effectiveThinkingPresets.find((preset) => preset.id === thinkingLevel)?.label ??
+      thinkingLevel ??
+      ''
   )
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
@@ -625,8 +656,27 @@
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+    const entry =
+      findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
+      findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
     onSelect(nextProviderId, nextModelId, nextHarnessId)
+    // Thinking level depends on the model: resolve a level the new model
+    // actually offers and surface it right after the model change, so parents
+    // never keep a stale level the model no longer supports.
+    if (thinkingLevel && entry?.model.thinkingPresets?.length) {
+      const defaultLevel = baseUrlProviderStore.defaultThinkingLevel(
+        nextHarnessId,
+        nextProviderId,
+        nextModelId
+      )
+      const resolved = resolveDefaultThinkingLevel(
+        entry.model.thinkingPresets,
+        defaultLevel,
+        thinkingLevel
+      )
+      if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
+    }
   }
 
   function toggleGroup(id: string): void {
@@ -708,6 +758,16 @@
           fill="currentColor"
           aria-label="Fast inference"
         />
+      {/if}
+      {#if supportsThinking}
+        <span
+          class="ml-0.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed"
+          title="Thinking level — change it from the picker"
+          aria-hidden="true"
+        >
+          <Brain size={10} />
+          <span class="capitalize">{currentThinkingLabel}</span>
+        </span>
       {/if}
     </Popover.Trigger>
 
@@ -877,6 +937,60 @@
             </div>
           {/if}
         </div>
+
+        {#if supportsThinking}
+          <div class="border-t px-2.5 py-2">
+            <div
+              class="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+            >
+              <Brain size={10} class="shrink-0" />
+              Thinking
+            </div>
+            <div
+              class="mt-1.5 grid max-h-36 gap-0.5 overflow-y-auto"
+              role="group"
+              aria-label="Thinking level"
+            >
+              {#each effectiveThinkingPresets as preset, i (preset.id)}
+                {@const active = thinkingLevel === preset.id}
+                <button
+                  type="button"
+                  data-thinking-index={i}
+                  class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[11px] transition-colors hover:bg-elevated {active
+                    ? 'text-primary'
+                    : 'text-foreground'}"
+                  title={preset.description ?? `Set thinking to ${preset.label}`}
+                  onclick={() => {
+                    if (!active) onSelectThinking?.(preset.id as ThinkingLevel)
+                  }}
+                  onkeydown={(event: KeyboardEvent) => {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                      event.preventDefault()
+                      const buttons = document.querySelectorAll('[data-thinking-index]')
+                      const currentIndex = Array.from(buttons).indexOf(
+                        event.currentTarget as HTMLElement
+                      )
+                      const nextIndex =
+                        event.key === 'ArrowDown'
+                          ? Math.min(currentIndex + 1, buttons.length - 1)
+                          : Math.max(currentIndex - 1, 0)
+                      const next = buttons[nextIndex] as HTMLElement
+                      if (next) next.focus()
+                      return
+                    }
+                  }}
+                >
+                  {#if active}
+                    <Check size={11} class="shrink-0" />
+                  {:else}
+                    <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                  {/if}
+                  <span class="capitalize">{preset.label}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
