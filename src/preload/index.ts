@@ -84,6 +84,7 @@ const INVOKE_CHANNELS = [
   'agent:listProviderSnapshot',
   'agent:refreshProviderCatalog',
   'agent:refreshAccountUsage',
+  'agent:getHarnessAuthStatus',
   'agent:listTools',
   'agent:listContextCapabilities',
   'agent:listProcesses',

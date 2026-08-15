@@ -29,6 +29,7 @@ import type {
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions,
@@ -1440,6 +1441,29 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
     return authenticated
+  }
+
+  /**
+   * Current authentication state of the shared first-party credential, probed
+   * through the credential-refresh gate so a thread-open check can never race
+   * a concurrent refresh (anthropics/claude-code#76905). Probe failures are
+   * reported as authenticated so real errors still surface at message time.
+   */
+  async getAuthStatus(projectPath: string): Promise<HarnessAuthStatus> {
+    const authenticated = await this.runAuthSerialized(() =>
+      this.probeFirstPartyAuthentication(projectPath)
+    )
+    if (!authenticated) {
+      return {
+        state: 'unauthenticated',
+        accounts: [],
+        detail: 'Claude Code could not authenticate with the stored credential.'
+      }
+    }
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'anthropic', label: 'Anthropic', method: 'oauth', active: true }]
+    }
   }
 
   /**

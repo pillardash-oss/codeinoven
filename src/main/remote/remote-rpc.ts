@@ -649,6 +649,8 @@ export class RemoteRpcDispatcher {
         return chatEngine.listProviders(this.string(args[0]), true)
       case 'agent:refreshAccountUsage':
         return chatEngine.refreshAccountUsage(this.string(args[0]), this.string(args[1]))
+      case 'agent:getHarnessAuthStatus':
+        return chatEngine.getHarnessAuthStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:getSessionStatus':
         return chatEngine.getSessionStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:ensureSession':
