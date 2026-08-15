@@ -2962,6 +2962,17 @@ export function registerIpcHandlers(
     }
   )
   ipcMain.handle('project:delete', async (_, projectId: string) => {
+    // Tear down every harness session (processes, ports, utility runtimes) for
+    // the project's threads before the rows are cascade-deleted. Threads are
+    // removed from the database here, not through `thread:delete`, so the
+    // engine's per-thread teardown would otherwise never run and harness
+    // processes would leak after project removal.
+    if (chatEngine?.deleteThreadSession) {
+      const threads = await threadManager.listThreads(projectId)
+      for (const thread of threads) {
+        await chatEngine.deleteThreadSession(projectId, thread.id)
+      }
+    }
     await projectManager.deleteProject(projectId)
     projectFilesService.invalidateProject(projectId)
   })
