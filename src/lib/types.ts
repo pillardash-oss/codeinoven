@@ -1653,7 +1653,38 @@ export interface LocalProfileAnalytics {
   utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
+  /** Harness/provider/model/thinking-level performance scored on session outcomes. */
+  modelPerformance: LocalProfileModelPerformance[]
   generatedAt: number
+}
+
+/** Lifecycle of one scored user session awaiting a positive/negative signal. */
+export type TurnOutcomeStatus = 'pending' | 'success' | 'corrected'
+
+/** What resolved a pending turn outcome into its final status. */
+export type TurnOutcomeSignal = 'continued' | 'switched' | 'cleaned_up' | 'corrective_feedback'
+
+/** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
+export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
+
+/** Aggregated feedback performance for one (harness, provider, model, thinking level). */
+export interface LocalProfileModelPerformance {
+  harnessId: string
+  providerId: string
+  modelId: string
+  thinkingLevel: ThinkingLevel | null
+  taskType: TurnOutcomeTaskType
+  /** Number of resolved session outcomes for this combination. */
+  outcomes: number
+  /** Sessions that ended successfully (continued, switched away, or left until cleanup). */
+  successes: number
+  /** Sessions the user corrected with a follow-up message. */
+  corrected: number
+  /** successes / outcomes, or null before any outcome is resolved. */
+  successRate: number | null
+  /** Average of the 0/1 per-outcome scores. */
+  averageScore: number
+  lastUsedAt: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */

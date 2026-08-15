@@ -53,6 +53,7 @@
     utilities: [],
     projects: [],
     activityDays: [],
+    modelPerformance: [],
     generatedAt: 0
   }
 

@@ -41,6 +41,7 @@ import {
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
+import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -1382,6 +1383,7 @@ export function registerIpcHandlers(
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
+  const turnFeedbackRepo = new TurnFeedbackRepo(database)
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
@@ -1444,9 +1446,12 @@ export function registerIpcHandlers(
   })
 
   // ─── Application config ────────────────────────────────────────────────
-  ipcMain.handle('account:getLocalUsage', (_, input: unknown) =>
-    harnessUsageRepo.profileAnalytics(validateLocalProfileAnalyticsRange(input))
-  )
+  ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
+    const range = validateLocalProfileAnalyticsRange(input)
+    const analytics = await harnessUsageRepo.profileAnalytics(range)
+    analytics.modelPerformance = turnFeedbackRepo.modelPerformance(range)
+    return analytics
+  })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
   }
@@ -4670,6 +4675,14 @@ export function registerIpcHandlers(
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
     await threadCreation.awaitReady(threadId)
+    // Opening a thread means the user moved on from wherever they were; any
+    // completed turn left pending on another thread counts as a success.
+    turnFeedbackRepo.resolvePendingForOtherThreads(
+      validateEntityId(threadId, 'Thread ID'),
+      'success',
+      'switched',
+      1
+    )
     return threadManager.markRead(projectId, threadId)
   })
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>

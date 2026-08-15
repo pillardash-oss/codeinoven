@@ -45,6 +45,7 @@ import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
+import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
 import { SecretVault } from '../storage/secret-vault'
@@ -136,6 +137,7 @@ import type {
   Thread,
   ThreadSettings,
   ThinkingLevel,
+  TurnOutcomeTaskType,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance
@@ -1358,6 +1360,7 @@ export class ChatEngine {
   private baseUrlProviders: BaseUrlProviderService
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
+  private turnFeedbackRepo: TurnFeedbackRepo
   private utilityTurns = new Map<
     string,
     {
@@ -1380,6 +1383,7 @@ export class ChatEngine {
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
+    this.turnFeedbackRepo = new TurnFeedbackRepo(database)
     this.projectManager = new ProjectManager(database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.checkpointManager = new CheckpointManager(database)
@@ -1388,6 +1392,9 @@ export class ChatEngine {
       broadcastThreadUpdate,
       async (thread) => {
         await this.deleteThreadSession(thread.projectId, thread.id)
+        // The user left this thread without complaining; its completed turns
+        // count as successful sessions before the rows are cascade-deleted.
+        this.turnFeedbackRepo.resolvePendingForThread(thread.id, 'success', 'cleaned_up', 1)
         await this.memoryService.deleteThreadMemory(thread.projectId, thread.id)
         await this.storage.remove(this.coordinatorHandoffQueuePath(thread.projectId, thread.id))
       },
@@ -6164,6 +6171,17 @@ export class ChatEngine {
       completedAt: createdAt
     }
     await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
+    if (dispatchOrigin === 'user') {
+      // The user reacted to the previous turn: a corrective follow-up scores it
+      // negatively, any other continuation scores it as a success.
+      const corrective = looksCorrective(displayText)
+      this.turnFeedbackRepo.resolveLatestPendingForThread(
+        threadId,
+        corrective ? 'corrected' : 'success',
+        corrective ? 'corrective_feedback' : 'continued',
+        corrective ? 0 : 1
+      )
+    }
     return userMessage
   }
 
@@ -13818,6 +13836,17 @@ export class ChatEngine {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
+      if (parentTurnId && turnAssistant && !failure && !turnAssistant.error) {
+        this.openTurnOutcome(
+          sessionId,
+          thread,
+          info.threadId,
+          mirror,
+          parentTurnId,
+          turnAssistant,
+          awaitingUser
+        )
+      }
       // Snapshot this turn's harness usage into the dedicated analytics table.
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.
@@ -14296,6 +14325,48 @@ export class ChatEngine {
           currency: 'USD',
           capturedAt: message.completedAt ?? message.createdAt
         } satisfies UsagePricingProvenance)
+    })
+  }
+
+  /**
+   * Open a pending session-outcome record for a completed, error-free turn that
+   * answered a visible user message. The outcome is resolved later by the first
+   * signal that arrives: the user continues/corrects, switches to another
+   * thread, or leaves the thread until cleanup. Internal orchestration turns
+   * (spec generation, repairs, hidden recaps) never open a record.
+   */
+  private openTurnOutcome(
+    sessionId: string,
+    thread: Thread | null,
+    threadId: string,
+    mirror: AgentMessage[],
+    parentTurnId: string,
+    turnAssistant: AgentMessage,
+    awaitingUser: boolean
+  ): void {
+    if (awaitingUser) return
+    if (!thread?.settings) return
+    const parentOrigin = mirror.find((message) => message.id === parentTurnId)?.origin
+    if (parentOrigin !== 'user') return
+    if (!turnAssistant.modelId && !thread.settings.modelId) return
+    const taskType: TurnOutcomeTaskType =
+      thread.achievementRole === 'auditor'
+        ? 'audit'
+        : thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
+          ? 'assignment'
+          : 'main'
+    this.turnFeedbackRepo.openPending({
+      id: `outcome:${parentTurnId}`,
+      threadId,
+      parentTurnId,
+      sessionId,
+      createdAt: turnAssistant.completedAt ?? turnAssistant.createdAt ?? Date.now(),
+      feature: taskType,
+      taskSlug: thread.featureSlug ?? null,
+      harnessId: turnAssistant.harnessId ?? thread.settings.harnessId,
+      providerId: turnAssistant.providerId ?? thread.settings.providerId ?? null,
+      modelId: turnAssistant.modelId ?? thread.settings.modelId ?? null,
+      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null
     })
   }
 
@@ -15653,6 +15724,41 @@ export function stampHarnessId(
     }
     return stamped
   })
+}
+
+/** Phrases that mark a user follow-up as correcting the previous answer. */
+const CORRECTIVE_PATTERNS = [
+  /\bthat'?s wrong\b/iu,
+  /\byou'?re wrong\b/iu,
+  /\byou are wrong\b/iu,
+  /\bnot working\b/iu,
+  /\bdoesn'?t work\b/iu,
+  /\bdoes not work\b/iu,
+  /\bisn'?t working\b/iu,
+  /\bis not working\b/iu,
+  /\bwon'?t work\b/iu,
+  /\bstill broken\b/iu,
+  /\bstill failing\b/iu,
+  /\bstill not\b/iu,
+  /\bthis failed\b/iu,
+  /\bit failed\b/iu,
+  /\bdidn'?t work\b/iu,
+  /\bdid not work\b/iu,
+  /\bbroke the\b/iu,
+  /\bintroduced a bug\b/iu,
+  /\bregression\b/iu,
+  /\bfix this\b/iu,
+  /\bfix it\b/iu,
+  /\bredo (it|this)\b/iu,
+  /\btry again\b/iu,
+  /\bnot correct\b/iu,
+  /\bincorrect\b/iu,
+  /\bwrong\b/iu
+]
+
+/** Best-effort detection of a corrective user follow-up (the negative signal). */
+export function looksCorrective(text: string): boolean {
+  return CORRECTIVE_PATTERNS.some((pattern) => pattern.test(text))
 }
 
 function formatProjectReferenceContext(references: PromptProjectReference[]): string {
