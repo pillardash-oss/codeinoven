@@ -44,13 +44,17 @@ const PERSISTENCE_FILE = 'retry-scheduler.json'
  * persisted so they survive app restarts, and the restored warning card proves
  * the resume is still scheduled. Only harnesses that do not schedule their own
  * provider retries are tracked; the chat engine enforces that gate before
- * handing records to this service (OpenCode manages its own retries).
+ * handing records to this service (OpenCode manages its own retries). Listeners
+ * are notified on every pending-set change so dependents (e.g. the power-wake
+ * service) can re-evaluate.
  */
 export class RetrySchedulerService {
   private readonly pending = new Map<string, PendingRetryRecord>()
   private timer: ReturnType<typeof setInterval> | null = null
   private enabled = false
   private continueThread: ((record: PendingRetryRecord) => Promise<void>) | null = null
+  /** Fired whenever the pending set changes (track/clear/fire/restore). */
+  private changeListener: (() => void) | null = null
   /** Serialized atomic writes so rapid track/clear never interleave snapshots. */
   private persistChain: Promise<void> = Promise.resolve()
 
@@ -74,11 +78,25 @@ export class RetrySchedulerService {
       void this.persist()
     }
     this.refreshTimer()
+    this.notifyChange()
   }
 
   /** The chat engine supplies the resume callback once registered. */
   attachContinue(callback: (record: PendingRetryRecord) => Promise<void>): void {
     this.continueThread = callback
+  }
+
+  /** Register a callback fired whenever the pending-retry set changes. */
+  attachChangeListener(callback: () => void): void {
+    this.changeListener = callback
+  }
+
+  /** True when any pending retry resets at or before `deadlineMs`. */
+  hasPendingRetryBefore(deadlineMs: number): boolean {
+    for (const record of this.pending.values()) {
+      if (record.retryAt <= deadlineMs) return true
+    }
+    return false
   }
 
   /** Record (or refresh) a pending reset retry for a session. */
@@ -95,6 +113,7 @@ export class RetrySchedulerService {
     this.refreshTimer()
     // The reset may already have passed — fire without waiting.
     this.tick()
+    this.notifyChange()
   }
 
   /** Drop a session from the pending set once it resolves or retires. */
@@ -102,6 +121,7 @@ export class RetrySchedulerService {
     if (this.pending.delete(sessionId)) {
       void this.persist()
       if (this.pending.size === 0) this.refreshTimer()
+      this.notifyChange()
     }
   }
 
@@ -153,6 +173,7 @@ export class RetrySchedulerService {
         count: this.pending.size
       })
     }
+    this.notifyChange()
   }
 
   private validateSavedRecord(value: unknown): PendingRetryRecord | null {
@@ -232,6 +253,7 @@ export class RetrySchedulerService {
     }
     void this.persist()
     if (this.pending.size === 0) this.refreshTimer()
+    this.notifyChange()
   }
 
   private async fire(record: PendingRetryRecord): Promise<void> {
@@ -253,5 +275,9 @@ export class RetrySchedulerService {
       // Leave the thread in its error state; the user can still Retry manually.
       Logger.error('Auto-resume attempt failed', error)
     }
+  }
+
+  private notifyChange(): void {
+    this.changeListener?.()
   }
 }
