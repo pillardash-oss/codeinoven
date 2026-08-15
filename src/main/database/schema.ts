@@ -240,18 +240,14 @@ export const HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL = `
 ALTER TABLE harness_usage ADD COLUMN thinking_level TEXT;`
 
 /**
- * Rebuilt `harness_usage_models` shape shared by both thinking-level
- * migrations. The level is NOT NULL with an empty-string "unknown" sentinel
- * because SQLite treats NULLs as distinct inside a composite PRIMARY KEY —
- * NULL levels would fragment one model's usage into a row per message instead
- * of accumulating it. SQLite cannot change a PRIMARY KEY in place, so the
- * table is always rebuilt rather than altered. The temp table is dropped first
- * so a partially-failed earlier run (which can leave `harness_usage_models_v2`
- * behind) never blocks database initialization on retry.
+ * Column definitions shared by the canonical `harness_usage_models` table, the
+ * migration staging table, and the interrupted-rebuild recovery (which
+ * normalizes a bare staging copy back to this constrained shape). thinking_level
+ * is NOT NULL with an empty-string "unknown" sentinel because SQLite treats
+ * NULLs as distinct inside a composite PRIMARY KEY — NULL levels would fragment
+ * one model's usage into a row per message instead of accumulating it.
  */
-const HARNESS_USAGE_MODELS_V2_DDL = `
-DROP TABLE IF EXISTS harness_usage_models_v2;
-CREATE TABLE harness_usage_models_v2 (
+export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
   thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
@@ -268,8 +264,81 @@ CREATE TABLE harness_usage_models_v2 (
   duration_ms          INTEGER NOT NULL DEFAULT 0,
   first_used_at        INTEGER NOT NULL,
   last_used_at         INTEGER NOT NULL,
-  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
-);`
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
+
+/** Columns the app reads off `harness_usage_models`; used to validate staged data. */
+export const HARNESS_USAGE_MODELS_EXPECTED_COLUMNS = [
+  'thread_id',
+  'harness_id',
+  'provider_id',
+  'model_id',
+  'thinking_level',
+  'message_count',
+  'cost_usd',
+  'tokens_in',
+  'tokens_out',
+  'tokens_reasoning',
+  'tokens_cache_read',
+  'tokens_cache_write',
+  'tokens_total',
+  'duration_ms',
+  'first_used_at',
+  'last_used_at'
+] as const
+
+/**
+ * Column definitions shared by the canonical `turn_feedback` table, the
+ * migration staging table, and the interrupted-rebuild recovery. thread_id
+ * deliberately does NOT cascade-delete: resolved outcomes are the long-term
+ * analytics record for "best model by feedback", so rows keep their own
+ * attribution when the owning thread is deleted.
+ */
+export const TURN_FEEDBACK_COLUMNS_SQL = `
+  id             TEXT PRIMARY KEY NOT NULL,
+  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  parent_turn_id TEXT NOT NULL UNIQUE,
+  session_id     TEXT,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+  score          REAL NOT NULL DEFAULT 0,
+  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
+  task_slug      TEXT,
+  harness_id     TEXT,
+  provider_id    TEXT,
+  model_id       TEXT,
+  thinking_level TEXT`
+
+/** Columns the app reads off `turn_feedback`; used to validate staged data. */
+export const TURN_FEEDBACK_EXPECTED_COLUMNS = [
+  'id',
+  'thread_id',
+  'parent_turn_id',
+  'session_id',
+  'created_at',
+  'resolved_at',
+  'status',
+  'signal',
+  'score',
+  'feature',
+  'task_slug',
+  'harness_id',
+  'provider_id',
+  'model_id',
+  'thinking_level'
+] as const
+
+/**
+ * Rebuilt `harness_usage_models` shape shared by both thinking-level
+ * migrations. SQLite cannot change a PRIMARY KEY in place, so the table is
+ * always rebuilt rather than altered. The temp table is dropped first so a
+ * partially-failed earlier run (which can leave `harness_usage_models_v2`
+ * behind) never blocks database initialization on retry.
+ */
+const HARNESS_USAGE_MODELS_V2_DDL = `
+DROP TABLE IF EXISTS harness_usage_models_v2;
+CREATE TABLE harness_usage_models_v2 (${HARNESS_USAGE_MODELS_COLUMNS_SQL});`
 
 const HARNESS_USAGE_MODELS_REBUILD_EPILOGUE = `
 DROP TABLE harness_usage_models;
@@ -329,23 +398,7 @@ ${HARNESS_USAGE_MODELS_REBUILD_EPILOGUE}`
  */
 export const TURN_FEEDBACK_SET_NULL_MIGRATION_SQL = `
 DROP TABLE IF EXISTS turn_feedback_v2;
-CREATE TABLE turn_feedback_v2 (
-  id             TEXT PRIMARY KEY NOT NULL,
-  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  parent_turn_id TEXT NOT NULL UNIQUE,
-  session_id     TEXT,
-  created_at     INTEGER NOT NULL,
-  resolved_at    INTEGER,
-  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
-  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
-  score          REAL NOT NULL DEFAULT 0,
-  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
-  task_slug      TEXT,
-  harness_id     TEXT,
-  provider_id    TEXT,
-  model_id       TEXT,
-  thinking_level TEXT
-);
+CREATE TABLE turn_feedback_v2 (${TURN_FEEDBACK_COLUMNS_SQL});
 INSERT INTO turn_feedback_v2(
   id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
   status, signal, score, feature, task_slug,
@@ -741,28 +794,8 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
 -- One row per model+thinking-level a harness used on a thread, with cumulative
 -- cost/tokens/duration so the battery popover (and the usage settings page) can
 -- show what each model consumed at each reasoning effort. Rows cascade-delete
--- with their thread. thinking_level is NOT NULL with an empty-string
--- "unknown" sentinel because SQLite treats NULLs as distinct inside a composite
--- PRIMARY KEY, which would fragment one model's usage into a row per message.
-CREATE TABLE IF NOT EXISTS harness_usage_models (
-  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  harness_id           TEXT NOT NULL,
-  provider_id          TEXT NOT NULL,
-  model_id             TEXT NOT NULL,
-  thinking_level       TEXT NOT NULL DEFAULT '',
-  message_count        INTEGER NOT NULL DEFAULT 0,
-  cost_usd             REAL NOT NULL DEFAULT 0,
-  tokens_in            INTEGER NOT NULL DEFAULT 0,
-  tokens_out           INTEGER NOT NULL DEFAULT 0,
-  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
-  tokens_total         INTEGER NOT NULL DEFAULT 0,
-  duration_ms          INTEGER NOT NULL DEFAULT 0,
-  first_used_at        INTEGER NOT NULL,
-  last_used_at         INTEGER NOT NULL,
-  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
-);
+-- with their thread.
+CREATE TABLE IF NOT EXISTS harness_usage_models (${HARNESS_USAGE_MODELS_COLUMNS_SQL});
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
   ON harness_usage_models(thread_id);
@@ -826,28 +859,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
 -- the thread idle until cleanup. Scores (0/1) feed the "best model by
 -- feedback" profile section, keyed by harness/provider/model/thinking level
 -- and the task kind (main/audit/assignment).
---
--- thread_id deliberately does NOT cascade-delete: resolved outcomes are the
--- long-term analytics record for "best model by feedback". When a thread is
--- deleted or evicted, its rows are resolved to success/cleaned_up and kept
--- with thread_id set to NULL (the row already carries its own attribution).
-CREATE TABLE IF NOT EXISTS turn_feedback (
-  id             TEXT PRIMARY KEY NOT NULL,
-  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  parent_turn_id TEXT NOT NULL UNIQUE,
-  session_id     TEXT,
-  created_at     INTEGER NOT NULL,
-  resolved_at    INTEGER,
-  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
-  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
-  score          REAL NOT NULL DEFAULT 0,
-  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
-  task_slug      TEXT,
-  harness_id     TEXT,
-  provider_id    TEXT,
-  model_id       TEXT,
-  thinking_level TEXT
-);
+CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
   ON turn_feedback(thread_id, created_at);

@@ -265,15 +265,38 @@ describe('turn_feedback SET NULL migration', () => {
 
 describe('interrupted-rebuild recovery', () => {
   // A maintenance worker cannot share a file database with a second WAL
-  // connection from a bare test, so the Database is given a no-op factory.
-  // The worker never actually answers, but init() completes without spawning.
-  const noopWorkerFactory = (): Worker =>
-    ({
-      on: () => undefined,
-      once: () => undefined,
-      postMessage: () => undefined,
+  // connection from a bare test, so the Database is given a scripted factory:
+  // every request is answered as "unavailable" (making query helpers fall back
+  // to the primary connection) and shutdown is acknowledged with a clean exit,
+  // so init() and the awaited close() complete without timers or errors.
+  const noopWorkerFactory = (): Worker => {
+    let messageHandler: ((message: unknown) => void) | null = null
+    let exitHandler: (() => void) | null = null
+    const stub = {
+      on: (event: string, handler: (message?: unknown) => void) => {
+        if (event === 'message') messageHandler = handler as (message: unknown) => void
+        if (event === 'exit') exitHandler = handler as () => void
+        return stub
+      },
+      once: (event: string, handler: () => void) => {
+        if (event === 'exit') exitHandler = handler
+        return stub
+      },
+      removeListener: () => stub,
+      removeAllListeners: () => stub,
+      postMessage: (message: { type: string; id: number; request: { kind: string } }) => {
+        if (message.type !== 'request') return
+        messageHandler?.({
+          type: 'response',
+          id: message.id,
+          result: { kind: message.request.kind, ok: false, error: 'unavailable' }
+        })
+        if (message.request.kind === 'shutdown') exitHandler?.()
+      },
       terminate: () => Promise.resolve(0)
-    }) as unknown as Worker
+    }
+    return stub as unknown as Worker
+  }
 
   it('adopts the populated staging table when a crash left the canonical table missing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cio-migration-recovery-'))
@@ -340,8 +363,39 @@ describe('interrupted-rebuild recovery', () => {
             "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'turn_feedback_v2'"
           )
         ).toBeUndefined()
+
+        // The adopted tables were normalized back to the constrained canonical
+        // schema (the seeded staging was a bare column copy): primary keys,
+        // nullability, and foreign keys must be restored.
+        const modelCols = db.raw().pragma('table_info(harness_usage_models)') as Array<{
+          name: string
+          notnull: number
+          pk: number
+        }>
+        expect(modelCols.find((c) => c.name === 'thinking_level')?.notnull).toBe(1)
+        expect(
+          modelCols
+            .filter((c) => c.pk > 0)
+            .map((c) => c.name)
+            .join(',')
+        ).toBe('thread_id,harness_id,provider_id,model_id,thinking_level')
+
+        const feedbackCols = db.raw().pragma('table_info(turn_feedback)') as Array<{
+          name: string
+          notnull: number
+          pk: number
+        }>
+        expect(feedbackCols.find((c) => c.name === 'id')?.pk).toBe(1)
+        expect(feedbackCols.find((c) => c.name === 'parent_turn_id')?.notnull).toBe(1)
+        const feedbackFks = db.raw().pragma('foreign_key_list(turn_feedback)') as Array<{
+          table: string
+          on_delete: string
+        }>
+        expect(
+          feedbackFks.some((fk) => fk.table === 'threads' && fk.on_delete === 'SET NULL')
+        ).toBe(true)
       } finally {
-        db.close()
+        await db.close()
       }
     } finally {
       rmSync(dir, { recursive: true, force: true })
