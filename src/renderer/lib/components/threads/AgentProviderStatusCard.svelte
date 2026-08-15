@@ -39,6 +39,8 @@
     ) => void
     onStop?: () => void
     onRetry?: () => void
+    /** Called after a successful sign-in instead of the generic retry. */
+    onSignedIn?: () => void
     onDismiss?: () => void
     sourceLabel?: string
     sourceDetail?: string
@@ -61,6 +63,7 @@
     onReorderFavorite,
     onStop,
     onRetry,
+    onSignedIn,
     onDismiss,
     sourceLabel,
     sourceDetail,
@@ -175,7 +178,7 @@
       return
     }
     closeSignIn()
-    onRetry?.()
+    ;(onSignedIn ?? onRetry)?.()
   }
 </script>
 

@@ -343,6 +343,9 @@
   let projectIconUrl = $state<string | null>(null)
   let errorMessage = $state('')
   let providerStatus = $state<AgentSessionStatus | null>(null)
+  /** Synthetic authentication issue raised by the thread-open auth probe, so
+   *  the sign-in card can tell proactive (no retry) from failure-driven. */
+  let proactiveAuthIssue: AgentProviderIssue | null = null
   /** True once the live session status is established on mount; makes the
    *  DB-status fallback in loadLocal defer to it instead of racing it. */
   let liveStatusKnown = false
@@ -373,6 +376,12 @@
       }
     }
   })
+  /** True while the visible provider card is the proactive sign-in card. */
+  const proactiveAuthVisible = $derived(
+    proactiveAuthIssue !== null &&
+      visibleProviderStatus !== null &&
+      visibleProviderStatus.issue === proactiveAuthIssue
+  )
   const providerName = $derived(
     settings.harnessId === 'opencode'
       ? 'OpenCode'
@@ -2592,6 +2601,9 @@
     try {
       providerStatus = await invoke('agent:getSessionStatus', projectId, id)
       if (!alive) return
+      if (providerStatus === null && settings.harnessId === 'claude-code') {
+        void probeHarnessAuthentication()
+      }
       // The live session status is the single source of truth on mount. Once
       // established, loadLocal's broader DB workflow status must not override
       // it. In particular, a coordinator can be persisted as executing while
@@ -2728,6 +2740,46 @@
     void sendMessage('Continue', [], undefined, true, undefined, [], [], {
       action: 'Retry connection'
     })
+  }
+  /** Detect an expired Claude Code session at thread open so the user can sign
+   *  in before their first message fails mid-turn. */
+  async function probeHarnessAuthentication(): Promise<void> {
+    try {
+      const authenticated = await invoke(
+        'agent:getHarnessAuthStatus',
+        thread.projectId,
+        settings.harnessId
+      )
+      if (!alive || authenticated !== false || providerStatus !== null) return
+      const issue: AgentProviderIssue = {
+        kind: 'authentication',
+        message: 'Claude Code sign-in expired. Sign in once to continue.',
+        rawError: 'Claude Code could not authenticate with the stored credential.',
+        harnessId: settings.harnessId,
+        retryable: true
+      }
+      proactiveAuthIssue = issue
+      setProviderError(issue)
+    } catch {
+      // Best-effort; a real authentication failure still surfaces at message time.
+    }
+  }
+
+  /** Re-check auth after a proactive sign-in and clear the card once it works. */
+  async function refreshAfterProactiveSignIn(): Promise<void> {
+    try {
+      const authenticated = await invoke(
+        'agent:getHarnessAuthStatus',
+        thread.projectId,
+        settings.harnessId
+      )
+      if (authenticated === true) {
+        proactiveAuthIssue = null
+        providerStatus = null
+      }
+    } catch {
+      // Keep the card; the user can dismiss it or send their message.
+    }
   }
 
   /** Dismiss an error card: clear the thread's cached error state and reset its
@@ -6993,10 +7045,14 @@
                     : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onStop={abortRun}
                 onRetry={retryConnection}
+                onSignedIn={proactiveAuthVisible
+                  ? () => void refreshAfterProactiveSignIn()
+                  : undefined}
                 autoRetryEnabled={autoRetryAfterReset}
                 onDismiss={() => {
                   errorMessage = ''
                   providerStatus = null
+                  proactiveAuthIssue = null
                   void dismissSessionError()
                 }}
               />

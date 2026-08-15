@@ -1458,6 +1458,9 @@ export class ChatEngine {
     ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
       this.refreshAccountUsage(projectId, threadId)
     )
+    ipcMain.handle('agent:getHarnessAuthStatus', (_, projectId: string, harnessId: string) =>
+      this.getHarnessAuthStatus(projectId, harnessId)
+    )
     ipcMain.handle(
       'agent:listTools',
       (_, projectId?: string, harnessId?: string, providerId?: string, modelId?: string) =>
@@ -2391,6 +2394,21 @@ export class ChatEngine {
       })
     )
     return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+  }
+
+  /**
+   * On-demand authentication check for a harness, routed through the driver so
+   * the claude-code probe stays inside the credential-refresh gate. Returns
+   * null when the harness exposes no status probe (the renderer then shows
+   * nothing); otherwise true when the stored credential authenticates.
+   */
+  async getHarnessAuthStatus(projectId: string, harnessId: string): Promise<boolean | null> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    harnessId = validateEntityId(harnessId, 'Harness ID', 256)
+    const { driver, projectPath } = await this.resolve(projectId, harnessId)
+    if (!driver.getAuthStatus) return null
+    const status = await driver.getAuthStatus(projectPath)
+    return status.state === 'authenticated'
   }
 
   /** One app-wide discovery pass; all projects share installed harness models. */
