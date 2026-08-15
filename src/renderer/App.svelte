@@ -102,6 +102,7 @@
   let threadSearchLoading = $state(false)
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
+  let newProjectSpotlightOpen = $state(false)
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
@@ -531,8 +532,7 @@
 
     switch (selection.action.id) {
       case 'app:new-project':
-        navigate('projects')
-        workspaceState.requestAddProjectChoices()
+        openNewProjectSpotlight()
         return
       case 'app:new-chat':
         navigate('chats')
@@ -895,6 +895,32 @@
     workspaceState.pendingAddedProject = project
   }
 
+  function openNewProjectSpotlight(): void {
+    newProjectSpotlightOpen = true
+  }
+
+  /** Spotlight flow: land on the new project (Projects view) with its fresh thread focused. */
+  async function handleSpotlightProjectCreated(project: Project): Promise<void> {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    await handleProjectCreated(project)
+  }
+
+  /** Spotlight flow: a picked folder already exists as a project — focus it. */
+  function handleSpotlightExistingProject(project: Project): void {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    const thread = scopeState.allScopeThreads
+      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
+      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+    if (thread) {
+      workspaceState.openThread(thread, project)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+    }
+  }
+
   async function openScopeThread(thread: Thread): Promise<void> {
     navigate('projects')
     const project =
@@ -1209,12 +1235,10 @@
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       if (e.repeat) return
-      // Cmd/Ctrl+Shift+N → new-project flow with creation options (local / SSH).
+      // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
+      if (activeView === 'chats') return
       if (commandPaletteOpen) commandPaletteOpen = false
-      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') {
-        navigate('projects')
-      }
-      workspaceState.requestAddProjectChoices()
+      openNewProjectSpotlight()
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
@@ -1402,6 +1426,18 @@
           threadSearchPaletteOpen = false
           resetThreadSearch()
         }}
+      />
+    {/await}
+  {/if}
+  {#if newProjectSpotlightOpen}
+    {#await import('$lib/components/shared/ProjectCreateControl.svelte') then { default: ProjectCreateControl }}
+      <ProjectCreateControl
+        mode="spotlight"
+        open={newProjectSpotlightOpen}
+        onClose={() => (newProjectSpotlightOpen = false)}
+        projects={scopeState.projectRecords}
+        onProjectCreated={handleSpotlightProjectCreated}
+        onExisting={handleSpotlightExistingProject}
       />
     {/await}
   {/if}
