@@ -130,7 +130,7 @@ export const desktopSignIn = async (ctx: ActionCtx, request: Request): Promise<R
     return json({ error: 'oauth-provider-not-configured', provider }, 503)
   }
 
-  const siteUrl = process.env['CONVEX_SITE_URL']
+  const siteUrl = process.env['SITE_URL']
   if (!siteUrl) return json({ error: 'auth-not-configured' }, 503)
   const authorizeUrl = new URL('/desktop/authorize', siteUrl)
   authorizeUrl.search = new URLSearchParams({

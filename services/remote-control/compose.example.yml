@@ -7,6 +7,7 @@ services:
     environment:
       NODE_ENV: production
       TRUST_PROXY: '1'
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
     volumes:
       - remote-data:/data
     healthcheck:
@@ -28,6 +29,8 @@ services:
     depends_on:
       remote-control:
         condition: service_healthy
+    environment:
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
     expose:
       - '80'
     healthcheck:
