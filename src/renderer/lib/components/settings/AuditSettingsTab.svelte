@@ -13,7 +13,8 @@
     AgentRole,
     AppConfig,
     AppConfigPatch,
-    ProviderCatalog
+    ProviderCatalog,
+    ThinkingLevel
   } from '$shared/types'
 
   interface Props {
@@ -97,10 +98,20 @@
     const harnessId = nextHarnessId ?? provider.harnessId
     const next: AgentDefaultsConfig = {
       ...defaults,
-      [role]: { harnessId, providerId, modelId }
+      [role]: { harnessId, providerId, modelId, thinkingLevel: defaults[role]?.thinkingLevel }
     }
     defaults = next
     rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function selectThinking(role: AgentRole, level: ThinkingLevel): Promise<void> {
+    if (!defaults[role]) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      [role]: { ...defaults[role], thinkingLevel: level }
+    }
+    defaults = next
     await updateConfig({ agentDefaults: next })
   }
 
@@ -125,10 +136,25 @@
     const harnessId = nextHarnessId ?? provider.harnessId
     const next: AgentDefaultsConfig = {
       ...defaults,
-      imageDescriptor: { harnessId, providerId, modelId }
+      imageDescriptor: {
+        harnessId,
+        providerId,
+        modelId,
+        thinkingLevel: defaults.imageDescriptor?.thinkingLevel
+      }
     }
     defaults = next
     rendererRecovery.addRecentModel(modelKey(harnessId, providerId, modelId))
+    await updateConfig({ agentDefaults: next })
+  }
+
+  async function selectImageDescriptorThinking(level: ThinkingLevel): Promise<void> {
+    if (!defaults.imageDescriptor) return
+    const next: AgentDefaultsConfig = {
+      ...defaults,
+      imageDescriptor: { ...defaults.imageDescriptor, thinkingLevel: level }
+    }
+    defaults = next
     await updateConfig({ agentDefaults: next })
   }
 
@@ -185,6 +211,8 @@
                 disabled={!settingsReady || loading || providers.length === 0}
                 onSelect={(providerId, modelId, harnessId) =>
                   void selectModel(role.id, providerId, modelId, harnessId)}
+                thinkingLevel={selection?.thinkingLevel}
+                onSelectThinking={(level) => void selectThinking(role.id, level)}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
@@ -266,6 +294,8 @@
             disabled={!settingsReady || loading || providers.length === 0}
             onSelect={(providerId, modelId, harnessId) =>
               void selectImageDescriptor(providerId, modelId, harnessId)}
+            thinkingLevel={defaults.imageDescriptor?.thinkingLevel}
+            onSelectThinking={(level) => void selectImageDescriptorThinking(level)}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
             onReorderFavorite={(draggedKey, targetKey, position) =>
