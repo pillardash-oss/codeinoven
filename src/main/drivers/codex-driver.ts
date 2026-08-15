@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { promisify } from 'util'
 import type {
   AgentEvent,
+  AgentProviderIssue,
   AgentRateLimitWindow,
   AgentUsageCredits,
   AgentMessage,
@@ -19,6 +20,7 @@ import type {
   ThreadSettings,
   ThinkingPreset
 } from '../../lib/types'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
@@ -925,7 +927,11 @@ export class CodexDriver extends PersistentCliDriver {
     await this.finishAppServerTurn(active, error)
   }
 
-  private async finishAppServerTurn(active: CodexAppServerTurn, error?: string): Promise<void> {
+  private async finishAppServerTurn(
+    active: CodexAppServerTurn,
+    error?: string,
+    issue?: AgentProviderIssue
+  ): Promise<void> {
     if (active.finished) return
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
@@ -937,8 +943,29 @@ export class CodexDriver extends PersistentCliDriver {
       Logger.error('Codex app-server session persistence failed:', persistError)
       error ??= 'Codex session could not be persisted'
     }
-    if (error) this.emit({ type: 'session.error', sessionId: active.session.id, error })
+    if (error) {
+      this.emit({
+        type: 'session.error',
+        sessionId: active.session.id,
+        error,
+        ...(issue ? { issue } : {})
+      })
+    }
     this.emit({ type: 'session.idle', sessionId: active.session.id })
+  }
+
+  /** A graceful harness failure for a dead Codex app-server: the user-facing
+   *  message is a retryable harness error, and the raw detail stays scoped to
+   *  the raw-error modal instead of splashing on the status card. */
+  private gracefulAppServerIssue(error: string): AgentProviderIssue {
+    return {
+      kind: classifyProviderIssue(error),
+      message:
+        'The Codex app-server stopped unexpectedly. Retry the message to continue your work.',
+      rawError: error,
+      harnessId: this.id,
+      retryable: true
+    }
   }
 
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
@@ -967,7 +994,8 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
-    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error)))
+    const issue = this.gracefulAppServerIssue(error)
+    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error, issue)))
   }
 
   private async codexInput(
