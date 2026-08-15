@@ -32,8 +32,9 @@
     height: number
     placement?: TerminalPlacement
     content: Snippet
-    /** Optional bottom bar, visually separated from the content by a border. */
-    footer?: Snippet
+    /** Optional trailing action, rendered as the last item in the sidebar
+     *  header row after the separator (e.g. the amber thread-note indicator). */
+    trailing?: Snippet
     onSelect: (id: string) => void
     onClose: (id: string) => void
     onFullscreenTab?: (id: string) => void
@@ -58,7 +59,7 @@
     height,
     placement = 'right',
     content,
-    footer,
+    trailing,
     onSelect,
     onClose,
     onFullscreenTab,
@@ -380,6 +381,9 @@
           <X size={13} />
         </button>
       {/if}
+      {#if trailing}
+        {@render trailing()}
+      {/if}
     </div>
   </div>
 
@@ -396,10 +400,4 @@
       {@render content()}
     {/if}
   </div>
-
-  {#if footer}
-    <div class="flex h-10 shrink-0 items-center justify-end gap-2 border-t border-border px-2">
-      {@render footer()}
-    </div>
-  {/if}
 </aside>

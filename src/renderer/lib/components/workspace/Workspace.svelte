@@ -3242,7 +3242,7 @@
             {/key}
           {/if}
         {/snippet}
-        {#snippet contextSidebarFooter()}
+        {#snippet contextSidebarTrailing()}
           {#if workspaceState.selectedThread && threadNotesState.has(workspaceState.selectedThread.id)}
             <button
               type="button"
@@ -3263,7 +3263,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            footer={contextSidebarFooter}
+            trailing={contextSidebarTrailing}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}

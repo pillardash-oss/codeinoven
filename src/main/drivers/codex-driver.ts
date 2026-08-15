@@ -328,7 +328,7 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const active: CodexAppServerTurn = {
       host,
       session,
@@ -490,10 +490,7 @@ export class CodexDriver extends PersistentCliDriver {
     this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
   }
 
-  private async createAppServerHost(
-    projectPath: string,
-    observerSessionId?: string
-  ): Promise<CodexAppServerHost> {
+  private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
     const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
       cwd: projectPath,
@@ -509,9 +506,10 @@ export class CodexDriver extends PersistentCliDriver {
       pending: new Map()
     }
     this.bindAppServer(host)
-    if (observerSessionId) {
-      this.observeHarnessProcess(observerSessionId, child, 'codex app-server', projectPath)
-    }
+    // The shared app-server is app-scoped: register it under APP_SCOPE (undefined
+    // session) so thread-scoped process kills (thread deletion, SourcesPanel
+    // "kill thread processes") never SIGTERM the universal session.
+    this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
     try {
       await this.appServerRequest(host, 'initialize', {
         clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
@@ -525,26 +523,15 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
-  private async ensureAppServerHost(
-    projectPath: string,
-    observerSessionId?: string
-  ): Promise<CodexAppServerHost> {
+  private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const existing = this.hostsByProjectPath.get(projectPath)
     if (existing && !existing.stopped) {
-      if (observerSessionId) {
-        this.observeHarnessProcess(
-          observerSessionId,
-          existing.child,
-          'codex app-server',
-          projectPath
-        )
-      }
       return existing
     }
     const starting = this.hostsStartingByProjectPath.get(projectPath)
     if (starting) return starting
     const promise = (async (): Promise<CodexAppServerHost> => {
-      const host = await this.createAppServerHost(projectPath, observerSessionId)
+      const host = await this.createAppServerHost(projectPath)
       this.hostsByProjectPath.set(projectPath, host)
       return host
     })()
@@ -1165,7 +1152,7 @@ export class CodexDriver extends PersistentCliDriver {
     this.applyEventToSession(session, { type: 'message.part.updated', sessionId, part: basePart })
     this.emit({ type: 'message.part.updated', sessionId, part: basePart })
 
-    const host = await this.ensureAppServerHost(projectPath, sessionId)
+    const host = await this.ensureAppServerHost(projectPath)
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.compactionsByThreadId.delete(nativeThreadId)
@@ -1237,7 +1224,7 @@ export class CodexDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     messageId: string
   ): Promise<void> {
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const telemetry = mapCodexRateLimits(
       await this.appServerRequest(host, 'account/rateLimits/read')
     )
@@ -1290,7 +1277,7 @@ export class CodexDriver extends PersistentCliDriver {
     messageId: string,
     nativeThreadId: string
   ): Promise<void> {
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const usagePromise = new Promise<ReturnType<typeof mapCodexUsage>>((resolve) => {
       const timer = setTimeout(() => {
         this.contextUsageByThreadId.delete(nativeThreadId)
