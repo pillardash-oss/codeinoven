@@ -737,7 +737,6 @@
 
       <div
         class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
-        style="scrollbar-width: thin"
         role="tablist"
         aria-label="Project tabs"
         tabindex="0"
