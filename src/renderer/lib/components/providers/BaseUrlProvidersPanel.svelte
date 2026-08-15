@@ -36,16 +36,18 @@
     )
   )
 
-  /** Harnesses selectable in the filter — every base-URL harness plus any harness
-   *  that already has custom providers. */
+  /** Harnesses selectable in the filter — only harnesses that already have at
+   *  least one custom base-URL provider. */
   let filterHarnesses = $derived.by(() => {
-    const entries = baseUrlHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))
-    for (const custom of baseUrlProviderStore.providers) {
-      if (!entries.some((entry) => entry.id === custom.harnessId)) {
-        entries.push({ id: custom.harnessId, name: providerName(custom.harnessId) })
+    const seen = new Map<string, string>()
+    for (const provider of baseUrlProviderStore.providers) {
+      if (!seen.has(provider.harnessId)) {
+        seen.set(provider.harnessId, providerName(provider.harnessId))
       }
     }
-    return entries.sort((left, right) => left.name.localeCompare(right.name))
+    return [...seen.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => left.name.localeCompare(right.name))
   })
 
   /** Multi-select harness filter; empty selection means "all harnesses". */
