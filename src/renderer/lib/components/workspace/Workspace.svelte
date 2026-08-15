@@ -762,8 +762,12 @@
   let dockGroups = $derived.by((): ContextDockItem[][] => {
     if (!selectedThread) return []
 
+    // Chats are pure conversations: their rail only carries session tools
+    // (sources, memory, debugger in dev) — never project, terminal or cloud tools.
+    const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+
     const workspaceTools: ContextDockItem[] = []
-    if (projectToolsAvailable) {
+    if (!isChatThread && projectToolsAvailable) {
       workspaceTools.push(
         {
           id: 'files',
@@ -781,7 +785,7 @@
         }
       )
     }
-    if (workspaceState.terminalAvailable) {
+    if (!isChatThread && workspaceState.terminalAvailable) {
       workspaceTools.push({
         id: 'terminal',
         label: terminalOpen ? 'Hide terminal' : 'Show terminal',
@@ -807,15 +811,17 @@
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
         onSelect: () => toggleDockPanel('memory', openMemoryTab)
-      },
-      {
+      }
+    ]
+    if (!isChatThread) {
+      sessionTools.push({
         id: 'cloud-deployment',
         label: 'Cloud deployments',
         icon: Cloud,
         active: dockKindActive('cloud-deployment'),
         onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
-      }
-    ]
+      })
+    }
     if (import.meta.env.DEV) {
       sessionTools.push({
         id: 'debugger',
