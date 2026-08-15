@@ -382,6 +382,8 @@
   let modelMenuOpen = $state(false)
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
+  /** Open state of the thinking-level dropdown inside the shared model picker. */
+  let thinkingMenuOpen = $state(false)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
@@ -428,11 +430,21 @@
     modelMenuOpen = false
     inferenceMenuOpen = false
     permissionMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   function showModelMenu(): void {
     modelMenuOpen = true
     plusMenuOpen = false
+    inferenceMenuOpen = false
+    thinkingMenuOpen = false
+  }
+
+  function showThinkingMenu(): void {
+    if (!supportsThinking) return
+    thinkingMenuOpen = true
+    plusMenuOpen = false
+    modelMenuOpen = false
     inferenceMenuOpen = false
   }
 
@@ -441,6 +453,7 @@
     inferenceMenuOpen = true
     plusMenuOpen = false
     modelMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   // Prior-open tracking for the focus-on-close edge detection below. This is a
@@ -651,8 +664,8 @@
     }
 
     if (action.id === 'selector:thinking') {
-      // Thinking lives inside the shared model picker — open it.
-      showModelMenu()
+      // Thinking level lives in the shared model picker's dropdown — open it directly.
+      showThinkingMenu()
       return
     }
 
@@ -1713,6 +1726,7 @@
           onclick={() => {
             plusMenuOpen = !plusMenuOpen
             modelMenuOpen = false
+            thinkingMenuOpen = false
           }}
         >
           <Plus size={15} class="transition-transform {plusMenuOpen ? 'rotate-45' : ''}" />
@@ -1866,6 +1880,7 @@
             permissionMenuOpen = !permissionMenuOpen
             plusMenuOpen = false
             modelMenuOpen = false
+            thinkingMenuOpen = false
           }}
         >
           {#if resolved.permissionLevel === 'full_access'}
@@ -1924,6 +1939,7 @@
       {favoriteModels}
       {recentModels}
       bind:open={modelMenuOpen}
+      bind:thinkingMenuOpen
       onSelect={selectModel}
       {onToggleFavorite}
       {onReorderFavorite}

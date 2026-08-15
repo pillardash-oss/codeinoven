@@ -36,6 +36,9 @@
     recentModels?: string[]
     /** True while the picker is open — opening it refreshes the catalog. */
     open?: boolean
+    /** True while the thinking-level dropdown is open. Lets a parent open the
+     *  thinking selector directly (e.g. from the `/thinking` slash action). */
+    thinkingMenuOpen?: boolean
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -76,6 +79,7 @@
     favoriteModels = [],
     recentModels = [],
     open = $bindable(false),
+    thinkingMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
@@ -786,7 +790,7 @@
         {/if}
       </Popover.Trigger>
       {#if supportsThinking}
-        <DropdownMenu.Root>
+        <DropdownMenu.Root bind:open={thinkingMenuOpen}>
           <DropdownMenu.Trigger
             class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
             aria-label={`Thinking level: ${currentThinkingLabel}`}
@@ -1157,7 +1161,7 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
