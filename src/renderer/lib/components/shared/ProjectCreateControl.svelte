@@ -20,6 +20,8 @@
     onExisting?: (project: Project) => void | Promise<void>
     title?: string
     triggerAddProject?: number
+    /** Incremented to open the creation-options dropdown (local / SSH) instead of the folder picker. */
+    triggerAddProjectDropdown?: number
   }
 
   let {
@@ -27,7 +29,8 @@
     onProjectCreated,
     onExisting,
     title = 'Add project',
-    triggerAddProject = 0
+    triggerAddProject = 0,
+    triggerAddProjectDropdown = 0
   }: Props = $props()
 
   const componentId = $props.id()
@@ -37,6 +40,15 @@
   $effect(() => {
     if (triggerAddProject > 0) {
       void addLocalFolder()
+    }
+  })
+
+  let addProjectDropdownOpen = $state(false)
+
+  /** React to an external trigger (e.g. Cmd+Shift+N) to open the creation options. */
+  $effect(() => {
+    if (triggerAddProjectDropdown > 0) {
+      addProjectDropdownOpen = true
     }
   })
   let showSshModal = $state(false)
@@ -150,7 +162,7 @@
   }
 </script>
 
-<DropdownMenu.Root>
+<DropdownMenu.Root bind:open={addProjectDropdownOpen}>
   <DropdownMenu.Trigger
     class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
     aria-label={title}
