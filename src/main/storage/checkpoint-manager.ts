@@ -48,6 +48,10 @@ const MAX_LINE_DIFF_BYTES = 1024 * 1024
 const MAX_LINE_DIFF_LINES = 20_000
 const MAX_LINE_DIFF_DISTANCE = 4_000
 const MAX_LINE_DIFF_WORK = 4_000_000
+/** Byte window returned for a per-file diff. Kept small to bound IPC payloads. */
+const MAX_DIFF_WINDOW_BYTES = 64 * 1024
+/** Context bytes kept around the changed region so the diff reads naturally. */
+const DIFF_WINDOW_CONTEXT_BYTES = 8 * 1024
 
 class StorageCheckpointBlobStore implements CheckpointBlobStore {
   constructor(private readonly projectId: string) {}
@@ -378,20 +382,18 @@ export class CheckpointManager {
       return { path, kind: change.kind, binary: true, truncated: false }
     }
     const tracker = this.tracker(projectId)
-    const maxBytes = 64 * 1024
     const before = change.before ? await tracker.readBlob(change.before.hash) : null
     const after = change.after ? await tracker.readBlob(change.after.hash) : null
     if (change.before && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
     if (change.after && !after) throw new Error(`Checkpoint blob is unavailable for ${path}`)
-    const decode = (content: Uint8Array | null): string | undefined =>
-      content ? new TextDecoder().decode(content.subarray(0, maxBytes)) : undefined
+    const window = decodeDiffWindow(before, after, MAX_DIFF_WINDOW_BYTES, DIFF_WINDOW_CONTEXT_BYTES)
     return {
       path,
       kind: change.kind,
       binary: false,
-      before: decode(before),
-      after: decode(after),
-      truncated: (before?.byteLength ?? 0) > maxBytes || (after?.byteLength ?? 0) > maxBytes
+      before: window.before,
+      after: window.after,
+      truncated: window.truncated
     }
   }
 
@@ -675,4 +677,71 @@ function splitLines(content: string): string[] {
   const lines = content.split(/\r?\n/u)
   if (lines.at(-1) === '') lines.pop()
   return lines
+}
+
+interface DecodedDiffWindow {
+  before: string | undefined
+  after: string | undefined
+  truncated: boolean
+}
+
+/**
+ * Returns a bounded text window around the changed region of a file instead of
+ * always the head. Without this, an edit sitting past the first `maxBytes` of a
+ * large file made the diff look empty ("No textual changes"). For created or
+ * deleted files the existing side is shown from its head.
+ */
+function decodeDiffWindow(
+  before: Uint8Array | null,
+  after: Uint8Array | null,
+  maxBytes: number,
+  contextBytes: number
+): DecodedDiffWindow {
+  const decoder = new TextDecoder('utf-8', { ignoreBOM: true })
+
+  if (!before || !after) {
+    const content = before ?? after
+    if (!content) return { before: undefined, after: undefined, truncated: false }
+    const truncated = content.length > maxBytes
+    const text = decoder.decode(content.subarray(0, maxBytes))
+    return before
+      ? { before: text, after: undefined, truncated }
+      : { before: undefined, after: text, truncated }
+  }
+
+  const minLength = Math.min(before.length, after.length)
+  let prefix = 0
+  while (prefix < minLength && before[prefix] === after[prefix]) prefix += 1
+  let suffix = 0
+  while (
+    suffix < minLength - prefix &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix += 1
+  }
+
+  const changeEnd = Math.max(before.length - suffix, after.length - suffix)
+  const changeSize = changeEnd - prefix
+
+  const fitsWithContext = changeSize + contextBytes * 2 <= maxBytes
+  let start = fitsWithContext
+    ? Math.max(0, prefix - contextBytes)
+    : Math.max(0, prefix + Math.floor(changeSize / 2) - Math.floor(maxBytes / 2))
+
+  const snapped = lineStartIndex(before, start)
+  if (snapped + maxBytes >= changeEnd) start = snapped
+
+  const end = Math.min(start + maxBytes, Math.max(before.length, after.length))
+  const beforeText = decoder.decode(before.subarray(start, Math.min(end, before.length)))
+  const afterText = decoder.decode(after.subarray(start, Math.min(end, after.length)))
+  const truncated = start > 0 || before.length > end || after.length > end
+  return { before: beforeText, after: afterText, truncated }
+}
+
+/** Index just after the last newline at or before `index`, or 0. */
+function lineStartIndex(data: Uint8Array, index: number): number {
+  if (index <= 0) return 0
+  let current = index
+  while (current > 0 && data[current - 1] !== 0x0a) current -= 1
+  return current
 }
