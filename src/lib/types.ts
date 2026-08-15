@@ -1655,6 +1655,8 @@ export interface LocalProfileAnalytics {
   activityDays: AccountActivityDay[]
   /** Harness/provider/model/thinking-level performance scored on session outcomes. */
   modelPerformance: LocalProfileModelPerformance[]
+  /** What the scored sessions cost to gather in this period. */
+  feedbackCost: LocalProfileFeedbackCost
   generatedAt: number
 }
 
@@ -1684,7 +1686,25 @@ export interface LocalProfileModelPerformance {
   successRate: number | null
   /** Average of the 0/1 per-outcome scores. */
   averageScore: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  /** Sum of priced outcome cost in USD for this combination. */
+  costUsd: number
+  /** Sum of reported tokens across the outcomes. */
+  tokensTotal: number
   lastUsedAt: number
+}
+
+/** What a resolved feedback session cost to gather (scoped to a period). */
+export interface LocalProfileFeedbackCost {
+  /** Resolved session outcomes in the period. */
+  outcomes: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  costUsd: number
+  knownCostUsd: number
+  estimatedCostUsd: number
+  tokensTotal: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */

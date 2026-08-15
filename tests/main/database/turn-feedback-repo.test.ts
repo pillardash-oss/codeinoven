@@ -33,6 +33,9 @@ function openInput(
     providerId: 'openai',
     modelId: 'gpt-5',
     thinkingLevel: 'high',
+    costUsd: null,
+    costStatus: 'unavailable',
+    tokensTotal: null,
     ...overrides
   }
 }
@@ -166,11 +169,18 @@ describe('TurnFeedbackRepo lifecycle', () => {
         harnessId: 'opencode',
         providerId: 'openai',
         modelId: 'gpt-5',
-        thinkingLevel: 'high' as const
+        thinkingLevel: 'high' as const,
+        costStatus: 'known' as const
       }
-      repo.openPending(openInput('t1', 't1-1', { ...base, createdAt: 1_000 }))
-      repo.openPending(openInput('t1', 't1-2', { ...base, createdAt: 2_000 }))
-      repo.openPending(openInput('t1', 't1-3', { ...base, createdAt: 3_000 }))
+      repo.openPending(
+        openInput('t1', 't1-1', { ...base, createdAt: 1_000, costUsd: 0.4, tokensTotal: 4000 })
+      )
+      repo.openPending(
+        openInput('t1', 't1-2', { ...base, createdAt: 2_000, costUsd: 0.2, tokensTotal: 2000 })
+      )
+      repo.openPending(
+        openInput('t1', 't1-3', { ...base, createdAt: 3_000, costUsd: 0.9, tokensTotal: 9000 })
+      )
       repo.openPending(
         openInput('t2', 'audit-1', {
           ...base,
@@ -178,7 +188,9 @@ describe('TurnFeedbackRepo lifecycle', () => {
           feature: 'audit',
           thinkingLevel: 'low',
           modelId: 'gpt-4o',
-          createdAt: 4_000
+          createdAt: 4_000,
+          costUsd: null,
+          costStatus: 'unavailable'
         })
       )
 
@@ -196,12 +208,26 @@ describe('TurnFeedbackRepo lifecycle', () => {
       expect(main?.thinkingLevel).toBe('high')
       expect(main?.taskType).toBe('main')
       expect(main?.harnessId).toBe('opencode')
+      expect(main?.pricedOutcomes).toBe(3)
+      expect(main?.costUsd).toBeCloseTo(1.5)
+      expect(main?.tokensTotal).toBe(15_000)
 
       const audit = performance.find((entry) => entry.modelId === 'gpt-4o')
       expect(audit?.outcomes).toBe(1)
       expect(audit?.successRate).toBe(1)
       expect(audit?.taskType).toBe('audit')
       expect(audit?.thinkingLevel).toBe('low')
+      // Unpriced outcomes are counted as outcomes but never enter cost sums.
+      expect(audit?.pricedOutcomes).toBe(0)
+      expect(audit?.costUsd).toBe(0)
+
+      const cost = repo.feedbackCost({ startAt: 0, endAt: 10_000 })
+      expect(cost.outcomes).toBe(4)
+      expect(cost.pricedOutcomes).toBe(3)
+      expect(cost.costUsd).toBeCloseTo(1.5)
+      expect(cost.knownCostUsd).toBeCloseTo(1.5)
+      expect(cost.estimatedCostUsd).toBe(0)
+      expect(cost.tokensTotal).toBe(15_000)
     } finally {
       destroyTestDb(db)
     }

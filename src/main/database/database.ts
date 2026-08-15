@@ -15,6 +15,7 @@ import {
   HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL,
   HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL,
   TURN_FEEDBACK_COLUMNS_SQL,
+  TURN_FEEDBACK_COST_MIGRATION_SQL,
   TURN_FEEDBACK_EXPECTED_COLUMNS,
   TURN_FEEDBACK_SET_NULL_MIGRATION_SQL,
   USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL
@@ -711,6 +712,12 @@ export class Database {
     if (fks.some((fk) => fk.table === 'threads' && fk.on_delete === 'CASCADE')) {
       connection.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)
       Logger.info('Migrated turn_feedback: thread reference now SET NULL on delete')
+    }
+    // Databases created before turn outcomes recorded their cost get the
+    // columns via guarded ALTER TABLE; fresh installs already carry them.
+    if (!columns('turn_feedback').some((column) => column.name === 'cost_usd')) {
+      connection.exec(TURN_FEEDBACK_COST_MIGRATION_SQL)
+      Logger.info('Migrated turn_feedback: added cost accounting columns')
     }
   }
 

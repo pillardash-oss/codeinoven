@@ -1450,6 +1450,7 @@ export function registerIpcHandlers(
     const range = validateLocalProfileAnalyticsRange(input)
     const analytics = await harnessUsageRepo.profileAnalytics(range)
     analytics.modelPerformance = turnFeedbackRepo.modelPerformance(range)
+    analytics.feedbackCost = turnFeedbackRepo.feedbackCost(range)
     return analytics
   })
   if (!options.hydrationHandlersRegistered) {

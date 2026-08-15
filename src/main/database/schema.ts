@@ -308,7 +308,10 @@ export const TURN_FEEDBACK_COLUMNS_SQL = `
   harness_id     TEXT,
   provider_id    TEXT,
   model_id       TEXT,
-  thinking_level TEXT`
+  thinking_level TEXT,
+  cost_usd       REAL,
+  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
+  tokens_total   INTEGER`
 
 /** Columns the app reads off `turn_feedback`; used to validate staged data. */
 export const TURN_FEEDBACK_EXPECTED_COLUMNS = [
@@ -326,8 +329,20 @@ export const TURN_FEEDBACK_EXPECTED_COLUMNS = [
   'harness_id',
   'provider_id',
   'model_id',
-  'thinking_level'
+  'thinking_level',
+  'cost_usd',
+  'cost_status',
+  'tokens_total'
 ] as const
+
+/**
+ * One-time migration for databases created before turn outcomes recorded what
+ * the scored session cost. Existing rows keep `NULL` ("unavailable").
+ */
+export const TURN_FEEDBACK_COST_MIGRATION_SQL = `
+ALTER TABLE turn_feedback ADD COLUMN cost_usd REAL;
+ALTER TABLE turn_feedback ADD COLUMN cost_status TEXT;
+ALTER TABLE turn_feedback ADD COLUMN tokens_total INTEGER;`
 
 /**
  * Rebuilt `harness_usage_models` shape shared by both thinking-level
