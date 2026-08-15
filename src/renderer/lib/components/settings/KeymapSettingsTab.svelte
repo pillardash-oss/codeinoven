@@ -38,7 +38,7 @@
               <p class="mt-1 text-[11px] text-dimmed">When: {shortcut.scenario}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1 pt-0.5">
-              {#each shortcut.keys as key, index (key)}
+              {#each shortcut.keys as key, index (index)}
                 <kbd
                   class="inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-border bg-elevated px-1.5 font-mono text-[11px] leading-none text-foreground shadow-sm"
                 >
