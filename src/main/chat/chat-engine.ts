@@ -984,6 +984,7 @@ class ImageDescriptorInactivityError extends Error {
 interface PendingMemoryDecision {
   userMessage: string
   settings: ThreadSettings
+  references: PromptReference[]
 }
 
 interface QueuedCoordinatorHandoff {
@@ -3968,6 +3969,26 @@ export class ChatEngine {
     const outboundIds = this.outboundMessageIdsBySession.get(activeSessionId) ?? new Set<string>()
     outboundIds.add(messageId)
     this.outboundMessageIdsBySession.set(activeSessionId, outboundIds)
+    const steerSettings =
+      thread.settings ??
+      ({
+        harnessId: driverId,
+        providerId: '',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false,
+        assignmentMode: false,
+        loopMode: false
+      } satisfies ThreadSettings)
+    // A steer is the latest user expression in the running turn — keep it (and
+    // its referenced selections) as the memory signal for when the turn ends,
+    // replacing the message that originally dispatched the turn.
+    this.pendingMemoryDecisions.set(activeSessionId, {
+      userMessage: text,
+      settings: steerSettings,
+      references: validatedPromptReferences
+    })
     const steerOptions = {
       sessionId: activeSessionId,
       text: driverText,
@@ -4538,6 +4559,16 @@ export class ChatEngine {
     // A new turn resolves any pending auto-resume for this session — the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
+    // Track the latest user expression for the memory proposal at turn end.
+    // Recorded before the active-turn branch below so a message that steers a
+    // running turn still carries its text and referenced selections.
+    if (origin === 'user') {
+      this.pendingMemoryDecisions.set(sessionId, {
+        userMessage: text,
+        settings,
+        references: validatedPromptReferences
+      })
+    }
     const activeSessionState = this.sessionStatuses.get(sessionId)?.state
     if (
       origin === 'internal' &&
@@ -4685,9 +4716,6 @@ export class ChatEngine {
       }
     }
     const historyRecap = composition.recapText
-    if (origin === 'user') {
-      this.pendingMemoryDecisions.set(sessionId, { userMessage: text, settings })
-    }
     this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.handledIdleSessions.delete(sessionId)
     // A fresh turn on this session is no longer a continuation of a stop the
@@ -4750,7 +4778,8 @@ export class ChatEngine {
               messageId,
               driver,
               projectPath,
-              pendingMemory.settings
+              pendingMemory.settings,
+              pendingMemory.references
             ).catch((error) => Logger.error('Memory signal processing failed:', error))
           }
           return publicUserMessage
@@ -14130,7 +14159,8 @@ export class ChatEngine {
           memoryParentTurnId,
           driver,
           info.projectPath,
-          pendingMemory.settings
+          pendingMemory.settings,
+          pendingMemory.references
         ).catch((error) => Logger.error('Memory signal processing failed:', error))
       }
     }
@@ -14996,7 +15026,8 @@ export class ChatEngine {
     parentTurnId: string,
     driver: HarnessDriver,
     projectPath: string,
-    settings: ThreadSettings
+    settings: ThreadSettings,
+    references: PromptReference[]
   ): Promise<void> {
     const current = await this.memoryService.current(projectId, threadId)
     if (!current.enabled) return
@@ -15007,7 +15038,7 @@ export class ChatEngine {
     // and cost for every actual model attempt are recorded inside
     // `generateMemoryProposal` (each structured/fallback attempt).
     const extraction = await this.memoryService.evaluateMemoryExtraction({
-      userMessage,
+      userMessage: composeMemoryUserInput(userMessage, references),
       assistantResponse,
       projectId,
       threadId
@@ -15713,6 +15744,23 @@ function assistantMemoryDecisionContext(message: AgentMessage): string {
     return []
   })
   return evidence.join('\n').slice(0, 20_000)
+}
+
+/**
+ * Fold the response selections a user referenced in their message ("Add to
+ * chat") into the memory extraction input so the proposal model can see the
+ * exact content the user is reacting to. Without the selections, a message
+ * like "I don't like this" reaches the memory model with no referent.
+ */
+function composeMemoryUserInput(userMessage: string, references: PromptReference[]): string {
+  if (references.length === 0) return userMessage
+  const selections = references
+    .map((reference, index) => {
+      const comment = reference.comment ? `\nUser comment: ${reference.comment}` : ''
+      return `<selection ${index + 1}>\n${reference.text}${comment}\n</selection>`
+    })
+    .join('\n\n')
+  return `Referenced response selections:\n${selections}\n\nUser message:\n${userMessage}`
 }
 
 function parseStructuredMemoryProposal(
