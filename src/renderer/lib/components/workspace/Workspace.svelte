@@ -24,7 +24,8 @@
     FileDiff,
     Files,
     Info,
-    SquareTerminal
+    SquareTerminal,
+    StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -35,6 +36,7 @@
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
+  import ThreadNoteModal from '../threads/ThreadNoteModal.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
@@ -84,6 +86,7 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -615,6 +618,9 @@
   let editProjectColor = $state<string | undefined>()
   let editProjectIconType = $state<string | undefined>()
   let editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
+
+  // Thread-note modal opened from the right-dock note indicator
+  let dockNoteThread = $state<Thread | null>(null)
 
   // Edit-scope modal
   let editBucketTarget = $state<ScopeBucket | null>(null)
@@ -3298,7 +3304,7 @@
             {/key}
           {/if}
         {/snippet}
-        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+        <div class="relative min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
           <ContextSidebar
             tabs={contextSidebarState.sidebarTabs}
             activeTabId={contextSidebarState.sidebarActiveTabId}
@@ -3318,6 +3324,17 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
           />
+          {#if workspaceState.selectedThread && threadNotesState.has(workspaceState.selectedThread.id)}
+            <button
+              type="button"
+              class="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-warning/30 bg-surface text-warning shadow-lg transition-colors hover:bg-warning/10"
+              aria-label="Open the note for {workspaceState.selectedThread.title}"
+              title="Note available — open the thread note"
+              onclick={() => (dockNoteThread = workspaceState.selectedThread)}
+            >
+              <StickyNote size={14} />
+            </button>
+          {/if}
         </div>
       {/if}
       {#if terminalDockVisible}
@@ -3394,6 +3411,16 @@
     </button>
   {/snippet}
 </Modal>
+
+{#if dockNoteThread}
+  <ThreadNoteModal
+    open
+    projectId={dockNoteThread.projectId}
+    threadId={dockNoteThread.id}
+    threadTitle={dockNoteThread.title}
+    onClose={() => (dockNoteThread = null)}
+  />
+{/if}
 
 <!-- Edit Project Modal -->
 <Modal open={showEditModal} title="Edit Project" onClose={() => (showEditModal = false)}>

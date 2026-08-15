@@ -215,6 +215,20 @@ export interface Thread {
 }
 
 /**
+ * A private, user-only note attached to a thread. Notes are never included in
+ * agent context or prompts — they exist so the user can remind themselves what
+ * they intended to do on a thread and return to it later. Deleting the thread
+ * deletes its note (ON DELETE CASCADE).
+ */
+export interface ThreadNote {
+  threadId: string
+  /** Markdown body of the note. */
+  body: string
+  createdAt: number
+  updatedAt: number
+}
+
+/**
  * A worker or auditor thread owned by an Achievement/Assignment coordinator
  * (the Sr. Engineer). These threads are orchestration internals: they never
  * notify on their own, are hidden from the regular projects/threads surfaces,
