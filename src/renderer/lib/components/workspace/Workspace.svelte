@@ -18,7 +18,6 @@
     FolderKanban,
     ArrowUpDown,
     Check,
-    ChevronUp,
     BrainCircuit,
     Bug,
     Cloud,
@@ -741,22 +740,28 @@
    *  otherwise the right sidebar like every other tool. */
   function toggleTerminal(): void {
     if (!selectedThread) return
-    const tab = contextSidebarState.activeTab
-    const terminalActive =
-      tab?.kind === 'terminal' &&
-      tab.projectId === selectedThread.projectId &&
-      tab.threadId === selectedThread.id
 
     if (contextSidebarState.terminalPlacement === 'bottom') {
-      if (terminalActive && contextSidebarState.terminalDockVisible) {
+      // The bottom dock is an independent region, so the rail toggles the dock
+      // itself — never the focused tab. Whether a terminal happens to hold the
+      // global focus is irrelevant: if the dock exists in any form it folds
+      // away, and only a dock with no terminals at all opens a fresh shell.
+      if (contextSidebarState.terminalDockVisible || contextSidebarState.terminalDockCollapsed) {
         contextSidebarState.toggleTerminalDock()
-      } else {
-        contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+        return
       }
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
       return
     }
 
-    if (contextSidebarState.sidebarVisible && terminalActive) {
+    // Docked to the right, the terminal is just another sidebar panel.
+    const sidebarTab = contextSidebarState.sidebarActiveTab
+    const terminalFocused =
+      sidebarTab?.kind === 'terminal' &&
+      sidebarTab.projectId === selectedThread.projectId &&
+      sidebarTab.threadId === selectedThread.id
+
+    if (contextSidebarState.sidebarVisible && terminalFocused) {
       contextSidebarState.hide()
     } else {
       contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
@@ -877,18 +882,18 @@
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
-  let terminalDockCollapsed = $derived(contextSidebarState.terminalDockCollapsed)
   let contextPanelColumns = $derived(
     sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
+  // A folded dock leaves no restore strip behind: the context dock's terminal
+  // icon is always on screen and is the way back, so hiding the terminal really
+  // does give the full height back to the thread.
   let contextPanelRows = $derived(
     terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
-      : terminalDockCollapsed
-        ? 'minmax(0, 1fr) 32px'
-        : 'minmax(0, 1fr)'
+      : 'minmax(0, 1fr)'
   )
 
   function openTabFullscreen(tabId: string): void {
@@ -3317,19 +3322,6 @@
             onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
           />
         </div>
-      {/if}
-      {#if terminalDockCollapsed}
-        <button
-          type="button"
-          class="flex h-8 min-h-0 w-full items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          style:grid-column="1 / -1"
-          style:grid-row="2"
-          title="Expand terminal"
-          aria-label="Expand terminal"
-          onclick={() => contextSidebarState.toggleTerminalDock()}
-        >
-          <ChevronUp size={14} />
-        </button>
       {/if}
     </div>
     {#if dockGroups.some((group) => group.length > 0)}
