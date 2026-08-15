@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ShieldCheck } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { AuditReport, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { AuditReport, ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     report: AuditReport
@@ -51,6 +51,11 @@
       providerId,
       modelId
     })
+  }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings) return
+    onModelChange?.({ ...settings, thinkingLevel: level })
   }
 
   function viewReport(): void {
@@ -111,6 +116,8 @@
           label="Change"
           variant="action"
           onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
           {onToggleFavorite}
           {onReorderFavorite}
         />

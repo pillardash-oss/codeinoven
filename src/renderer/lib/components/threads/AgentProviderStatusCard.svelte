@@ -15,6 +15,7 @@
     AgentSessionStatus,
     ProviderAccountLoginHandoff,
     ProviderCatalog,
+    ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -172,6 +173,11 @@
     onModelChange({ ...settings, harnessId, providerId, modelId })
   }
 
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings || !onModelChange) return
+    onModelChange({ ...settings, thinkingLevel: level })
+  }
+
   function finishSignIn(exitCode: number): void {
     if (exitCode !== 0) {
       loginError = `Sign-in exited with code ${exitCode}.`
@@ -290,6 +296,8 @@
             label="Change"
             variant="action"
             onSelect={chooseModel}
+            thinkingLevel={settings.thinkingLevel}
+            onSelectThinking={chooseThinking}
             {onToggleFavorite}
             {onReorderFavorite}
           />

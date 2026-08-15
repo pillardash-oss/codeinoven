@@ -9,7 +9,7 @@
   } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     specTitle: string
@@ -178,6 +178,10 @@
   function chooseModel(providerId: string, modelId: string, harnessId: string): void {
     onModelChange({ ...auditorSettings, harnessId, providerId, modelId })
   }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    onModelChange({ ...auditorSettings, thinkingLevel: level })
+  }
 </script>
 
 {#if collapsed}
@@ -310,6 +314,8 @@
             label="Change model"
             variant="action"
             onSelect={chooseModel}
+            thinkingLevel={auditorSettings.thinkingLevel}
+            onSelectThinking={chooseThinking}
             {onToggleFavorite}
             {onReorderFavorite}
           />
