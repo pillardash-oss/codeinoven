@@ -83,7 +83,7 @@ interface LocalProjectAggregateRow extends UsageAggregateRow {
  * computer-use tool calls are excluded because their tokens ride inside the
  * parent agent turn.
  */
-const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title'] as const
+const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search_nudge'] as const
 
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
