@@ -780,7 +780,6 @@ export class HarnessUsageRepo {
       const createdAt = message.createdAt
       const completedAt = message.completedAt ?? createdAt
       const duration = completedAt > createdAt ? completedAt - createdAt : 0
-
       statements.push({
         sql: `INSERT INTO harness_usage(
           project_id, thread_id, harness_id, provider_id, model_id, thinking_level,
@@ -847,7 +846,7 @@ export class HarnessUsageRepo {
             harnessId,
             providerId,
             modelId,
-            thinkingLevel,
+            thinkingLevel ?? '',
             1,
             cost,
             tokens?.input ?? 0,

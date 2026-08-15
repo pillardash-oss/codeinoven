@@ -242,8 +242,12 @@ ALTER TABLE harness_usage ADD COLUMN thinking_level TEXT;`
 /**
  * One-time migration for databases created before `harness_usage_models` broke
  * usage down per thinking level. SQLite cannot change a PRIMARY KEY in place,
- * so the table is rebuilt with `thinking_level` added to the key; pre-migration
- * rows carry `NULL` ("unknown") and merge into a single row per model.
+ * so the table is rebuilt with `thinking_level` added to the key. The level is
+ * NOT NULL with an empty-string "unknown" sentinel because SQLite treats NULLs
+ * as distinct inside a composite PRIMARY KEY — NULL levels would fragment one
+ * model's usage into a row per message instead of accumulating it. Re-runs on
+ * the nullable `thinking_level` variant this feature first shipped with to
+ * normalize legacy NULLs to ''.
  */
 export const HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL = `
 CREATE TABLE harness_usage_models_v2 (
@@ -251,7 +255,7 @@ CREATE TABLE harness_usage_models_v2 (
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT NOT NULL,
-  thinking_level       TEXT,
+  thinking_level       TEXT NOT NULL DEFAULT '',
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -271,17 +275,61 @@ INSERT INTO harness_usage_models_v2(
   tokens_cache_read, tokens_cache_write, tokens_total, duration_ms,
   first_used_at, last_used_at
 ) SELECT
-  thread_id, harness_id, provider_id, model_id, NULL,
-  message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning,
-  tokens_cache_read, tokens_cache_write, tokens_total, duration_ms,
-  first_used_at, last_used_at
-FROM harness_usage_models;
+  thread_id, harness_id, provider_id, model_id, COALESCE(thinking_level, ''),
+  SUM(message_count), SUM(cost_usd), SUM(tokens_in), SUM(tokens_out), SUM(tokens_reasoning),
+  SUM(tokens_cache_read), SUM(tokens_cache_write), SUM(tokens_total), SUM(duration_ms),
+  MIN(first_used_at), MAX(last_used_at)
+FROM harness_usage_models
+GROUP BY thread_id, harness_id, provider_id, model_id, COALESCE(thinking_level, '');
 DROP TABLE harness_usage_models;
 ALTER TABLE harness_usage_models_v2 RENAME TO harness_usage_models;
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
   ON harness_usage_models(thread_id);
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
   ON harness_usage_models(harness_id);`
+
+/**
+ * One-time migration for databases created while `turn_feedback.thread_id`
+ * still cascade-deleted with its thread, which silently discarded every
+ * resolved outcome — including the cleaned_up passes that must feed the
+ * "best model by feedback" analytics. Rebuilds the table with `ON DELETE
+ * SET NULL` and preserves all existing rows.
+ */
+export const TURN_FEEDBACK_SET_NULL_MIGRATION_SQL = `
+CREATE TABLE turn_feedback_v2 (
+  id             TEXT PRIMARY KEY NOT NULL,
+  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  parent_turn_id TEXT NOT NULL UNIQUE,
+  session_id     TEXT,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+  score          REAL NOT NULL DEFAULT 0,
+  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
+  task_slug      TEXT,
+  harness_id     TEXT,
+  provider_id    TEXT,
+  model_id       TEXT,
+  thinking_level TEXT
+);
+INSERT INTO turn_feedback_v2(
+  id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
+  status, signal, score, feature, task_slug,
+  harness_id, provider_id, model_id, thinking_level
+) SELECT
+  id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
+  status, signal, score, feature, task_slug,
+  harness_id, provider_id, model_id, thinking_level
+FROM turn_feedback;
+DROP TABLE turn_feedback;
+ALTER TABLE turn_feedback_v2 RENAME TO turn_feedback;
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
+  ON turn_feedback(thread_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
+  ON turn_feedback(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
+  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -660,13 +708,15 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
 -- One row per model+thinking-level a harness used on a thread, with cumulative
 -- cost/tokens/duration so the battery popover (and the usage settings page) can
 -- show what each model consumed at each reasoning effort. Rows cascade-delete
--- with their thread.
+-- with their thread. thinking_level is NOT NULL with an empty-string
+-- "unknown" sentinel because SQLite treats NULLs as distinct inside a composite
+-- PRIMARY KEY, which would fragment one model's usage into a row per message.
 CREATE TABLE IF NOT EXISTS harness_usage_models (
   thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT NOT NULL,
-  thinking_level       TEXT,
+  thinking_level       TEXT NOT NULL DEFAULT '',
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -743,9 +793,14 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
 -- the thread idle until cleanup. Scores (0/1) feed the "best model by
 -- feedback" profile section, keyed by harness/provider/model/thinking level
 -- and the task kind (main/audit/assignment).
+--
+-- thread_id deliberately does NOT cascade-delete: resolved outcomes are the
+-- long-term analytics record for "best model by feedback". When a thread is
+-- deleted or evicted, its rows are resolved to success/cleaned_up and kept
+-- with thread_id set to NULL (the row already carries its own attribution).
 CREATE TABLE IF NOT EXISTS turn_feedback (
   id             TEXT PRIMARY KEY NOT NULL,
-  thread_id      TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
   parent_turn_id TEXT NOT NULL UNIQUE,
   session_id     TEXT,
   created_at     INTEGER NOT NULL,
