@@ -419,6 +419,7 @@ const EVENT_CHANNELS = [
   'notification:playSound',
   'notification:show',
   'notification:threadClicked',
+  'notification:permissionStatus',
   'providers:status',
   'thread:deleted',
   'thread:updated',
