@@ -26,7 +26,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
 
   return betterAuth({
     appName: 'CodeInOven',
-    baseURL: requiredEnvironment('CONVEX_SITE_URL'),
+    baseURL: requiredEnvironment('SITE_URL'),
     secret: requiredEnvironment('BETTER_AUTH_SECRET'),
     database: authComponent.adapter(ctx),
     trustedOrigins: [requiredEnvironment('SITE_URL'), requiredEnvironment('CONVEX_SITE_URL')],
