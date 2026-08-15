@@ -243,6 +243,7 @@ const INVOKE_CHANNELS = [
   'memory:createProposal',
   'notification:test',
   'notification:getPermissionStatus',
+  'notification:openSettings',
   'scope:get',
   'scope:save',
   'plan:approve',

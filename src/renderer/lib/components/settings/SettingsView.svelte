@@ -214,10 +214,7 @@
   }
 
   function openNotificationSettings(): void {
-    void invoke(
-      'shell:openExternal',
-      'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
-    )
+    void invoke('notification:openSettings')
   }
 
   onMount(() => {

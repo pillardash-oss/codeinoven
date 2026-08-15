@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Notification } from 'electron'
+import { app, BrowserWindow, Notification, shell } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { APP_NAME, APP_SLUG } from '../lib/brand'
 import { Logger } from './logger'
@@ -76,6 +76,7 @@ export class NotificationService {
     void this.hydrateBadge()
     ipcMain.handle('notification:test', () => this.sendTestNotification())
     ipcMain.handle('notification:getPermissionStatus', () => this.getPermissionStatus())
+    ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
   stop(): void {
@@ -87,6 +88,7 @@ export class NotificationService {
     this.updateBadge()
     ipcMain.removeHandler('notification:test')
     ipcMain.removeHandler('notification:getPermissionStatus')
+    ipcMain.removeHandler('notification:openSettings')
   }
 
   /**
@@ -115,6 +117,35 @@ export class NotificationService {
       return { platform: 'other' }
     }
     return { platform: 'darwin', status: this.macosNotificationPermission }
+  }
+
+  /**
+   * Open the OS notification-settings pane so the user can re-enable
+   * notifications. The deep-link URL is a hard-coded, platform-specific
+   * constant (never renderer-supplied), so it bypasses the web-only external
+   * URL validator. Returns false on platforms with no such deep link.
+   */
+  async openSettings(): Promise<boolean> {
+    const url = this.notificationSettingsUrl()
+    if (url === null) return false
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch (error) {
+      Logger.error('Could not open notification settings:', error)
+      return false
+    }
+  }
+
+  private notificationSettingsUrl(): string | null {
+    switch (process.platform) {
+      case 'darwin':
+        return 'x-apple.systempreferences:com.apple.Notifications-Settings.extension'
+      case 'win32':
+        return 'ms-settings:notifications'
+      default:
+        return null
+    }
   }
 
   markAborting(projectId: string, threadId: string): void {
