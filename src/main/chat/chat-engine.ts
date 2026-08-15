@@ -835,6 +835,8 @@ interface SessionInfo {
   driverId: string
   activeTurnId?: string
   changedPaths?: Set<string>
+  /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
+  preciseChangedPaths?: Map<string, number>
   changeFilterReliable?: boolean
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
@@ -12856,9 +12858,15 @@ export class ChatEngine {
           if (UNBOUNDED_MUTATING_TOOLS.has(normalizedToolName(part.tool))) {
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
-          session.changedPaths ??= new Set()
-          for (const path of changedPathsFromTool(session.projectPath, part)) {
-            session.changedPaths.add(path)
+          const precisePaths = changedPathsFromTool(session.projectPath, part)
+          if (precisePaths.length > 0) {
+            session.changedPaths ??= new Set()
+            session.preciseChangedPaths ??= new Map()
+            const claimedAt = Date.now()
+            for (const path of precisePaths) {
+              session.changedPaths.add(path)
+              session.preciseChangedPaths.set(path, claimedAt)
+            }
           }
         }
         let perSession = this.toolTimes.get(event.sessionId)
@@ -14682,10 +14690,15 @@ export class ChatEngine {
         failure,
         // An empty set is a real answer — the agent touched nothing this turn —
         // so it is passed through instead of falling back to the unfiltered diff.
-        info.changeFilterReliable !== false ? (info.changedPaths ?? new Set()) : undefined
+        info.changeFilterReliable !== false ? (info.changedPaths ?? new Set()) : undefined,
+        {
+          precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
+          foreignClaimedPaths: this.liveForeignClaimedPaths(info)
+        }
       )
       info.activeTurnId = undefined
       info.changedPaths = undefined
+      info.preciseChangedPaths = undefined
       info.changeFilterReliable = undefined
       info.openUnboundedTools = undefined
       info.unboundedWindowStart = undefined
@@ -14700,6 +14713,24 @@ export class ChatEngine {
     } catch (error) {
       Logger.error('turn checkpoint completion failed:', error)
     }
+  }
+
+  /**
+   * Paths other active sessions' precise file tools claimed this turn. Only
+   * paths claimed by a different thread can belong to a concurrent edit; the
+   * caller time-filters these against the turn's start before dropping them.
+   */
+  private liveForeignClaimedPaths(self: SessionInfo): Map<string, number> {
+    const foreign = new Map<string, number>()
+    for (const other of this.sessionRegistry.values()) {
+      if (other === self || other.projectId !== self.projectId) continue
+      if (other.threadId === self.threadId) continue
+      for (const [path, claimedAt] of other.preciseChangedPaths ?? []) {
+        const existing = foreign.get(path)
+        if (existing === undefined || claimedAt < existing) foreign.set(path, claimedAt)
+      }
+    }
+    return foreign
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────
@@ -14723,6 +14754,7 @@ export class ChatEngine {
       driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
+      preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
       unboundedWindowStart: activeTurnId ? undefined : existing?.unboundedWindowStart,

@@ -44,6 +44,23 @@ interface CheckpointLineStats {
   truncated?: boolean
 }
 
+/**
+ * Optional signals used to reconcile the turn diff against concurrent work.
+ * A shell command's stat window cannot tell which process wrote a path, so a
+ * path that another thread demonstrably edited during this turn is excluded
+ * from this thread's card unless this thread itself claimed it with a precise
+ * file tool.
+ */
+export interface TurnCompletionOptions {
+  /** Paths this thread's precise file tools touched during the turn. */
+  precisePaths?: ReadonlySet<string>
+  /** Paths other active sessions' precise file tools touched, path → claimed ms. */
+  foreignClaimedPaths?: ReadonlyMap<string, number>
+}
+
+/** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
+const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
+
 const MAX_LINE_DIFF_BYTES = 1024 * 1024
 const MAX_LINE_DIFF_LINES = 20_000
 const MAX_LINE_DIFF_DISTANCE = 4_000
@@ -156,7 +173,8 @@ export class CheckpointManager {
     projectPath: string,
     status: Extract<TurnCheckpointStatus, 'completed' | 'failed' | 'interrupted'>,
     failure?: string,
-    changedPaths?: ReadonlySet<string>
+    changedPaths?: ReadonlySet<string>,
+    options: TurnCompletionOptions = {}
   ): Promise<TurnCheckpoint> {
     const checkpoint = await this.get(projectId, threadId, turnId)
     if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
@@ -167,9 +185,14 @@ export class CheckpointManager {
       includeGitMetadata: checkpoint.before.git !== undefined
     })
     const allChanges = tracker.calculateChanges(checkpoint.before, after)
+    const foreign =
+      allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
+    const precisePaths = options.precisePaths ?? new Set<string>()
+    const keepChange = (path: string): boolean =>
+      foreign === undefined || !foreign.has(path) || precisePaths.has(path)
     const changes = changedPaths
-      ? allChanges.filter((change) => changedPaths.has(change.path))
-      : allChanges
+      ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
+      : allChanges.filter((change) => keepChange(change.path))
     const updated: TurnCheckpoint = {
       ...checkpoint,
       status,
@@ -186,6 +209,43 @@ export class CheckpointManager {
       threadId
     ])
     return updated
+  }
+
+  /**
+   * Paths another thread demonstrably edited while this turn ran, path → when
+   * the other thread touched it (ms). Merges live precise-tool claims with
+   * checkpoints other threads completed inside this turn's window. Only claims
+   * made after this turn started count: a stale claim from an earlier turn must
+   * not hide this thread's own shell-driven edit.
+   */
+  private async foreignClaimedPaths(
+    checkpoint: TurnCheckpoint,
+    options: TurnCompletionOptions
+  ): Promise<Map<string, number>> {
+    const foreign = new Map<string, number>()
+    const turnStart = checkpoint.before.createdAt
+    for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
+      if (claimedAt >= turnStart) foreign.set(path, claimedAt)
+    }
+    const rows = await this.queryDataRows(
+      `SELECT data FROM turn_checkpoints
+       WHERE project_id = ? AND thread_id != ?
+         AND json_extract(data, '$.status') = 'completed'
+         AND json_extract(data, '$.completedAt') >= ?`,
+      [checkpoint.projectId, checkpoint.threadId, turnStart],
+      FOREIGN_CHECKPOINT_SCAN_LIMIT
+    )
+    for (const { data } of rows) {
+      try {
+        const other = JSON.parse(data) as TurnCheckpoint
+        for (const change of other.changes ?? []) {
+          if (!foreign.has(change.path)) foreign.set(change.path, other.completedAt ?? turnStart)
+        }
+      } catch {
+        // A malformed row must not block turn completion.
+      }
+    }
+    return foreign
   }
 
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
