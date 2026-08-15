@@ -24,7 +24,7 @@ After completing the code, ask the user if they want a playground link. Only cal
 
 ## Rules You Must Follow
 
-Always read the APP-BIBLE.md file if it exists. It will guide you on the principles and philosophies of this app, and how to contribute to it.
+Always read the `docs/APP-BIBLE.md` file if it exists. It will guide you on the principles and philosophies of this app, and how to contribute to it.
 
 ### 1. work-ethic
 
