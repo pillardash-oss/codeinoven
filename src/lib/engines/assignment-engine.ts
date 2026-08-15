@@ -959,6 +959,8 @@ export class AssignmentEngine {
       reworkCycle: active.auditCycle?.reworkCycle ?? 1,
       workAssignmentVersion: active.version,
       status: 'rework',
+      report: undefined,
+      review: undefined,
       completedAt: undefined
     }
     const updated: AssignmentPlan = {
