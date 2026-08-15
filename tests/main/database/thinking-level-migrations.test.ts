@@ -1,0 +1,155 @@
+import { describe, expect, it } from 'vitest'
+import Database from 'better-sqlite3'
+import {
+  HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL,
+  TURN_FEEDBACK_SET_NULL_MIGRATION_SQL
+} from '../../../src/main/database/schema'
+
+function legacyHarnessUsageModelsSql(): string {
+  return `
+    CREATE TABLE threads (id TEXT PRIMARY KEY NOT NULL);
+    CREATE TABLE harness_usage_models (
+      thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+      harness_id TEXT NOT NULL, provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
+      thinking_level TEXT,
+      message_count INTEGER NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,
+      tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0,
+      tokens_reasoning INTEGER NOT NULL DEFAULT 0, tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+      tokens_cache_write INTEGER NOT NULL DEFAULT 0, tokens_total INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0, first_used_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL,
+      PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
+    );
+  `
+}
+
+describe('harness_usage_models thinking-level migration', () => {
+  it('rebuilds the table with a NOT NULL thinking_level so unknown rows accumulate', () => {
+    const db = new Database(':memory:')
+    db.exec(legacyHarnessUsageModelsSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    // The nullable-column bug: two rows with NULL level for the same model
+    // (SQLite treats NULLs as distinct inside a composite PRIMARY KEY).
+    db.exec(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x',NULL,2,1.0,100,50,10,0,0,160,1000,100,200)`
+    )
+    db.exec(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x',NULL,3,2.0,200,100,20,0,0,320,2000,150,250)`
+    )
+
+    db.exec(HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL)
+
+    const cols = db.pragma('table_info(harness_usage_models)') as Array<{
+      name: string
+      notnull: number
+      pk: number
+    }>
+    const level = cols.find((c) => c.name === 'thinking_level')
+    expect(level?.notnull).toBe(1)
+    const pk = cols
+      .filter((c) => c.pk > 0)
+      .map((c) => c.name)
+      .join(',')
+    expect(pk).toBe('thread_id,harness_id,provider_id,model_id,thinking_level')
+
+    // The duplicate NULL rows were merged into a single '' row, not fragmented.
+    const rows = db.prepare('SELECT * FROM harness_usage_models').all() as Array<{
+      thinking_level: string
+      message_count: number
+      cost_usd: number
+      tokens_total: number
+    }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.thinking_level).toBe('')
+    expect(rows[0]?.message_count).toBe(5)
+    expect(rows[0]?.cost_usd).toBeCloseTo(3.0)
+    expect(rows[0]?.tokens_total).toBe(480)
+
+    // Unknown (''), low, and high levels now coexist as distinct rows.
+    db.prepare(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x','low',1,0.5,50,25,5,0,0,80,500,300,400)`
+    ).run()
+    db.prepare(
+      `INSERT INTO harness_usage_models VALUES('t1','opencode','openai','gpt-x','high',1,0.5,50,25,5,0,0,80,500,300,400)`
+    ).run()
+    expect(
+      (db.prepare('SELECT COUNT(*) c FROM harness_usage_models').get() as { c: number }).c
+    ).toBe(3)
+  })
+})
+
+describe('turn_feedback SET NULL migration', () => {
+  function legacyTurnFeedbackSql(): string {
+    return `
+      CREATE TABLE threads (id TEXT PRIMARY KEY NOT NULL);
+      CREATE TABLE turn_feedback (
+        id TEXT PRIMARY KEY NOT NULL,
+        thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        parent_turn_id TEXT NOT NULL UNIQUE,
+        session_id TEXT,
+        created_at INTEGER NOT NULL,
+        resolved_at INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+        signal TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+        score REAL NOT NULL DEFAULT 0,
+        feature TEXT CHECK(feature IN ('main','audit','assignment')),
+        task_slug TEXT,
+        harness_id TEXT, provider_id TEXT, model_id TEXT, thinking_level TEXT
+      );
+    `
+  }
+
+  it('switches the thread FK to SET NULL and preserves rows', () => {
+    const db = new Database(':memory:')
+    db.exec(legacyTurnFeedbackSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    db.exec(
+      `INSERT INTO turn_feedback(id, thread_id, parent_turn_id, created_at, status, score, feature, harness_id, provider_id, model_id, thinking_level)
+       VALUES('o1','t1','turn-1',1000,'success',1,'main','opencode','openai','gpt-x','high')`
+    )
+
+    db.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)
+
+    const fks = db.pragma('foreign_key_list(turn_feedback)') as Array<{
+      table: string
+      on_delete: string
+    }>
+    expect(fks.some((fk) => fk.table === 'threads' && fk.on_delete === 'SET NULL')).toBe(true)
+
+    const row = db.prepare('SELECT * FROM turn_feedback').get() as {
+      thread_id: string
+      parent_turn_id: string
+      model_id: string
+      score: number
+    }
+    expect(row.thread_id).toBe('t1')
+    expect(row.parent_turn_id).toBe('turn-1')
+    expect(row.model_id).toBe('gpt-x')
+    expect(row.score).toBe(1)
+  })
+
+  it('keeps resolved cleanup outcomes after the thread row is deleted', () => {
+    const db = new Database(':memory:')
+    db.exec(legacyTurnFeedbackSql())
+    db.exec(`INSERT INTO threads(id) VALUES('t1')`)
+    db.exec(
+      `INSERT INTO turn_feedback(id, thread_id, parent_turn_id, created_at, resolved_at, status, signal, score, feature, harness_id, provider_id, model_id)
+       VALUES('o1','t1','turn-1',1000,2000,'success','cleaned_up',1,'main','opencode','openai','gpt-x')`
+    )
+
+    db.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)
+    db.exec(`DELETE FROM threads WHERE id = 't1'`)
+
+    const row = db.prepare('SELECT * FROM turn_feedback').get() as {
+      thread_id: string | null
+      status: string
+      signal: string
+      score: number
+    }
+    expect(row).toBeDefined()
+    expect(row.thread_id).toBeNull()
+    expect(row.status).toBe('success')
+    expect(row.signal).toBe('cleaned_up')
+    expect(row.score).toBe(1)
+  })
+})

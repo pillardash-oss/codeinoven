@@ -136,7 +136,6 @@ import type {
   ThreadStatus,
   Thread,
   ThreadSettings,
-  ThinkingLevel,
   TurnOutcomeTaskType,
   UsageEventDetails,
   UsageEventFeature,
@@ -3049,8 +3048,7 @@ export class ChatEngine {
       )
       const messages = stampHarnessId(
         await driver.loadMessages(projectPath, thread.sessionId),
-        driverId,
-        thread.settings
+        driverId
       )
       this.applyReasoningStamps(thread.sessionId, messages)
       this.applyToolStamps(thread.sessionId, messages)
@@ -3062,12 +3060,16 @@ export class ChatEngine {
       // Preserve thinking and tool timestamps from the mirror for parts the driver lacks.
       this.preserveMirrorReasoningStamps(mirror, messages)
       this.preserveMirrorToolStamps(mirror, messages)
-      const merged = mergeAgentMessages(
-        mirror,
-        classifyProviderMessages(
-          messages,
-          this.planningSessions.has(thread.sessionId) || isDedicatedAssignmentAuditorThread(thread)
-        )
+      const merged = restoreMirrorThinkingLevel(
+        mergeAgentMessages(
+          mirror,
+          classifyProviderMessages(
+            messages,
+            this.planningSessions.has(thread.sessionId) ||
+              isDedicatedAssignmentAuditorThread(thread)
+          )
+        ),
+        mirror
       )
       await this.threadManager.upsertMessages(projectId, threadId, merged)
       return presentableMessages(merged, isDedicatedAssignmentAuditorThread(thread))
@@ -3414,8 +3416,7 @@ export class ChatEngine {
               )
             })
           ]),
-          owner.driverId,
-          (await this.threadManager.getThread(owner.projectId, owner.threadId))?.settings
+          owner.driverId
         )
         this.applyReasoningStamps(sessionId, incoming)
         this.applyToolStamps(sessionId, incoming)
@@ -3426,7 +3427,7 @@ export class ChatEngine {
         )
         this.preserveMirrorReasoningStamps(cached, incoming)
         this.preserveMirrorToolStamps(cached, incoming)
-        const merged = mergeAgentMessages(cached, incoming)
+        const merged = restoreMirrorThinkingLevel(mergeAgentMessages(cached, incoming), cached)
         await this.threadManager.saveSubagentMessages(
           owner.projectId,
           owner.threadId,
@@ -13749,9 +13750,20 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
       const messages = stampHarnessId(
         await driver.loadMessages(info.projectPath, sessionId),
-        info.driverId,
-        thread?.settings
+        info.driverId
       )
+
+      // The thread's settings are authoritative for the turn that just
+      // completed: stamp only its newest assistant message. Historical
+      // transcript rows keep whatever level they were persisted with (restored
+      // below), so a level change never rewrites the past.
+      const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
+      const turnAssistant = [...messages.slice(latestUserIndex + 1)]
+        .reverse()
+        .find((message) => message.role === 'assistant')
+      if (turnAssistant && !turnAssistant.thinkingLevel && thread?.settings?.thinkingLevel) {
+        turnAssistant.thinkingLevel = thread.settings.thinkingLevel
+      }
 
       this.applyReasoningStamps(sessionId, messages)
       this.applyToolStamps(sessionId, messages)
@@ -13760,12 +13772,11 @@ export class ChatEngine {
       const suppressTerminalAnswer =
         this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
       let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer)
-      let merged = mergeAgentMessages(mirror, classifiedMessages)
+      let merged = restoreMirrorThinkingLevel(
+        mergeAgentMessages(mirror, classifiedMessages),
+        mirror
+      )
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
-      const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
-      const turnAssistant = [...messages.slice(latestUserIndex + 1)]
-        .reverse()
-        .find((message) => message.role === 'assistant')
       // The provider transcript is the irreplaceable user data. Persist it
       // before Mermaid validation, usage accounting, specification parsing, or
       // any other optional end-of-turn work can throw. Later upserts may refine
@@ -13820,7 +13831,10 @@ export class ChatEngine {
           classifiedMessages = classifiedMessages.map((message) =>
             message.id === rejected.id ? rejected : message
           )
-          merged = mergeAgentMessages(mirror, classifiedMessages)
+          merged = restoreMirrorThinkingLevel(
+            mergeAgentMessages(mirror, classifiedMessages),
+            mirror
+          )
           if ((this.mermaidRepairAttempts.get(sessionId) ?? 0) >= 1 || !thread?.settings) {
             failure = rejectionReason
             merged = mergeAgentMessages(merged, [
@@ -15704,29 +15718,49 @@ function presentableMessages(
     })
 }
 
+/** Record which harness produced each message; drivers do not know their own id. */
+export function stampHarnessId(messages: AgentMessage[], harnessId: string): AgentMessage[] {
+  return messages.map((message) => (message.harnessId ? message : { ...message, harnessId }))
+}
+
 /**
- * Record which harness produced each message; drivers do not know their own id.
- * Also stamps the thread's current thinking level onto any message the driver
- * could not report (opencode has no provenance channel), so per-message
- * reasoning effort is persisted for usage analytics.
+ * Keep a message's persisted thinking level when the driver transcript omits it
+ * (driver reloads and history loads never know the reasoning effort of past
+ * turns). The on-disk mirror is the single source of truth for historical rows:
+ * after a restart a driver can re-stamp an entire session with the current
+ * turn's provenance, so any message already known to the mirror gets the
+ * mirror's level — and a message the mirror never recorded a level for stays
+ * unknown rather than inheriting the live turn's effort. Brand-new messages
+ * (the turn being finalized) are not in the mirror, so their driver-stamped or
+ * caller-stamped level is preserved.
  */
-export function stampHarnessId(
-  messages: AgentMessage[],
-  harnessId: string,
-  settings?: { thinkingLevel?: ThinkingLevel }
+export function restoreMirrorThinkingLevel(
+  merged: AgentMessage[],
+  mirror: AgentMessage[]
 ): AgentMessage[] {
-  const thinkingLevel = settings?.thinkingLevel
-  return messages.map((message) => {
-    let stamped = message
-    if (!stamped.harnessId) stamped = { ...stamped, harnessId }
-    if (thinkingLevel && !stamped.thinkingLevel) {
-      stamped = { ...stamped, thinkingLevel }
+  if (mirror.length === 0) return merged
+  const byId = new Map(mirror.map((message) => [message.id, message]))
+  return merged.map((message) => {
+    const persisted = byId.get(message.id)?.thinkingLevel
+    if (persisted) {
+      return message.thinkingLevel === persisted
+        ? message
+        : { ...message, thinkingLevel: persisted }
     }
-    return stamped
+    if (byId.has(message.id) && message.thinkingLevel) {
+      return { ...message, thinkingLevel: undefined }
+    }
+    return message
   })
 }
 
 /** Phrases that mark a user follow-up as correcting the previous answer. */
+/**
+ * Phrases that mark a user follow-up as correcting the previous answer. Kept
+ * deliberately narrow to avoid false negatives on legitimate continuations:
+ * ambiguous tasking like "fix this", "try again", or a bare "wrong" (which can
+ * describe a file, branch, or unrelated thing) never score a pass as a miss.
+ */
 const CORRECTIVE_PATTERNS = [
   /\bthat'?s wrong\b/iu,
   /\byou'?re wrong\b/iu,
@@ -15739,7 +15773,6 @@ const CORRECTIVE_PATTERNS = [
   /\bwon'?t work\b/iu,
   /\bstill broken\b/iu,
   /\bstill failing\b/iu,
-  /\bstill not\b/iu,
   /\bthis failed\b/iu,
   /\bit failed\b/iu,
   /\bdidn'?t work\b/iu,
@@ -15747,13 +15780,9 @@ const CORRECTIVE_PATTERNS = [
   /\bbroke the\b/iu,
   /\bintroduced a bug\b/iu,
   /\bregression\b/iu,
-  /\bfix this\b/iu,
-  /\bfix it\b/iu,
   /\bredo (it|this)\b/iu,
-  /\btry again\b/iu,
   /\bnot correct\b/iu,
-  /\bincorrect\b/iu,
-  /\bwrong\b/iu
+  /\bincorrect\b/iu
 ]
 
 /** Best-effort detection of a corrective user follow-up (the negative signal). */

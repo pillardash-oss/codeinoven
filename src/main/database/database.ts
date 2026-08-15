@@ -11,6 +11,7 @@ import {
   DATABASE_SCHEMA_SQL,
   HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL,
   HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL,
+  TURN_FEEDBACK_SET_NULL_MIGRATION_SQL,
   USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL
 } from './schema'
 import {
@@ -633,8 +634,8 @@ export class Database {
    * fresh installs, which already carry the columns from the CREATE TABLE.
    */
   private applyThinkingLevelMigrations(connection: DatabaseType): void {
-    const columns = (table: string): Array<{ name: string }> =>
-      connection.pragma(`table_info(${table})`) as Array<{ name: string }>
+    const columns = (table: string): Array<{ name: string; notnull?: number }> =>
+      connection.pragma(`table_info(${table})`) as Array<{ name: string; notnull?: number }>
 
     if (!columns('agent_messages').some((column) => column.name === 'thinking_level')) {
       connection.exec(AGENT_MESSAGES_THINKING_LEVEL_MIGRATION_SQL)
@@ -648,9 +649,26 @@ export class Database {
       connection.exec(HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL)
       Logger.info('Migrated harness_usage: added thinking_level column')
     }
-    if (!columns('harness_usage_models').some((column) => column.name === 'thinking_level')) {
+    const modelLevel = columns('harness_usage_models').find(
+      (column) => column.name === 'thinking_level'
+    )
+    // Rebuild when the column is missing entirely OR is still nullable: SQLite
+    // treats NULLs as distinct inside a composite PRIMARY KEY, so a nullable
+    // level would let one model's usage fragment into a row per message.
+    if (!modelLevel || modelLevel.notnull === 0) {
       connection.exec(HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL)
-      Logger.info('Migrated harness_usage_models: rebuilt with thinking_level in key')
+      Logger.info('Migrated harness_usage_models: rebuilt with NOT NULL thinking_level in key')
+    }
+    // Rebuild turn_feedback when its thread reference still cascade-deletes:
+    // resolved outcomes (including cleanup passes) must survive thread deletion
+    // to feed the model-performance analytics.
+    const fks = connection.pragma('foreign_key_list(turn_feedback)') as Array<{
+      table: string
+      on_delete: string
+    }>
+    if (fks.some((fk) => fk.table === 'threads' && fk.on_delete === 'CASCADE')) {
+      connection.exec(TURN_FEEDBACK_SET_NULL_MIGRATION_SQL)
+      Logger.info('Migrated turn_feedback: thread reference now SET NULL on delete')
     }
   }
 
