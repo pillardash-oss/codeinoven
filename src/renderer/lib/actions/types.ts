@@ -21,6 +21,8 @@ export interface ActionSource {
   id: string
   label: string
   kind: ActionSourceKind
+  /** Accent color for the source badge (e.g. a project's color). */
+  color?: string
 }
 
 export interface ActionDefinition {
@@ -34,6 +36,8 @@ export interface ActionDefinition {
   disabledReason?: string
   /** Optional lucide icon rendered in place of the category letter badge. */
   icon?: Component
+  /** Optional colored data-URI (e.g. a file/folder icon) rendered in the badge. */
+  iconUri?: string
 }
 
 export interface ActionSelection {
