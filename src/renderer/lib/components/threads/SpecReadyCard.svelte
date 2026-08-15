@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Play, X } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     providers?: ProviderCatalog[]
@@ -53,6 +53,11 @@
       providerId,
       modelId
     })
+  }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings) return
+    onModelChange?.({ ...settings, thinkingLevel: level })
   }
 </script>
 
@@ -109,6 +114,8 @@
           label="Change"
           variant="action"
           onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
           {onToggleFavorite}
           {onReorderFavorite}
         />

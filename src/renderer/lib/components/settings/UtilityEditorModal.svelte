@@ -226,6 +226,7 @@ Write the skill…`
   let isNative = $derived(target?.kind === 'native')
   let nativeEntry = $derived(target?.kind === 'native' ? target.entry : null)
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
+  let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
 
   let availableHarnesses = $derived(
     providerStore.providers
@@ -1003,7 +1004,7 @@ Write the complete workflow, rules, and examples for this skill.`
       draft.kind === 'skill'
         ? skillMetadata(draft.instructions)
         : { name: draft.name.trim(), description: draft.description.trim() }
-    if (!metadata.name) throw new Error('Name is required.')
+    if (!isAppOwned && !metadata.name) throw new Error('Name is required.')
     if (draft.id === null && buildBindings().length === 0) {
       throw new Error('Select at least one installed harness.')
     }
@@ -1018,10 +1019,12 @@ Write the complete workflow, rules, and examples for this skill.`
     }
     let saved: UtilityDefinition
     if (draft.id) {
-      const patch: UtilityDefinitionPatch = common
+      // The app-owned image descriptor is locked except for the vision model.
+      const patch: UtilityDefinitionPatch = isAppOwned ? { config: buildConfig() } : common
       saved = await invoke('utilities:update', draft.id, patch)
       const credential = buildCredential()
-      if (credential) saved = await invoke('utilities:setCredential', saved.id, credential)
+      if (credential && !isAppOwned)
+        saved = await invoke('utilities:setCredential', saved.id, credential)
     } else {
       const input: UtilityDefinitionInput = { kind: draft.kind, ...common }
       const credential = buildCredential()
@@ -1284,8 +1287,16 @@ Write the complete workflow, rules, and examples for this skill.`
             </span>.
           </p>
         {/if}
+        {#if isAppOwned}
+          <p
+            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[11px] text-primary"
+          >
+            This is a built-in utility: only the vision model can be changed. Everything else is
+            managed by the app.
+          </p>
+        {/if}
 
-        {#if !isNative}
+        {#if !isNative && !isAppOwned}
           {@render harnessSelector()}
         {/if}
 
@@ -1294,22 +1305,24 @@ Write the complete workflow, rules, and examples for this skill.`
             <label class="space-y-1 text-xs font-medium">
               <span>Name</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 required
+                disabled={isAppOwned}
                 bind:value={draft.name}
               />
             </label>
             <label class="space-y-1 text-xs font-medium">
               <span>Description</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                disabled={isAppOwned}
                 bind:value={draft.description}
               />
             </label>
           </div>
         {/if}
 
-        {#if !isNative}
+        {#if !isNative && !isAppOwned}
           <div class="grid grid-cols-2 gap-3">
             <label class="space-y-1 text-xs font-medium">
               <span>Activation</span>
@@ -1490,7 +1503,6 @@ Write the complete workflow, rules, and examples for this skill.`
               <span>Harness ID</span>
               <input
                 class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-                required
                 placeholder="opencode"
                 bind:value={draft.descriptorHarnessId}
               />
@@ -1500,7 +1512,6 @@ Write the complete workflow, rules, and examples for this skill.`
                 <span>Provider ID</span>
                 <input
                   class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-                  required
                   placeholder="anthropic"
                   bind:value={draft.descriptorProviderId}
                 />
@@ -1509,7 +1520,6 @@ Write the complete workflow, rules, and examples for this skill.`
                 <span>Model ID (vision)</span>
                 <input
                   class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
-                  required
                   placeholder="claude-sonnet-4-5"
                   bind:value={draft.descriptorModelId}
                 />
@@ -1517,7 +1527,8 @@ Write the complete workflow, rules, and examples for this skill.`
             </div>
             <p class="text-[11px] text-dimmed">
               A model from the harness catalog that can see images. Text-only models call this
-              utility to describe attached images.
+              utility to describe attached images. Leave the fields empty to let the app pick a
+              vision model automatically.
             </p>
           {:else}
             <label class="block space-y-1 text-xs font-medium">
@@ -1548,7 +1559,7 @@ Write the complete workflow, rules, and examples for this skill.`
           {/if}
         </fieldset>
 
-        {#if !isNative && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
+        {#if !isNative && !isAppOwned && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
           <fieldset class="space-y-3 rounded-xl border p-3">
             <legend class="px-1 text-xs font-semibold">
               {draft.kind === 'mcp' ? 'MCP secret' : 'API key'}
@@ -1602,7 +1613,9 @@ Write the complete workflow, rules, and examples for this skill.`
           </fieldset>
         {/if}
 
-        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+        {#if !isAppOwned}
+          <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+        {/if}
       </form>
     {/if}
 
@@ -1632,7 +1645,7 @@ Write the complete workflow, rules, and examples for this skill.`
         >
           {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
         </button>
-        {#if draft.id !== null || isNative}
+        {#if (draft.id !== null || isNative) && !isAppOwned}
           <button
             class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
             type="button"

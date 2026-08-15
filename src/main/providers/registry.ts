@@ -1,9 +1,6 @@
 import type { CloudDeploymentProviderKind } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../lib/types'
-import type {
-  DeploymentProvider,
-  DeploymentProviderContext
-} from '../deployment-provider.interface'
+import type { DeploymentProvider, DeploymentProviderContext } from './deployment-provider.interface'
 import { NotImplementedProvider } from './not-implemented-provider'
 import { createCoolifyProvider } from './coolify-provider'
 

@@ -14,7 +14,7 @@ import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { APP_ID, APP_NAME } from '../src/lib/brand'
-import { Logger } from '../src/main/logger'
+import { Logger } from '../src/main/system/logger'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 

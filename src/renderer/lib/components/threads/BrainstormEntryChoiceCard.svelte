@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Lightbulb, Loader2, Sparkles } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     busy?: boolean
@@ -48,6 +48,11 @@
       modelId
     })
   }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings) return
+    onModelChange?.({ ...settings, thinkingLevel: level })
+  }
 </script>
 
 <section
@@ -93,6 +98,8 @@
             label="Change"
             variant="action"
             onSelect={chooseModel}
+            thinkingLevel={settings.thinkingLevel}
+            onSelectThinking={chooseThinking}
             {onToggleFavorite}
             {onReorderFavorite}
           />

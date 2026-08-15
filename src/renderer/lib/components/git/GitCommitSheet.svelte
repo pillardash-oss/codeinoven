@@ -37,7 +37,13 @@
         id="commit-message"
         class="min-h-24 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
         placeholder="Summarize the change…"
-        bind:value={message}></textarea>
+        bind:value={message}
+        onkeydown={(event: KeyboardEvent) => {
+          if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault()
+            void commit()
+          }
+        }}></textarea>
     </div>
     {#if gitState.error}
       <p

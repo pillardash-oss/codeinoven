@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { promisify } from 'util'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import type {
   AgentEvent,
   AgentMessage,
@@ -34,14 +34,14 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { hasNativeProviderCatalog } from '../native-provider-config-service'
-import { SecretVault } from '../secret-vault'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import { SecretVault } from '../storage/secret-vault'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000

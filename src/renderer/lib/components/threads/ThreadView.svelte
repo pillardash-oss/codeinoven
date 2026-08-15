@@ -18,6 +18,7 @@
 
   import {
     AudioLines,
+    Brain,
     Check,
     ChevronDown,
     Copy,
@@ -67,7 +68,7 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -106,7 +107,8 @@
     type ResponseReferenceAnchor
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
-  import { collectAgentSources } from '$lib/agent-sources'
+  import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
+  import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -132,6 +134,7 @@
     AgentDefaultsConfig,
     AgentModelSelection,
     AgentRole,
+    AgentQuestion,
     ProviderCatalog,
     PromptAttachment,
     PromptAssignmentTaskReference,
@@ -341,6 +344,9 @@
   let projectIconUrl = $state<string | null>(null)
   let errorMessage = $state('')
   let providerStatus = $state<AgentSessionStatus | null>(null)
+  /** Synthetic authentication issue raised by the thread-open auth probe, so
+   *  the sign-in card can tell proactive (no retry) from failure-driven. */
+  let proactiveAuthIssue: AgentProviderIssue | null = null
   /** True once the live session status is established on mount; makes the
    *  DB-status fallback in loadLocal defer to it instead of racing it. */
   let liveStatusKnown = false
@@ -371,6 +377,12 @@
       }
     }
   })
+  /** True while the visible provider card is the proactive sign-in card. */
+  const proactiveAuthVisible = $derived(
+    proactiveAuthIssue !== null &&
+      visibleProviderStatus !== null &&
+      visibleProviderStatus.issue === proactiveAuthIssue
+  )
   const providerName = $derived(
     settings.harnessId === 'opencode'
       ? 'OpenCode'
@@ -1773,16 +1785,45 @@
     }
   })
 
-  /** Files uploaded to or produced in this chat — surfaced via the Sources panel. */
-  let sources = $derived(
-    collectAgentSources(messages).filter((source) => {
-      if (source.kind !== 'file-citation') return true
-      return (
-        citationPathsState.isValidPath(source.path) ||
-        citationPathsState.isKnownExternalPath(source.path)
-      )
-    })
-  )
+  /**
+   * Files uploaded to or produced in this chat — surfaced via the Sources panel.
+   * File citations are only listed when confirmed to exist on disk. Citations
+   * inside the project display with their project-relative path (the tail of
+   * the path stays visible), while `path` itself is never rewritten so clicks
+   * keep targeting the exact file.
+   */
+  let sources = $derived.by((): AgentSource[] => {
+    const projectPath = project?.path?.trim()
+    return collectAgentSources(messages)
+      .filter((source) => {
+        if (source.kind !== 'file-citation') return true
+        return (
+          citationPathsState.isValidPath(source.path) ||
+          citationPathsState.isKnownExternalPath(source.path)
+        )
+      })
+      .map((source) => {
+        if (source.kind !== 'file-citation' || !source.path || !projectPath) return source
+        const root = projectPath.replace(/[\\/]+$/u, '')
+        if (isAbsoluteCitationPath(source.path)) {
+          const target = normalizeCitationPath(source.path)
+          const rootKey = normalizeCitationPath(root)
+          if (!target.startsWith(`${rootKey}/`)) return source
+          return {
+            ...source,
+            displayPath: target.slice(rootKey.length + 1),
+            title: source.line ? `${source.path}:${source.line}` : source.path
+          }
+        }
+        const fullPath = `${root}/${source.path}`
+        return {
+          ...source,
+          path: fullPath,
+          displayPath: source.path,
+          title: source.line ? `${fullPath}:${source.line}` : fullPath
+        }
+      })
+  })
 
   /** Jump target for the header's history dropdown — loads a window around the
    *  target when it lies outside the currently loaded cache, then scrolls to it. */
@@ -2573,6 +2614,9 @@
     try {
       providerStatus = await invoke('agent:getSessionStatus', projectId, id)
       if (!alive) return
+      if (providerStatus === null && settings.harnessId === 'claude-code') {
+        void probeHarnessAuthentication()
+      }
       // The live session status is the single source of truth on mount. Once
       // established, loadLocal's broader DB workflow status must not override
       // it. In particular, a coordinator can be persisted as executing while
@@ -2709,6 +2753,46 @@
     void sendMessage('Continue', [], undefined, true, undefined, [], [], {
       action: 'Retry connection'
     })
+  }
+  /** Detect an expired Claude Code session at thread open so the user can sign
+   *  in before their first message fails mid-turn. */
+  async function probeHarnessAuthentication(): Promise<void> {
+    try {
+      const authenticated = await invoke(
+        'agent:getHarnessAuthStatus',
+        thread.projectId,
+        settings.harnessId
+      )
+      if (!alive || authenticated !== false || providerStatus !== null) return
+      const issue: AgentProviderIssue = {
+        kind: 'authentication',
+        message: 'Claude Code sign-in expired. Sign in once to continue.',
+        rawError: 'Claude Code could not authenticate with the stored credential.',
+        harnessId: settings.harnessId,
+        retryable: true
+      }
+      proactiveAuthIssue = issue
+      setProviderError(issue)
+    } catch {
+      // Best-effort; a real authentication failure still surfaces at message time.
+    }
+  }
+
+  /** Re-check auth after a proactive sign-in and clear the card once it works. */
+  async function refreshAfterProactiveSignIn(): Promise<void> {
+    try {
+      const authenticated = await invoke(
+        'agent:getHarnessAuthStatus',
+        thread.projectId,
+        settings.harnessId
+      )
+      if (authenticated === true) {
+        proactiveAuthIssue = null
+        providerStatus = null
+      }
+    } catch {
+      // Keep the card; the user can dismiss it or send their message.
+    }
   }
 
   /** Dismiss an error card: clear the thread's cached error state and reset its
@@ -3154,6 +3238,10 @@
   }
 
   // ─── Message queue & steer —───────────────────────────────────────────────
+
+  /** Shortcut label for the steer combo — macOS shows ⌘⇧, others Ctrl+Shift+. */
+  const steerModifierLabel =
+    navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘⇧' : 'Ctrl+Shift+'
 
   let queuedMessage = $state('')
   let queuedAttachments = $state<PromptAttachment[]>([])
@@ -4050,7 +4138,7 @@
     assignmentError = ''
     if (previousHarnessId !== updated.harnessId || previousProviderId !== updated.providerId) {
       contextUsageDisplay = undefined
-      liveAccountUsage = []
+      accountUsageFetchedAt = 0
     }
     syncAgentRole('seniorEngineer', selection)
     commitSettings(updated)
@@ -4822,7 +4910,8 @@
     const auditor = {
       harnessId: selected.harnessId,
       providerId: selected.providerId,
-      modelId: selected.modelId
+      modelId: selected.modelId,
+      thinkingLevel: selected.thinkingLevel
     }
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -5550,7 +5639,8 @@
         ? {
             harnessId: auditSettings.harnessId,
             providerId: auditSettings.providerId,
-            modelId: auditSettings.modelId
+            modelId: auditSettings.modelId,
+            thinkingLevel: auditSettings.thinkingLevel
           }
         : undefined
     const normalized: ThreadSettings = {
@@ -5561,16 +5651,20 @@
     const providerChanged = settings.providerId !== normalized.providerId
     settings = normalized
     if (harnessChanged || providerChanged) {
-      // Clear any usage shown for the previous harness/provider so the battery
-      // reflects only the newly selected configuration until its quota arrives.
+      // Reset only the single-harness context meter so the battery reflects
+      // the newly selected configuration. Preserve the live per-harness quota
+      // overlay: quota already fetched for harnesses used in this conversation
+      // stays visible and refreshes on the next hover. Force that hover to
+      // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
-      liveAccountUsage = []
+      accountUsageFetchedAt = 0
     }
     if (seniorModelChanged && normalized.engineeringMode) {
       syncAgentRole('seniorEngineer', {
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
-        modelId: normalized.modelId
+        modelId: normalized.modelId,
+        thinkingLevel: normalized.thinkingLevel
       })
     }
     // Persist immediately so the choice survives navigation away from this view.
@@ -5829,6 +5923,52 @@
     )
   }
 
+  /** Open the explain side chat for a single agent question so the user can
+   *  understand it (and its options) before answering. The card already pauses
+   *  the question timeout; here we populate the chat and set a question-specific
+   *  auto prompt. */
+  function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
+    const selection = formatQuestionForExplain(question)
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      'elaborate',
+      selection,
+      temporaryConversationContext(),
+      settings,
+      true,
+      EXPLAIN_QUESTION_PROMPT
+    )
+  }
+
+  const EXPLAIN_QUESTION_PROMPT =
+    'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral — do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
+
+  function formatQuestionForExplain(question: AgentQuestion): string {
+    const parts: string[] = []
+    if (question.header) parts.push(`Question: ${question.header}`)
+    if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
+    if (question.description) parts.push(`Description: ${question.description}`)
+    if (question.richOptions && question.richOptions.length > 0) {
+      parts.push(
+        'Options:',
+        ...question.richOptions.map((option) =>
+          [
+            `- ${option.label}`,
+            option.description ? `  ${option.description}` : '',
+            option.recommended ? '  (recommended by the agent)' : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        )
+      )
+    } else if (question.options && question.options.length > 0) {
+      parts.push('Options:', ...question.options.map((option) => `- ${option}`))
+    }
+    if (question.multiple) parts.push('(The user may select more than one option.)')
+    return parts.join('\n\n')
+  }
+
   // ─── Message attribution (model + harness) ────────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
@@ -5858,6 +5998,25 @@
   /** Harness that produced the message — falls back to the thread's harness. */
   function messageHarnessId(msg: AgentMessage): string {
     return msg.harnessId ?? settings.harnessId
+  }
+
+  /** Thinking level used for the message's turn, when its model reasons. */
+  function messageThinkingLevel(msg: AgentMessage): ThinkingLevel | null {
+    if (!msg.modelId) return null
+    const modelId = fastBaseModelId(msg.modelId)
+    const model =
+      allModels.find(
+        (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
+      ) ?? allModels.find((m) => m.id === modelId)
+    const presets = model?.thinkingPresets ?? []
+    // A model known not to reason never shows a thinking badge, even when a
+    // generic level was stamped onto its rows.
+    if (model && presets.length === 0) return null
+    // Prefer the level actually persisted for this turn (historical truth),
+    // falling back to the thread's current level for legacy/live messages.
+    if (msg.thinkingLevel) return msg.thinkingLevel
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
   }
 
   function messageHarnessName(msg: AgentMessage): string {
@@ -6375,7 +6534,6 @@
                       bind:value={editingText}
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
-                      submitOnEnter
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
                     <div class="mt-1.5 flex items-center justify-end gap-1.5">
@@ -6623,6 +6781,7 @@
                 msgIndex === latestTurnInfo.startIndex && latestTurnInfo.active}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
+              {@const msgThinking = messageThinkingLevel(msg)}
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
@@ -6658,6 +6817,7 @@
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
                         {modelLabel}
+                        thinkingLevel={msgThinking}
                         providerName={provider?.name}
                         {harnessId}
                         {harnessName}
@@ -6803,6 +6963,16 @@
                                     />
                                   {/if}
                                 </span>
+                                {#if msgThinking}
+                                  <span
+                                    class="flex items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                                    title={`Thinking level: ${msgThinking}`}
+                                    aria-label={`Thinking level: ${msgThinking}`}
+                                  >
+                                    <Brain size={9} />
+                                    {msgThinking}
+                                  </span>
+                                {/if}
                               {/if}
                               <span class="text-[10px] text-dimmed"
                                 >· {formatTime(msg.completedAt ?? msg.createdAt)}</span
@@ -6928,10 +7098,14 @@
                     : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onStop={abortRun}
                 onRetry={retryConnection}
+                onSignedIn={proactiveAuthVisible
+                  ? () => void refreshAfterProactiveSignIn()
+                  : undefined}
                 autoRetryEnabled={autoRetryAfterReset}
                 onDismiss={() => {
                   errorMessage = ''
                   providerStatus = null
+                  proactiveAuthIssue = null
                   void dismissSessionError()
                 }}
               />
@@ -6976,7 +7150,7 @@
                   <div class="flex items-center gap-1">
                     <button
                       class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
-                      title="Send this message to the agent now"
+                      title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
                     >
                       Steer
@@ -7161,6 +7335,7 @@
                   onAnswer={handleQuestionAnswer}
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
+                  onExplain={handleQuestionExplain}
                 />
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}

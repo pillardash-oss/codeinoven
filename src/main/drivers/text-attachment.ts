@@ -2,7 +2,7 @@
 
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import type { PromptAttachment } from '../../lib/types'
 
 const TEXT_MIME_PREFIX = 'text/'

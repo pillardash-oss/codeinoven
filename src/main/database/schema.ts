@@ -183,12 +183,14 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
+  thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
   created_at      INTEGER NOT NULL,
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
   context_window  INTEGER,
@@ -198,7 +200,64 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_timeline
-  ON agent_messages(thread_id, session_id, created_at, id);`
+  ON agent_messages(thread_id, session_id, created_at, id);
+
+-- Analytics range scans (Profile): role/harness_id are low-cardinality
+-- filters over a created_at window, so leading with created_at bounds the scan.
+CREATE INDEX IF NOT EXISTS idx_agent_messages_analytics
+  ON agent_messages(created_at, role, harness_id);`
+
+/**
+ * Column definitions for the canonical `harness_usage_models` table.
+ * thinking_level is NOT NULL with an empty-string "unknown" sentinel because
+ * SQLite treats NULLs as distinct inside a composite PRIMARY KEY — NULL levels
+ * would fragment one model's usage into a row per message instead of
+ * accumulating it.
+ */
+export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
+  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  thinking_level       TEXT NOT NULL DEFAULT '',
+  message_count        INTEGER NOT NULL DEFAULT 0,
+  cost_usd             REAL NOT NULL DEFAULT 0,
+  tokens_in            INTEGER NOT NULL DEFAULT 0,
+  tokens_out           INTEGER NOT NULL DEFAULT 0,
+  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
+  tokens_total         INTEGER NOT NULL DEFAULT 0,
+  duration_ms          INTEGER NOT NULL DEFAULT 0,
+  first_used_at        INTEGER NOT NULL,
+  last_used_at         INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
+
+/**
+ * Column definitions for the canonical `turn_feedback` table. thread_id
+ * deliberately does NOT cascade-delete: resolved outcomes are the long-term
+ * analytics record for "best model by feedback", so rows keep their own
+ * attribution when the owning thread is deleted.
+ */
+export const TURN_FEEDBACK_COLUMNS_SQL = `
+  id             TEXT PRIMARY KEY NOT NULL,
+  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  parent_turn_id TEXT NOT NULL UNIQUE,
+  session_id     TEXT,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+  score          REAL NOT NULL DEFAULT 0,
+  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
+  task_slug      TEXT,
+  harness_id     TEXT,
+  provider_id    TEXT,
+  model_id       TEXT,
+  thinking_level TEXT,
+  cost_usd       REAL,
+  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
+  tokens_total   INTEGER`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -540,6 +599,7 @@ CREATE TABLE IF NOT EXISTS harness_usage (
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT,
+  thinking_level       TEXT,
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -572,28 +632,12 @@ CREATE TABLE IF NOT EXISTS harness_usage_messages (
 CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
   ON harness_usage_messages(thread_id);
 
--- Per-model cost breakdown for each (thread, harness, provider). One row per
--- model a harness used on a thread, with cumulative cost/tokens/duration so the
--- battery popover (and a future usage settings page) can show what each model
--- consumed. Rows cascade-delete with their thread.
-CREATE TABLE IF NOT EXISTS harness_usage_models (
-  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  harness_id           TEXT NOT NULL,
-  provider_id          TEXT NOT NULL,
-  model_id             TEXT NOT NULL,
-  message_count        INTEGER NOT NULL DEFAULT 0,
-  cost_usd             REAL NOT NULL DEFAULT 0,
-  tokens_in            INTEGER NOT NULL DEFAULT 0,
-  tokens_out           INTEGER NOT NULL DEFAULT 0,
-  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
-  tokens_total         INTEGER NOT NULL DEFAULT 0,
-  duration_ms          INTEGER NOT NULL DEFAULT 0,
-  first_used_at        INTEGER NOT NULL,
-  last_used_at         INTEGER NOT NULL,
-  PRIMARY KEY (thread_id, harness_id, provider_id, model_id)
-);
+-- Per-model cost breakdown for each (thread, harness, provider, thinking level).
+-- One row per model+thinking-level a harness used on a thread, with cumulative
+-- cost/tokens/duration so the battery popover (and the usage settings page) can
+-- show what each model consumed at each reasoning effort. Rows cascade-delete
+-- with their thread.
+CREATE TABLE IF NOT EXISTS harness_usage_models (${HARNESS_USAGE_MODELS_COLUMNS_SQL});
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
   ON harness_usage_models(thread_id);
@@ -615,6 +659,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   harness_id            TEXT,
   provider_id           TEXT,
   model_id              TEXT,
+  thinking_level        TEXT,
   utility_id            TEXT,
   raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
   tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
@@ -643,7 +688,29 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_thread
   ON usage_events(thread_id, created_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
-  ON usage_events(parent_turn_id, feature, created_at);`
+  ON usage_events(parent_turn_id, feature, created_at);
+
+-- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
+CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
+  ON usage_events(feature, created_at);
+
+-- ─── Turn outcome feedback (session scoring) ─────────────────────────────
+-- One row per completed user turn, opened "pending" when a successful turn
+-- finishes and resolved when the user signals the outcome: they continued
+-- positively, corrected the answer, switched away to another thread, or left
+-- the thread idle until cleanup. Scores (0/1) feed the "best model by
+-- feedback" profile section, keyed by harness/provider/model/thinking level
+-- and the task kind (main/audit/assignment).
+CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
+  ON turn_feedback(thread_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
+  ON turn_feedback(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
+  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
 
 /** Canonical fresh-install schema. There are no historical migrations. */
 export const DATABASE_SCHEMA_SQL = [

@@ -1,4 +1,5 @@
 import type { AgentPart, TurnCheckpointFileDiff } from '$shared/types'
+import { computeDiffLines } from '../files/file-diff'
 
 export interface ToolDiffLine {
   kind: 'context' | 'added' | 'deleted'
@@ -102,62 +103,12 @@ function fullLineDiff(
   beforeSource: string | undefined,
   afterSource: string | undefined
 ): ToolDiffLine[] {
-  const before = beforeSource?.split('\n') ?? []
-  const after = afterSource?.split('\n') ?? []
-  if (before.at(-1) === '') before.pop()
-  if (after.at(-1) === '') after.pop()
-  if (before.length * after.length > 500_000) {
-    return snippetDiff(before.join('\n'), after.join('\n'))
-  }
-
-  const lengths = Array.from({ length: before.length + 1 }, () => new Uint32Array(after.length + 1))
-  for (let beforeIndex = before.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
-    for (let afterIndex = after.length - 1; afterIndex >= 0; afterIndex -= 1) {
-      lengths[beforeIndex][afterIndex] =
-        before[beforeIndex] === after[afterIndex]
-          ? lengths[beforeIndex + 1][afterIndex + 1] + 1
-          : Math.max(lengths[beforeIndex + 1][afterIndex], lengths[beforeIndex][afterIndex + 1])
-    }
-  }
-
-  const lines: ToolDiffLine[] = []
-  let beforeIndex = 0
-  let afterIndex = 0
-  while (beforeIndex < before.length || afterIndex < after.length) {
-    if (
-      beforeIndex < before.length &&
-      afterIndex < after.length &&
-      before[beforeIndex] === after[afterIndex]
-    ) {
-      lines.push({
-        kind: 'context',
-        text: before[beforeIndex],
-        beforeLine: beforeIndex + 1,
-        afterLine: afterIndex + 1
-      })
-      beforeIndex += 1
-      afterIndex += 1
-    } else if (
-      afterIndex < after.length &&
-      (beforeIndex >= before.length ||
-        lengths[beforeIndex][afterIndex + 1] >= lengths[beforeIndex + 1][afterIndex])
-    ) {
-      lines.push({
-        kind: 'added',
-        text: after[afterIndex],
-        afterLine: afterIndex + 1
-      })
-      afterIndex += 1
-    } else {
-      lines.push({
-        kind: 'deleted',
-        text: before[beforeIndex],
-        beforeLine: beforeIndex + 1
-      })
-      beforeIndex += 1
-    }
-  }
-  return compactContext(lines)
+  // Shared with the checkpoint diff viewer: exact LCS for small inputs, a
+  // bounded Myers diff for large ones. The old 500k-cell fallback to a naive
+  // prefix/suffix snippet rendered a small edit in a large file as a whole-file
+  // rewrite, because a line insertion shifts every subsequent line.
+  const lines = computeDiffLines(beforeSource, afterSource)
+  return compactContext(lines as unknown as ToolDiffLine[])
 }
 
 function patchDiffs(source: string, fallbackPath: string): ToolFileDiff[] {

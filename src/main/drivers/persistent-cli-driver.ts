@@ -15,11 +15,12 @@ import type {
   PermissionReply,
   ProviderCatalog,
   SessionAgentEvent,
+  ThinkingLevel,
   UsagePricingProvenance
 } from '../../lib/types'
-import { Logger } from '../logger'
-import { estimateTokenCostUsd } from '../pricing'
-import type { StorageEngine } from '../storage-engine'
+import { Logger } from '../system/logger'
+import { estimateTokenCostUsd } from '../providers/pricing'
+import type { StorageEngine } from '../storage/storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
   AgentEventCallback,
@@ -30,7 +31,7 @@ import type {
   PreparedUtilityRuntime,
   SendPromptOptions
 } from './driver.interface'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 
 export interface TitleModelCandidate {
   providerId: string
@@ -135,8 +136,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private deletedSessions = new Set<string>()
   /** Sessions whose provider stream already supplied a structured terminal issue. */
   private structuredProcessIssues = new Set<string>()
-  /** Model/provider of the running turn — CLIs do not echo them back per message. */
-  private turnProvenance = new Map<string, { providerId?: string; modelId?: string }>()
+  /** Model/provider/thinking level of the running turn — CLIs do not echo them back per message. */
+  private turnProvenance = new Map<
+    string,
+    { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }
+  >()
   private titleSessions = new Set<string>()
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
@@ -348,7 +352,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,
-      invocation.provenanceModelId ?? opts.settings.modelId
+      invocation.provenanceModelId ?? opts.settings.modelId,
+      opts.settings.thinkingLevel
     )
     this.appendUserMessage(session, opts)
     let child: ChildProcess
@@ -595,10 +600,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.processObserver?.watchProcess(sessionId, child.pid, command, cwd)
   }
 
-  protected setTurnProvenance(sessionId: string, providerId?: string, modelId?: string): void {
+  protected setTurnProvenance(
+    sessionId: string,
+    providerId?: string,
+    modelId?: string,
+    thinkingLevel?: ThinkingLevel
+  ): void {
     this.turnProvenance.set(sessionId, {
       providerId: providerId || undefined,
-      modelId: modelId || undefined
+      modelId: modelId || undefined,
+      thinkingLevel: thinkingLevel || undefined
     })
   }
 
@@ -732,6 +743,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         ...raw,
         providerId: raw.providerId ?? provenance?.providerId,
         modelId: raw.modelId ?? provenance?.modelId,
+        thinkingLevel: raw.thinkingLevel ?? provenance?.thinkingLevel,
         harnessId: raw.harnessId ?? this.id
       }
       const index = session.messages.findIndex((current) => current.id === message.id)

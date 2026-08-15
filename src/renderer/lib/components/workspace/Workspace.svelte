@@ -17,7 +17,8 @@
     Copy,
     FolderKanban,
     ArrowUpDown,
-    Check
+    Check,
+    ChevronUp
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -437,7 +438,7 @@
     if (current !== prevProjectFileOpenCount && !loading) {
       prevProjectFileOpenCount = current
       const request = workspaceState.consumeProjectFileOpenRequest()
-      if (request) void openProjectFileFromCommand(request.projectId, request.path)
+      if (request) void openProjectFileFromCommand(request.projectId, request.path, request.kind)
     }
   })
 
@@ -729,6 +730,7 @@
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+  let terminalDockCollapsed = $derived(contextSidebarState.terminalDockCollapsed)
   let contextPanelColumns = $derived(
     sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
@@ -737,7 +739,9 @@
   let contextPanelRows = $derived(
     terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
-      : 'minmax(0, 1fr)'
+      : terminalDockCollapsed
+        ? 'minmax(0, 1fr) 32px'
+        : 'minmax(0, 1fr)'
   )
 
   function openTabFullscreen(tabId: string): void {
@@ -1335,6 +1339,21 @@
     wasActive = nowActive
   })
 
+  /** Cmd/Ctrl+W while the context sidebar has focus closes its active tab
+   *  (through the unsaved-changes confirmation) rather than the thread. */
+  $effect(() => {
+    const request = contextSidebarState.closeActiveTabRequest
+    if (request === 0) return
+    const focused = document.activeElement instanceof Element ? document.activeElement : null
+    const region = focused?.closest<HTMLElement>('[data-region="context-sidebar"]')
+    const placement = region?.dataset.placement
+    const tabId =
+      placement === 'bottom'
+        ? contextSidebarState.terminalActiveTabId
+        : contextSidebarState.sidebarActiveTabId
+    if (tabId) closeContextTab(tabId)
+  })
+
   /** Explicit timeline expansion. The initial shell intentionally carries
    * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {
@@ -1833,12 +1852,23 @@
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
-  async function openProjectFileFromCommand(projectId: string, path: string): Promise<void> {
+  async function openProjectFileFromCommand(
+    projectId: string,
+    path: string,
+    kind: 'file' | 'directory'
+  ): Promise<void> {
     const project = projects.find((candidate) => candidate.id === projectId)
     if (!project || project.source !== 'local' || !project.path) return
 
-    navigate('projects')
-    const projectThread =
+    // Preserve the current content view (remember the project sidebar state)
+    // instead of forcing the Projects view. Chats cannot host a project file.
+    if (mode === 'chats') {
+      navigate('projects')
+    } else if (!active) {
+      navigate(mode)
+    }
+
+    let projectThread: Thread | null =
       selectedThread?.projectId === projectId
         ? selectedThread
         : allThreads
@@ -1848,16 +1878,31 @@
     if (projectThread) {
       await openThread(projectThread)
     } else {
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-      workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
-      rendererRecovery.setSelectedProject(project.id)
-      contextSidebarState.activateThread(project.id, '')
+      // No thread yet — create one so the file opens inside a real thread context.
+      await createThreadInProject(project)
+      projectThread =
+        workspaceState.selectedThread?.projectId === projectId
+          ? workspaceState.selectedThread
+          : null
+      if (!projectThread) {
+        workspaceState.clearThread()
+        workspaceState.activeProject = project
+        workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
+        rendererRecovery.setSelectedProject(project.id)
+        contextSidebarState.activateThread(project.id, '')
+      }
     }
 
     await projectFilesWorkspace.loadDirectory(project.id, '')
     contextSidebarState.openFiles(project.id, projectThread?.id ?? '')
-    await projectFilesWorkspace.openFile(project.id, path)
+    if (kind === 'directory') {
+      await projectFilesWorkspace.revealFile(project.id, path)
+      projectFilesWorkspace.markDirectoryExpanded(project.id, path)
+      await projectFilesWorkspace.loadDirectory(project.id, path, true)
+    } else {
+      await projectFilesWorkspace.openFile(project.id, path)
+      await projectFilesWorkspace.revealFile(project.id, path)
+    }
   }
 
   async function openScopedThread(thread: Thread): Promise<void> {
@@ -3090,12 +3135,18 @@
         {#snippet terminalDockContent()}
           {@const activeDockTab = contextSidebarState.terminalActiveTab}
           {#if activeDockTab}
-            {#key activeDockTab.id}
-              <TerminalPanel
-                terminalId={activeDockTab.terminalId}
-                projectId={activeDockTab.projectId}
-              />
-            {/key}
+            {#if terminalFullscreenTabId === activeDockTab.id}
+              <div class="flex h-full items-center justify-center text-xs text-muted">
+                Terminal is open in fullscreen
+              </div>
+            {:else}
+              {#key activeDockTab.id}
+                <TerminalPanel
+                  terminalId={activeDockTab.terminalId}
+                  projectId={activeDockTab.projectId}
+                />
+              {/key}
+            {/if}
           {/if}
         {/snippet}
         <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
@@ -3116,8 +3167,22 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
           />
         </div>
+      {/if}
+      {#if terminalDockCollapsed}
+        <button
+          type="button"
+          class="flex h-8 min-h-0 w-full items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          style:grid-column="1 / -1"
+          style:grid-row="2"
+          title="Expand terminal"
+          aria-label="Expand terminal"
+          onclick={() => contextSidebarState.toggleTerminalDock()}
+        >
+          <ChevronUp size={14} />
+        </button>
       {/if}
     </div>
   </section>

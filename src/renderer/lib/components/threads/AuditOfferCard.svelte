@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Loader2, ShieldCheck } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     threadTitle: string
@@ -52,6 +52,10 @@
     const harnessId = nextHarnessId ?? settings.harnessId
     onModelChange({ ...settings, harnessId, providerId, modelId })
   }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    onModelChange({ ...settings, thinkingLevel: level })
+  }
 </script>
 
 <section class="rounded-xl border bg-surface p-4" aria-label="Audit implementation">
@@ -92,6 +96,8 @@
         label="Change"
         variant="action"
         onSelect={chooseModel}
+        thinkingLevel={settings.thinkingLevel}
+        onSelectThinking={chooseThinking}
         {onToggleFavorite}
         {onReorderFavorite}
       />

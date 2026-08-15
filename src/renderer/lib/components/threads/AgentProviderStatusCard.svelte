@@ -15,6 +15,7 @@
     AgentSessionStatus,
     ProviderAccountLoginHandoff,
     ProviderCatalog,
+    ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
@@ -39,6 +40,8 @@
     ) => void
     onStop?: () => void
     onRetry?: () => void
+    /** Called after a successful sign-in instead of the generic retry. */
+    onSignedIn?: () => void
     onDismiss?: () => void
     sourceLabel?: string
     sourceDetail?: string
@@ -61,6 +64,7 @@
     onReorderFavorite,
     onStop,
     onRetry,
+    onSignedIn,
     onDismiss,
     sourceLabel,
     sourceDetail,
@@ -169,13 +173,18 @@
     onModelChange({ ...settings, harnessId, providerId, modelId })
   }
 
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings || !onModelChange) return
+    onModelChange({ ...settings, thinkingLevel: level })
+  }
+
   function finishSignIn(exitCode: number): void {
     if (exitCode !== 0) {
       loginError = `Sign-in exited with code ${exitCode}.`
       return
     }
     closeSignIn()
-    onRetry?.()
+    ;(onSignedIn ?? onRetry)?.()
   }
 </script>
 
@@ -287,6 +296,8 @@
             label="Change"
             variant="action"
             onSelect={chooseModel}
+            thinkingLevel={settings.thinkingLevel}
+            onSelectThinking={chooseThinking}
             {onToggleFavorite}
             {onReorderFavorite}
           />

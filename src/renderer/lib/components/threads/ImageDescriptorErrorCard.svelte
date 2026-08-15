@@ -5,7 +5,8 @@
   import type {
     AgentModelSelection,
     ImageDescriptorErrorRequest,
-    ProviderCatalog
+    ProviderCatalog,
+    ThinkingLevel
   } from '$shared/types'
 
   interface Props {
@@ -50,6 +51,12 @@
   let needsSelection = $derived(request.selection === undefined)
   let working = $state(false)
   let actionError = $state('')
+
+  function chooseThinking(level: ThinkingLevel): void {
+    const base = override ?? request.selection
+    if (!base) return
+    override = { ...base, thinkingLevel: level }
+  }
 
   async function retry(): Promise<void> {
     const selection = visionSelection
@@ -149,6 +156,8 @@
         onSelect={(providerId, modelId, harnessId) => {
           override = { harnessId, providerId, modelId }
         }}
+        thinkingLevel={visionSelection?.thinkingLevel}
+        onSelectThinking={chooseThinking}
         {onToggleFavorite}
         {onReorderFavorite}
       />

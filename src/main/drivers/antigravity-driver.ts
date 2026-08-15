@@ -27,7 +27,7 @@ import type {
   HarnessCapabilities,
   SendPromptOptions
 } from './driver.interface'
-import type { StorageEngine } from '../storage-engine'
+import type { StorageEngine } from '../storage/storage-engine'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without

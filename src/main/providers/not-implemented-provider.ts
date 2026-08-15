@@ -6,7 +6,7 @@ import type {
 import type {
   CloudDeploymentProviderInfo,
   DeploymentProvider
-} from '../deployment-provider.interface'
+} from './deployment-provider.interface'
 
 /** Human-readable platform names keyed by provider kind. */
 export const PROVIDER_DISPLAY_NAMES: Readonly<

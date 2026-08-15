@@ -1,8 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Popover } from 'bits-ui'
+  import { DropdownMenu, Popover } from 'bits-ui'
   import {
+    Brain,
+    Check,
     ChevronRight,
     Clock,
     Cpu,
@@ -15,13 +17,15 @@
     Zap,
     X
   } from '@lucide/svelte'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ProviderCatalog, ProviderModel } from '$shared/types'
+  import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
 
   interface Props {
     providers: ProviderCatalog[]
@@ -32,6 +36,9 @@
     recentModels?: string[]
     /** True while the picker is open — opening it refreshes the catalog. */
     open?: boolean
+    /** True while the thinking-level dropdown is open. Lets a parent open the
+     *  thinking selector directly (e.g. from the `/thinking` slash action). */
+    thinkingMenuOpen?: boolean
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -43,7 +50,18 @@
     fast?: boolean
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
+    /** Current thinking level. Whenever the selected model declares thinking
+     *  presets, the trigger shows the level badge and the popover exposes the
+     *  presets — no opt-in beyond passing the current value is needed. */
+    thinkingLevel?: ThinkingLevel | null
+    /** Thinking presets to display. Defaults to the selected model's declared
+     *  presets — when the model declares none, thinking controls stay hidden. */
+    thinkingPresets?: ThinkingPreset[]
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    /** Fired when the thinking level changes — either from an explicit preset
+     *  click, or automatically when a newly selected model no longer supports
+     *  the previous level. */
+    onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
     onReorderFavorite?: (
@@ -61,6 +79,7 @@
     favoriteModels = [],
     recentModels = [],
     open = $bindable(false),
+    thinkingMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
@@ -68,7 +87,10 @@
     label,
     fast = false,
     visionOnly = false,
+    thinkingLevel = null,
+    thinkingPresets,
     onSelect,
+    onSelectThinking,
     onToggleFavorite,
     onReorderFavorite
   }: Props = $props()
@@ -109,6 +131,35 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === modelId) ??
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
+  )
+  /**
+   * Thinking presets offered by the selected model. Callers may override them
+   * (e.g. the composer falls back to the standard presets while the catalog is
+   * still cold); otherwise the model's declared presets decide — none declared
+   * means the model does not reason and the thinking controls stay hidden.
+   */
+  let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
+  /** Thinking controls appear whenever the selected model declares presets —
+   *  the thinking level depends on the model, not on the caller's opt-in. */
+  let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
+  /**
+   * Fallback "current" level for the trigger when the caller does not track a
+   * thinking level yet: the model's declared default (custom providers) or its
+   * lowest preset, mirroring what selecting the model would apply.
+   */
+  let fallbackThinkingLevel = $derived(
+    baseUrlProviderStore.defaultThinkingLevel(
+      selectedProvider?.harnessId ?? harnessId,
+      providerId,
+      modelId
+    ) ?? resolveDefaultThinkingLevel(effectiveThinkingPresets, undefined, undefined)
+  )
+  let currentThinkingLabel = $derived(
+    effectiveThinkingPresets.find((preset) => preset.id === thinkingLevel)?.label ??
+      thinkingLevel ??
+      effectiveThinkingPresets.find((preset) => preset.id === fallbackThinkingLevel)?.label ??
+      effectiveThinkingPresets[0]?.label ??
+      ''
   )
   /**
    * Snapshot fallback so the trigger renders instantly, before any harness
@@ -215,12 +266,21 @@
           (words.length === 0 && provider.catalogStatus === 'unavailable')
       )
   })
+  /** Visual shell of the trigger — it hosts the model button and, when the
+   *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full items-center justify-between gap-1 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
+      ? 'flex w-full items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? 'flex items-center gap-1 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
-        : 'flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50'
+        ? 'flex items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+        : 'flex items-center rounded-lg transition-colors hover:bg-elevated'
+  )
+  let modelButtonClasses = $derived(
+    variant === 'field'
+      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
+      : variant === 'action'
+        ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
+        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground'
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
@@ -625,8 +685,27 @@
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+    const entry =
+      findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
+      findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
     onSelect(nextProviderId, nextModelId, nextHarnessId)
+    // Thinking level depends on the model: resolve a level the new model
+    // actually offers and surface it right after the model change, so parents
+    // never keep a stale level the model no longer supports.
+    if (thinkingLevel && entry?.model.thinkingPresets?.length) {
+      const defaultLevel = baseUrlProviderStore.defaultThinkingLevel(
+        nextHarnessId,
+        nextProviderId,
+        nextModelId
+      )
+      const resolved = resolveDefaultThinkingLevel(
+        entry.model.thinkingPresets,
+        defaultLevel,
+        thinkingLevel
+      )
+      if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
+    }
   }
 
   function toggleGroup(id: string): void {
@@ -684,32 +763,80 @@
 
 <div>
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
-    <Popover.Trigger
-      type="button"
-      class={triggerClasses}
-      aria-label={`Select model, currently ${selectedLabel}`}
-      title={`Select model — ${selectedLabel}`}
-      {disabled}
-    >
-      {#if selectedProvider}
-        <span class="flex shrink-0 items-center gap-0.5">
-          {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
-        </span>
-      {:else if selectedHarnessIcon}
-        {@render harnessIcon(harnessId)}
-      {:else}
-        <Cpu size={12} />
+    <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
+      <Popover.Trigger
+        class={modelButtonClasses}
+        aria-label={`Select model, currently ${selectedLabel}`}
+        title={`Select model — ${selectedLabel}`}
+        {disabled}
+      >
+        {#if selectedProvider}
+          <span class="flex shrink-0 items-center gap-0.5">
+            {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+          </span>
+        {:else if selectedHarnessIcon}
+          {@render harnessIcon(harnessId)}
+        {:else}
+          <Cpu size={12} />
+        {/if}
+        <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+        {#if fast}
+          <Zap
+            size={11}
+            class="shrink-0 text-accent"
+            fill="currentColor"
+            aria-label="Fast inference"
+          />
+        {/if}
+      </Popover.Trigger>
+      {#if supportsThinking}
+        <DropdownMenu.Root bind:open={thinkingMenuOpen}>
+          <DropdownMenu.Trigger
+            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            aria-label={`Thinking level: ${currentThinkingLabel}`}
+            title="Thinking level"
+            {disabled}
+          >
+            <Brain size={10} />
+            <span class="capitalize">{currentThinkingLabel}</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={12}
+              class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#each effectiveThinkingPresets as preset (preset.id)}
+                {@const active = thinkingLevel === preset.id}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                    ? 'text-primary'
+                    : ''}"
+                  title={preset.description ?? `Set thinking to ${preset.label}`}
+                  onSelect={() => {
+                    if (!active) onSelectThinking?.(preset.id as ThinkingLevel)
+                  }}
+                >
+                  {#if active}
+                    <Check size={11} class="shrink-0 text-primary" />
+                  {:else}
+                    <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                  {/if}
+                  <span class="flex flex-col">
+                    <span class="capitalize">{preset.label}</span>
+                    {#if preset.description}
+                      <span class="text-[10px] font-normal text-muted">{preset.description}</span>
+                    {/if}
+                  </span>
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       {/if}
-      <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
-      {#if fast}
-        <Zap
-          size={11}
-          class="shrink-0 text-accent"
-          fill="currentColor"
-          aria-label="Fast inference"
-        />
-      {/if}
-    </Popover.Trigger>
+    </div>
 
     <Popover.Portal>
       <Popover.Content
@@ -1034,7 +1161,7 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}

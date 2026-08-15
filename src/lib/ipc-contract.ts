@@ -551,6 +551,7 @@ export interface IpcInvokeContract {
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
     [projectId?: string, harnessId?: string, providerId?: string, modelId?: string],
     AgentToolCatalog
@@ -650,7 +651,23 @@ export interface IpcInvokeContract {
     ],
     AgentMessage
   >
+  'agent:steerTemporaryPrompt': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      text: string,
+      attachments: PromptAttachment[],
+      selections: string[]
+    ],
+    void
+  >
   'agent:closeTemporaryChat': Contract<[temporaryChatId: string], void>
+  'agent:abortTemporaryChat': Contract<
+    [projectId: string, threadId: string, temporaryChatId: string],
+    void
+  >
   'agent:getTemporaryChatStatus': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
@@ -1063,6 +1080,14 @@ export interface IpcInvokeContract {
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
   'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>
+  /**
+   * Open the OS notification-settings pane (System Settings on macOS, Settings
+   * on Windows). The target URL is a hard-coded, platform-specific allow-list
+   * constant resolved in the main process — never renderer-supplied — so it is
+   * safe to bypass the web-only external-URL validator. Returns false when the
+   * platform has no notification-settings deep link.
+   */
+  'notification:openSettings': Contract<[], boolean>
   'plan:approve': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:get': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:save': Contract<[projectId: string, threadId: string, content: string], Plan>
@@ -1204,6 +1229,10 @@ export interface IpcInvokeContract {
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
+  /** Reveal an existing absolute path (e.g. an agent-cited file outside the
+   *  project root) in the OS file manager. Existence is checked; no content is
+   *  read or opened. Returns false when the path does not exist. */
+  'shell:revealExternalPath': Contract<[path: string], boolean>
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'spec:addAnnotation': Contract<

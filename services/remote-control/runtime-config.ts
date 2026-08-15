@@ -13,3 +13,8 @@ export const remoteDatabasePath = resolve(
     (remoteProduction ? '/data/remote-control.sqlite' : 'data/remote-control.sqlite')
 )
 export const trustRemoteProxy = process.env['TRUST_PROXY'] === '1'
+
+const configuredConvexSiteUrl = process.env['CONVEX_SITE_URL']?.trim()
+export const convexSiteUrl = configuredConvexSiteUrl
+  ? new URL(configuredConvexSiteUrl).origin
+  : 'http://127.0.0.1:3211'
