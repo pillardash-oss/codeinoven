@@ -95,6 +95,7 @@ interface CodexAppServerTurn {
 }
 
 interface CodexCompactionRun {
+  host: CodexAppServerHost
   session: PersistentCliSession
   messageId: string
   basePart: Extract<AgentPart, { type: 'compaction' }>
@@ -104,6 +105,7 @@ interface CodexCompactionRun {
 }
 
 interface CodexContextUsageWaiter {
+  host: CodexAppServerHost
   resolve: (usage: ReturnType<typeof mapCodexUsage>) => void
   timer: ReturnType<typeof setTimeout>
 }
@@ -233,8 +235,10 @@ export class CodexDriver extends PersistentCliDriver {
   private activeTurns = new Map<string, CodexAppServerTurn>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
-  private host: CodexAppServerHost | null = null
-  private hostStarting: Promise<CodexAppServerHost> | null = null
+  /** Resident app-server hosts keyed by project working directory so the
+   *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
+  private hostsByProjectPath = new Map<string, CodexAppServerHost>()
+  private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
 
   protected async ensureCliReady(): Promise<void> {
     try {
@@ -424,12 +428,12 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
-    this.stopResidentHostIfIdle()
+    this.stopResidentHostForPathIfIdle(projectPath)
   }
 
   override releaseProjectResources(projectPath: string): void {
     super.releaseProjectResources(projectPath)
-    this.stopResidentHostIfIdle()
+    this.stopResidentHostForPathIfIdle(projectPath)
   }
 
   override dispose(): void {
@@ -447,10 +451,11 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     this.contextUsageByThreadId.clear()
-    const host = this.host
-    this.host = null
-    this.hostStarting = null
-    if (host) this.stopAppServerHost(host, 'Codex driver disposed')
+    for (const host of this.hostsByProjectPath.values()) {
+      this.stopAppServerHost(host, 'Codex driver disposed')
+    }
+    this.hostsByProjectPath.clear()
+    this.hostsStartingByProjectPath.clear()
     super.dispose()
   }
 
@@ -465,18 +470,16 @@ export class CodexDriver extends PersistentCliDriver {
     if (!host.child.killed) host.child.kill()
   }
 
-  private stopResidentHostIfIdle(): void {
-    const host = this.host
-    if (!host || this.hostStarting) return
-    if (
-      this.activeTurns.size > 0 ||
-      this.compactionsByThreadId.size > 0 ||
-      this.contextUsageByThreadId.size > 0 ||
+  private stopResidentHostForPathIfIdle(projectPath: string): void {
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (!host || this.hostsStartingByProjectPath.has(projectPath)) return
+    const busy =
+      [...this.activeTurns.values()].some((active) => active.host === host) ||
+      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
+      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
       host.pending.size > 0
-    ) {
-      return
-    }
-    this.host = null
+    if (busy) return
+    this.hostsByProjectPath.delete(projectPath)
     this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
   }
 
@@ -519,32 +522,37 @@ export class CodexDriver extends PersistentCliDriver {
     projectPath: string,
     observerSessionId?: string
   ): Promise<CodexAppServerHost> {
-    if (this.host && !this.host.stopped) {
+    const existing = this.hostsByProjectPath.get(projectPath)
+    if (existing && !existing.stopped) {
       if (observerSessionId) {
         this.observeHarnessProcess(
           observerSessionId,
-          this.host.child,
+          existing.child,
           'codex app-server',
           projectPath
         )
       }
-      return this.host
+      return existing
     }
-    if (this.hostStarting) return this.hostStarting
-    const starting = (async (): Promise<CodexAppServerHost> => {
+    const starting = this.hostsStartingByProjectPath.get(projectPath)
+    if (starting) return starting
+    const promise = (async (): Promise<CodexAppServerHost> => {
       const host = await this.createAppServerHost(projectPath, observerSessionId)
-      this.host = host
+      this.hostsByProjectPath.set(projectPath, host)
       return host
     })()
-    this.hostStarting = starting
+    this.hostsStartingByProjectPath.set(projectPath, promise)
     try {
-      return await starting
+      return await promise
     } catch (error) {
-      if (this.host && !this.host.child.killed) this.host.child.kill()
-      this.host = null
+      const host = this.hostsByProjectPath.get(projectPath)
+      if (host && !host.child.killed) host.child.kill()
+      this.hostsByProjectPath.delete(projectPath)
       throw error
     } finally {
-      if (this.hostStarting === starting) this.hostStarting = null
+      if (this.hostsStartingByProjectPath.get(projectPath) === promise) {
+        this.hostsStartingByProjectPath.delete(projectPath)
+      }
     }
   }
 
@@ -552,7 +560,7 @@ export class CodexDriver extends PersistentCliDriver {
     let temporaryHost: CodexAppServerHost | null = null
     try {
       const host =
-        this.host || this.hostStarting
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
       const discovered: ProviderModel[] = []
@@ -894,24 +902,27 @@ export class CodexDriver extends PersistentCliDriver {
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
-    const resident = this.host === host
-    if (resident) this.host = null
+    for (const [projectPath, candidate] of this.hostsByProjectPath) {
+      if (candidate !== host) continue
+      this.hostsByProjectPath.delete(projectPath)
+      break
+    }
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(error))
     }
     host.pending.clear()
-    if (resident) {
-      for (const compaction of this.compactionsByThreadId.values()) {
-        clearTimeout(compaction.timer)
-        compaction.reject(new Error(error))
-      }
-      this.compactionsByThreadId.clear()
-      for (const waiter of this.contextUsageByThreadId.values()) {
-        clearTimeout(waiter.timer)
-        waiter.resolve(undefined)
-      }
-      this.contextUsageByThreadId.clear()
+    for (const [threadId, compaction] of this.compactionsByThreadId) {
+      if (compaction.host !== host) continue
+      clearTimeout(compaction.timer)
+      this.compactionsByThreadId.delete(threadId)
+      compaction.reject(new Error(error))
+    }
+    for (const [threadId, waiter] of this.contextUsageByThreadId) {
+      if (waiter.host !== host) continue
+      clearTimeout(waiter.timer)
+      this.contextUsageByThreadId.delete(threadId)
+      waiter.resolve(undefined)
     }
     const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
     await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error)))
@@ -1090,6 +1101,7 @@ export class CodexDriver extends PersistentCliDriver {
         reject(new Error('Codex compaction timed out'))
       }, CODEX_COMPACTION_TIMEOUT_MS)
       this.compactionsByThreadId.set(nativeThreadId, {
+        host,
         session,
         messageId,
         basePart,
@@ -1182,7 +1194,7 @@ export class CodexDriver extends PersistentCliDriver {
     let temporaryHost: CodexAppServerHost | null = null
     try {
       const host =
-        this.host || this.hostStarting
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
       const telemetry = mapCodexRateLimits(
@@ -1213,7 +1225,7 @@ export class CodexDriver extends PersistentCliDriver {
         this.contextUsageByThreadId.delete(nativeThreadId)
         resolve(undefined)
       }, CODEX_USAGE_TIMEOUT_MS)
-      this.contextUsageByThreadId.set(nativeThreadId, { resolve, timer })
+      this.contextUsageByThreadId.set(nativeThreadId, { host, resolve, timer })
     })
     try {
       await this.appServerRequest(host, 'thread/resume', { threadId: nativeThreadId })
