@@ -639,6 +639,9 @@ function replaceInlineMatch(
 function applyInlineRule(root: HTMLElement): boolean {
   const selection = selectionInside(root)
   if (!selection?.isCollapsed || !(selection.anchorNode instanceof Text)) return false
+  // Markdown inline formatting must never fire inside a code block — code like
+  // `const x = `foo`` or `**not bold**` has to stay literal.
+  if (selection.anchorNode.parentElement?.closest?.('[data-editor-codeblock]')) return false
 
   const textNode = selection.anchorNode
   const endOffset = selection.anchorOffset
