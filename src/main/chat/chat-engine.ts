@@ -186,6 +186,7 @@ import {
   validateMermaidOutput,
   type MermaidValidationFailure
 } from './mermaid-output-validator'
+import { concludesCapabilityUnavailable, searchNudgePrompt } from './not-available-detector'
 
 /**
  * Workflow instruction injected into every prompt when Engineering is
@@ -1148,6 +1149,8 @@ export class ChatEngine {
   private pendingMemoryDecisions = new Map<string, PendingMemoryDecision>()
   /** Number of automatic Mermaid correction prompts already issued for the active turn. */
   private mermaidRepairAttempts = new Map<string, number>()
+  /** One automatic utility-search nudge per active turn, per session. */
+  private searchNudgeAttempts = new Map<string, number>()
   /** One provider-backed repair attempt per incomplete persisted session per app run. */
   private historyRecoveryAttempts = new Set<string>()
   private historyRecoveryTasks = new Map<string, Promise<void>>()
@@ -2899,6 +2902,7 @@ export class ChatEngine {
     this.outboundMessageIdsBySession.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
+    this.searchNudgeAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
     this.clearPendingQuestionsForSession(sessionId)
@@ -4500,6 +4504,7 @@ export class ChatEngine {
     if (origin === 'user') {
       this.mermaidRepairAttempts.delete(sessionId)
       this.incompleteTurnRecoveryAttempts.delete(sessionId)
+      this.searchNudgeAttempts.delete(sessionId)
     }
     // A new turn resolves any pending auto-resume for this session — the user
     // (or a previous scheduled retry) is driving it again.
@@ -13666,6 +13671,63 @@ export class ChatEngine {
         }
         return
       }
+      // The agent concluded a capability/tool/MCP does not exist, yet never
+      // used utility_search despite the gateway exposing it this turn. Nudge it
+      // (feedback, not an error/warning) to search — the app may host the
+      // capability as an on-demand utility. Mirrors the Mermaid repair pattern:
+      // finalize the checkpoint, clean the turn utilities, then continue with
+      // an internal prompt. One nudge per turn so it cannot loop.
+      if (
+        !failure &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        turnAssistant &&
+        thread?.settings &&
+        (this.searchNudgeAttempts.get(sessionId) ?? 0) < 1
+      ) {
+        const utilityTurn = this.utilityTurns.get(sessionId)
+        const searchExposed = Boolean(
+          utilityTurn &&
+          (utilityTurn.gateway.instructions.trim() || utilityTurn.gateway.directInstructions.trim())
+        )
+        if (searchExposed) {
+          const claimedUnavailable = concludesCapabilityUnavailable(assistantText(turnAssistant))
+          const searched = this.utilityOrchestration.hasSearched(utilityTurn.gateway.id)
+          if (claimedUnavailable && !searched) {
+            this.searchNudgeAttempts.set(sessionId, 1)
+            await this.finishCheckpoint(sessionId, info, 'completed')
+            await this.cleanupTurnUtilities(sessionId)
+            turnUtilitiesCleaned = true
+            if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+            try {
+              await this.sendPrompt(
+                info.projectId,
+                info.threadId,
+                thread.settings,
+                searchNudgePrompt(claimedUnavailable),
+                [],
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                'internal'
+              )
+            } catch (error) {
+              this.pendingMemoryDecisions.delete(sessionId)
+              const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+              await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+              await this.broadcastThreadSessionError(
+                info.projectId,
+                info.threadId,
+                sessionId,
+                issue
+              )
+            }
+            return
+          }
+        }
+      }
       const persistedRevision = this.pendingSpecRevisions.has(sessionId)
         ? null
         : await this.readPendingSpecRevision(info.projectId, info.threadId)
@@ -14312,6 +14374,7 @@ export class ChatEngine {
     this.pendingMemoryDecisions.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
+    this.searchNudgeAttempts.delete(sessionId)
     this.pendingSpecRevisions.delete(sessionId)
     this.pendingBrainstormTurns.delete(sessionId)
     try {

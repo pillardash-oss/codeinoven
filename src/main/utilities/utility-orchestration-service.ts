@@ -285,6 +285,11 @@ export class UtilityOrchestrationService {
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
+  /** Whether the agent has called utility_search at least once this turn. */
+  hasSearched(gatewayId: string): boolean {
+    return this.turns.get(gatewayId)?.state.searched === true
+  }
+
   private async cleanupTurn(id: string): Promise<void> {
     const turn = this.turns.get(id)
     if (!turn) return
