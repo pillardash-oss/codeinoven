@@ -2,6 +2,7 @@
   import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
+  import { patchSelectionCopy } from '$lib/terminal/selection-copy'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -56,6 +57,7 @@
     try {
       const ghostty = await Ghostty.load()
       if (destroyed) return
+      patchSelectionCopy()
       const terminal = new Terminal({
         ghostty,
         cursorBlink: true,

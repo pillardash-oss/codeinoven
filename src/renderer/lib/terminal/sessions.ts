@@ -2,6 +2,7 @@ import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
+import { patchSelectionCopy } from './selection-copy'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
@@ -131,6 +132,7 @@ class TerminalSessionManager {
 
   private async create(id: string): Promise<TerminalSession> {
     const ghostty = await this.getRuntime()
+    patchSelectionCopy()
     const term = new Terminal({
       ghostty,
       cursorBlink: true,
