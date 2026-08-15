@@ -670,55 +670,6 @@
     contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
   }
 
-  let sidebarActions = $derived.by(() => {
-    if (!selectedThread) return []
-    const actions = [
-      {
-        id: 'sources',
-        label: 'Sources',
-        description: 'View sources attached to this conversation',
-        onSelect: openSourcesTab
-      },
-      ...(activeProject?.source === 'local' && activeProject.path
-        ? [
-            {
-              id: 'files',
-              label: 'Files',
-              description: 'Browse and edit project files',
-              onSelect: () => void openFiles()
-            },
-            {
-              id: 'diff',
-              label: 'Changes',
-              description: 'Review changes from completed runs',
-              onSelect: openDiff
-            }
-          ]
-        : []),
-      {
-        id: 'cloud-deployments',
-        label: 'Cloud Deployments',
-        description: 'Monitor your cloud deployments',
-        onSelect: openCloudDeploymentsTab
-      },
-      {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
-      }
-    ]
-    if (import.meta.env.DEV) {
-      actions.push({
-        id: 'debugger',
-        label: 'Debugger',
-        description: 'Inspect agent requests',
-        onSelect: openDebugger
-      })
-    }
-    return actions
-  })
-
   // ─── Context dock (right rail) ───────────────────────────────────────────
 
   /** Whether `kind` is the panel currently on screen in the right sidebar. */
@@ -901,19 +852,6 @@
       part.activity
     )
   }
-
-  /** Actions offered inside the bottom terminal dock — only new shells belong there. */
-  let terminalDockActions = $derived.by(() => {
-    if (!selectedThread) return []
-    return [
-      {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
-      }
-    ]
-  })
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
@@ -3304,7 +3242,20 @@
             {/key}
           {/if}
         {/snippet}
-        <div class="relative min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+        {#snippet contextSidebarFooter()}
+          {#if workspaceState.selectedThread && threadNotesState.has(workspaceState.selectedThread.id)}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded-md border border-warning/30 bg-surface text-warning transition-colors hover:bg-warning/10"
+              aria-label="Open the note for {workspaceState.selectedThread.title}"
+              title="Note available — open the thread note"
+              onclick={() => (dockNoteThread = workspaceState.selectedThread)}
+            >
+              <StickyNote size={14} />
+            </button>
+          {/if}
+        {/snippet}
+        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
           <ContextSidebar
             tabs={contextSidebarState.sidebarTabs}
             activeTabId={contextSidebarState.sidebarActiveTabId}
@@ -3312,8 +3263,7 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            actions={sidebarActions}
-            hideAddButton={mode === 'chats'}
+            footer={contextSidebarFooter}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3323,18 +3273,8 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onNewTerminal={openNewTerminal}
           />
-          {#if workspaceState.selectedThread && threadNotesState.has(workspaceState.selectedThread.id)}
-            <button
-              type="button"
-              class="absolute bottom-2 right-2 z-10 flex h-8 w-8 items-center justify-center rounded-lg border border-warning/30 bg-surface text-warning shadow-lg transition-colors hover:bg-warning/10"
-              aria-label="Open the note for {workspaceState.selectedThread.title}"
-              title="Note available — open the thread note"
-              onclick={() => (dockNoteThread = workspaceState.selectedThread)}
-            >
-              <StickyNote size={14} />
-            </button>
-          {/if}
         </div>
       {/if}
       {#if terminalDockVisible}
@@ -3363,7 +3303,6 @@
             height={contextSidebarState.terminalHeight}
             placement="bottom"
             content={terminalDockContent}
-            actions={terminalDockActions}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3374,6 +3313,7 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
+            onNewTerminal={openNewTerminal}
           />
         </div>
       {/if}
