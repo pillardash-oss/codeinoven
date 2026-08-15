@@ -739,7 +739,9 @@
   let contextPanelRows = $derived(
     terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
-      : 'minmax(0, 1fr)'
+      : terminalDockCollapsed
+        ? 'minmax(0, 1fr) 32px'
+        : 'minmax(0, 1fr)'
   )
 
   function openTabFullscreen(tabId: string): void {
@@ -2894,7 +2896,7 @@
   {/if}
 
   <!-- Main Content -->
-  <section class="relative min-w-0 flex-1 overflow-hidden">
+  <section class="min-w-0 flex-1 overflow-hidden">
     <div
       class="grid h-full min-h-0 min-w-0"
       style:grid-template-columns={contextPanelColumns}
@@ -3125,7 +3127,9 @@
       {#if terminalDockCollapsed}
         <button
           type="button"
-          class="absolute inset-x-0 bottom-0 z-30 flex h-8 w-full shrink-0 items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          class="flex h-8 min-h-0 w-full items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          style:grid-column="1 / -1"
+          style:grid-row="2"
           title="Expand terminal"
           aria-label="Expand terminal"
           onclick={() => contextSidebarState.toggleTerminalDock()}
