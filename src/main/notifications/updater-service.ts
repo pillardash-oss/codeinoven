@@ -173,17 +173,24 @@ export class UpdaterService {
 
   /**
    * Point the auto-updater at the configured release channel before checking.
-   * `nightly` resolves the GitHub provider's `latest-nightly.yml` feed; the
-   * default (stable) uses the published release feed.
+   * `nightly` resolves the GitHub provider's `nightly-*.yml` feed; the default
+   * (stable) uses the published release feed.
    */
   private async applyConfiguredChannel(): Promise<void> {
     try {
       const config = await this.storage.getConfig()
-      const channel = config.updateChannel === 'nightly' ? 'nightly' : null
+      const nightly = config.updateChannel === 'nightly'
+      const channel = nightly ? 'nightly' : null
       if (autoUpdater.channel !== channel) {
         autoUpdater.channel = channel
         Logger.dev('Updater: channel set to', channel ?? 'latest')
       }
+      // Nightlies are published as semver-lower prereleases on a non-latest tag
+      // (`vX.Y.Z-nightly.N`), so the GitHub provider only finds their feed file
+      // when prereleases are allowed. Without this it resolves the latest stable
+      // release, whose artifacts are `latest-*.yml`, and 404s on `nightly-*.yml`.
+      // Re-assert every check so opting back out to stable clears it too.
+      autoUpdater.allowPrerelease = nightly
     } catch (error: unknown) {
       Logger.error('Updater: failed to read update channel', error)
     }
