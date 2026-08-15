@@ -88,9 +88,11 @@ interface CodexAppServerHost {
 interface CodexAppServerTurn {
   host: CodexAppServerHost
   session: PersistentCliSession
+  startParams?: Record<string, unknown>
   nativeThreadId?: string
   turnId?: string
   failure?: string
+  summaryFallbackAttempted?: boolean
   finished: boolean
 }
 
@@ -231,6 +233,7 @@ export class CodexDriver extends PersistentCliDriver {
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
+  private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
   /** Resident app-server hosts keyed by project working directory so the
@@ -356,7 +359,7 @@ export class CodexDriver extends PersistentCliDriver {
       session.nativeSessionId = nativeThreadId
       await this.persistSession(session)
 
-      const turnResult = await this.appServerRequest(host, 'turn/start', {
+      const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
         input: await this.codexInput(options.text, options.systemPrompt, options.attachments),
@@ -370,9 +373,13 @@ export class CodexDriver extends PersistentCliDriver {
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
         effort: codexEffort(options.settings.thinkingLevel),
-        summary: 'none',
+        ...(this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
+          ? { summary: 'none' }
+          : {}),
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
-      })
+      }
+      active.startParams = turnParams
+      const turnResult = await this.appServerRequest(host, 'turn/start', turnParams)
       const turn = recordValue(turnResult['turn'])
       const turnId = stringValue(turn?.['id'])
       if (!turnId) throw new Error('Codex app-server did not return an active turn ID')
@@ -756,7 +763,45 @@ export class CodexDriver extends PersistentCliDriver {
       status === 'failed'
         ? (stringValue(error?.['message']) ?? active.failure ?? 'Codex turn failed')
         : undefined
+    const unsupportedSummary = [message, active.failure].some(
+      (candidate) => candidate !== undefined && isUnsupportedReasoningSummary(candidate)
+    )
+    if (unsupportedSummary && !active.summaryFallbackAttempted) {
+      void this.retryWithoutReasoningSummary(active)
+      return
+    }
     void this.completeAppServerTurn(active, message)
+  }
+
+  private async retryWithoutReasoningSummary(active: CodexAppServerTurn): Promise<void> {
+    const startParams = active.startParams
+    if (!startParams) {
+      await this.completeAppServerTurn(active, active.failure ?? 'Codex turn failed')
+      return
+    }
+    active.summaryFallbackAttempted = true
+    active.failure = undefined
+    const model = stringValue(startParams['model'])
+    if (model) this.modelsWithoutReasoningSummaries.add(model)
+    const clientUserMessageId = stringValue(startParams['clientUserMessageId'])
+    try {
+      const result = await this.appServerRequest(active.host, 'turn/start', {
+        ...startParams,
+        ...(clientUserMessageId
+          ? { clientUserMessageId: `${clientUserMessageId}:summary-fallback` }
+          : {}),
+        summary: 'none'
+      })
+      const turn = recordValue(result['turn'])
+      const turnId = stringValue(turn?.['id'])
+      if (!turnId) throw new Error('Codex app-server did not return an active fallback turn ID')
+      active.turnId = turnId
+    } catch (error) {
+      await this.completeAppServerTurn(
+        active,
+        error instanceof Error ? error.message : 'Codex fallback turn could not start'
+      )
+    }
   }
 
   private activeTurnForNotification(
@@ -1403,6 +1448,14 @@ function codexEffort(value: ThreadSettings['thinkingLevel']): string {
   // cross-harness alias used by the app and by lightweight internal turns.
   if (value === 'minimal') return 'low'
   return value
+}
+
+function isUnsupportedReasoningSummary(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('reasoning.summary') &&
+    (normalized.includes('unsupported parameter') || normalized.includes('unsupported_parameter'))
+  )
 }
 
 function normalizeAppServerItem(
