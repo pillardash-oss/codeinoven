@@ -257,13 +257,13 @@ export class UtilityOrchestrationService {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: hasOnDemand
-        ? `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first; only after searching and confirming no relevant result may you conclude that it does not exist. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
+        ? `A minimal app gateway is available. When you need a skill or MCP that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first. The search result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
         : '',
       directInstructions: [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
-        'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}.',
+        'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
         'Describe images directly: POST /image_descriptor with {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}.',
@@ -375,14 +375,21 @@ export class UtilityOrchestrationService {
         description: utility.description,
         active: state.activated.has(utility.id)
       }))
+    // An explicit, unambiguous verdict the agent must honor: `true` means no
+    // eligible utility matched the query (or none is eligible at all), so it can
+    // confidently conclude the capability is not available in this session.
+    // This must be distinguished from an ambiguous empty array.
+    const notFound = query ? matches.length === 0 : ranked.length === 0
     await this.audit(state, 'utility.searched', {
       query,
       fallback,
+      notFound,
       resultIds: utilities.map(({ id }) => id)
     })
     return {
       utilities,
       fallback,
+      notFound,
       ...(fallback
         ? {
             message:
