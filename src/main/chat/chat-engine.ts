@@ -1667,12 +1667,39 @@ export class ChatEngine {
         )
     )
     ipcMain.handle(
+      'agent:steerTemporaryPrompt',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        temporaryChatId: string,
+        settings: ThreadSettings,
+        text: string,
+        attachments: PromptAttachment[],
+        selections?: string[]
+      ) =>
+        this.steerTemporaryPrompt(
+          projectId,
+          threadId,
+          temporaryChatId,
+          settings,
+          text,
+          attachments,
+          selections
+        )
+    )
+    ipcMain.handle(
       'agent:ensureAuditSession',
       (_, projectId: string, threadId: string, temporaryChatId: string, settings: ThreadSettings) =>
         this.ensureAuditSession(projectId, threadId, temporaryChatId, settings)
     )
     ipcMain.handle('agent:closeTemporaryChat', (_, temporaryChatId: string) =>
       this.closeTemporaryChat(temporaryChatId)
+    )
+    ipcMain.handle(
+      'agent:abortTemporaryChat',
+      (_, projectId: string, threadId: string, temporaryChatId: string) =>
+        this.abortTemporaryChat(projectId, threadId, temporaryChatId)
     )
     ipcMain.handle('agent:getTemporaryChatStatus', (_, temporaryChatId: string) =>
       this.getTemporaryChatStatus(temporaryChatId)
@@ -5048,6 +5075,126 @@ export class ChatEngine {
       this.clearCompletionWaiter(temporary.sessionId)
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
       throw error
+    }
+  }
+
+  /**
+   * Deliver a queued message into the live temporary chat session as an
+   * intervention, without starting a new turn — the counterpart of the main
+   * thread's `steerPrompt` for quick chats. The session must still be running
+   * (`working`); otherwise the message is rejected so the renderer restores it
+   * to its queue. Mirrors `sendTemporaryPrompt` for validation, selection
+   * formatting, and read-only session semantics.
+   */
+  async steerTemporaryPrompt(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[],
+    selections?: string[]
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
+    settings = validateThreadSettings(settings)
+    text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    if (!Array.isArray(attachments)) {
+      throw new TypeError('Temporary chat attachments must be an array')
+    }
+    const validatedAttachments = attachments.map((attachment) => {
+      const url = validateBoundedString(attachment.url, 'Attachment URL', 1, 20_000)
+      const mime = validateBoundedString(attachment.mime, 'Attachment MIME', 1, 512)
+      return {
+        mime,
+        url,
+        ...(attachment.filename
+          ? { filename: validateBoundedString(attachment.filename, 'Attachment filename', 1, 1024) }
+          : {})
+      }
+    })
+    const selectedTexts = Array.isArray(selections)
+      ? selections
+          .map((selection) =>
+            validateBoundedString(selection, 'Selected response text', 1, 100_000)
+          )
+          .filter(Boolean)
+      : []
+
+    const temporary = this.temporaryChats.get(temporaryChatId)
+    if (!temporary || temporary.kind !== 'chat') {
+      throw new Error('The temporary chat session is no longer active')
+    }
+    if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
+      throw new Error('Temporary chat does not belong to this thread')
+    }
+    if (temporary.driverId !== settings.harnessId) {
+      throw new Error('The temporary chat harness cannot be changed after its first message')
+    }
+    if (this.sessionStatuses.get(temporary.sessionId)?.state !== 'working') {
+      throw new Error('The quick chat turn finished before the steer message could be delivered')
+    }
+    this.refreshTemporaryChatExpiry(temporary)
+
+    const driver = this.drivers.get(temporary.driverId)
+    if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
+    if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
+      throw new Error(`${driver.name} does not expose native active-turn steering`)
+    }
+    assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
+    const promptText = selectedTexts.length
+      ? `Referenced response selections:\n${selectedTexts
+          .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
+          .join('\n\n')}\n\nUser request:\n${text}`
+      : text
+    const steerOptions = {
+      sessionId: temporary.sessionId,
+      text: promptText,
+      attachments: validatedAttachments,
+      userMessageId: createMessageId()
+    }
+    if (temporary.isolated && driver instanceof OpenCodeDriver) {
+      await driver.steerPrompt(temporary.projectPath, steerOptions, temporary.isolated)
+    } else {
+      await driver.steerPrompt(temporary.projectPath, steerOptions)
+    }
+  }
+
+  /**
+   * Abort the running temporary chat turn (the user clicked the stop button).
+   * The session itself stays alive so a later message can reuse it. Rejects the
+   * pending completion waiter so the in-flight send settles immediately.
+   */
+  async abortTemporaryChat(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string
+  ): Promise<void> {
+    this.touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
+    const temporary = this.temporaryChats.get(temporaryChatId)
+    if (!temporary || temporary.kind !== 'chat') return
+    if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
+      throw new Error('Temporary chat does not belong to this thread')
+    }
+    if (this.sessionStatuses.get(temporary.sessionId)?.state !== 'working') return
+    this.userAbortedSessions.add(temporary.sessionId)
+    this.rejectCompletionWaiter(temporary.sessionId, 'Temporary chat stopped by user')
+    const driver = this.drivers.get(temporary.driverId)
+    if (driver) {
+      try {
+        if (temporary.isolated && driver instanceof OpenCodeDriver) {
+          await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
+        } else {
+          await driver.abort(temporary.projectPath, temporary.sessionId)
+        }
+      } finally {
+        this.sessionStatuses.set(temporary.sessionId, { state: 'idle' })
+      }
     }
   }
 

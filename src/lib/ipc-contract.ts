@@ -650,7 +650,23 @@ export interface IpcInvokeContract {
     ],
     AgentMessage
   >
+  'agent:steerTemporaryPrompt': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      text: string,
+      attachments: PromptAttachment[],
+      selections: string[]
+    ],
+    void
+  >
   'agent:closeTemporaryChat': Contract<[temporaryChatId: string], void>
+  'agent:abortTemporaryChat': Contract<
+    [projectId: string, threadId: string, temporaryChatId: string],
+    void
+  >
   'agent:getTemporaryChatStatus': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
