@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { MessagesSquare } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -47,11 +48,13 @@
     DEFAULT_SCOPE_BUCKET_ID,
     DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
     type AppConfig,
     type AppConfigPatch,
     type Project,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
   import type {
     AgentNotificationPayload,
@@ -92,6 +95,11 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  let threadSearchPaletteOpen = $state(false)
+  let threadSearchActions = $state<ActionDefinition[]>([])
+  let threadSearchLoading = $state(false)
+  let threadSearchTimer: number | null = null
+  let threadSearchRequest = 0
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
@@ -99,7 +107,12 @@
     path: string
   }
 
+  interface ThreadSearchTarget {
+    thread: Thread
+  }
+
   const fileSearchTargets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
+  const threadSearchTargets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   const applicationSource = {
     id: 'application',
@@ -186,6 +199,9 @@
   let paletteContextActions = $derived.by((): ActionDefinition[] => {
     const workspaceVisible =
       activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
+    const hasLocalProjects = scopeState.projectRecords.some(
+      (project) => !project.hidden && project.source === 'local' && project.path
+    )
     const actions: ActionDefinition[] = [
       {
         id: 'app:new-project',
@@ -205,11 +221,7 @@
       }
     ]
 
-    if (
-      scopeState.projectRecords.some(
-        (project) => !project.hidden && project.source === 'local' && project.path
-      )
-    ) {
+    if (hasLocalProjects) {
       actions.push({
         id: 'app:file-search',
         title: 'Search files across projects',
@@ -279,6 +291,19 @@
           keywords: ['citations', 'references', 'attachments']
         }
       )
+    }
+
+    if (hasLocalProjects) {
+      // Unshifted last so it always lands first in the palette.
+      actions.unshift({
+        id: 'app:thread-search',
+        title: 'Search threads across projects',
+        description: 'Find a conversation by title or message content in any project',
+        category: 'thread',
+        source: applicationSource,
+        icon: MessagesSquare,
+        keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
+      })
     }
 
     return actions
@@ -522,6 +547,9 @@
       case 'app:file-search':
         openFileSearchPalette()
         return
+      case 'app:thread-search':
+        openThreadSearchPalette()
+        return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
@@ -599,6 +627,10 @@
     if (fileSearchPaletteOpen) {
       fileSearchPaletteOpen = false
       resetFileSearch()
+    }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
     }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
@@ -693,6 +725,105 @@
     fileSearchPaletteOpen = false
     navigate('projects')
     workspaceState.requestProjectFileOpen(target.projectId, target.path)
+  }
+
+  function resetThreadSearch(): void {
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    threadSearchRequest++
+    threadSearchLoading = false
+    threadSearchActions = []
+    threadSearchTargets.clear()
+  }
+
+  function openThreadSearchPalette(): void {
+    resetThreadSearch()
+    threadSearchPaletteOpen = true
+  }
+
+  async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
+    let results: ThreadSearchResult[]
+    try {
+      results = await invoke('threads:search', query, { limit: 50 })
+    } catch {
+      results = []
+    }
+    if (request !== threadSearchRequest || !threadSearchPaletteOpen) return
+
+    const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
+    const actions: ActionDefinition[] = []
+    for (const result of results) {
+      const thread = result.thread
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const project = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
+      const id = actionId(`thread:${thread.projectId}:${thread.id}`)
+      targets.set(id, { thread })
+      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
+      actions.push({
+        id,
+        title: thread.title,
+        description: snippet
+          ? `${project?.name ?? thread.projectId} · ${snippet}`
+          : (project?.name ?? thread.projectId),
+        category: 'thread',
+        source: {
+          id: `project:${thread.projectId}`,
+          label: project?.name ?? thread.projectId,
+          kind: 'app'
+        },
+        icon: MessagesSquare,
+        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
+      })
+    }
+    threadSearchTargets.clear()
+    for (const [id, target] of targets) threadSearchTargets.set(id, target)
+    threadSearchActions = actions.slice(0, 60)
+    threadSearchLoading = false
+  }
+
+  function handleThreadSearchQuery(query: string): void {
+    if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
+    const request = ++threadSearchRequest
+    const normalized = query.trim()
+    if (normalized.length < 2) {
+      threadSearchLoading = false
+      threadSearchActions = []
+      threadSearchTargets.clear()
+      return
+    }
+
+    threadSearchLoading = true
+    threadSearchTimer = window.setTimeout(() => {
+      threadSearchTimer = null
+      void searchThreadsAcrossProjects(normalized, request)
+    }, 160)
+  }
+
+  async function openThreadFromSearch(thread: Thread): Promise<void> {
+    if (thread.projectId === INBOX_PROJECT_ID) {
+      navigate('chats')
+    } else {
+      navigate('projects')
+    }
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+    workspaceState.openThread(thread, project)
+    void scopeState.ensureBoardLoaded(thread.projectId)
+    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
+    scopeState.updateThread(updated)
+    workspaceState.updateThread(updated)
+  }
+
+  function handleThreadSearchSelection(selection: ActionSelection): void {
+    const target = threadSearchTargets.get(selection.action.id)
+    if (!target) return
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    void openThreadFromSearch(target.thread)
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
@@ -950,6 +1081,11 @@
       resetFileSearch()
       return
     }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
+      return
+    }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
       return
@@ -1071,8 +1207,7 @@
 
       // When the file tree has focus, Cmd/Ctrl+N creates a new file there
       // instead of starting a new thread. The tree's own handler manages it.
-      const active =
-        document.activeElement instanceof Element ? document.activeElement : null
+      const active = document.activeElement instanceof Element ? document.activeElement : null
       if (active?.closest('[data-region="file-tree"]')) return
 
       if (activeView === 'scope') {
@@ -1231,6 +1366,25 @@
         onClose={() => {
           fileSearchPaletteOpen = false
           resetFileSearch()
+        }}
+      />
+    {/await}
+  {/if}
+  {#if threadSearchPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
+      <ThreadSearchPalette
+        open={threadSearchPaletteOpen}
+        actions={threadSearchActions}
+        title="Search threads across projects"
+        placeholder="Search thread titles and messages across all projects…"
+        emptyLabel={threadSearchLoading
+          ? 'Searching threads…'
+          : 'Type at least two characters to search all projects'}
+        onQueryChange={handleThreadSearchQuery}
+        onSelect={handleThreadSearchSelection}
+        onClose={() => {
+          threadSearchPaletteOpen = false
+          resetThreadSearch()
         }}
       />
     {/await}

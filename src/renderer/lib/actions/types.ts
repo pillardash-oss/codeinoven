@@ -1,3 +1,5 @@
+import type { Component } from 'svelte'
+
 export type ActionId = `${string}:${string}`
 
 export type ActionCategory =
@@ -10,6 +12,7 @@ export type ActionCategory =
   | 'mcp'
   | 'target'
   | 'file'
+  | 'thread'
   | 'other'
 
 export type ActionSourceKind = 'app' | 'harness' | 'plugin'
@@ -29,6 +32,8 @@ export interface ActionDefinition {
   keywords?: readonly string[]
   shortcut?: readonly string[]
   disabledReason?: string
+  /** Optional lucide icon rendered in place of the category letter badge. */
+  icon?: Component
 }
 
 export interface ActionSelection {
