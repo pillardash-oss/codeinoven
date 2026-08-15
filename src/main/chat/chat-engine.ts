@@ -13901,11 +13901,10 @@ export class ChatEngine {
         (this.searchNudgeAttempts.get(sessionId) ?? 0) < 1
       ) {
         const utilityTurn = this.utilityTurns.get(sessionId)
-        const searchExposed = Boolean(
+        if (
           utilityTurn &&
           (utilityTurn.gateway.instructions.trim() || utilityTurn.gateway.directInstructions.trim())
-        )
-        if (searchExposed) {
+        ) {
           const claimedUnavailable = concludesCapabilityUnavailable(assistantText(turnAssistant))
           const searched = this.utilityOrchestration.hasSearched(utilityTurn.gateway.id)
           const answerText = assistantText(turnAssistant)
@@ -15354,6 +15353,7 @@ export class ChatEngine {
           ? await driver.loadMessages(projectPath, sessionId, isolated)
           : await driver.loadMessages(projectPath, sessionId)
       response = [...messages].reverse().find((candidate) => candidate.role === 'assistant')
+      if (!response) return false
       const verdict = assistantText(response).trim()
       return /^yes\b/im.test(verdict)
     } catch (error) {
