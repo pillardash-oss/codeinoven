@@ -3,6 +3,7 @@
   import type { MemoryExportKind, MemoryImportPreview } from '$shared/types'
   import { Download, Loader2, Upload } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
+  import ThreadDropdown from '../shared/ThreadDropdown.svelte'
 
   interface Props {
     variant: 'settings' | 'sidebar'
@@ -185,37 +186,29 @@
     </div>
   </section>
 {:else}
-  <div class="mb-4 flex items-center gap-2">
-    <button
-      class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-      type="button"
-      disabled={busy}
-      title="Export this project's memory to a JSON file"
-      onclick={() => void exportMemory()}
-    >
-      {#if busy}
-        <Loader2 size={13} class="animate-spin" />
-      {:else}
-        <Download size={13} />
-      {/if}
-      Export
-    </button>
-    <button
-      class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-      type="button"
-      disabled={busy}
-      title="Import a memory export file into this project"
-      onclick={() => void pickImport()}
-    >
-      <Upload size={13} />
-      Import
-    </button>
-    {#if error}
-      <p class="min-w-0 flex-1 truncate text-xs text-danger" role="alert">{error}</p>
-    {:else if message}
-      <p class="min-w-0 flex-1 truncate text-xs text-primary" role="status">{message}</p>
-    {/if}
-  </div>
+  <ThreadDropdown
+    items={[
+      {
+        label: 'Export memory',
+        icon: Download,
+        disabled: busy,
+        onClick: () => void exportMemory()
+      },
+      {
+        label: 'Import memory',
+        icon: Upload,
+        disabled: busy,
+        onClick: () => void pickImport()
+      }
+    ]}
+    title="Memory transfer"
+    ariaLabel="Export or import this project's memory"
+  />
+  {#if error}
+    <p class="mt-2 text-xs text-danger" role="alert">{error}</p>
+  {:else if message}
+    <p class="mt-2 text-xs text-primary" role="status">{message}</p>
+  {/if}
 {/if}
 
 {#if preview}

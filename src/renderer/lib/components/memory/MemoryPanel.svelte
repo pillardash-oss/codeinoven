@@ -665,7 +665,7 @@
     <!-- Fixed filters and actions -->
     <div class="shrink-0">
       <div class="mb-3 flex items-center gap-3 text-xs text-dimmed">
-        <span>{stats.total} entries</span>
+        <span>{stats.total} {stats.total === 1 ? 'entry' : 'entries'}</span>
         {#if variant === 'sidebar'}
           <span>{stats.enabled} enabled</span>
         {/if}
@@ -674,8 +674,8 @@
         {/if}
       </div>
 
-      <div class="mb-3 flex flex-wrap items-center gap-2">
-        <div class="relative min-w-[200px] flex-1">
+      <div class="mb-3 {variant === 'sidebar' ? 'space-y-2' : 'flex flex-wrap items-center gap-2'}">
+        <div class="relative {variant === 'sidebar' ? '' : 'min-w-[200px] flex-1'}">
           <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
             class="w-full rounded-lg border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
@@ -683,24 +683,26 @@
             bind:value={searchQuery}
           />
         </div>
-        <select
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-          bind:value={filterCategory}
-        >
-          <option value="">All categories</option>
-          {#each Object.entries(categoryLabels) as [value, label] (value)}
-            <option {value}>{label}</option>
-          {/each}
-        </select>
-        <select
-          class="rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-          bind:value={filterPriority}
-        >
-          <option value="">All priorities</option>
-          {#each Object.entries(priorityLabels) as [value, label] (value)}
-            <option {value}>{label}</option>
-          {/each}
-        </select>
+        <div class={variant === 'sidebar' ? 'grid grid-cols-2 gap-2' : 'contents'}>
+          <select
+            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            bind:value={filterCategory}
+          >
+            <option value="">All categories</option>
+            {#each Object.entries(categoryLabels) as [value, label] (value)}
+              <option {value}>{label}</option>
+            {/each}
+          </select>
+          <select
+            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            bind:value={filterPriority}
+          >
+            <option value="">All priorities</option>
+            {#each Object.entries(priorityLabels) as [value, label] (value)}
+              <option {value}>{label}</option>
+            {/each}
+          </select>
+        </div>
       </div>
 
       <div class="mb-4 flex items-center gap-3">
@@ -730,13 +732,12 @@
         {#if saved}
           <span class="text-xs text-primary">Saved</span>
         {/if}
+        {#if variant === 'sidebar' && allowTransfer && projectId}
+          <div class="ml-auto">
+            <MemoryTransfer {variant} {projectId} onImported={load} />
+          </div>
+        {/if}
       </div>
-
-      {#if variant === 'sidebar' && allowTransfer && projectId}
-        <div class="mb-4">
-          <MemoryTransfer {variant} {projectId} onImported={load} />
-        </div>
-      {/if}
     </div>
 
     <!-- Entries list (scrollable) -->
