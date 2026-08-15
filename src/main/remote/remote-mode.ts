@@ -270,6 +270,30 @@ function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
   }
 }
 
+async function enrollmentFailureMessage(response: Response): Promise<string> {
+  let reason = ''
+  try {
+    const payload: unknown = await response.json()
+    if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+      const error = (payload as Record<string, unknown>)['error']
+      if (typeof error === 'string') reason = error
+    }
+  } catch {
+    // The status code still provides a safe, actionable fallback.
+  }
+  if (response.status === 401 || reason === 'unauthorized') {
+    return 'The remote service could not verify your signed-in account'
+  }
+  if (response.status === 403 || reason === 'enrollment-conflict') {
+    return 'This desktop enrollment belongs to a different account'
+  }
+  if (response.status === 429 || reason === 'rate-limited') {
+    return 'Too many pairing attempts. Wait a moment and try again'
+  }
+  if (response.status >= 500) return 'The remote pairing service is unavailable'
+  return `The remote service rejected pairing (HTTP ${response.status})`
+}
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
@@ -1478,10 +1502,19 @@ export class RemoteModeController {
 
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
-    const accountConfig =
+    const storedAccountConfig =
       this.accountConfig ?? (await this.storage.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH))
-    const existingTokenRef = previous?.tokenRef ?? accountConfig?.profileTokenRef
-    const existingToken = existingTokenRef ? await this.vault.resolve(existingTokenRef) : null
+    const accountConfig = storedAccountConfig
+      ? await this.ensureFreshAccountToken(storedAccountConfig)
+      : null
+    const accountToken = accountConfig
+      ? await this.vault.resolve(accountConfig.profileTokenRef)
+      : null
+    const existingDeviceToken = previous?.tokenRef
+      ? await this.vault.resolve(previous.tokenRef)
+      : null
+    const authorizationToken = accountToken ?? existingDeviceToken
+    if (!authorizationToken) throw new Error('Sign in before pairing this desktop')
 
     this.stopCloudAccess()
     this.cloudAbortController = new AbortController()
@@ -1500,7 +1533,10 @@ export class RemoteModeController {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(existingToken ? { Authorization: `Bearer ${existingToken}` } : {})
+          Authorization: `Bearer ${authorizationToken}`,
+          ...(accountToken && existingDeviceToken
+            ? { 'X-CodeInOven-Desktop-Token': existingDeviceToken }
+            : {})
         },
         body: JSON.stringify({
           name: hostname(),
@@ -1512,14 +1548,15 @@ export class RemoteModeController {
       this.cloudAbortController?.signal
     )
     if (!response.ok) {
-      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment failed' }
+      const message = await enrollmentFailureMessage(response)
+      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: message }
       this.broadcast()
-      throw new Error('Cloud desktop enrollment failed')
+      throw new Error(message)
     }
     const payload = parseEnrollmentResponse(await response.json())
     if (!payload) throw new Error('Cloud service returned an invalid enrollment response')
 
-    const deviceToken = payload.deviceToken ?? existingToken
+    const deviceToken = payload.deviceToken ?? existingDeviceToken
     if (!deviceToken) throw new Error('Cloud service did not issue a desktop credential')
     const tokenRef = await this.vault.save(deviceToken, previous?.tokenRef)
     const profileTokenRef = await this.vault.save(

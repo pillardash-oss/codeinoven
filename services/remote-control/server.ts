@@ -556,11 +556,21 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
 
   const presentedToken = bearerToken(request)
   const presentedHash = presentedToken ? tokenHash(presentedToken) : null
-  const existing = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
-  const accountIdentity =
-    presentedToken && !existing ? await accountIdentityFromRequest(request) : null
+  const desktopTokenHeader = request.headers.get('x-codeinoven-desktop-token')?.trim() ?? ''
+  const desktopToken = desktopTokenHeader.length <= 256 ? desktopTokenHeader : ''
+  const headerDesktop = desktopToken
+    ? database.findDesktopByTokenHash(tokenHash(desktopToken))
+    : null
+  const legacyDesktop = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
+  const existing = headerDesktop ?? legacyDesktop
+  const accountIdentity = presentedToken ? await accountIdentityFromRequest(request) : null
   const accountUserId = accountIdentity?.id ?? null
-  if (presentedToken && !existing && !accountUserId) return json({ error: 'unauthorized' }, 401)
+  if ((!existing && !accountUserId) || (desktopToken && !accountUserId)) {
+    return json({ error: 'unauthorized' }, 401)
+  }
+  if (existing?.user_id && accountUserId && existing.user_id !== accountUserId) {
+    return json({ error: 'enrollment-conflict' }, 403)
+  }
   if (accountIdentity) {
     database.upsertOAuthUser({
       id: accountIdentity.id,
