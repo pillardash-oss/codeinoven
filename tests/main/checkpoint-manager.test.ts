@@ -80,6 +80,53 @@ describe('CheckpointManager', () => {
     await expect(readFile(join(projectRoot, 'existing.txt'), 'utf-8')).resolves.toBe('before')
   })
 
+  it('shows an edit located past the diff window head instead of an empty diff', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    // Push the change far beyond the 64KB diff-window head.
+    const padding = '0123456789\n'.repeat(7000)
+    const original = `${padding}MARKER_BEFORE\n`
+    const changed = `${padding}MARKER_AFTER\n`
+
+    await writeFile(join(projectRoot, 'large.txt'), original, 'utf-8')
+    const before = await manager.beginTurn(
+      'project1',
+      'thread1',
+      projectRoot,
+      'Large file edit',
+      false
+    )
+    await writeFile(join(projectRoot, 'large.txt'), changed, 'utf-8')
+    await manager.completeTurn('project1', 'thread1', before.id, projectRoot, 'completed')
+
+    const diff = await manager.getFileDiff('project1', 'thread1', before.id, 'large.txt')
+    expect(diff.truncated).toBe(true)
+    expect(diff.before).toContain('MARKER_BEFORE')
+    expect(diff.after).toContain('MARKER_AFTER')
+    expect(diff.before).not.toBe(diff.after)
+  })
+
+  it('returns the head of a newly created file and marks it truncated when large', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    const content = 'a'.repeat(70_000)
+
+    const before = await manager.beginTurn(
+      'project1',
+      'thread1',
+      projectRoot,
+      'Create large file',
+      false
+    )
+    await writeFile(join(projectRoot, 'created-large.txt'), content, 'utf-8')
+    await manager.completeTurn('project1', 'thread1', before.id, projectRoot, 'completed')
+
+    const diff = await manager.getFileDiff('project1', 'thread1', before.id, 'created-large.txt')
+    expect(diff).toMatchObject({ kind: 'created', binary: false, truncated: true })
+    expect(diff.after).toBe('a'.repeat(64 * 1024))
+    expect(diff.before).toBeUndefined()
+  })
+
   it('marks an active turn as interrupted for restart recovery', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()
