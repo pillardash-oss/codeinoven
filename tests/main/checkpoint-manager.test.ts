@@ -96,6 +96,27 @@ describe('CheckpointManager', () => {
     expect(interrupted).toMatchObject({ id: checkpoint.id, status: 'interrupted' })
   })
 
+  it('finalizes an active turn as completed when the harness demonstrably finished', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'existing.txt'), 'before', 'utf-8')
+
+    const checkpoint = await manager.beginTurn(
+      'project2',
+      'thread2',
+      projectRoot,
+      'Completed before stop',
+      false
+    )
+    await writeFile(join(projectRoot, 'existing.txt'), 'after', 'utf-8')
+
+    const completed = await manager.markActiveCompleted('project2', 'thread2')
+
+    expect(completed).toMatchObject({ id: checkpoint.id, status: 'completed' })
+    expect(completed?.failure).toBeUndefined()
+    expect(completed?.changes.map((change) => change.path)).toContain('existing.txt')
+  })
+
   it('restores only selected paths and rejects files changed after capture', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()
