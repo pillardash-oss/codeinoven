@@ -1691,6 +1691,8 @@ export interface IpcEventContract {
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
+  /** macOS notification authorization changed (delivery outcome or re-verification). */
+  'notification:permissionStatus': [status: SystemNotificationPermissionStatus]
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': []
