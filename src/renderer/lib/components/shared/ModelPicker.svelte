@@ -822,6 +822,7 @@
               align="start"
               sideOffset={4}
               collisionPadding={12}
+              onCloseAutoFocus={(event) => event.preventDefault()}
               class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
