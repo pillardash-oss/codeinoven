@@ -23,7 +23,7 @@ import type {
   HarnessCapabilities,
   SendPromptOptions
 } from './driver.interface'
-import type { StorageEngine } from '../storage-engine'
+import type { StorageEngine } from '../storage/storage-engine'
 
 /**
  * Muse Code (Meta) headless integration notes.

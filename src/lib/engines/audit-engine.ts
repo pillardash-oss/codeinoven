@@ -1,6 +1,6 @@
 import { join } from 'path'
 import type { Database } from '../../main/database/database'
-import type { StorageEngine } from '../../main/storage-engine'
+import type { StorageEngine } from '../../main/storage/storage-engine'
 import type {
   AuditAnnotation,
   AuditReport,

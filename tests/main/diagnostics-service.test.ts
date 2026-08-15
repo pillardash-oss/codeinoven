@@ -4,7 +4,10 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { APP_SLUG, ORG_SLUG } from '../../src/lib/brand'
 import type { Project, Thread } from '../../src/lib/types'
-import { DiagnosticsService, type DiagnosticsMetadata } from '../../src/main/diagnostics-service'
+import {
+  DiagnosticsService,
+  type DiagnosticsMetadata
+} from '../../src/main/system/diagnostics-service'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'

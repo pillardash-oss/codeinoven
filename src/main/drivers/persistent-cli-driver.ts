@@ -17,9 +17,9 @@ import type {
   SessionAgentEvent,
   UsagePricingProvenance
 } from '../../lib/types'
-import { Logger } from '../logger'
-import { estimateTokenCostUsd } from '../pricing'
-import type { StorageEngine } from '../storage-engine'
+import { Logger } from '../system/logger'
+import { estimateTokenCostUsd } from '../providers/pricing'
+import type { StorageEngine } from '../storage/storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
   AgentEventCallback,
@@ -30,7 +30,7 @@ import type {
   PreparedUtilityRuntime,
   SendPromptOptions
 } from './driver.interface'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 
 export interface TitleModelCandidate {
   providerId: string

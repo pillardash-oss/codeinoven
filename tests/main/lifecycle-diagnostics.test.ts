@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   handleFatalStartupFailure,
   LifecycleDiagnostics
-} from '../../src/main/lifecycle-diagnostics'
+} from '../../src/main/system/lifecycle-diagnostics'
 
 describe('handleFatalStartupFailure', () => {
   it('closes every initialized resource and reports successes and failures', async () => {

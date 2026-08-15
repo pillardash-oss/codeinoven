@@ -2,12 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import type { MemoryService } from '../../src/main/memory-service'
+import type { MemoryService } from '../../src/main/chat/memory-service'
 import {
   PromptAssembler,
   clearInstructionCache,
   instructionCacheSize
-} from '../../src/main/prompt-assembler'
+} from '../../src/main/chat/prompt-assembler'
 
 const temporaryRoots: string[] = []
 

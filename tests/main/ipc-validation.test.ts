@@ -27,7 +27,7 @@ import {
   validateRemoteUrl,
   validateThreadSettings,
   validateThreadStatus
-} from '../../src/main/ipc-validation'
+} from '../../src/main/ipc/ipc-validation'
 
 const validSettings = {
   harnessId: 'opencode',

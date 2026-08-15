@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { StorageEngine } from '../../../src/main/storage-engine'
+import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { PiDriver, mapPiRecord } from '../../../src/main/drivers/pi-driver'
 import type {
   CliLineParseContext,

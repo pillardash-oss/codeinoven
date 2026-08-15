@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { MemoryConfig, MemoryEntry } from '../../src/lib/types'
-import { StorageEngine } from '../../src/main/storage-engine'
+import { StorageEngine } from '../../src/main/storage/storage-engine'
 import {
   MEMORY_EXTRACTION_LIMITS,
   MEMORY_LIMITS,
@@ -11,7 +11,7 @@ import {
   detectMemoryCandidates,
   estimateTokens,
   validateMemoryConfig
-} from '../../src/main/memory-service'
+} from '../../src/main/chat/memory-service'
 
 const temporaryRoots: string[] = []
 

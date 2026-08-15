@@ -10,7 +10,7 @@ vi.mock('../../../src/main/memory-service', () => ({
   estimateTokens: (text: string) => Math.ceil(text.length / 4)
 }))
 
-import { formatHistoryRecap } from '../../src/main/chat-engine'
+import { formatHistoryRecap } from '../../src/main/chat/chat-engine'
 import type { AgentMessage } from '../../src/lib/types'
 
 function message(role: 'user' | 'assistant', text: string): AgentMessage {

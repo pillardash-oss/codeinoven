@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizePricingEntries } from '../../src/main/model-pricing-service'
+import { normalizePricingEntries } from '../../src/main/providers/model-pricing-service'
 
 describe('normalizePricingEntries', () => {
   it('normalizes a payload with reference prices and derives cache-write/reasoning', () => {

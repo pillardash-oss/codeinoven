@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAutoTitleLauncher } from '../../src/main/title-generation-policy'
+import { createAutoTitleLauncher } from '../../src/main/chat/title-generation-policy'
 
 describe('thread title generation scheduling', () => {
   it('launches independently and exactly once', async () => {

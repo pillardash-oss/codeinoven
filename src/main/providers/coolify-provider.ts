@@ -8,7 +8,7 @@ import type {
   CloudDeploymentProviderInfo,
   DeploymentProvider,
   DeploymentProviderContext
-} from '../deployment-provider.interface'
+} from './deployment-provider.interface'
 import { COOLIFY_BASE_URL_ENV, resolveCoolifyBaseUrl } from './base-url'
 
 /** Human-readable platform name surfaced by the Cloud Deployments panel. */

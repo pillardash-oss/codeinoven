@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Logger } from '../../src/main/logger'
+import { Logger } from '../../src/main/system/logger'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
@@ -156,8 +156,8 @@ describe('lifecycle — Logger flush on shutdown', () => {
 
 describe('lifecycle — PtyService destroyAll', () => {
   it('kills all active PTY sessions and clears sender', async () => {
-    const { PtyService } = await import('../../src/main/pty-service')
-    const { StorageEngine } = await import('../../src/main/storage-engine')
+    const { PtyService } = await import('../../src/main/system/pty-service')
+    const { StorageEngine } = await import('../../src/main/storage/storage-engine')
 
     const storage = new StorageEngine()
     const database = await createTestDb()

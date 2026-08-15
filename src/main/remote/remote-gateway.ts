@@ -35,7 +35,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { brotliCompress, gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import type { Duplex } from 'node:stream'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import {
   buildUpgradeResponse,
   decodeWsFrames,

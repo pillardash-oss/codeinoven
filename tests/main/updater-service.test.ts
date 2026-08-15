@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppConfig } from '../../src/lib/types'
-import type { StorageEngine } from '../../src/main/storage-engine'
-import { UpdaterService, type SessionActivitySource } from '../../src/main/updater-service'
+import type { StorageEngine } from '../../src/main/storage/storage-engine'
+import {
+  UpdaterService,
+  type SessionActivitySource
+} from '../../src/main/notifications/updater-service'
 
 interface MockAutoUpdater {
   isUpdaterActive: () => boolean

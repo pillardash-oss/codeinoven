@@ -19,7 +19,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { buildHarnessEnvironment } from './cli-environment'
-import { hasNativeProviderCatalog } from '../native-provider-config-service'
+import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import type {
   GenerateTitleOptions,
   HarnessCapabilities,
@@ -38,9 +38,9 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
-import type { BaseUrlProviderService } from '../base-url-provider-service'
-import type { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
+import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import type { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },

@@ -24,7 +24,7 @@ import {
 } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Logger } from '../src/main/logger'
+import { Logger } from '../src/main/system/logger'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sourceDir = join(root, 'node_modules/@lobehub/icons-static-svg/icons')

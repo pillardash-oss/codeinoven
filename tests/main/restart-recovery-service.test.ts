@@ -7,8 +7,8 @@ import type { ThreadStatus } from '../../src/lib/types'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
-import { CheckpointManager } from '../../src/main/checkpoint-manager'
-import { RestartRecoveryService } from '../../src/main/restart-recovery-service'
+import { CheckpointManager } from '../../src/main/storage/checkpoint-manager'
+import { RestartRecoveryService } from '../../src/main/system/restart-recovery-service'
 
 const temporaryPaths: string[] = []
 const testDatabases: Database[] = []

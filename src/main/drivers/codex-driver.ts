@@ -20,10 +20,10 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { resolveFastModelId } from '../../lib/fast-inference'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { Logger } from '../logger'
-import { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { Logger } from '../system/logger'
+import { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import type {
