@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Popover } from 'bits-ui'
+  import { DropdownMenu, Popover } from 'bits-ui'
   import {
     Brain,
     Check,
@@ -246,12 +246,21 @@
           (words.length === 0 && provider.catalogStatus === 'unavailable')
       )
   })
+  /** Visual shell of the trigger — it hosts the model button and, when the
+   *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full items-center justify-between gap-1 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
+      ? 'flex w-full items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? 'flex items-center gap-1 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
-        : 'flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50'
+        ? 'flex items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+        : 'flex items-center rounded-lg transition-colors hover:bg-elevated'
+  )
+  let modelButtonClasses = $derived(
+    variant === 'field'
+      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
+      : variant === 'action'
+        ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
+        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground'
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
@@ -734,42 +743,84 @@
 
 <div>
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
-    <Popover.Trigger
-      type="button"
-      class={triggerClasses}
-      aria-label={`Select model, currently ${selectedLabel}`}
-      title={`Select model — ${selectedLabel}`}
-      {disabled}
-    >
-      {#if selectedProvider}
-        <span class="flex shrink-0 items-center gap-0.5">
-          {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
-        </span>
-      {:else if selectedHarnessIcon}
-        {@render harnessIcon(harnessId)}
-      {:else}
-        <Cpu size={12} />
-      {/if}
-      <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
-      {#if fast}
-        <Zap
-          size={11}
-          class="shrink-0 text-accent"
-          fill="currentColor"
-          aria-label="Fast inference"
-        />
-      {/if}
+    <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
+      <button
+        type="button"
+        class={modelButtonClasses}
+        aria-label={`Select model, currently ${selectedLabel}`}
+        title={`Select model — ${selectedLabel}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        {disabled}
+        onclick={() => (open = true)}
+      >
+        {#if selectedProvider}
+          <span class="flex shrink-0 items-center gap-0.5">
+            {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+          </span>
+        {:else if selectedHarnessIcon}
+          {@render harnessIcon(harnessId)}
+        {:else}
+          <Cpu size={12} />
+        {/if}
+        <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+        {#if fast}
+          <Zap
+            size={11}
+            class="shrink-0 text-accent"
+            fill="currentColor"
+            aria-label="Fast inference"
+          />
+        {/if}
+      </button>
       {#if supportsThinking}
-        <span
-          class="ml-0.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed"
-          title="Thinking level — change it from the picker"
-          aria-hidden="true"
-        >
-          <Brain size={10} />
-          <span class="capitalize">{currentThinkingLabel}</span>
-        </span>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            aria-label={`Thinking level: ${currentThinkingLabel}`}
+            title="Thinking level"
+            {disabled}
+          >
+            <Brain size={10} />
+            <span class="capitalize">{currentThinkingLabel}</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={12}
+              class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#each effectiveThinkingPresets as preset (preset.id)}
+                {@const active = thinkingLevel === preset.id}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                    ? 'text-primary'
+                    : ''}"
+                  title={preset.description ?? `Set thinking to ${preset.label}`}
+                  onSelect={() => {
+                    if (!active) onSelectThinking?.(preset.id as ThinkingLevel)
+                  }}
+                >
+                  {#if active}
+                    <Check size={11} class="shrink-0 text-primary" />
+                  {:else}
+                    <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                  {/if}
+                  <span class="flex flex-col">
+                    <span class="capitalize">{preset.label}</span>
+                    {#if preset.description}
+                      <span class="text-[10px] font-normal text-muted">{preset.description}</span>
+                    {/if}
+                  </span>
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       {/if}
-    </Popover.Trigger>
+    </div>
 
     <Popover.Portal>
       <Popover.Content
@@ -937,60 +988,6 @@
             </div>
           {/if}
         </div>
-
-        {#if supportsThinking}
-          <div class="border-t px-2.5 py-2">
-            <div
-              class="flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
-            >
-              <Brain size={10} class="shrink-0" />
-              Thinking
-            </div>
-            <div
-              class="mt-1.5 grid max-h-36 gap-0.5 overflow-y-auto"
-              role="group"
-              aria-label="Thinking level"
-            >
-              {#each effectiveThinkingPresets as preset, i (preset.id)}
-                {@const active = thinkingLevel === preset.id}
-                <button
-                  type="button"
-                  data-thinking-index={i}
-                  class="flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[11px] transition-colors hover:bg-elevated {active
-                    ? 'text-primary'
-                    : 'text-foreground'}"
-                  title={preset.description ?? `Set thinking to ${preset.label}`}
-                  onclick={() => {
-                    if (!active) onSelectThinking?.(preset.id as ThinkingLevel)
-                  }}
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      const buttons = document.querySelectorAll('[data-thinking-index]')
-                      const currentIndex = Array.from(buttons).indexOf(
-                        event.currentTarget as HTMLElement
-                      )
-                      const nextIndex =
-                        event.key === 'ArrowDown'
-                          ? Math.min(currentIndex + 1, buttons.length - 1)
-                          : Math.max(currentIndex - 1, 0)
-                      const next = buttons[nextIndex] as HTMLElement
-                      if (next) next.focus()
-                      return
-                    }
-                  }}
-                >
-                  {#if active}
-                    <Check size={11} class="shrink-0" />
-                  {:else}
-                    <span class="w-[11px] shrink-0" aria-hidden="true"></span>
-                  {/if}
-                  <span class="capitalize">{preset.label}</span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
