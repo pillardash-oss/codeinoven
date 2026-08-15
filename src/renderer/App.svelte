@@ -59,7 +59,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
-  import { loadProjectIcons } from '$lib/project-icons'
+  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import {
@@ -130,6 +130,8 @@
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
   let newProjectSpotlightOpen = $state(false)
+  /** Stored custom project icon data-URLs (project.id → url), for palette badges. */
+  let projectIconUrls = $state(new Map<string, string>())
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
@@ -894,6 +896,10 @@
       const id = actionId(`thread:${thread.projectId}:${thread.id}`)
       targets.set(id, { thread })
       const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
+      // Threads carry their project's icon and color, not a generic thread icon.
+      const projectIconUri = project
+        ? (getProjectIcon(project, projectIconUrls.get(project.id)) ?? undefined)
+        : undefined
       actions.push({
         id,
         title: thread.title,
@@ -907,7 +913,7 @@
           kind: 'app',
           ...(project?.color ? { color: project.color } : {})
         },
-        icon: MessagesSquare,
+        ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
       })
     }
@@ -964,6 +970,7 @@
       //    without waiting for the (larger) thread payload.
       const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
+      projectIconUrls = icons
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
       // 2. Tasks — recent rows only, via the bounded hydration query. The full
