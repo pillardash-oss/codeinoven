@@ -62,6 +62,14 @@
     projects: [],
     activityDays: [],
     modelPerformance: [],
+    feedbackCost: {
+      outcomes: 0,
+      pricedOutcomes: 0,
+      costUsd: 0,
+      knownCostUsd: 0,
+      estimatedCostUsd: 0,
+      tokensTotal: 0
+    },
     generatedAt: 0
   }
 
@@ -953,6 +961,19 @@
         Success rate from your sessions: continuing positively, switching context, or leaving the
         thread until cleanup scores a pass; a corrective follow-up scores a miss.
       </p>
+      {#if usage.feedbackCost.outcomes > 0}
+        <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+          <span class="font-semibold tabular-nums text-foreground">
+            {formatCost(usage.feedbackCost.costUsd)} spent
+          </span>
+          <span class="text-dimmed">
+            across {usage.feedbackCost.outcomes} scored sessions{usage.feedbackCost.pricedOutcomes <
+            usage.feedbackCost.outcomes
+              ? ` · ${usage.feedbackCost.outcomes - usage.feedbackCost.pricedOutcomes} without a reported cost`
+              : ''}
+          </span>
+        </p>
+      {/if}
       {#if usage.modelPerformance.length > 0}
         <div
           class="mt-3 flex flex-wrap items-center gap-1"
@@ -1029,13 +1050,13 @@
           <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
             {entry.outcomes} sessions · {entry.successes} passed{entry.corrected > 0
               ? ` · ${entry.corrected} corrected`
-              : ''}
+              : ''}{entry.costUsd > 0 ? ` · ${formatCost(entry.costUsd)} total` : ''}
           </p>
         </div>
       {:else}
         <p class="px-4 py-8 text-center text-xs text-muted">
-          Scores appear as you use agents: after a turn, continuing or moving on counts as a pass,
-          and a corrective follow-up counts as a miss.
+          Scores and their cost appear as you use agents: after a turn, continuing or moving on
+          counts as a pass, and a corrective follow-up counts as a miss.
         </p>
       {/each}
     </div>

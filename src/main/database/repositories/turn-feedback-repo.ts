@@ -25,9 +25,12 @@ export interface TurnFeedbackRow {
   provider_id: string | null
   model_id: string | null
   thinking_level: string | null
+  cost_usd: number | null
+  cost_status: 'known' | 'estimated' | 'unavailable' | null
+  tokens_total: number | null
 }
 
-/** Identity and task metadata captured when a completed turn opens a session. */
+/** Identity, task metadata, and cost captured when a completed turn opens a session. */
 export interface OpenTurnFeedbackInput {
   id: string
   threadId: string
@@ -40,6 +43,11 @@ export interface OpenTurnFeedbackInput {
   providerId: string | null
   modelId: string | null
   thinkingLevel: ThinkingLevel | null
+  /** USD cost of the scored turn, when the provider (or pricing) reported it. */
+  costUsd: number | null
+  costStatus: 'known' | 'estimated' | 'unavailable'
+  /** Total reported tokens for the scored turn, when available. */
+  tokensTotal: number | null
 }
 
 interface ModelPerformanceRow {
@@ -52,7 +60,19 @@ interface ModelPerformanceRow {
   successes: number
   corrected: number
   avg_score: number
+  priced_outcomes: number
+  cost_usd: number
+  tokens_total: number
   last_used_at: number
+}
+
+interface FeedbackCostRow {
+  outcomes: number
+  priced_outcomes: number
+  cost_usd: number
+  known_cost_usd: number
+  estimated_cost_usd: number
+  tokens_total: number
 }
 
 /**
@@ -69,8 +89,9 @@ export class TurnFeedbackRepo {
       `INSERT OR IGNORE INTO turn_feedback(
         id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
         status, signal, score, feature, task_slug,
-        harness_id, provider_id, model_id, thinking_level
-      ) VALUES(?,?,?,?,?,NULL,'pending',NULL,0,?,?,?,?,?,?)`,
+        harness_id, provider_id, model_id, thinking_level,
+        cost_usd, cost_status, tokens_total
+      ) VALUES(?,?,?,?,?,NULL,'pending',NULL,0,?,?,?,?,?,?,?,?,?)`,
       input.id,
       input.threadId,
       input.parentTurnId,
@@ -81,7 +102,10 @@ export class TurnFeedbackRepo {
       input.harnessId,
       input.providerId,
       input.modelId,
-      input.thinkingLevel
+      input.thinkingLevel,
+      input.costUsd,
+      input.costStatus,
+      input.tokensTotal
     )
   }
 
@@ -169,6 +193,11 @@ export class TurnFeedbackRepo {
               SUM(CASE WHEN score > 0 THEN 1 ELSE 0 END) AS successes,
               SUM(CASE WHEN status = 'corrected' THEN 1 ELSE 0 END) AS corrected,
               AVG(score) AS avg_score,
+              SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
+                       THEN 1 ELSE 0 END) AS priced_outcomes,
+              SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
+                       THEN cost_usd ELSE 0 END) AS cost_usd,
+              SUM(COALESCE(tokens_total, 0)) AS tokens_total,
               MAX(created_at) AS last_used_at
        FROM turn_feedback
        WHERE status <> 'pending'
@@ -196,9 +225,49 @@ export class TurnFeedbackRepo {
           corrected: row.corrected,
           successRate: outcomes > 0 ? row.successes / outcomes : null,
           averageScore: outcomes > 0 ? row.avg_score : 0,
+          pricedOutcomes: row.priced_outcomes,
+          costUsd: row.cost_usd,
+          tokensTotal: row.tokens_total,
           lastUsedAt: row.last_used_at
         }
       })
       .filter((entry): entry is LocalProfileModelPerformance => entry !== null)
+  }
+
+  /** Range-scoped total of what the resolved feedback sessions cost to gather. */
+  feedbackCost(range: { startAt: number; endAt: number }): {
+    outcomes: number
+    pricedOutcomes: number
+    costUsd: number
+    knownCostUsd: number
+    estimatedCostUsd: number
+    tokensTotal: number
+  } {
+    const row = this.db.get<FeedbackCostRow>(
+      `SELECT COUNT(*) AS outcomes,
+              SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
+                       THEN 1 ELSE 0 END) AS priced_outcomes,
+              SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
+                       THEN cost_usd ELSE 0 END) AS cost_usd,
+              SUM(CASE WHEN cost_status = 'known' AND cost_usd IS NOT NULL
+                       THEN cost_usd ELSE 0 END) AS known_cost_usd,
+              SUM(CASE WHEN cost_status = 'estimated' AND cost_usd IS NOT NULL
+                       THEN cost_usd ELSE 0 END) AS estimated_cost_usd,
+              SUM(COALESCE(tokens_total, 0)) AS tokens_total
+       FROM turn_feedback
+       WHERE status <> 'pending'
+         AND created_at >= ?
+         AND created_at < ?`,
+      range.startAt,
+      range.endAt
+    )
+    return {
+      outcomes: row?.outcomes ?? 0,
+      pricedOutcomes: row?.priced_outcomes ?? 0,
+      costUsd: row?.cost_usd ?? 0,
+      knownCostUsd: row?.known_cost_usd ?? 0,
+      estimatedCostUsd: row?.estimated_cost_usd ?? 0,
+      tokensTotal: row?.tokens_total ?? 0
+    }
   }
 }

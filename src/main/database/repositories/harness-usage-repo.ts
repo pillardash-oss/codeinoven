@@ -722,8 +722,17 @@ export class HarnessUsageRepo {
       utilities,
       projects,
       activityDays,
-      // Feedback scoring lives in TurnFeedbackRepo; the IPC layer overlays it.
+      // Feedback scoring and its cost live in TurnFeedbackRepo; the IPC layer
+      // overlays them.
       modelPerformance: [],
+      feedbackCost: {
+        outcomes: 0,
+        pricedOutcomes: 0,
+        costUsd: 0,
+        knownCostUsd: 0,
+        estimatedCostUsd: 0,
+        tokensTotal: 0
+      },
       generatedAt: Date.now()
     }
   }

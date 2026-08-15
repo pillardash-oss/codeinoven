@@ -14269,18 +14269,8 @@ export class ChatEngine {
           ? 'assignment'
           : 'main'
     const normalizedUsage = message.normalizedUsage
-    const stepCosts = message.parts.filter(
-      (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
-        part.type === 'step-finish' && typeof part.cost === 'number'
-    )
-    const knownCost =
-      typeof message.cost === 'number'
-        ? message.cost
-        : stepCosts.length > 0
-          ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
-          : null
-    const estimated =
-      message.costProvenance !== undefined && message.costProvenance.source !== 'provider'
+    const { costUsd: knownCost, costStatus } = this.assistantTurnCostAccounting(message)
+    const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
       id: `message:${message.id}`,
       threadId,
@@ -14340,6 +14330,32 @@ export class ChatEngine {
   }
 
   /**
+   * Provider cost of a completed assistant turn: the message-level cost,
+   * falling back to the sum of step-finish costs, with the same provenance
+   * semantics the usage events use. `unavailable` when neither source
+   * reported a cost.
+   */
+  private assistantTurnCostAccounting(message: AgentMessage): {
+    costUsd: number | null
+    costStatus: 'known' | 'estimated' | 'unavailable'
+  } {
+    const stepCosts = message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'step-finish' }> =>
+        part.type === 'step-finish' && typeof part.cost === 'number'
+    )
+    const costUsd =
+      typeof message.cost === 'number'
+        ? message.cost
+        : stepCosts.length > 0
+          ? stepCosts.reduce((sum, part) => sum + (part.cost ?? 0), 0)
+          : null
+    if (costUsd === null) return { costUsd: null, costStatus: 'unavailable' }
+    const estimated =
+      message.costProvenance !== undefined && message.costProvenance.source !== 'provider'
+    return { costUsd, costStatus: estimated ? 'estimated' : 'known' }
+  }
+
+  /**
    * Open a pending session-outcome record for a completed, error-free turn that
    * answered a visible user message. The outcome is resolved later by the first
    * signal that arrives: the user continues/corrects, switches to another
@@ -14366,6 +14382,7 @@ export class ChatEngine {
         : thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
           ? 'assignment'
           : 'main'
+    const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
     this.turnFeedbackRepo.openPending({
       id: `outcome:${parentTurnId}`,
       threadId,
@@ -14377,7 +14394,10 @@ export class ChatEngine {
       harnessId: turnAssistant.harnessId ?? thread.settings.harnessId,
       providerId: turnAssistant.providerId ?? thread.settings.providerId ?? null,
       modelId: turnAssistant.modelId ?? thread.settings.modelId ?? null,
-      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null
+      thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null,
+      costUsd,
+      costStatus,
+      tokensTotal: turnAssistant.tokens?.total ?? null
     })
   }
 
