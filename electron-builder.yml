@@ -38,6 +38,19 @@ mac:
     - dmg
     - zip
   artifactName: ${name}-${version}-${arch}.${ext}
+  # Platform-level `files` replaces the top-level list, so the base set is
+  # repeated here. better-sqlite3 ships prebuilds for every platform; a macOS
+  # app only needs the darwin binaries, so the linux*/win32* copies (~13MB)
+  # are excluded.
+  files:
+    - out/**/*
+    - '!out/**/.DS_Store'
+    - '!node_modules/better-sqlite3/deps/**'
+    - '!node_modules/better-sqlite3/src/**'
+    - '!node_modules/better-sqlite3/binding.gyp'
+    - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**'
+    - '!node_modules/better-sqlite3/prebuilds/linux*'
+    - '!node_modules/better-sqlite3/prebuilds/win32*'
 win:
   icon: src/renderer/static/icon.png
   target:
