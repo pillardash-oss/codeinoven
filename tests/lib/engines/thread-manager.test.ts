@@ -293,4 +293,46 @@ describe('ThreadManager', () => {
     ])
     expect(persisted.find((m) => m.id === 'delta-2')?.parts).toEqual(b.parts)
   })
+
+  it('resolves pending feedback outcomes before deletion on every delete path', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
+    const { manager, db } = await createManager()
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'To delete'
+    })
+
+    // A pending session outcome for the thread (as chat-engine would open it).
+    db.run(
+      `INSERT INTO turn_feedback(
+        id, thread_id, parent_turn_id, created_at, status, score, feature,
+        harness_id, provider_id, model_id, thinking_level
+      ) VALUES('outcome:turn-1', ?, 'turn-1', 1, 'pending', 0, 'main', 'opencode', 'openai', 'gpt-x', 'high')`,
+      thread.id
+    )
+
+    await manager.deleteThread('project1', thread.id)
+
+    // The pending outcome was resolved to a cleaned_up success and survived the
+    // deletion (thread reference SET NULL, attribution intact) — it must not
+    // remain pending and excluded from model-performance analytics.
+    const row = db.get(
+      'SELECT thread_id, status, signal, score, model_id FROM turn_feedback WHERE parent_turn_id = ?',
+      'turn-1'
+    ) as {
+      thread_id: string | null
+      status: string
+      signal: string
+      score: number
+      model_id: string
+    }
+    expect(row).toBeDefined()
+    expect(row.thread_id).toBeNull()
+    expect(row.status).toBe('success')
+    expect(row.signal).toBe('cleaned_up')
+    expect(row.score).toBe(1)
+    expect(row.model_id).toBe('gpt-x')
+  })
 })

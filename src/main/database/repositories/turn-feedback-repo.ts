@@ -10,7 +10,8 @@ import type {
 /** One persisted turn-outcome row. */
 export interface TurnFeedbackRow {
   id: string
-  thread_id: string
+  /** Null after the owning thread is deleted (ON DELETE SET NULL). */
+  thread_id: string | null
   parent_turn_id: string
   session_id: string | null
   created_at: number

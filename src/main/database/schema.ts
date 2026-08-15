@@ -240,16 +240,14 @@ export const HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL = `
 ALTER TABLE harness_usage ADD COLUMN thinking_level TEXT;`
 
 /**
- * One-time migration for databases created before `harness_usage_models` broke
- * usage down per thinking level. SQLite cannot change a PRIMARY KEY in place,
- * so the table is rebuilt with `thinking_level` added to the key. The level is
- * NOT NULL with an empty-string "unknown" sentinel because SQLite treats NULLs
- * as distinct inside a composite PRIMARY KEY — NULL levels would fragment one
- * model's usage into a row per message instead of accumulating it. Re-runs on
- * the nullable `thinking_level` variant this feature first shipped with to
- * normalize legacy NULLs to ''.
+ * Rebuilt `harness_usage_models` shape shared by both thinking-level
+ * migrations. The level is NOT NULL with an empty-string "unknown" sentinel
+ * because SQLite treats NULLs as distinct inside a composite PRIMARY KEY —
+ * NULL levels would fragment one model's usage into a row per message instead
+ * of accumulating it. SQLite cannot change a PRIMARY KEY in place, so the
+ * table is always rebuilt rather than altered.
  */
-export const HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL = `
+const HARNESS_USAGE_MODELS_V2_DDL = `
 CREATE TABLE harness_usage_models_v2 (
   thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   harness_id           TEXT NOT NULL,
@@ -268,7 +266,43 @@ CREATE TABLE harness_usage_models_v2 (
   first_used_at        INTEGER NOT NULL,
   last_used_at         INTEGER NOT NULL,
   PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)
-);
+);`
+
+const HARNESS_USAGE_MODELS_REBUILD_EPILOGUE = `
+DROP TABLE harness_usage_models;
+ALTER TABLE harness_usage_models_v2 RENAME TO harness_usage_models;
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
+  ON harness_usage_models(thread_id);
+CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
+  ON harness_usage_models(harness_id);`
+
+/**
+ * One-time migration for databases created before `thinking_level` existed at
+ * all: the legacy table has no such column, so the copy uses a literal ''.
+ */
+export const HARNESS_USAGE_MODELS_ADD_THINKING_LEVEL_MIGRATION_SQL = `
+${HARNESS_USAGE_MODELS_V2_DDL}
+INSERT INTO harness_usage_models_v2(
+  thread_id, harness_id, provider_id, model_id, thinking_level,
+  message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning,
+  tokens_cache_read, tokens_cache_write, tokens_total, duration_ms,
+  first_used_at, last_used_at
+) SELECT
+  thread_id, harness_id, provider_id, model_id, '',
+  SUM(message_count), SUM(cost_usd), SUM(tokens_in), SUM(tokens_out), SUM(tokens_reasoning),
+  SUM(tokens_cache_read), SUM(tokens_cache_write), SUM(tokens_total), SUM(duration_ms),
+  MIN(first_used_at), MAX(last_used_at)
+FROM harness_usage_models
+GROUP BY thread_id, harness_id, provider_id, model_id;
+${HARNESS_USAGE_MODELS_REBUILD_EPILOGUE}`
+
+/**
+ * One-time migration for databases created with the nullable
+ * `thinking_level` variant this feature first shipped with: the column exists,
+ * so the copy normalizes NULLs to '' and merges any duplicate NULL rows.
+ */
+export const HARNESS_USAGE_MODELS_NORMALIZE_THINKING_LEVEL_MIGRATION_SQL = `
+${HARNESS_USAGE_MODELS_V2_DDL}
 INSERT INTO harness_usage_models_v2(
   thread_id, harness_id, provider_id, model_id, thinking_level,
   message_count, cost_usd, tokens_in, tokens_out, tokens_reasoning,
@@ -281,12 +315,7 @@ INSERT INTO harness_usage_models_v2(
   MIN(first_used_at), MAX(last_used_at)
 FROM harness_usage_models
 GROUP BY thread_id, harness_id, provider_id, model_id, COALESCE(thinking_level, '');
-DROP TABLE harness_usage_models;
-ALTER TABLE harness_usage_models_v2 RENAME TO harness_usage_models;
-CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
-  ON harness_usage_models(thread_id);
-CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
-  ON harness_usage_models(harness_id);`
+${HARNESS_USAGE_MODELS_REBUILD_EPILOGUE}`
 
 /**
  * One-time migration for databases created while `turn_feedback.thread_id`
