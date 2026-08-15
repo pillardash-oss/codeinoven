@@ -69,7 +69,12 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'loopAuditor',
   'imageDescriptor'
 ])
-const AGENT_MODEL_SELECTION_FIELDS = new Set(['harnessId', 'providerId', 'modelId'])
+const AGENT_MODEL_SELECTION_FIELDS = new Set([
+  'harnessId',
+  'providerId',
+  'modelId',
+  'thinkingLevel'
+])
 const CREATE_PROJECT_FIELDS = new Set([
   'name',
   'path',
@@ -541,7 +546,16 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         1,
         128
       ),
-      modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256)
+      modelId: validateBoundedString(auditor.modelId, 'Achievement auditor model ID', 1, 256),
+      ...(auditor.thinkingLevel === undefined
+        ? {}
+        : {
+            thinkingLevel: assertEnum(
+              auditor.thinkingLevel,
+              THINKING_LEVELS,
+              'Achievement auditor thinking level'
+            )
+          })
     }
   }
   if (input.imageDescriptor !== undefined) {
@@ -555,7 +569,16 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
         1,
         128
       ),
-      modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256)
+      modelId: validateBoundedString(descriptor.modelId, 'Image descriptor model ID', 1, 256),
+      ...(descriptor.thinkingLevel === undefined
+        ? {}
+        : {
+            thinkingLevel: assertEnum(
+              descriptor.thinkingLevel,
+              THINKING_LEVELS,
+              'image descriptor thinking level'
+            )
+          })
     }
   }
   return settings

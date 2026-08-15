@@ -756,6 +756,8 @@ export interface AgentModelSelection {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort for the role. When absent, the thread's own level is used. */
+  thinkingLevel?: ThinkingLevel
 }
 
 export type AgentRole = 'seniorEngineer' | 'worker' | 'auditor'
