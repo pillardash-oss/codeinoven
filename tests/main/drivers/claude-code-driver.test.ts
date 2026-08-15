@@ -5,7 +5,7 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
-import { StorageEngine } from '../../../src/main/storage-engine'
+import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { ClaudeCodeDriver, mapClaudeCodeRecord } from '../../../src/main/drivers/claude-code-driver'
 import type { CliLineParseContext } from '../../../src/main/drivers/persistent-cli-driver'
 

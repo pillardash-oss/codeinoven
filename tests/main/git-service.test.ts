@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { simpleGit } from 'simple-git'
-import { GitService } from '../../src/main/git-service'
+import { GitService } from '../../src/main/git/git-service'
 
 const temporaryPaths: string[] = []
 

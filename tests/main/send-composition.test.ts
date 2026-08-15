@@ -10,7 +10,10 @@ vi.mock('../../../src/main/memory-service', () => ({
   estimateTokens: (text: string) => Math.ceil(text.length / 4)
 }))
 
-import { composeBrainstormSystemPrompt, composeTurnSystemPrompt } from '../../src/main/chat-engine'
+import {
+  composeBrainstormSystemPrompt,
+  composeTurnSystemPrompt
+} from '../../src/main/chat/chat-engine'
 import {
   composeBudgetedSend,
   computePromptBudget,

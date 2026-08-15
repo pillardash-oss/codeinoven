@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CoolifyProvider, CoolifyProviderError } from '../../../src/main/providers/coolify-provider'
-import type { DeploymentProviderContext } from '../../../src/main/deployment-provider.interface'
+import type { DeploymentProviderContext } from '../../../src/main/providers/deployment-provider.interface'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 

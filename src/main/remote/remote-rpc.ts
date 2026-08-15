@@ -15,9 +15,9 @@
 import type { Database } from '../database/database'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
-import { ProjectFilesService } from '../project-files-service'
-import type { ChatEngine } from '../chat-engine'
-import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
+import { ProjectFilesService } from '../editor/project-files-service'
+import type { ChatEngine } from '../chat/chat-engine'
+import { broadcastThreadDeleted, broadcastThreadUpdate } from '../chat/thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 import {
   authorizationForChannel,
@@ -41,16 +41,16 @@ import {
   AssignmentEngine,
   type AddAssignmentAnnotationInput
 } from '../../lib/engines/assignment-engine'
-import { SpecContextService } from '../spec-context-service'
-import { CheckpointManager } from '../checkpoint-manager'
-import { MemoryService } from '../memory-service'
-import { RepositoryService } from '../repository-service'
-import { GitService } from '../git-service'
-import { SecretVault } from '../secret-vault'
-import { GitHubAuthService } from '../github-auth-service'
+import { SpecContextService } from '../chat/spec-context-service'
+import { CheckpointManager } from '../storage/checkpoint-manager'
+import { MemoryService } from '../chat/memory-service'
+import { RepositoryService } from '../git/repository-service'
+import { GitService } from '../git/git-service'
+import { SecretVault } from '../storage/secret-vault'
+import { GitHubAuthService } from '../git/github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
-import { StorageEngine } from '../storage-engine'
-import { validateScopeBoard, validateScopeSlice } from '../ipc-validation'
+import { StorageEngine } from '../storage/storage-engine'
+import { validateScopeBoard, validateScopeSlice } from '../ipc/ipc-validation'
 import type {
   AssignmentModelSelection,
   AssignmentPlanContent,
@@ -72,7 +72,7 @@ import type {
   ThreadSettings,
   UserMessagePresentation
 } from '../../lib/types'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 
 export interface RemoteRpcServices {
   database: Database

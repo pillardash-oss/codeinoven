@@ -5,7 +5,7 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
 import type { AgentMessage } from '../../../src/lib/types'
-import { StorageEngine } from '../../../src/main/storage-engine'
+import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import type {
   CliLineParseContext,
   CliLineParseResult,

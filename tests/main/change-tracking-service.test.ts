@@ -8,7 +8,7 @@ import {
   ChangeTrackingService,
   CheckpointLimitError,
   type CheckpointBlobStore
-} from '../../src/main/change-tracking-service'
+} from '../../src/main/git/change-tracking-service'
 
 const temporaryPaths: string[] = []
 const execFileAsync = promisify(execFile)

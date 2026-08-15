@@ -8,7 +8,7 @@ import type { Project } from '../../src/lib/types'
 import { ProjectManager } from '../../src/lib/engines/project-manager'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
-import { SpecContextService } from '../../src/main/spec-context-service'
+import { SpecContextService } from '../../src/main/chat/spec-context-service'
 
 const temporaryPaths: string[] = []
 const testDatabases: Database[] = []

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, readFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { SecretVault } from '../../src/main/secret-vault'
-import { StorageEngine } from '../../src/main/storage-engine'
+import { SecretVault } from '../../src/main/storage/secret-vault'
+import { StorageEngine } from '../../src/main/storage/storage-engine'
 
 const { safeStorage } = vi.hoisted(() => ({
   safeStorage: {

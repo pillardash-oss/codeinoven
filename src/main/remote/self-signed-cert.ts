@@ -15,7 +15,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { networkInterfaces } from 'node:os'
 import { isIP } from 'node:net'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 
 export interface SelfSignedCertificate {
   key: string

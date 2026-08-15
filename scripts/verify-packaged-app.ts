@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync, accessSync } from 'node:fs'
 import { join, resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { Logger } from '../src/main/logger'
+import { Logger } from '../src/main/system/logger'
 
 type Options = {
   'artifact-dir': string

@@ -6,7 +6,7 @@ import {
   type ImageDescriptorBatchCapability,
   type ImageDescriptorResult,
   type ResolvedImageEntry
-} from '../../src/main/image-descriptor-provider'
+} from '../../src/main/providers/image-descriptor-provider'
 import { imageDescriptorBatchCapability } from '../../src/main/services/image-descriptor'
 
 const DATA = 'data:image/png;base64,iVBORw0KGgo='

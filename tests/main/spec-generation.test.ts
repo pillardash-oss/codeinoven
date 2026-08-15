@@ -24,14 +24,14 @@ import {
   mergeProviderCatalogs,
   mergeAgentMessages,
   assertHarnessRequestCapabilities
-} from '../../src/main/chat-engine'
+} from '../../src/main/chat/chat-engine'
 import {
   PromptAssembler,
   layerDevHash,
   layerSize,
   normalizeLayerContent
-} from '../../src/main/prompt-assembler'
-import { MemoryService } from '../../src/main/memory-service'
+} from '../../src/main/chat/prompt-assembler'
+import { MemoryService } from '../../src/main/chat/memory-service'
 
 const validContent = {
   problem: 'Users need a reliable specification workflow.',

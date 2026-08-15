@@ -19,7 +19,7 @@
 import createDatabaseWorkerThread from './database-worker-thread.ts?nodeWorker'
 import type { Worker, WorkerOptions } from 'worker_threads'
 import { dirname, join } from 'path'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import type { AgentMessage } from '../../lib/types'
 import type { ProviderDeltaSyncResult } from './repositories/agent-message-repo'
 

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { describe, expect, it } from 'vitest'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../src/lib/types'
-import { StorageEngine } from '../../src/main/storage-engine'
+import { StorageEngine } from '../../src/main/storage/storage-engine'
 
 async function setup(): Promise<{
   storage: StorageEngine

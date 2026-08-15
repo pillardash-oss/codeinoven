@@ -5,7 +5,7 @@ import type { Database } from '../../main/database/database'
 import { AssignmentRepo } from '../../main/database/repositories/assignment-repo'
 import type { AssignmentApiCapabilityRow } from '../../main/database/repositories/assignment-repo'
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
-import type { StorageEngine } from '../../main/storage-engine'
+import type { StorageEngine } from '../../main/storage/storage-engine'
 import type {
   AssignmentPlan,
   AssignmentAnnotation,

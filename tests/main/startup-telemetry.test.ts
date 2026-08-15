@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { StartupTelemetry } from '../../src/main/startup-telemetry'
+import { StartupTelemetry } from '../../src/main/system/startup-telemetry'
 
 describe('StartupTelemetry phase timestamps', () => {
   it('computes deltas relative to the previous phase, starting from zero', () => {

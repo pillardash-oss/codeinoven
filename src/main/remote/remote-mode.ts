@@ -9,14 +9,14 @@
  */
 
 import { app, BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { join } from 'node:path'
 import { hostname, platform } from 'node:os'
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server, type ServerResponse } from 'node:http'
-import { Logger } from '../logger'
-import { sendToRenderer } from '../renderer-delivery'
-import { SecretVault } from '../secret-vault'
+import { Logger } from '../system/logger'
+import { sendToRenderer } from '../ipc/renderer-delivery'
+import { SecretVault } from '../storage/secret-vault'
 import { CloudRelayClient } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
@@ -83,7 +83,7 @@ export interface RemoteModeOptions {
   /** Optional remote RPC dispatcher that serves the phone chat client. */
   rpc?: RemoteRpcDispatcher | null
   /** Optional storage used to persist the remote-mode flag across restarts. */
-  storage?: import('../storage-engine').StorageEngine | null
+  storage?: import('../storage/storage-engine').StorageEngine | null
   /** Device credential service backing per-device identity and revocation. */
   credentials?: DeviceCredentialService | null
   /**
@@ -420,7 +420,7 @@ export class RemoteModeController {
   private readonly staticRoot: string
   private readonly iconPath: string
   private readonly rpc: RemoteRpcDispatcher | null
-  private readonly storage: import('../storage-engine').StorageEngine | null
+  private readonly storage: import('../storage/storage-engine').StorageEngine | null
   private readonly credentials: DeviceCredentialService | null
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>

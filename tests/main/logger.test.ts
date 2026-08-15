@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { Logger } from '../../src/main/logger'
+import { Logger } from '../../src/main/system/logger'
 
 const temporaryPaths: string[] = []
 

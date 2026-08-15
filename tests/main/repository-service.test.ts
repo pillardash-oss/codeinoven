@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, realpath, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { RepositoryService } from '../../src/main/repository-service'
+import { RepositoryService } from '../../src/main/git/repository-service'
 
 const temporaryPaths: string[] = []
 

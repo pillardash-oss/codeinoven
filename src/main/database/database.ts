@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import { DATABASE_SCHEMA_SQL } from './schema'
 import {
   DatabaseWorker,

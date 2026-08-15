@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTokenUsage } from '../../src/lib/types'
-import { registerModelPricing, estimateTokenCostUsd } from '../../src/main/pricing'
+import { registerModelPricing, estimateTokenCostUsd } from '../../src/main/providers/pricing'
 
 const gpt5Tokens: AgentTokenUsage = {
   input: 100,

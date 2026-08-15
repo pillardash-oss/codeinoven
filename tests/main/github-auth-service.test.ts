@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GitHubAuthService } from '../../src/main/github-auth-service'
-import type { SecretVault } from '../../src/main/secret-vault'
+import { GitHubAuthService } from '../../src/main/git/github-auth-service'
+import type { SecretVault } from '../../src/main/storage/secret-vault'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 

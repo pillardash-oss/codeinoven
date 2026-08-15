@@ -10,7 +10,7 @@ import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS
 } from '../../../src/main/database/database-worker'
-import { Logger } from '../../../src/main/logger'
+import { Logger } from '../../../src/main/system/logger'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
 import { HarnessUsageRepo } from '../../../src/main/database/repositories/harness-usage-repo'
 import { ThreadManager } from '../../../src/lib/engines/thread-manager'
