@@ -1,6 +1,7 @@
 <script lang="ts">
   import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -76,9 +77,20 @@
       fit.observeResize()
       fit.fit()
 
+      // Only render the caret while this terminal actually holds focus.
+      const cursorVisibility = new TerminalCursorController(terminal)
+      const onFocusIn = (): void => cursorVisibility.focus()
+      const onFocusOut = (): void => cursorVisibility.blur()
+      host.addEventListener('focusin', onFocusIn)
+      host.addEventListener('focusout', onFocusOut)
+
       term = terminal
 
       unsubs.push(
+        () => {
+          host.removeEventListener('focusin', onFocusIn)
+          host.removeEventListener('focusout', onFocusOut)
+        },
         subscribe(`pty:data:${terminalId}`, (data) => {
           terminal.write(data as string)
         }),
