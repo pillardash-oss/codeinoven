@@ -13,13 +13,16 @@
 
   let remoteStatus = $state<RemoteModeStatus | null>(null)
   let pendingApprovals = $state<RemotePendingStepUpApproval[]>([])
-  let loading = $state(true)
+  let remoteLoading = $state(true)
+  let accountLoading = $state(true)
   let busy = $state(false)
   let copied = $state<'code' | 'link' | null>(null)
-  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
+  let accountState = $state<AccountProfileState>({ status: 'pending', profile: null })
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let accountError = $state('')
+  let enrollmentError = $state('')
 
+  const initializing = $derived(remoteLoading || accountLoading)
   const accountProfile = $derived(accountState.profile)
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
@@ -84,15 +87,17 @@
     await invoke('remote:rejectStepUp', approvalId)
   }
 
-  async function beginCloudEnrollment(): Promise<void> {
+  async function beginCloudEnrollment(reportFailure = true): Promise<void> {
     if (busy) return
     busy = true
-    accountError = ''
+    enrollmentError = ''
     try {
       remoteStatus = await invoke('remote:beginCloudEnrollment')
     } catch {
-      accountError =
-        'Desktop enrollment could not be started. Check the remote service and try again.'
+      if (reportFailure) {
+        enrollmentError =
+          'A pairing code could not be created. Check the remote service and try again.'
+      }
     } finally {
       busy = false
     }
@@ -126,7 +131,8 @@
       accountResult.status === 'fulfilled'
         ? accountResult.value
         : { status: 'signed-out', profile: null }
-    loading = false
+    remoteLoading = false
+    accountLoading = false
 
     if (
       accountState.status === 'signed-in' &&
@@ -135,7 +141,7 @@
       remoteStatus.cloud.state !== 'connecting' &&
       remoteStatus.cloud.state !== 'enrollment-pending'
     ) {
-      await beginCloudEnrollment()
+      await beginCloudEnrollment(false)
     }
   }
 
@@ -152,10 +158,11 @@
   onMount(() => {
     const unsubStatus = subscribe('remote:status', (status) => {
       remoteStatus = status
-      loading = false
+      remoteLoading = false
     })
     const unsubAccount = subscribe('account:profileChanged', (state) => {
       accountState = state
+      accountLoading = false
       accountError = state.status === 'error' ? state.message : ''
       if (
         state.status === 'signed-in' &&
@@ -164,7 +171,7 @@
         remoteStatus.cloud.state !== 'connecting' &&
         remoteStatus.cloud.state !== 'enrollment-pending'
       ) {
-        void beginCloudEnrollment()
+        void beginCloudEnrollment(false)
       }
     })
     const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
@@ -223,8 +230,16 @@
       </div>
     {/if}
 
-    {#if loading}
-      <p class="mt-3 text-xs text-muted" aria-live="polite">Loading remote access…</p>
+    {#if initializing}
+      <div class="mt-4 flex items-start gap-2 rounded-lg bg-raised p-3" aria-live="polite">
+        <RefreshCw size={14} class="mt-0.5 shrink-0 text-primary" />
+        <div>
+          <p class="text-xs font-semibold text-foreground">Restoring your account</p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            Checking your saved sign-in and remote access status…
+          </p>
+        </div>
+      </div>
     {:else if !remoteStatus}
       <p class="mt-3 text-xs text-danger" aria-live="polite">
         Remote access status could not be loaded.
@@ -388,16 +403,7 @@
         </button>
       </div>
     {:else if accountState.status === 'signed-in'}
-      {#if !remoteStatus.cloud.desktopId && remoteStatus.cloud.state === 'error'}
-        <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
-          <p class="text-xs font-semibold text-foreground">
-            Your account is connected, but the pairing code could not be created.
-          </p>
-          <p class="mt-1 text-xs leading-relaxed text-muted">
-            Retry desktop enrollment to generate a QR code and one-time code for your phone.
-          </p>
-        </div>
-      {:else if !remoteStatus.cloud.desktopId}
+      {#if !remoteStatus.cloud.desktopId && remoteStatus.cloud.state === 'connecting'}
         <div
           class="mt-3 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3"
         >
@@ -409,21 +415,32 @@
             </p>
           </div>
         </div>
-      {/if}
-      <div class="mt-3 flex items-center justify-between gap-3 text-xs">
-        <span class="text-muted">Connection</span>
-        <span class="font-medium text-foreground">
-          {remoteStatus.cloud.state === 'online'
-            ? 'Ready'
-            : remoteStatus.cloud.state === 'connecting'
-              ? 'Connecting…'
-              : remoteStatus.cloud.desktopId
-                ? 'Offline'
-                : 'Not enrolled'}
-        </span>
-      </div>
-      {#if remoteStatus.cloud.lastError}
-        <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
+      {:else if !remoteStatus.cloud.desktopId}
+        <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <p class="text-xs font-semibold text-foreground">Pair your phone</p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            You are signed in. Create a temporary QR code to add your phone to this desktop.
+          </p>
+        </div>
+        {#if enrollmentError}
+          <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {enrollmentError}
+          </p>
+        {/if}
+      {:else}
+        <div class="mt-3 flex items-center justify-between gap-3 text-xs">
+          <span class="text-muted">Connection</span>
+          <span class="font-medium text-foreground">
+            {remoteStatus.cloud.state === 'online'
+              ? 'Ready'
+              : remoteStatus.cloud.state === 'connecting'
+                ? 'Connecting…'
+                : 'Offline'}
+          </span>
+        </div>
+        {#if remoteStatus.cloud.lastError}
+          <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
+        {/if}
       {/if}
     {:else}
       <p class="mt-3 text-xs text-muted">Account status is unavailable. Refresh and try again.</p>
@@ -447,7 +464,7 @@
             ? 'Create new code'
             : busy
               ? 'Creating pairing code…'
-              : 'Retry pairing'}
+              : 'Create pairing code'}
         </button>
         {#if remoteStatus.cloud.desktopId}
           <button
