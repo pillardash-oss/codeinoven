@@ -145,7 +145,9 @@ function mapCodexModel(value: unknown): ProviderModel | null {
   const additionalSpeedTiers = Array.isArray(model?.['additionalSpeedTiers'])
     ? model['additionalSpeedTiers']
     : []
-  const thinkingPresets = codexThinkingPresets(model?.['supportedReasoningEfforts'])
+  const thinkingPresets = codexModelSupportsReasoning(id)
+    ? codexThinkingPresets(model?.['supportedReasoningEfforts'])
+    : undefined
   const contextWindow =
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
@@ -365,8 +367,9 @@ export class CodexDriver extends PersistentCliDriver {
         ),
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
-        effort: codexEffort(options.settings.thinkingLevel),
-        ...(requiresDisabledReasoningSummary(options.settings.modelId) ? { summary: 'none' } : {}),
+        ...(codexModelSupportsReasoning(options.settings.modelId)
+          ? { effort: codexEffort(options.settings.thinkingLevel) }
+          : { summary: 'none' }),
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
       })
       const turn = recordValue(turnResult['turn'])
@@ -1393,9 +1396,9 @@ function codexEffort(value: ThreadSettings['thinkingLevel']): string {
   return value
 }
 
-/** GPT-5.3 Codex Spark rejects the Responses API reasoning.summary parameter. */
-function requiresDisabledReasoningSummary(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith('gpt-5.3-codex-spark')
+/** GPT-5.3 Codex Spark does not accept configurable reasoning parameters. */
+function codexModelSupportsReasoning(modelId: string): boolean {
+  return !modelId.toLowerCase().startsWith('gpt-5.3-codex-spark')
 }
 
 function normalizeAppServerItem(
