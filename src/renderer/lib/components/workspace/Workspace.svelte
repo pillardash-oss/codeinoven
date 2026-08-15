@@ -18,7 +18,14 @@
     FolderKanban,
     ArrowUpDown,
     Check,
-    ChevronUp
+    ChevronUp,
+    BrainCircuit,
+    Bug,
+    Cloud,
+    FileDiff,
+    Files,
+    Info,
+    SquareTerminal
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -37,6 +44,7 @@
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
   import TemporaryChatView from '../chats/TemporaryChatView.svelte'
@@ -76,6 +84,7 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -702,6 +711,144 @@
       })
     }
     return actions
+  })
+
+  // ─── Context dock (right rail) ───────────────────────────────────────────
+
+  /** Whether `kind` is the panel currently on screen in the right sidebar. */
+  function dockKindActive(kind: ContextSidebarTab['kind']): boolean {
+    return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === kind
+  }
+
+  /**
+   * The dock's toggle contract: clicking the active tool collapses the panel,
+   * clicking any other tool swaps the panel content without closing it.
+   */
+  function toggleDockPanel(kind: ContextSidebarTab['kind'], open: () => void): void {
+    if (dockKindActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
+    open()
+  }
+
+  function openMemoryTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+  }
+
+  /** Terminals toggle their own region: the bottom dock when docked there,
+   *  otherwise the right sidebar like every other tool. */
+  function toggleTerminal(): void {
+    if (!selectedThread) return
+    const tab = contextSidebarState.activeTab
+    const terminalActive =
+      tab?.kind === 'terminal' &&
+      tab.projectId === selectedThread.projectId &&
+      tab.threadId === selectedThread.id
+
+    if (contextSidebarState.terminalPlacement === 'bottom') {
+      if (terminalActive && contextSidebarState.terminalDockVisible) {
+        contextSidebarState.toggleTerminalDock()
+      } else {
+        contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+      }
+      return
+    }
+
+    if (contextSidebarState.sidebarVisible && terminalActive) {
+      contextSidebarState.hide()
+    } else {
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+    }
+  }
+
+  /** True while a terminal is on screen in whichever region hosts terminals. */
+  let terminalOpen = $derived(
+    contextSidebarState.terminalPlacement === 'bottom'
+      ? contextSidebarState.terminalDockVisible
+      : Boolean(
+          contextSidebarState.sidebarVisible && contextSidebarState.activeTab?.kind === 'terminal'
+        )
+  )
+
+  /** Project files and diffs only exist for local projects with a real path. */
+  let projectToolsAvailable = $derived(
+    Boolean(activeProject?.source === 'local' && activeProject.path)
+  )
+
+  /**
+   * Dock contents, grouped: workspace tools, then session tools. Every entry is
+   * a toggle — the rail itself is always visible, only the panel comes and goes.
+   */
+  let dockGroups = $derived.by((): ContextDockItem[][] => {
+    if (!selectedThread) return []
+
+    const workspaceTools: ContextDockItem[] = []
+    if (projectToolsAvailable) {
+      workspaceTools.push(
+        {
+          id: 'files',
+          label: 'Files',
+          icon: Files,
+          active: dockKindActive('files'),
+          onSelect: () => toggleDockPanel('files', () => void openFiles())
+        },
+        {
+          id: 'diff',
+          label: 'Changes',
+          icon: FileDiff,
+          active: dockKindActive('diff'),
+          onSelect: () => toggleDockPanel('diff', openDiff)
+        }
+      )
+    }
+    if (workspaceState.terminalAvailable) {
+      workspaceTools.push({
+        id: 'terminal',
+        label: terminalOpen ? 'Hide terminal' : 'Show terminal',
+        icon: SquareTerminal,
+        active: terminalOpen,
+        onSelect: toggleTerminal
+      })
+    }
+
+    const sessionTools: ContextDockItem[] = [
+      {
+        id: 'sources',
+        label: 'Sources',
+        icon: Info,
+        active: dockKindActive('sources'),
+        onSelect: () => toggleDockPanel('sources', openSourcesTab)
+      },
+      {
+        id: 'memory',
+        label: 'Memory',
+        icon: BrainCircuit,
+        active: dockKindActive('memory'),
+        badge: memoryProposalState.hasPending ? 'attention' : undefined,
+        badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
+        onSelect: () => toggleDockPanel('memory', openMemoryTab)
+      },
+      {
+        id: 'cloud-deployment',
+        label: 'Cloud deployments',
+        icon: Cloud,
+        active: dockKindActive('cloud-deployment'),
+        onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
+      }
+    ]
+    if (import.meta.env.DEV) {
+      sessionTools.push({
+        id: 'debugger',
+        label: 'Debugger',
+        icon: Bug,
+        active: dockKindActive('debugger'),
+        onSelect: () => toggleDockPanel('debugger', openDebugger)
+      })
+    }
+
+    return [workspaceTools, sessionTools]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -2937,9 +3084,9 @@
   {/if}
 
   <!-- Main Content -->
-  <section class="min-w-0 flex-1 overflow-hidden">
+  <section class="flex min-w-0 flex-1 overflow-hidden">
     <div
-      class="grid h-full min-h-0 min-w-0"
+      class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
@@ -3185,6 +3332,9 @@
         </button>
       {/if}
     </div>
+    {#if dockGroups.some((group) => group.length > 0)}
+      <ContextDock groups={dockGroups} />
+    {/if}
   </section>
 </div>
 
