@@ -115,6 +115,19 @@ export interface MemoryContextTab {
   memorySection: MemorySection
 }
 
+/**
+ * The Assignment / Achievement coordinator, docked into the sidebar. The tab
+ * carries no data of its own: the panel is a snippet published by the thread
+ * that owns the coordination, registered on `coordinatorDockState`.
+ */
+export interface CoordinatorContextTab {
+  id: string
+  kind: 'coordinator'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export type TemporaryChatMode = 'audit' | 'elaborate' | 'quick'
 
 export interface TemporaryChatContextTab {
@@ -157,6 +170,7 @@ export type ContextSidebarTab =
   | TemporaryChatContextTab
   | NotificationContextTab
   | MemoryContextTab
+  | CoordinatorContextTab
 
 interface ThreadSidebarContext {
   projectId: string
@@ -641,6 +655,35 @@ class ContextSidebarState {
       projectId,
       threadId
     })
+  }
+
+  /**
+   * Dock the coordinator for a thread. The title tracks the coordination kind
+   * (Assignment vs Achievement), so an existing tab is re-titled rather than
+   * duplicated when a thread switches modes.
+   */
+  openCoordinator(projectId: string, threadId: string, title: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `coordinator:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      existing.title = title
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'coordinator',
+      title,
+      projectId,
+      threadId
+    })
+  }
+
+  /** Whether the coordinator tab is already docked for a thread. */
+  hasCoordinator(projectId: string, threadId: string): boolean {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    return context?.tabs.some((tab) => tab.kind === 'coordinator') ?? false
   }
 
   openMemory(projectId: string, threadId: string, section?: MemorySection): void {
