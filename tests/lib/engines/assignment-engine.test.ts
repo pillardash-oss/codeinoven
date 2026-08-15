@@ -513,7 +513,22 @@ describe('AssignmentEngine', () => {
       auditCycle: { status: 'available' as const, availableAt: 100 },
       content: {
         ...active.content,
-        tasks: active.content.tasks.map((task) => ({ ...task, status: 'completed' as const }))
+        tasks: active.content.tasks.map((task) => ({
+          ...task,
+          status: 'completed' as const,
+          report: {
+            status: 'ready_for_audit' as const,
+            summary: 'Done.',
+            evidence: ['baseline', 'check'],
+            reportedAt: 100
+          },
+          review: {
+            decision: 'pass' as const,
+            checklistResults: [],
+            notes: 'Passed.',
+            reviewedAt: 100
+          }
+        }))
       }
     }
     db.run(
@@ -560,11 +575,14 @@ describe('AssignmentEngine', () => {
 
     const reopened = await engine.reopenCompletedTask('project-1', coordinatorId, 'design')
     expect(reopened.status).toBe('running')
-    expect(reopened.content.tasks.find((task) => task.id === 'design')).toMatchObject({
+    const reopenedDesign = reopened.content.tasks.find((task) => task.id === 'design')
+    expect(reopenedDesign).toMatchObject({
       status: 'rework',
       workKind: 'rework',
       reworkCycle: 1
     })
+    expect(reopenedDesign?.report).toBeUndefined()
+    expect(reopenedDesign?.review).toBeUndefined()
   })
 
   it('re-dispatches a failed worker task to a fresh worker thread', async () => {

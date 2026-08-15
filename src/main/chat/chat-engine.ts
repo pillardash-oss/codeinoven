@@ -1168,6 +1168,10 @@ export class ChatEngine {
   private stoppedAssignmentAuditRuns = new Set<string>()
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
   private stoppedAssignmentSessions = new Set<string>()
+  /** Consecutive no-op coordinator continuations per Assignment (stall guard). */
+  private assignmentContinuationStalls = new Map<string, number>()
+  /** Max consecutive forced continuations before an Assignment stall surfaces. */
+  private static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 2
   /** Concurrent late-Assignment requests for one coordinator share one model run. */
   private activeAssignmentDraftRuns = new Map<string, Promise<AssignmentPlan>>()
   private activeAchievementAuditorEnsures = new Map<string, Promise<Thread>>()
@@ -13833,16 +13837,53 @@ export class ChatEngine {
     if (assignmentContinuation) {
       try {
         await this.ensureAssignmentApi()
-        const dispatched = await this.sendAssignmentCoordinatorPrompt(
+        const assignmentId = assignmentContinuation.assignment.id
+        const coordinatorThreadId = assignmentContinuation.assignment.coordinatorThreadId
+        let dispatched = await this.sendAssignmentCoordinatorPrompt(
           assignmentContinuation.assignment,
           assignmentContinuation.settings,
           this.coordinatorAssignmentPrompt(assignmentContinuation.assignment)
         )
         if (!dispatched) {
-          Logger.info('Assignment continuation skipped because its snapshot is unchanged', {
-            assignmentId: assignmentContinuation.assignment.id,
-            threadId: assignmentContinuation.assignment.coordinatorThreadId
-          })
+          const stalls = (this.assignmentContinuationStalls.get(assignmentId) ?? 0) + 1
+          if (stalls > ChatEngine.MAX_ASSIGNMENT_CONTINUATION_STALLS) {
+            this.assignmentContinuationStalls.delete(assignmentId)
+            Logger.error('Assignment coordinator stalled without making progress', {
+              assignmentId,
+              threadId: coordinatorThreadId,
+              consecutiveNoOpContinuations: stalls
+            })
+            await this.threadManager.setStatus(info.projectId, coordinatorThreadId, 'interrupted', {
+              read: false
+            })
+            this.broadcastToast(
+              'The Sr. Engineer ended its turn without resolving the Assignment tasks. Resume coordination to continue.',
+              'info'
+            )
+          } else {
+            this.assignmentContinuationStalls.set(assignmentId, stalls)
+            dispatched = await this.sendAssignmentCoordinatorPrompt(
+              assignmentContinuation.assignment,
+              assignmentContinuation.settings,
+              this.coordinatorAssignmentPrompt(assignmentContinuation.assignment),
+              undefined,
+              true
+            )
+            if (dispatched) {
+              Logger.info('Forced Assignment coordinator continuation after a no-op turn', {
+                assignmentId,
+                threadId: coordinatorThreadId,
+                consecutiveNoOpContinuations: stalls
+              })
+            } else {
+              Logger.info('Assignment continuation skipped because its snapshot is unchanged', {
+                assignmentId,
+                threadId: coordinatorThreadId
+              })
+            }
+          }
+        } else {
+          this.assignmentContinuationStalls.delete(assignmentId)
         }
       } catch (error) {
         Logger.error('Assignment continuation failed', {
