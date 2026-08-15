@@ -132,6 +132,7 @@
     AgentDefaultsConfig,
     AgentModelSelection,
     AgentRole,
+    AgentQuestion,
     ProviderCatalog,
     PromptAttachment,
     PromptAssignmentTaskReference,
@@ -5829,6 +5830,52 @@
     )
   }
 
+  /** Open the explain side chat for a single agent question so the user can
+   *  understand it (and its options) before answering. The card already pauses
+   *  the question timeout; here we populate the chat and set a question-specific
+   *  auto prompt. */
+  function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
+    const selection = formatQuestionForExplain(question)
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      'elaborate',
+      selection,
+      temporaryConversationContext(),
+      settings,
+      true,
+      EXPLAIN_QUESTION_PROMPT
+    )
+  }
+
+  const EXPLAIN_QUESTION_PROMPT =
+    'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral — do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
+
+  function formatQuestionForExplain(question: AgentQuestion): string {
+    const parts: string[] = []
+    if (question.header) parts.push(`Question: ${question.header}`)
+    if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
+    if (question.description) parts.push(`Description: ${question.description}`)
+    if (question.richOptions && question.richOptions.length > 0) {
+      parts.push(
+        'Options:',
+        ...question.richOptions.map((option) =>
+          [
+            `- ${option.label}`,
+            option.description ? `  ${option.description}` : '',
+            option.recommended ? '  (recommended by the agent)' : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        )
+      )
+    } else if (question.options && question.options.length > 0) {
+      parts.push('Options:', ...question.options.map((option) => `- ${option}`))
+    }
+    if (question.multiple) parts.push('(The user may select more than one option.)')
+    return parts.join('\n\n')
+  }
+
   // ─── Message attribution (model + harness) ────────────────────────────
 
   let allModels = $derived(providers.flatMap((p) => p.models))
@@ -7161,6 +7208,7 @@
                   onAnswer={handleQuestionAnswer}
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
+                  onExplain={handleQuestionExplain}
                 />
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
