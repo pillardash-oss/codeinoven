@@ -25,7 +25,13 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
-import { MemoryService, validateMemoryConfig } from '../chat/memory-service'
+import {
+  MemoryService,
+  parseMemoryExport,
+  serializeMemoryExport,
+  validateMemoryConfig,
+  validateMemoryExportKind
+} from '../chat/memory-service'
 import { harnessLoadsAgentsMd } from '../agents/harness-registry'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { SpecContextService } from '../chat/spec-context-service'
@@ -1662,6 +1668,63 @@ export function registerIpcHandlers(
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
+      })
+    }
+  )
+
+  ipcMain.handle('memory:export', async (_, kind: unknown, projectId?: unknown) => {
+    const scope = validateMemoryExportKind(kind, projectId)
+    const entries = await memoryService.exportEntries(scope.kind, scope.projectId)
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const defaultPath = `${APP_SLUG}-memory-${scope.kind}-${new Date().toISOString().slice(0, 10)}.json`
+    const result = win
+      ? await dialog.showSaveDialog(win, {
+          title: `Export ${APP_NAME} Memory`,
+          defaultPath,
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+      : await dialog.showSaveDialog({
+          title: `Export ${APP_NAME} Memory`,
+          defaultPath,
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, serializeMemoryExport({ ...scope, entries }), 'utf-8')
+    return result.filePath
+  })
+
+  ipcMain.handle('memory:import', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: `Import ${APP_NAME} Memory`,
+          properties: ['openFile'],
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+      : await dialog.showOpenDialog({
+          title: `Import ${APP_NAME} Memory`,
+          properties: ['openFile'],
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const raw = await readFile(result.filePaths[0], 'utf-8')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      throw new TypeError('The selected file is not valid JSON')
+    }
+    return parseMemoryExport(parsed)
+  })
+
+  ipcMain.handle(
+    'memory:importApply',
+    async (_, preview: unknown, kind: unknown, projectId?: unknown) => {
+      const safePreview = parseMemoryExport(preview)
+      const scope = validateMemoryExportKind(kind, projectId)
+      return memoryService.importEntries(safePreview.entries, {
+        kind: scope.kind,
+        projectId: scope.projectId
       })
     }
   )

@@ -9,6 +9,7 @@
     type MemoryScope
   } from '$shared/types'
   import MemoryEntryComponent from './MemoryEntry.svelte'
+  import MemoryTransfer from './MemoryTransfer.svelte'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
@@ -24,6 +25,8 @@
     onMemoryEnabledChange?: (enabled: boolean) => Promise<void>
     onChatMemoryEnabledChange?: (enabled: boolean) => Promise<void>
     activeSection?: MemorySection
+    /** Whether the panel may show memory transfer (export/import) controls. */
+    allowTransfer?: boolean
   }
 
   interface PendingProposal {
@@ -44,7 +47,8 @@
     chatMemoryEnabled,
     onMemoryEnabledChange,
     onChatMemoryEnabledChange,
-    activeSection = $bindable('active')
+    activeSection = $bindable('active'),
+    allowTransfer = true
   }: Props = $props()
 
   let entries = $state<MemoryEntry[]>([])
@@ -518,6 +522,12 @@
       </p>
     {/if}
 
+    {#if variant === 'settings' && allowTransfer}
+      <div class="mb-5">
+        <MemoryTransfer {variant} {scope} onImported={load} />
+      </div>
+    {/if}
+
     {#if error}
       <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
         {error}
@@ -721,6 +731,12 @@
           <span class="text-xs text-primary">Saved</span>
         {/if}
       </div>
+
+      {#if variant === 'sidebar' && allowTransfer && projectId}
+        <div class="mb-4">
+          <MemoryTransfer {variant} {projectId} onImported={load} />
+        </div>
+      {/if}
     </div>
 
     <!-- Entries list (scrollable) -->
