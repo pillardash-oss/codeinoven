@@ -1,6 +1,28 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { MessagesSquare } from '@lucide/svelte'
+  import type { Component } from 'svelte'
+  import {
+    Bell,
+    Blocks,
+    BookOpen,
+    Brain,
+    FileSearch,
+    FolderOpen,
+    FolderPlus,
+    GitBranch,
+    Info,
+    LayoutDashboard,
+    ListTree,
+    MessageSquarePlus,
+    MessagesSquare,
+    Server,
+    SlidersHorizontal,
+    SquarePen,
+    Terminal,
+    User,
+    Users,
+    Wrench
+  } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import Toaster from '$lib/components/ui/Toaster.svelte'
@@ -130,6 +152,7 @@
       description: 'Browse projects and engineering threads',
       category: 'navigation',
       source: applicationSource,
+      icon: FolderOpen,
       keywords: ['workspace', 'threads']
     },
     {
@@ -138,6 +161,7 @@
       description: 'Browse standalone conversations',
       category: 'navigation',
       source: applicationSource,
+      icon: MessagesSquare,
       keywords: ['conversations', 'messages']
     },
     {
@@ -146,6 +170,7 @@
       description: 'Review work across projects',
       category: 'navigation',
       source: applicationSource,
+      icon: LayoutDashboard,
       keywords: ['board', 'overview']
     },
     {
@@ -154,6 +179,7 @@
       description: 'Browse threads across all projects',
       category: 'navigation',
       source: applicationSource,
+      icon: ListTree,
       keywords: ['timeline', 'all']
     }
   ] satisfies ActionDefinition[]
@@ -162,26 +188,50 @@
     id: SettingsSection
     label: string
     keywords: string[]
+    icon: Component
   }> = [
-    { id: 'general', label: 'General', keywords: ['appearance', 'theme', 'preferences'] },
-    { id: 'memory', label: 'Memory', keywords: ['instructions', 'knowledge'] },
+    {
+      id: 'general',
+      label: 'General',
+      keywords: ['appearance', 'theme', 'preferences'],
+      icon: SlidersHorizontal
+    },
+    {
+      id: 'memory',
+      label: 'Memory',
+      keywords: ['instructions', 'knowledge'],
+      icon: Brain
+    },
     {
       id: 'audits',
       label: 'Agents',
-      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review']
+      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
+      icon: Users
     },
-    { id: 'harnesses', label: 'Harnesses', keywords: ['models', 'providers', 'harnesses'] },
+    {
+      id: 'harnesses',
+      label: 'Harnesses',
+      keywords: ['models', 'providers', 'harnesses'],
+      icon: Blocks
+    },
     {
       id: 'utilities',
       label: 'Utilities',
-      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools']
+      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
+      icon: Wrench
     },
-    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'] },
-    { id: 'profile', label: 'Profile', keywords: ['account', 'usage', 'activity', 'cloud'] },
+    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
+    {
+      id: 'profile',
+      label: 'Profile',
+      keywords: ['account', 'usage', 'activity', 'cloud'],
+      icon: User
+    },
     {
       id: 'about',
       label: 'About',
-      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug']
+      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
+      icon: Info
     }
   ]
 
@@ -195,6 +245,7 @@
     description: `Open the ${tab.label} settings tab`,
     category: 'navigation',
     source: applicationSource,
+    icon: tab.icon,
     keywords: ['settings', 'preferences', ...tab.keywords],
     ...(tab.id === 'general' ? { shortcut: ['Ctrl', ','] } : {})
   }))
@@ -212,6 +263,7 @@
         description: 'Choose how to add a project — local folder or SSH',
         category: 'command',
         source: applicationSource,
+        icon: FolderPlus,
         shortcut: ['Ctrl', 'Shift', 'N'],
         keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
       },
@@ -221,6 +273,7 @@
         description: 'Open or close the notifications sidebar',
         category: 'navigation',
         source: applicationSource,
+        icon: Bell,
         keywords: ['alerts', 'completed', 'attention']
       }
     ]
@@ -232,6 +285,7 @@
         description: 'Find and open a file from any local project',
         category: 'file',
         source: applicationSource,
+        icon: FileSearch,
         keywords: ['quick open', 'find', 'workspace']
       })
     }
@@ -243,6 +297,7 @@
         description: 'Start a standalone conversation',
         category: 'command',
         source: applicationSource,
+        icon: MessageSquarePlus,
         shortcut: ['Ctrl', 'N'],
         keywords: ['conversation', 'message']
       })
@@ -256,6 +311,7 @@
         description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -270,6 +326,7 @@
         description: `Create a thread in ${workspaceState.activeProject.name}`,
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -277,13 +334,38 @@
 
     const thread = workspaceVisible ? workspaceState.selectedThread : null
     if (thread) {
+      const threadProject = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
       actions.push(
+        {
+          id: 'app:terminal',
+          title: 'Open terminal',
+          description: 'Open a terminal for this thread',
+          category: 'navigation',
+          source: applicationSource,
+          icon: Terminal,
+          keywords: ['shell', 'console', 'command line', 'run']
+        },
+        {
+          id: 'app:git',
+          title: 'Open git panel',
+          description: 'View changes, commits and branches for this project',
+          category: 'navigation',
+          source: applicationSource,
+          icon: GitBranch,
+          keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
+          ...(threadProject?.changeTrackingMode !== 'git'
+            ? { disabledReason: 'This project does not use Git tracking' }
+            : {})
+        },
         {
           id: 'app:memory',
           title: 'Toggle memory sidebar',
           description: 'View the memory context available to this thread',
           category: 'navigation',
           source: applicationSource,
+          icon: Brain,
           keywords: ['prompt', 'instructions', 'context']
         },
         {
@@ -292,6 +374,7 @@
           description: 'View sources attached to this conversation',
           category: 'navigation',
           source: applicationSource,
+          icon: BookOpen,
           keywords: ['citations', 'references', 'attachments']
         }
       )
@@ -317,7 +400,9 @@
     ...paletteContextActions,
     ...navigationActions,
     ...settingsActions,
-    ...actionContext.actions
+    // Harness-bound actions (model pickers, slash commands) belong to the inline
+    // menus — the global Cmd+K surface keeps app-level and cross-harness actions.
+    ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
 
   /** Content view to return to when leaving Settings or Scope — persisted in the
@@ -558,6 +643,18 @@
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
+      case 'app:terminal': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
+        return
+      }
+      case 'app:git': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openGit(thread.projectId, thread.id)
+        return
+      }
       case 'app:memory': {
         const thread = workspaceState.selectedThread
         if (!thread) return
