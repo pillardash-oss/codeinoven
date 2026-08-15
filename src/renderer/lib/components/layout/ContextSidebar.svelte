@@ -6,6 +6,7 @@
     Bot,
     BrainCircuit,
     Bug,
+    ChevronDown,
     Cloud,
     FileDiff,
     Files,
@@ -51,6 +52,9 @@
     onWidthChange: (width: number) => void
     onHeightChange: (height: number) => void
     onTerminalPlacementChange: (placement: TerminalPlacement) => void
+    /** Fold the bottom terminal dock into its thin restore bar. Only wired for
+     *  the bottom dock; the right sidebar never collapses via this prop. */
+    onTerminalDockToggle?: () => void
   }
 
   let {
@@ -68,7 +72,8 @@
     onMoveTab,
     onWidthChange,
     onHeightChange,
-    onTerminalPlacementChange
+    onTerminalPlacementChange,
+    onTerminalDockToggle
   }: Props = $props()
 
   let resizing = $state(false)
@@ -289,6 +294,17 @@
             <PanelBottom size={13} />
           {/if}
         </button>
+        {#if placement === 'bottom' && onTerminalDockToggle}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+            aria-label="Hide terminal dock"
+            title="Hide terminal dock"
+            onclick={onTerminalDockToggle}
+          >
+            <ChevronDown size={13} />
+          </button>
+        {/if}
       {/if}
       {#if !hideAddButton}
         <DropdownMenu.Root>

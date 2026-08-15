@@ -17,7 +17,8 @@
     Copy,
     FolderKanban,
     ArrowUpDown,
-    Check
+    Check,
+    ChevronUp
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -729,6 +730,7 @@
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+  let terminalDockCollapsed = $derived(contextSidebarState.terminalDockCollapsed)
   let contextPanelColumns = $derived(
     sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
@@ -2892,7 +2894,7 @@
   {/if}
 
   <!-- Main Content -->
-  <section class="min-w-0 flex-1 overflow-hidden">
+  <section class="relative min-w-0 flex-1 overflow-hidden">
     <div
       class="grid h-full min-h-0 min-w-0"
       style:grid-template-columns={contextPanelColumns}
@@ -3116,8 +3118,20 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
           />
         </div>
+      {/if}
+      {#if terminalDockCollapsed}
+        <button
+          type="button"
+          class="absolute inset-x-0 bottom-0 z-30 flex h-8 w-full shrink-0 items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Expand terminal"
+          aria-label="Expand terminal"
+          onclick={() => contextSidebarState.toggleTerminalDock()}
+        >
+          <ChevronUp size={14} />
+        </button>
       {/if}
     </div>
   </section>
