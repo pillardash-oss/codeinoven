@@ -1063,6 +1063,14 @@ export interface IpcInvokeContract {
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
   'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>
+  /**
+   * Open the OS notification-settings pane (System Settings on macOS, Settings
+   * on Windows). The target URL is a hard-coded, platform-specific allow-list
+   * constant resolved in the main process — never renderer-supplied — so it is
+   * safe to bypass the web-only external-URL validator. Returns false when the
+   * platform has no notification-settings deep link.
+   */
+  'notification:openSettings': Contract<[], boolean>
   'plan:approve': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:get': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:save': Contract<[projectId: string, threadId: string, content: string], Plan>
