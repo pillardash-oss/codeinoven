@@ -338,7 +338,8 @@ export class CodexDriver extends PersistentCliDriver {
     this.setTurnProvenance(
       session.id,
       options.settings.providerId,
-      resolveFastModelId(options.settings.modelId, fastInference ? 'fast' : 'normal')
+      resolveFastModelId(options.settings.modelId, fastInference ? 'fast' : 'normal'),
+      options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
 

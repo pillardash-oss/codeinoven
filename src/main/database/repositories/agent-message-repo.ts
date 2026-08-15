@@ -5,6 +5,7 @@ import type {
   AgentMessageOrigin,
   AgentMessageVisibility,
   AgentPart,
+  ThinkingLevel,
   ThreadMessageCursor,
   ThreadMessagePage,
   UserMessageSummary
@@ -65,6 +66,7 @@ export interface PersistedMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
   created_at: number
@@ -97,6 +99,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.model_id ?? '',
     row.provider_id ?? '',
     row.harness_id ?? '',
+    row.thinking_level ?? '',
     row.references_json ?? '',
     row.project_references_json ?? '',
     String(row.created_at),
@@ -128,6 +131,7 @@ export interface AgentMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
   created_at: number
@@ -184,6 +188,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     modelId: row.model_id ?? undefined,
     providerId: row.provider_id ?? undefined,
     harnessId: row.harness_id ?? undefined,
+    thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : undefined,
     references: row.references_json ? JSON.parse(row.references_json) : undefined,
     projectReferences: row.project_references_json
       ? JSON.parse(row.project_references_json)
@@ -228,6 +233,7 @@ export interface EncodedAgentMessage {
   modelId: string | null
   providerId: string | null
   harnessId: string | null
+  thinkingLevel: string | null
   referencesJson: string | null
   projectReferencesJson: string | null
   createdAt: number
@@ -263,6 +269,7 @@ export function encodeAgentMessage(
   const modelId = message.modelId ?? null
   const providerId = message.providerId ?? null
   const harnessId = message.harnessId ?? null
+  const thinkingLevel = message.thinkingLevel ?? null
   const referencesJson = message.references ? JSON.stringify(message.references) : null
   const projectReferencesJson = message.projectReferences
     ? JSON.stringify(message.projectReferences)
@@ -290,6 +297,7 @@ export function encodeAgentMessage(
     model_id: modelId,
     provider_id: providerId,
     harness_id: harnessId,
+    thinking_level: thinkingLevel,
     references_json: referencesJson,
     project_references_json: projectReferencesJson,
     created_at: createdAt,
@@ -318,6 +326,7 @@ export function encodeAgentMessage(
     modelId,
     providerId,
     harnessId,
+    thinkingLevel,
     referencesJson,
     projectReferencesJson,
     createdAt,
@@ -343,12 +352,12 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
     sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
       transport_parts, transport_origin,
-      model_id, provider_id, harness_id,
+      model_id, provider_id, harness_id, thinking_level,
       references_json, project_references_json,
       created_at, completed_at, cost,
       tokens_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -361,6 +370,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       model_id = excluded.model_id,
       provider_id = excluded.provider_id,
       harness_id = excluded.harness_id,
+      thinking_level = excluded.thinking_level,
       references_json = excluded.references_json,
       project_references_json = excluded.project_references_json,
       created_at = excluded.created_at,
@@ -389,6 +399,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.modelId,
       encoded.providerId,
       encoded.harnessId,
+      encoded.thinkingLevel,
       encoded.referencesJson,
       encoded.projectReferencesJson,
       encoded.createdAt,

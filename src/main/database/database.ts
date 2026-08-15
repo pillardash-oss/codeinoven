@@ -5,7 +5,14 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import { AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL, DATABASE_SCHEMA_SQL } from './schema'
+import {
+  AGENT_MESSAGES_THINKING_LEVEL_MIGRATION_SQL,
+  AGENT_MESSAGES_TOKENS_TOTAL_MIGRATION_SQL,
+  DATABASE_SCHEMA_SQL,
+  HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL,
+  HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL,
+  USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL
+} from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -617,6 +624,34 @@ export class Database {
     const connection = this.requireDb()
     connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
     this.applyTokensTotalMigration(connection)
+    this.applyThinkingLevelMigrations(connection)
+  }
+
+  /**
+   * Guarded column additions and table rebuilds for databases created before
+   * usage records captured the model's thinking level. Each is a no-op on
+   * fresh installs, which already carry the columns from the CREATE TABLE.
+   */
+  private applyThinkingLevelMigrations(connection: DatabaseType): void {
+    const columns = (table: string): Array<{ name: string }> =>
+      connection.pragma(`table_info(${table})`) as Array<{ name: string }>
+
+    if (!columns('agent_messages').some((column) => column.name === 'thinking_level')) {
+      connection.exec(AGENT_MESSAGES_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated agent_messages: added thinking_level column')
+    }
+    if (!columns('usage_events').some((column) => column.name === 'thinking_level')) {
+      connection.exec(USAGE_EVENTS_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated usage_events: added thinking_level column')
+    }
+    if (!columns('harness_usage').some((column) => column.name === 'thinking_level')) {
+      connection.exec(HARNESS_USAGE_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated harness_usage: added thinking_level column')
+    }
+    if (!columns('harness_usage_models').some((column) => column.name === 'thinking_level')) {
+      connection.exec(HARNESS_USAGE_MODELS_THINKING_LEVEL_MIGRATION_SQL)
+      Logger.info('Migrated harness_usage_models: rebuilt with thinking_level in key')
+    }
   }
 
   /**

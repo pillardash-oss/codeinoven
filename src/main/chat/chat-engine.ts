@@ -135,6 +135,7 @@ import type {
   ThreadStatus,
   Thread,
   ThreadSettings,
+  ThinkingLevel,
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance
@@ -3041,7 +3042,8 @@ export class ChatEngine {
       )
       const messages = stampHarnessId(
         await driver.loadMessages(projectPath, thread.sessionId),
-        driverId
+        driverId,
+        thread.settings
       )
       this.applyReasoningStamps(thread.sessionId, messages)
       this.applyToolStamps(thread.sessionId, messages)
@@ -3405,7 +3407,8 @@ export class ChatEngine {
               )
             })
           ]),
-          owner.driverId
+          owner.driverId,
+          (await this.threadManager.getThread(owner.projectId, owner.threadId))?.settings
         )
         this.applyReasoningStamps(sessionId, incoming)
         this.applyToolStamps(sessionId, incoming)
@@ -6370,6 +6373,7 @@ export class ChatEngine {
             harnessId: driverId,
             providerId: attempt.providerId,
             modelId: attempt.modelId,
+            thinkingLevel: 'minimal',
             utilityId: null,
             rawProviderUsage: tokens ? { ...tokens } : {},
             tokens: {
@@ -6409,6 +6413,7 @@ export class ChatEngine {
           harnessId: driverId,
           providerId: settings.providerId,
           modelId: settings.modelId,
+          thinkingLevel: 'minimal',
           utilityId: null,
           rawProviderUsage: {},
           tokens: {
@@ -13723,16 +13728,17 @@ export class ChatEngine {
     try {
       const driver = this.drivers.get(info.driverId)
       if (!driver) return
+      const thread = await this.threadManager.getThread(info.projectId, info.threadId)
       const messages = stampHarnessId(
         await driver.loadMessages(info.projectPath, sessionId),
-        info.driverId
+        info.driverId,
+        thread?.settings
       )
 
       this.applyReasoningStamps(sessionId, messages)
       this.applyToolStamps(sessionId, messages)
 
       const mirror = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
-      const thread = await this.threadManager.getThread(info.projectId, info.threadId)
       const suppressTerminalAnswer =
         this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
       let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer)
@@ -14245,6 +14251,7 @@ export class ChatEngine {
       harnessId: message.harnessId ?? null,
       providerId: message.providerId ?? null,
       modelId: message.modelId ?? null,
+      thinkingLevel: message.thinkingLevel ?? thread?.settings?.thinkingLevel ?? null,
       utilityId: null,
       rawProviderUsage: normalizedUsage?.rawProviderUsage ?? {},
       tokens: normalizedUsage
@@ -14326,6 +14333,7 @@ export class ChatEngine {
       harnessId: input.harnessId,
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
+      thinkingLevel: input.settings.thinkingLevel ?? null,
       utilityId: null,
       rawProviderUsage: reported?.rawProviderUsage ?? {},
       tokens: {
@@ -14435,6 +14443,7 @@ export class ChatEngine {
         harnessId: message.harnessId ?? null,
         providerId: message.providerId ?? null,
         modelId: message.modelId ?? null,
+        thinkingLevel: message.thinkingLevel ?? null,
         utilityId: part.tool,
         rawProviderUsage: {},
         tokens: {
@@ -14475,6 +14484,7 @@ export class ChatEngine {
       harnessId: settings.harnessId,
       providerId: settings.providerId,
       modelId: settings.modelId,
+      thinkingLevel: settings.thinkingLevel ?? null,
       utilityId: attribution.utilityId,
       rawProviderUsage: {
         reinjectedTokens,
@@ -15623,9 +15633,26 @@ function presentableMessages(
     })
 }
 
-/** Record which harness produced each message; drivers do not know their own id. */
-export function stampHarnessId(messages: AgentMessage[], harnessId: string): AgentMessage[] {
-  return messages.map((message) => (message.harnessId ? message : { ...message, harnessId }))
+/**
+ * Record which harness produced each message; drivers do not know their own id.
+ * Also stamps the thread's current thinking level onto any message the driver
+ * could not report (opencode has no provenance channel), so per-message
+ * reasoning effort is persisted for usage analytics.
+ */
+export function stampHarnessId(
+  messages: AgentMessage[],
+  harnessId: string,
+  settings?: { thinkingLevel?: ThinkingLevel }
+): AgentMessage[] {
+  const thinkingLevel = settings?.thinkingLevel
+  return messages.map((message) => {
+    let stamped = message
+    if (!stamped.harnessId) stamped = { ...stamped, harnessId }
+    if (thinkingLevel && !stamped.thinkingLevel) {
+      stamped = { ...stamped, thinkingLevel }
+    }
+    return stamped
+  })
 }
 
 function formatProjectReferenceContext(references: PromptProjectReference[]): string {
