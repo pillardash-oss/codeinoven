@@ -839,6 +839,12 @@
     slashOpen = Boolean(slashMatch)
     slashQuery = slashMatch?.[2] ?? ''
     slashIndex = 0
+    // A query that matches no actions is almost certainly a path being typed
+    // (e.g. `cd /usr/local/bin`), not a command — close the menu so Enter and
+    // the rest of the text behave normally.
+    if (slashOpen && slashActions.length === 0) {
+      slashOpen = false
+    }
   }
 
   function selectMention(mention: ComposerMentionEntry): void {
@@ -1258,6 +1264,18 @@
         return
       }
       if (e.key === 'Tab' && !e.shiftKey && slashActions[slashIndex]) {
+        e.preventDefault()
+        selectSlashAction(slashActions[slashIndex], 'keyboard')
+        return
+      }
+      if (e.key === 'Enter' && slashActions[slashIndex]) {
+        // The rich editor only submits when the caret sits in a plain paragraph
+        // (P/DIV). When the slash is typed after text that renders as a heading,
+        // list, code block, etc. the editor's own Enter handler would let the
+        // browser insert a newline instead of running the command — so the slash
+        // menu claims Enter here, in the bubbling phase, before the default
+        // action fires. For plain paragraphs the editor already submitted and
+        // closed the menu, making this branch a no-op.
         e.preventDefault()
         selectSlashAction(slashActions[slashIndex], 'keyboard')
         return
