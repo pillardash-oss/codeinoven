@@ -94,7 +94,8 @@ const defaultConfig: AppConfig = {
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: false,
   resumeWorkOnRestart: true,
-  defaultMergeMethod: 'squash'
+  defaultMergeMethod: 'squash',
+  maxDiffLines: 100
 }
 
 beforeEach(async () => {
@@ -148,6 +149,7 @@ describe('validateAppConfigPatch', () => {
         autoRetryAfterReset: true,
         resumeWorkOnRestart: false,
         defaultMergeMethod: 'rebase',
+        maxDiffLines: 250,
         memory
       })
     ).toMatchObject({
@@ -172,6 +174,7 @@ describe('validateAppConfigPatch', () => {
       autoRetryAfterReset: true,
       resumeWorkOnRestart: false,
       defaultMergeMethod: 'rebase',
+      maxDiffLines: 250,
       memory: {
         enabled: true,
         entries: [
@@ -198,6 +201,10 @@ describe('validateAppConfigPatch', () => {
     { threadLimit: 0 },
     { threadLimit: 1.5 },
     { threadLimit: 1001 },
+    { maxDiffLines: 9 },
+    { maxDiffLines: 1.5 },
+    { maxDiffLines: 5001 },
+    { maxDiffLines: '100' },
     { slashCommandMode: 'both' },
     { preferredEditor: 'unknown-editor' },
     { agentDefaults: { syncFromThreadChanges: 'yes' } },

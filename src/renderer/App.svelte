@@ -29,6 +29,7 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { clearDraftLabelCookie } from '$lib/stores/draft-label'
@@ -80,7 +81,8 @@
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
-    defaultMergeMethod: 'squash'
+    defaultMergeMethod: 'squash',
+    maxDiffLines: 100
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -206,10 +208,11 @@
       {
         id: 'app:new-project',
         title: 'Create new project',
-        description: 'Add a local or remote project',
+        description: 'Choose how to add a project — local folder or SSH',
         category: 'command',
         source: applicationSource,
-        keywords: ['add', 'folder', 'repository']
+        shortcut: ['Ctrl', 'Shift', 'N'],
+        keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
       },
       {
         id: 'app:notifications',
@@ -335,6 +338,7 @@
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
+      appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
     } catch {
@@ -350,6 +354,7 @@
     applyTheme()
     try {
       config = await invoke('config:update', patch)
+      appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
     } catch {
@@ -527,7 +532,7 @@
     switch (selection.action.id) {
       case 'app:new-project':
         navigate('projects')
-        workspaceState.requestAddProject()
+        workspaceState.requestAddProjectChoices()
         return
       case 'app:new-chat':
         navigate('chats')
@@ -1200,6 +1205,17 @@
     if ((e.metaKey || e.ctrlKey) && e.key === ',') {
       e.preventDefault()
       navigate('settings')
+    }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      if (e.repeat) return
+      // Cmd/Ctrl+Shift+N → new-project flow with creation options (local / SSH).
+      if (commandPaletteOpen) commandPaletteOpen = false
+      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') {
+        navigate('projects')
+      }
+      workspaceState.requestAddProjectChoices()
+      return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
       e.preventDefault()

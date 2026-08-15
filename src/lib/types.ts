@@ -2877,6 +2877,9 @@ export interface AppConfig {
   resumeWorkOnRestart: boolean
   /** Default PR merge method used by the Git panel, pre-selected when merging. */
   defaultMergeMethod: PrMergeMethod
+  /** Hunks whose changed lines exceed this are collapsed with a notice so huge
+   *  diffs do not hurt diff-view performance. */
+  maxDiffLines: number
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2906,6 +2909,7 @@ export type AppConfigPatch = Partial<
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
+    | 'maxDiffLines'
   >
 >
 

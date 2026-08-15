@@ -291,7 +291,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'imageDescriptorAskAgain',
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
-  'defaultMergeMethod'
+  'defaultMergeMethod',
+  'maxDiffLines'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -980,6 +981,18 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       )
     }
     patch.questionTimeoutMs = value.questionTimeoutMs
+  }
+
+  if ('maxDiffLines' in value) {
+    if (
+      typeof value.maxDiffLines !== 'number' ||
+      !Number.isInteger(value.maxDiffLines) ||
+      value.maxDiffLines < 10 ||
+      value.maxDiffLines > 5000
+    ) {
+      throw new TypeError('Max diff lines must be an integer between 10 and 5000')
+    }
+    patch.maxDiffLines = value.maxDiffLines
   }
 
   if ('slashCommandMode' in value) {
