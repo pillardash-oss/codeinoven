@@ -320,6 +320,7 @@ const INVOKE_CHANNELS = [
   'repository:remoteOrigin',
   'shell:openExternal',
   'shell:revealPath',
+  'shell:revealExternalPath',
   'web:favicon',
   'spec:addAnnotation',
   'spec:addDecisionComment',

@@ -266,6 +266,16 @@
     }
   }
 
+  /** Citation text shown in the panel: the project-relative path when the file
+   *  lives in the project (the full absolute path stays in the tooltip and on
+   *  the click target). Long paths are middle-ellipsized so the tail — the
+   *  filename — is never cut off by the narrow sidebar. */
+  function citationDisplayText(source: FileCitationAgentSource): string {
+    const path = source.displayPath ?? source.path
+    if (path.length <= 48) return path
+    return `${path.slice(0, 12)}…${path.slice(-34)}`
+  }
+
   function handleCitationClick(source: FileCitationAgentSource): void {
     const projectId = workspaceState.activeProject?.id
     if (!projectId) return
@@ -678,11 +688,11 @@
                 {:else if source.kind === 'file-citation'}
                   <button
                     type="button"
-                    class="mt-0.5 block max-w-full cursor-pointer truncate text-left text-xs font-medium text-primary hover:text-primary/80"
+                    class="mt-0.5 block max-w-full cursor-pointer text-left text-xs font-medium text-primary hover:text-primary/80"
                     title={`Open ${source.path}${source.line ? ` at line ${source.line}` : ''}`}
                     onclick={() => handleCitationClick(source)}
                   >
-                    <span class="truncate">{source.path}</span>
+                    <span class="break-all">{citationDisplayText(source)}</span>
                     {#if source.line}
                       <span class="ml-1 text-[10px] text-dimmed tabular-nums">:{source.line}</span>
                     {/if}

@@ -27,6 +27,12 @@ export interface WebAgentSource extends BaseAgentSource {
 export interface FileCitationAgentSource extends BaseAgentSource {
   kind: 'file-citation'
   path: string
+  /**
+   * Project-relative form of `path` for display when the cited file lives
+   * inside the current project — lets the sources panel show the tail of the
+   * path instead of a truncated absolute path. Clicking always uses `path`.
+   */
+  displayPath?: string
   line?: number
   lineEnd?: number
 }

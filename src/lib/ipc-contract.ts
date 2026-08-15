@@ -1229,6 +1229,10 @@ export interface IpcInvokeContract {
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
+  /** Reveal an existing absolute path (e.g. an agent-cited file outside the
+   *  project root) in the OS file manager. Existence is checked; no content is
+   *  read or opened. Returns false when the path does not exist. */
+  'shell:revealExternalPath': Contract<[path: string], boolean>
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'spec:addAnnotation': Contract<

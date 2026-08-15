@@ -107,7 +107,7 @@
   } from '$lib/stores/response-references.svelte'
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
-  import { isAbsoluteCitationPath } from '$lib/agent-source-citations'
+  import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
@@ -1786,9 +1786,10 @@
 
   /**
    * Files uploaded to or produced in this chat — surfaced via the Sources panel.
-   * File citations are only listed when confirmed to exist on disk, and are
-   * shown with their full project-rooted path (`<project-cwd>/src/app.html`)
-   * so the user can open them without guessing where they live.
+   * File citations are only listed when confirmed to exist on disk. Citations
+   * inside the project display with their project-relative path (the tail of
+   * the path stays visible), while `path` itself is never rewritten so clicks
+   * keep targeting the exact file.
    */
   let sources = $derived.by((): AgentSource[] => {
     const projectPath = project?.path?.trim()
@@ -1801,12 +1802,23 @@
         )
       })
       .map((source) => {
-        if (source.kind !== 'file-citation' || isAbsoluteCitationPath(source.path)) return source
-        if (!projectPath || !source.path) return source
-        const fullPath = `${projectPath.replace(/[\\/]+$/u, '')}/${source.path}`
+        if (source.kind !== 'file-citation' || !source.path || !projectPath) return source
+        const root = projectPath.replace(/[\\/]+$/u, '')
+        if (isAbsoluteCitationPath(source.path)) {
+          const target = normalizeCitationPath(source.path)
+          const rootKey = normalizeCitationPath(root)
+          if (!target.startsWith(`${rootKey}/`)) return source
+          return {
+            ...source,
+            displayPath: target.slice(rootKey.length + 1),
+            title: source.line ? `${source.path}:${source.line}` : source.path
+          }
+        }
+        const fullPath = `${root}/${source.path}`
         return {
           ...source,
           path: fullPath,
+          displayPath: source.path,
           title: source.line ? `${fullPath}:${source.line}` : fullPath
         }
       })
