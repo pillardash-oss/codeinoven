@@ -169,6 +169,9 @@
    */
   let selectedHarnessIcon = $derived(getAgentIcon(harnessId))
   let selectedLabel = $derived(label ?? selectedModel?.name ?? (modelId || 'Model'))
+  /** Keep the trigger readable — long names (e.g. Claude Code's default-model
+   *  description) would otherwise swallow the composer's bottom bar. */
+  let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
@@ -284,6 +287,14 @@
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
+
+  /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
+  const MODEL_LABEL_MAX_LENGTH = 40
+
+  function truncateLabel(value: string): string {
+    if (value.length <= MODEL_LABEL_MAX_LENGTH) return value
+    return `${value.slice(0, MODEL_LABEL_MAX_LENGTH - 1).trimEnd()}…`
+  }
 
   function mergeProviderEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
     const merged: ProviderCatalog[] = []
@@ -795,7 +806,7 @@
         {:else}
           <Cpu size={12} />
         {/if}
-        <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
+        <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
         {#if fast}
           <Zap
             size={11}
