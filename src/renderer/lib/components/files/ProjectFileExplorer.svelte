@@ -290,18 +290,13 @@
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
     projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
-    // Only selecting a file result closes the filter and reveals it. Folder
-    // rows in the filtered tree are ordinary tree rows: clicking one must
-    // toggle it, or the user can never fold/unfold folders while searching.
+    // Selecting a file result keeps the filter active so the user can preview
+    // multiple matches. Folder rows in the filtered tree are ordinary tree
+    // rows: clicking one must toggle it, or the user can never fold/unfold
+    // folders while searching.
     const selectedFromSearch = filterOpen && Boolean(filterQuery.trim()) && entry.kind === 'file'
     if (selectedFromSearch) {
       revealedSearchPath = entry.path
-      closeFilter(false)
-      if (entry.kind === 'directory') {
-        await projectFilesWorkspace.revealDirectory(projectId, entry.path)
-      } else {
-        await projectFilesWorkspace.revealFile(projectId, entry.path)
-      }
     } else if (entry.kind === 'directory') {
       await toggleDirectoryRow(entry)
     }
@@ -316,7 +311,7 @@
           entry.path,
           'diff'
         )
-      } else if (mode === 'normal' || selectedFromSearch) {
+      } else if (mode === 'normal') {
         await projectFilesWorkspace.openFile(projectId, entry.path)
       } else {
         await projectFilesWorkspace.openFilePreview(projectId, entry.path)
