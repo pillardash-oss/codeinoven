@@ -419,6 +419,33 @@ export class ThreadRepo {
     return this.hydrateThreads(result.rows as unknown as ThreadRow[])
   }
 
+  /** Load only non-archived threads that currently hold active agent work. */
+  listActive(): Array<Thread & { status: 'planning' | 'executing' }> {
+    const rows = this.db.all<ThreadRow>(
+      `SELECT * FROM threads
+       WHERE archived = 0 AND status IN ('planning', 'executing')
+       ORDER BY last_activity DESC, id ASC`
+    )
+    return rows
+      .map(rowToThread)
+      .filter(
+        (thread): thread is Thread & { status: 'planning' | 'executing' } =>
+          thread.status === 'planning' || thread.status === 'executing'
+      )
+  }
+
+  /** Check for active work without hydrating every thread row or usage metadata. */
+  hasActive(): boolean {
+    return (
+      this.db.get<{ active: number }>(
+        `SELECT 1 AS active
+         FROM threads
+         WHERE archived = 0 AND status IN ('planning', 'executing')
+         LIMIT 1`
+      ) !== undefined
+    )
+  }
+
   delete(id: string): void {
     this.db.run('DELETE FROM threads WHERE id = ?', id)
   }

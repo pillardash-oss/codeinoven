@@ -122,7 +122,11 @@ export class AuditEngine {
    * them. Idempotent: already-written files are skipped.
    */
   async materializeAllReports(): Promise<void> {
-    const rows = this.db.all<{ data: string }>('SELECT data FROM audit_reports')
+    const result = await this.db.queryViaWorker('SELECT data FROM audit_reports', [], 0)
+    if (!result.ok) {
+      throw new Error(result.error ?? 'audit report query failed')
+    }
+    const rows = result.rows as Array<{ data: string }>
     const byProject = new Map<
       string,
       { project: Project; featureSlug: string; reports: AuditReport[] }

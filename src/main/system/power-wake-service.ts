@@ -1,17 +1,10 @@
 import { powerSaveBlocker } from 'electron'
-import type { Thread, ThreadStatus } from '../../lib/types'
+import type { Thread } from '../../lib/types'
 import { Logger } from './logger'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { RetrySchedulerService } from './retry-scheduler-service'
-
-/**
- * Thread states that count as "work in progress". `spec` is intentionally
- * absent: a review-ready artifact has finished its agent work and can wait for
- * the user indefinitely without keeping the device awake.
- */
-const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
 /**
  * Coordinated work can briefly have no active persisted thread while control
@@ -156,9 +149,7 @@ export class PowerWakeService {
   private hasActiveThread(): boolean {
     if (!this.database.isOpen()) return false
     try {
-      return new ThreadRepo(this.database)
-        .listAll()
-        .some((thread) => !thread.archived && ACTIVE_STATUSES.has(thread.status))
+      return new ThreadRepo(this.database).hasActive()
     } catch (error) {
       Logger.error('Power wake: could not query active threads', error)
       return false
