@@ -23,6 +23,7 @@
     Cloud,
     FileDiff,
     Files,
+    History,
     Info,
     MessageCircleDashed,
     SquareTerminal,
@@ -790,18 +791,22 @@
 
     // The message-history counter leads the rail so it reads first, like a
     // running tally of the conversation — click to jump to any past message.
-    const history: ContextDockItem[] =
-      workspaceState.messageCount > 0
-        ? [
-            {
-              id: 'history',
-              label: `Message history (${workspaceState.messageCount} messages you sent)`,
-              countLabel: String(workspaceState.messageCount),
-              active: showHistoryMenu,
-              onSelect: () => (showHistoryMenu = !showHistoryMenu)
-            }
-          ]
-        : []
+    // Before the first message it falls back to a plain history icon: there's
+    // no count worth showing yet, and "0" reads as a stuck/broken badge.
+    const hasMessages = workspaceState.messageCount > 0
+    const history: ContextDockItem[] = [
+      {
+        id: 'history',
+        label: hasMessages
+          ? `Message history (${workspaceState.messageCount} messages you sent)`
+          : 'Message history',
+        icon: hasMessages ? undefined : History,
+        countLabel: hasMessages ? String(workspaceState.messageCount) : undefined,
+        active: showHistoryMenu,
+        menu: showHistoryMenu ? historyMenu : undefined,
+        onSelect: () => (showHistoryMenu = !showHistoryMenu)
+      }
+    ]
 
     const workspaceTools: ContextDockItem[] = []
     if (!isChatThread && projectToolsAvailable) {
@@ -3383,45 +3388,42 @@
       {/if}
     </div>
     {#if dockGroups.some((group) => group.length > 0)}
-      <div class="relative h-full shrink-0">
-        <ContextDock groups={dockGroups} />
-        {#if showHistoryMenu}
-          <button
-            class="fixed inset-0 z-30 cursor-default"
-            aria-label="Close history"
-            title="Close history"
-            onclick={() => (showHistoryMenu = false)}
-          ></button>
-          <div
-            class="absolute right-10 top-11 z-40 w-72 overflow-hidden border bg-surface shadow-lg"
-            role="menu"
-            aria-label="Jump to message"
-          >
-            <p
-              class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
-            >
-              Your messages
-            </p>
-            <div class="max-h-72 overflow-y-auto p-1">
-              {#each workspaceState.userMessages as message, index (message.id)}
-                <button
-                  class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  role="menuitem"
-                  title={message.content}
-                  onclick={() => jumpToHistoryMessage(message.id)}
-                >
-                  {index + 1}. {message.content}
-                </button>
-              {:else}
-                <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
+      <ContextDock groups={dockGroups} />
     {/if}
   </section>
 </div>
+
+{#snippet historyMenu()}
+  <button
+    class="fixed inset-0 z-30 cursor-default"
+    aria-label="Close history"
+    title="Close history"
+    onclick={() => (showHistoryMenu = false)}
+  ></button>
+  <div
+    class="absolute right-full top-0 z-40 mr-2 w-72 overflow-hidden border bg-surface shadow-lg"
+    role="menu"
+    aria-label="Jump to message"
+  >
+    <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
+      Your messages
+    </p>
+    <div class="max-h-72 overflow-y-auto p-1">
+      {#each workspaceState.userMessages as message, index (message.id)}
+        <button
+          class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          role="menuitem"
+          title={message.content}
+          onclick={() => jumpToHistoryMessage(message.id)}
+        >
+          {index + 1}. {message.content}
+        </button>
+      {:else}
+        <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
+      {/each}
+    </div>
+  </div>
+{/snippet}
 
 <!-- Remove Project Confirmation -->
 <Modal open={showRemoveModal} title="Remove Project" onClose={() => (showRemoveModal = false)}>
