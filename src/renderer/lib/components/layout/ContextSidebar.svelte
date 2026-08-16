@@ -88,8 +88,16 @@
     'debugger'
   ])
 
-  let tabbedMode = $derived(activeTab ? TABBED_KINDS.has(activeTab.kind) : false)
-  let headerless = $derived(activeTab ? HEADERLESS_KINDS.has(activeTab.kind) : false)
+  /** Files are headerless like the other single-panel tools right up until a
+   *  second file is open — then a real tab strip is the only way back to the
+   *  first one, so it earns the same tabbed treatment as terminals. */
+  let openFilesCount = $derived(tabs.filter((tab) => tab.kind === 'files').length)
+  let tabbedMode = $derived(
+    activeTab
+      ? TABBED_KINDS.has(activeTab.kind) || (activeTab.kind === 'files' && openFilesCount > 1)
+      : false
+  )
+  let headerless = $derived(activeTab ? HEADERLESS_KINDS.has(activeTab.kind) && !tabbedMode : false)
   /** The strip never mixes tools: it lists siblings of the active kind only. */
   let stripTabs = $derived(
     activeTab && tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
@@ -295,7 +303,7 @@
                   type="button"
                   class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
                   aria-label={`Close ${tab.title}`}
-                  title={tab.kind === 'terminal' ? 'Close terminal' : 'Close chat'}
+                  title={`Close ${tab.title}`}
                   onclick={() => onClose(tab.id)}
                 >
                   <X size={11} />

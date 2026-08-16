@@ -1130,7 +1130,8 @@
   >
     <div
       bind:this={treeScroll}
-      class="min-h-0 flex-1 overflow-auto py-1"
+      class="min-h-0 flex-1 overflow-auto py-1 [&::-webkit-scrollbar]:hidden"
+      style:scrollbar-width="none"
       role="tree"
       tabindex="0"
       onclick={handleTreeContainerClick}
