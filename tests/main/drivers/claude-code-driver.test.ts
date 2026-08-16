@@ -98,7 +98,7 @@ describe('ClaudeCodeDriver', () => {
         '--model',
         'sonnet',
         '--permission-mode',
-        'dontAsk'
+        'default'
       ]),
       expect.any(Object)
     )
@@ -149,7 +149,7 @@ describe('ClaudeCodeDriver', () => {
     })
     expect(spawnMock).toHaveBeenLastCalledWith(
       'claude',
-      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'dontAsk']),
+      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'default']),
       expect.any(Object)
     )
     next.emit('exit', 0, null)
