@@ -5,6 +5,9 @@ import type {
   MemoryCategory,
   MemoryConfig,
   MemoryEntry,
+  MemoryExportFile,
+  MemoryExportKind,
+  MemoryImportPreview,
   MemoryPriority,
   MemoryProposal,
   MemoryScope,
@@ -12,6 +15,7 @@ import type {
   SpecContextReference,
   Thread
 } from '../../lib/types'
+import { INBOX_PROJECT_ID } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 
 const MEMORY_FILENAME = 'memory.md'
@@ -578,6 +582,139 @@ export class MemoryService {
     await this.writeMemoryMd(serializeMemoryMd(validated), projectId, threadId)
   }
 
+  /**
+   * Gather every memory entry that belongs to an export scope.
+   *
+   * - `projects`: global + projects-scoped root entries, every per-project file
+   *   and every project thread file.
+   * - `chats`: global-scoped root entries, the chat file and every chat thread file.
+   * - `both`: everything.
+   * - `project`: only the given project's own file and its thread files.
+   */
+  async exportEntries(kind: MemoryExportKind, projectId?: string): Promise<MemoryEntry[]> {
+    const entries: MemoryEntry[] = []
+    if (kind === 'both') {
+      entries.push(...(await this.getEntries()))
+      entries.push(...(await this.collectProjectMemory()))
+      entries.push(...(await this.collectChatMemory()))
+    } else if (kind === 'projects') {
+      entries.push(...(await this.getEntries()))
+      entries.push(...(await this.collectProjectMemory()))
+    } else if (kind === 'chats') {
+      const root = await this.getEntries()
+      entries.push(...root.filter((entry) => entry.scope === 'global'))
+      entries.push(...(await this.collectChatMemory()))
+    } else if (kind === 'project') {
+      const safeProjectId = optionalEntityId(projectId, 'Project ID')
+      if (!safeProjectId) {
+        throw new TypeError('A project export requires a project ID')
+      }
+      entries.push(...(await this.getEntries(safeProjectId)))
+      const threadIds = await this.storage.listDirectories(
+        join(PROJECTS_DIR, safeProjectId, THREADS_DIR)
+      )
+      for (const threadId of threadIds) {
+        entries.push(...(await this.getEntries(safeProjectId, threadId)))
+      }
+    }
+    return dedupeEntriesById(entries)
+  }
+
+  private async collectProjectMemory(): Promise<MemoryEntry[]> {
+    const entries: MemoryEntry[] = []
+    for (const pid of await this.storage.listDirectories(PROJECTS_DIR)) {
+      entries.push(...(await this.getEntries(pid)))
+      const threadIds = await this.storage.listDirectories(join(PROJECTS_DIR, pid, THREADS_DIR))
+      for (const threadId of threadIds) {
+        entries.push(...(await this.getEntries(pid, threadId)))
+      }
+    }
+    return entries
+  }
+
+  private async collectChatMemory(): Promise<MemoryEntry[]> {
+    const entries: MemoryEntry[] = []
+    entries.push(...(await this.getEntries(INBOX_PROJECT_ID)))
+    const threadIds = await this.storage.listDirectories(join(CHATS_CWD_DIR, THREADS_DIR))
+    for (const threadId of threadIds) {
+      entries.push(...(await this.getEntries(INBOX_PROJECT_ID, threadId)))
+    }
+    return entries
+  }
+
+  /**
+   * Merge imported entries into the appropriate storage files.
+   *
+   * Entries are routed by their own scope/projectId/threadId, filtered by the
+   * requested export kind, and merged per destination file with a dedupe on
+   * `scope + normalized content`. Existing memory is never deleted. Per-file
+   * limits (max entries / aggregate characters) are enforced by skipping any
+   * entry that would exceed them.
+   */
+  async importEntries(
+    entries: MemoryEntry[],
+    options: { kind: MemoryExportKind; projectId?: string }
+  ): Promise<{ added: number; skipped: number }> {
+    let added = 0
+    let skipped = 0
+    const destinations = new Map<
+      string,
+      { location: { projectId?: string; threadId?: string }; entries: MemoryEntry[] }
+    >()
+
+    for (const rawEntry of entries) {
+      if (!entryBelongsToExportKind(rawEntry, options.kind)) {
+        skipped++
+        continue
+      }
+      const destination = importDestinationFor(rawEntry, options)
+      if (!destination) {
+        skipped++
+        continue
+      }
+      const key = `${destination.projectId ?? ''}\0${destination.threadId ?? ''}`
+      const group = destinations.get(key) ?? { location: destination, entries: [] }
+      group.entries.push({
+        ...rawEntry,
+        projectId: destination.projectId,
+        threadId: destination.threadId
+      })
+      destinations.set(key, group)
+    }
+
+    for (const group of destinations.values()) {
+      const existing = await this.getEntries(group.location.projectId, group.location.threadId)
+      const seen = new Set(existing.map((entry) => dedupeKey(entry)))
+      let merged = [...existing]
+      for (const entry of group.entries) {
+        const key = dedupeKey(entry)
+        if (seen.has(key)) {
+          skipped++
+          continue
+        }
+        const candidate = [...merged, entry]
+        try {
+          validateMemoryConfig({ enabled: true, entries: candidate })
+        } catch {
+          skipped++
+          continue
+        }
+        merged = candidate
+        seen.add(key)
+        added++
+      }
+      if (merged.length !== existing.length) {
+        await this.writeMemoryMd(
+          serializeMemoryMd(merged),
+          group.location.projectId,
+          group.location.threadId
+        )
+      }
+    }
+
+    return { added, skipped }
+  }
+
   async formatCurrent(projectId?: string, threadId?: string): Promise<string> {
     return this.format(await this.current(projectId, threadId), projectId, threadId)
   }
@@ -1078,6 +1215,92 @@ export class MemoryService {
   }
 }
 
+export const MEMORY_EXPORT_FORMAT = 'codeinoven-memory'
+export const MEMORY_EXPORT_VERSION = 1
+
+export function serializeMemoryExport(input: {
+  kind: MemoryExportKind
+  projectId?: string
+  entries: MemoryEntry[]
+}): string {
+  const file: MemoryExportFile = {
+    format: MEMORY_EXPORT_FORMAT,
+    version: MEMORY_EXPORT_VERSION,
+    exportedAt: Date.now(),
+    kind: input.kind,
+    projectId: input.kind === 'project' ? input.projectId : undefined,
+    entries: input.entries
+  }
+  return JSON.stringify(file, null, 2)
+}
+
+/**
+ * Validate an exported memory JSON string and return a preview of what it
+ * contains without touching any storage file.
+ */
+export function parseMemoryExport(value: unknown): MemoryImportPreview {
+  if (!isRecord(value)) throw new TypeError('The file does not contain a memory export')
+  if (value.format !== MEMORY_EXPORT_FORMAT) {
+    throw new TypeError('The file is not a CodeInOven memory export')
+  }
+  if (value.version !== MEMORY_EXPORT_VERSION) {
+    throw new TypeError('The memory export version is not supported by this app')
+  }
+  if (!Array.isArray(value.entries)) {
+    throw new TypeError('The memory export contains no entries array')
+  }
+  const kind = value.kind
+  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
+    throw new TypeError('The memory export kind is invalid')
+  }
+  const projectId = value.projectId
+  if (typeof projectId !== 'undefined' && typeof projectId !== 'string') {
+    throw new TypeError('The memory export project ID is invalid')
+  }
+  // Entries are validated individually: the per-file limits that
+  // `validateMemoryConfig` enforces across an array do not apply to a whole
+  // export, which may contain entries from many storage files.
+  const entries = value.entries.map((entry, index) => {
+    try {
+      return validateMemoryConfig({ enabled: true, entries: [entry] }).entries[0]
+    } catch (cause) {
+      throw new TypeError(
+        `Memory entry ${index} is invalid: ${cause instanceof Error ? cause.message : 'invalid entry'}`,
+        { cause }
+      )
+    }
+  })
+  return {
+    format: MEMORY_EXPORT_FORMAT,
+    version: MEMORY_EXPORT_VERSION,
+    kind,
+    projectId,
+    entryCount: entries.length,
+    entries
+  }
+}
+
+/** Validate that an export kind and optional project ID form a legal request. */
+export function validateMemoryExportKind(
+  kind: unknown,
+  projectId?: unknown
+): {
+  kind: MemoryExportKind
+  projectId?: string
+} {
+  if (kind !== 'projects' && kind !== 'chats' && kind !== 'both' && kind !== 'project') {
+    throw new TypeError('Memory export scope is invalid')
+  }
+  if (kind === 'project') {
+    const safeProjectId = optionalEntityId(projectId, 'Project ID')
+    if (!safeProjectId) {
+      throw new TypeError('A project export requires a project ID')
+    }
+    return { kind, projectId: safeProjectId }
+  }
+  return { kind }
+}
+
 function groupByCategory(entries: MemoryEntry[]): Record<MemoryPriority, MemoryEntry[]> {
   const grouped: Record<MemoryPriority, MemoryEntry[]> = {
     critical: [],
@@ -1089,6 +1312,74 @@ function groupByCategory(entries: MemoryEntry[]): Record<MemoryPriority, MemoryE
     grouped[entry.priority].push(entry)
   }
   return grouped
+}
+
+/** Whether an entry belongs to a given export scope. Global applies to both. */
+function entryBelongsToExportKind(entry: MemoryEntry, kind: MemoryExportKind): boolean {
+  switch (kind) {
+    case 'both':
+      return true
+    case 'projects':
+      return (
+        entry.scope === 'global' ||
+        entry.scope === 'projects' ||
+        entry.scope === 'project' ||
+        (entry.scope === 'thread' && entry.projectId !== INBOX_PROJECT_ID)
+      )
+    case 'chats':
+      return (
+        entry.scope === 'global' ||
+        entry.scope === 'chat' ||
+        (entry.scope === 'thread' && entry.projectId === INBOX_PROJECT_ID)
+      )
+    case 'project':
+      return (
+        entry.scope === 'global' ||
+        entry.scope === 'projects' ||
+        entry.scope === 'project' ||
+        entry.scope === 'thread'
+      )
+  }
+}
+
+/** Resolve the storage file an imported entry should be written to. */
+function importDestinationFor(
+  entry: MemoryEntry,
+  options: { kind: MemoryExportKind; projectId?: string }
+): { projectId?: string; threadId?: string } | null {
+  switch (entry.scope) {
+    case 'global':
+    case 'projects':
+      return {}
+    case 'chat':
+      return { projectId: INBOX_PROJECT_ID }
+    case 'project': {
+      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
+      if (!projectId) return null
+      return { projectId }
+    }
+    case 'thread': {
+      const projectId = options.kind === 'project' ? options.projectId : entry.projectId
+      if (!projectId || !entry.threadId) return null
+      return { projectId, threadId: entry.threadId }
+    }
+  }
+}
+
+/** Dedupe identity: scope + normalized content (the user-chosen merge rule). */
+function dedupeKey(entry: MemoryEntry): string {
+  return `${entry.scope}\0${normalizeText(entry.content)}`
+}
+
+function dedupeEntriesById(entries: MemoryEntry[]): MemoryEntry[] {
+  const seen = new Set<string>()
+  const result: MemoryEntry[] = []
+  for (const entry of entries) {
+    if (seen.has(entry.id)) continue
+    seen.add(entry.id)
+    result.push(entry)
+  }
+  return result
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

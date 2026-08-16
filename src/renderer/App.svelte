@@ -52,6 +52,7 @@
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -1216,6 +1217,9 @@
     // initialise the store here so the overlay's dynamic import can be gated on
     // `pipState.active` without ever missing a frame.
     pipState.init()
+    // Load which threads carry a user note so sidebar rows and the right-dock
+    // indicator can react; the store keeps itself in sync via `note:changed`.
+    threadNotesState.init()
     return () => {
       unsubscribeClick()
       unsubscribeShow()

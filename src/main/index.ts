@@ -8,6 +8,9 @@ import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
+import { AccountProfileRepo } from './database/repositories/account-profile-repo'
+import { loadDeviceIdentity } from './account/device-identity'
+import { readMemorySyncState } from './remote/memory-sync-state'
 import { StorageEngine } from './storage/storage-engine'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import {
@@ -514,6 +517,10 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  // Keep the device awake while a scheduled auto-retry is due within the wake
+  // window, so a usage-limit reset fires even when the user is away.
+  powerWakeService.attachRetryScheduler(retryScheduler)
+  retryScheduler.attachChangeListener(() => powerWakeService?.onRetryScheduleChanged())
   updaterService.setChatEngine(chatEngine)
   // Reap any harness processes orphaned by an unclean previous run before the
   // first session can spawn fresh servers, so leftover dev servers/ports are
@@ -585,6 +592,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
     remoteCredentials = new DeviceCredentialService(database)
+    const accountProfileRepo = new AccountProfileRepo(database)
     const accountUsage = new HarnessUsageRepo(database)
     const accountMemory = new MemoryService(storage)
     remoteMode = new RemoteModeController({
@@ -601,13 +609,37 @@ async function bootPostPaintServices(): Promise<void> {
       }),
       storage,
       credentials: remoteCredentials,
-      loadAccountProfileData: async () => ({
-        usage: await accountUsage.profileSummary(),
-        globalMemories: (await accountMemory.getEntries()).filter(
+      accountProfileRepo,
+      loadAccountProfileData: async () => {
+        const identity = await loadDeviceIdentity(storage)
+        const analytics = await accountUsage.profileSummary()
+        const globalMemories = (await accountMemory.getEntries()).filter(
           (entry) => entry.scope === 'global'
         )
-      }),
+        const syncState = await readMemorySyncState(storage)
+        return {
+          deviceId: identity.deviceId,
+          deviceLabel: identity.deviceLabel,
+          platform: identity.platform,
+          usage: {
+            deviceId: identity.deviceId,
+            deviceLabel: identity.deviceLabel,
+            platform: identity.platform,
+            messageCount: analytics.messageCount,
+            costUsd: analytics.costUsd,
+            tokens: analytics.tokens,
+            durationMs: analytics.durationMs,
+            activeDays: analytics.activityDays.length,
+            projects: await accountUsage.projectUsageSummary(),
+            updatedAt: Date.now()
+          },
+          globalMemories,
+          globalMemoryTombstones: syncState?.tombstones ?? []
+        }
+      },
       applyGlobalMemories: async (entries) => {
+        // The server returns the tombstone-filtered union of every device's
+        // memories, so replacing the local list is what propagates deletions.
         await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
       },
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)

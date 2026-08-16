@@ -25,7 +25,13 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
-import { MemoryService, validateMemoryConfig } from '../chat/memory-service'
+import {
+  MemoryService,
+  parseMemoryExport,
+  serializeMemoryExport,
+  validateMemoryConfig,
+  validateMemoryExportKind
+} from '../chat/memory-service'
 import { harnessLoadsAgentsMd } from '../agents/harness-registry'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { SpecContextService } from '../chat/spec-context-service'
@@ -38,10 +44,12 @@ import {
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
+import { sendToRenderer } from './renderer-delivery'
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
+import { NoteRepo } from '../database/repositories/note-repo'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -1384,6 +1392,7 @@ export function registerIpcHandlers(
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
   const turnFeedbackRepo = new TurnFeedbackRepo(database)
+  const noteRepo = new NoteRepo(database)
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.
@@ -1662,6 +1671,63 @@ export function registerIpcHandlers(
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
+      })
+    }
+  )
+
+  ipcMain.handle('memory:export', async (_, kind: unknown, projectId?: unknown) => {
+    const scope = validateMemoryExportKind(kind, projectId)
+    const entries = await memoryService.exportEntries(scope.kind, scope.projectId)
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const defaultPath = `${APP_SLUG}-memory-${scope.kind}-${new Date().toISOString().slice(0, 10)}.json`
+    const result = win
+      ? await dialog.showSaveDialog(win, {
+          title: `Export ${APP_NAME} Memory`,
+          defaultPath,
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+      : await dialog.showSaveDialog({
+          title: `Export ${APP_NAME} Memory`,
+          defaultPath,
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+    if (result.canceled || !result.filePath) return null
+    await writeFile(result.filePath, serializeMemoryExport({ ...scope, entries }), 'utf-8')
+    return result.filePath
+  })
+
+  ipcMain.handle('memory:import', async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+    const result = win
+      ? await dialog.showOpenDialog(win, {
+          title: `Import ${APP_NAME} Memory`,
+          properties: ['openFile'],
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+      : await dialog.showOpenDialog({
+          title: `Import ${APP_NAME} Memory`,
+          properties: ['openFile'],
+          filters: [{ name: 'Memory Export', extensions: ['json'] }]
+        })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const raw = await readFile(result.filePaths[0], 'utf-8')
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      throw new TypeError('The selected file is not valid JSON')
+    }
+    return parseMemoryExport(parsed)
+  })
+
+  ipcMain.handle(
+    'memory:importApply',
+    async (_, preview: unknown, kind: unknown, projectId?: unknown) => {
+      const safePreview = parseMemoryExport(preview)
+      const scope = validateMemoryExportKind(kind, projectId)
+      return memoryService.importEntries(safePreview.entries, {
+        kind: scope.kind,
+        projectId: scope.projectId
       })
     }
   )
@@ -2899,6 +2965,17 @@ export function registerIpcHandlers(
     }
   )
   ipcMain.handle('project:delete', async (_, projectId: string) => {
+    // Tear down every harness session (processes, ports, utility runtimes) for
+    // the project's threads before the rows are cascade-deleted. Threads are
+    // removed from the database here, not through `thread:delete`, so the
+    // engine's per-thread teardown would otherwise never run and harness
+    // processes would leak after project removal.
+    if (chatEngine?.deleteThreadSession) {
+      const threads = await threadManager.listThreads(projectId)
+      for (const thread of threads) {
+        await chatEngine.deleteThreadSession(projectId, thread.id)
+      }
+    }
     await projectManager.deleteProject(projectId)
     projectFilesService.invalidateProject(projectId)
   })
@@ -4614,6 +4691,49 @@ export function registerIpcHandlers(
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     await threadManager.deleteThread(validProjectId, validThreadId)
   })
+  // ─── Thread notes (user-only scratch space) ─────────────────────────────
+  const NOTE_BODY_MAX = 100_000
+
+  function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      sendToRenderer(win.webContents, 'note:changed', projectId, threadId, hasNote)
+    }
+  }
+
+  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) return null
+    return noteRepo.get(validThreadId)
+  })
+  ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const validBody = validateBoundedString(body, 'Note body', 0, NOTE_BODY_MAX)
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) throw new Error('Thread not found')
+    const previous = noteRepo.get(validThreadId)
+    const now = Date.now()
+    const note = {
+      threadId: validThreadId,
+      body: validBody,
+      createdAt: previous?.createdAt ?? now,
+      updatedAt: now
+    }
+    noteRepo.upsert(note)
+    broadcastNoteChanged(validProjectId, validThreadId, true)
+    return note
+  })
+  ipcMain.handle('note:delete', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) throw new Error('Thread not found')
+    noteRepo.delete(validThreadId)
+    broadcastNoteChanged(validProjectId, validThreadId, false)
+  })
+  ipcMain.handle('note:list', () => noteRepo.listThreadIds())
   ipcMain.handle(
     'thread:dismissSpecReview',
     async (_, projectId: unknown, threadId: unknown, specId: unknown, specVersion: unknown) => {

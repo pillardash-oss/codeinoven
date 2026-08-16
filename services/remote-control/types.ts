@@ -39,13 +39,6 @@ export interface UserRecord {
   created_at: number
 }
 
-export interface AccountProfileRecord {
-  user_id: string
-  usage_json: string
-  global_memories_json: string
-  updated_at: number
-}
-
 export interface DesktopAuthorizationCodeRecord {
   user_id: string
   code_challenge: string

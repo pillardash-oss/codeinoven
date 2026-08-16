@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { gitState } from './git.svelte'
+import { APP_SLUG } from '$shared/brand'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -8,8 +9,19 @@ const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
+const TERMINAL_PLACEMENT_STORAGE_KEY = `${APP_SLUG}.terminal-placement.v1`
 
 export type TerminalPlacement = 'right' | 'bottom'
+
+function loadTerminalPlacement(): TerminalPlacement {
+  if (typeof window === 'undefined') return 'right'
+  try {
+    const raw = window.localStorage.getItem(TERMINAL_PLACEMENT_STORAGE_KEY)
+    return raw === 'bottom' ? 'bottom' : 'right'
+  } catch {
+    return 'right'
+  }
+}
 
 export interface TerminalContextTab {
   id: string
@@ -103,6 +115,19 @@ export interface MemoryContextTab {
   memorySection: MemorySection
 }
 
+/**
+ * The Assignment / Achievement coordinator, docked into the sidebar. The tab
+ * carries no data of its own: the panel is a snippet published by the thread
+ * that owns the coordination, registered on `coordinatorDockState`.
+ */
+export interface CoordinatorContextTab {
+  id: string
+  kind: 'coordinator'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export type TemporaryChatMode = 'audit' | 'elaborate' | 'quick'
 
 export interface TemporaryChatContextTab {
@@ -145,6 +170,7 @@ export type ContextSidebarTab =
   | TemporaryChatContextTab
   | NotificationContextTab
   | MemoryContextTab
+  | CoordinatorContextTab
 
 interface ThreadSidebarContext {
   projectId: string
@@ -198,7 +224,7 @@ class ContextSidebarState {
   private temporaryChatExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   width = $state(480)
   terminalHeight = $state(320)
-  terminalPlacement = $state<TerminalPlacement>('right')
+  terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
   /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
    *  consumer (Workspace) can run the close-through-confirmation flow. */
   closeActiveTabRequest = $state(0)
@@ -283,6 +309,13 @@ class ContextSidebarState {
   /** Move terminals between the sidebar and the bottom dock. */
   setTerminalPlacement(placement: TerminalPlacement): void {
     this.terminalPlacement = placement
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(TERMINAL_PLACEMENT_STORAGE_KEY, placement)
+      } catch {
+        // Terminal placement is cosmetic; unavailable storage must not break the app.
+      }
+    }
     const context = this.activeContext
     if (!context) return
     if (placement === 'bottom') {
@@ -622,6 +655,35 @@ class ContextSidebarState {
       projectId,
       threadId
     })
+  }
+
+  /**
+   * Dock the coordinator for a thread. The title tracks the coordination kind
+   * (Assignment vs Achievement), so an existing tab is re-titled rather than
+   * duplicated when a thread switches modes.
+   */
+  openCoordinator(projectId: string, threadId: string, title: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `coordinator:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      existing.title = title
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'coordinator',
+      title,
+      projectId,
+      threadId
+    })
+  }
+
+  /** Whether the coordinator tab is already docked for a thread. */
+  hasCoordinator(projectId: string, threadId: string): boolean {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    return context?.tabs.some((tab) => tab.kind === 'coordinator') ?? false
   }
 
   openMemory(projectId: string, threadId: string, section?: MemorySection): void {
@@ -1074,7 +1136,7 @@ class ContextSidebarState {
     if (!context.tabs.some((tab) => tab.id === id)) return
     context.activeTabId = id
     this.trackRegionActiveTab(context, id)
-    this.revealRegion(context, id, false)
+    this.revealRegion(context, id)
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
@@ -1087,7 +1149,7 @@ class ContextSidebarState {
     }
     context.activeTabId = tab.id
     this.trackRegionActiveTab(context, tab.id)
-    this.revealRegion(context, tab.id, true)
+    this.revealRegion(context, tab.id)
   }
 
   /** Remember which area (sidebar vs bottom dock) owns the focused tab. */
@@ -1104,16 +1166,16 @@ class ContextSidebarState {
   /**
    * Reveal only the region the tab belongs to, keeping the two regions
    * independent:
-   * - Terminal tabs docked at the bottom open the dock; on a brand-new open
-   *   the sidebar is revealed too so its add-actions stay reachable.
+   * - Terminal tabs docked at the bottom open the dock and nothing else. The
+   *   add-actions they used to need the sidebar for now live on the always-on
+   *   context dock, so opening a shell no longer drags the sidebar open with it.
    * - Everything else reveals the sidebar. The dock is never touched.
    */
-  private revealRegion(context: ThreadSidebarContext, id: string, opening: boolean): void {
+  private revealRegion(context: ThreadSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
     if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
       context.terminalDockOpen = true
-      if (opening) context.visible = true
     } else {
       context.visible = true
     }

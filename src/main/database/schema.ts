@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS threads (
   settings             TEXT,
   context_usage        TEXT,
   session_id           TEXT,
+  session_harness_id   TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
   audit_state          TEXT CHECK(audit_state IN ('offered','running','report_ready','reworking')),
@@ -384,6 +385,21 @@ CREATE TABLE IF NOT EXISTS remote_pairing_bootstraps (
 
 CREATE INDEX IF NOT EXISTS idx_remote_bootstraps_state ON remote_pairing_bootstraps(state);`
 
+/**
+ * Desktop account profile cache. Mirrors the last validated remote account
+ * profile (id, avatar, name, email, usage, global memories) so an app restart
+ * or an offline window never loses the signed-in identity. The row is replaced
+ * only when a fresh profile is fetched and removed only when the user
+ * explicitly signs out.
+ */
+export const ACCOUNT_PROFILE_SQL = `
+-- ─── Account profile cache (desktop) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS account_profile (
+  id           TEXT PRIMARY KEY NOT NULL,
+  profile_json TEXT NOT NULL,
+  cached_at    INTEGER NOT NULL
+);`
+
 export const MISC_TABLES_SQL =
   `
 -- ─── Brainstorm Workflow ──────────────────────────────────────────────
@@ -564,7 +580,9 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_assignment
   ON assignment_api_capabilities(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_thread
-  ON assignment_api_capabilities(thread_id);` + REMOTE_DEVICE_SQL
+  ON assignment_api_capabilities(thread_id);` +
+  REMOTE_DEVICE_SQL +
+  ACCOUNT_PROFILE_SQL
 
 export const PERSISTENCE_SQL = `
 -- ─── Provider sync cursors ────────────────────────────────────────────────
@@ -712,6 +730,20 @@ CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
   ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
 
+/**
+ * Private user-only notes attached to threads. The row cascade-deletes with
+ * its thread, so deleting a thread always removes its note. Notes are never
+ * read by the chat engine or any harness — they are purely user scratch space.
+ */
+export const THREAD_NOTES_SQL = `
+-- ─── Thread notes (user-only scratch space) ──────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_notes (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`
+
 /** Canonical fresh-install schema. There are no historical migrations. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
@@ -725,5 +757,6 @@ export const DATABASE_SCHEMA_SQL = [
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
-  HARNESS_USAGE_SQL
+  HARNESS_USAGE_SQL,
+  THREAD_NOTES_SQL
 ].join('\n')

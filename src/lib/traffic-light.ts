@@ -23,8 +23,10 @@ export interface TrafficLightInfo {
   offset: number
 }
 
-/** Horizontal inset kept for the macOS traffic lights (matches the legacy `pl-24`). */
-export const TRAFFIC_LIGHT_OFFSET = 96
+/** Horizontal inset kept for the macOS traffic lights (matches `pl-20`; the traffic
+ *  light cluster itself sits at x:16 and is ~54px wide, so this leaves a small
+ *  breathing gap without pushing the first nav icon far past the buttons). */
+export const TRAFFIC_LIGHT_OFFSET = 80
 
 /** No in-content window controls — nothing to reserve. */
 export const NO_TRAFFIC_LIGHT: TrafficLightInfo = { present: false, side: null, offset: 0 }

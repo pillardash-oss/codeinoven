@@ -28,9 +28,10 @@ import type {
   AccountProfileState,
   AccountProfileSyncPayload,
   AccountSignInStart,
-  AccountUsageBreakdown,
-  AccountUsageSummary,
-  MemoryEntry
+  MemoryEntry,
+  MemoryTombstone,
+  SyncedDeviceProject,
+  SyncedDeviceUsage
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
@@ -43,6 +44,7 @@ import {
 } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
+import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
 import {
   readRemoteDeviceNames,
@@ -50,6 +52,12 @@ import {
   writeRemoteDeviceName,
   writeRemoteModeState
 } from './remote-state'
+import {
+  mergeTombstones,
+  readMemorySyncState,
+  tombstonesForDeletions,
+  writeMemorySyncState
+} from './memory-sync-state'
 
 declare global {
   /** Public remote-service origin injected by the Electron production build. */
@@ -86,6 +94,8 @@ export interface RemoteModeOptions {
   storage?: import('../storage/storage-engine').StorageEngine | null
   /** Device credential service backing per-device identity and revocation. */
   credentials?: DeviceCredentialService | null
+  /** SQLite repository used to cache the validated account profile locally. */
+  accountProfileRepo?: AccountProfileRepo | null
   /**
    * Called whenever the live remote-session state changes (a phone connects or
    * disconnects). Lets the host keep the device awake while a session is live.
@@ -113,6 +123,7 @@ interface CloudAccessConfig {
 interface AccountSessionConfig {
   apiOrigin: string
   profileTokenRef: string
+  expiresAt?: number
 }
 
 interface EnrollmentResponse {
@@ -135,6 +146,9 @@ export function remoteEnvInt(name: string, fallback: number): number {
 const CLOUD_REQUEST_TIMEOUT_MS = 15_000
 const CLOUD_ENROLLMENT_RETRY_INITIAL_MS = 5_000
 const CLOUD_ENROLLMENT_RETRY_MAX_MS = 5 * 60_000
+const ACCOUNT_TOKEN_REFRESH_LEAD_MS = 7 * 24 * 60 * 60_000
+const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
+const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
 
 function cloudResponseIsTerminal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
@@ -263,74 +277,130 @@ function parseEnrollmentResponse(value: unknown): EnrollmentResponse | null {
   }
 }
 
+async function enrollmentFailureMessage(response: Response): Promise<string> {
+  let reason = ''
+  try {
+    const payload: unknown = await response.json()
+    if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+      const error = (payload as Record<string, unknown>)['error']
+      if (typeof error === 'string') reason = error
+    }
+  } catch {
+    // The status code still provides a safe, actionable fallback.
+  }
+  if (response.status === 401 || reason === 'unauthorized') {
+    return 'The remote service could not verify your signed-in account'
+  }
+  if (response.status === 403 || reason === 'enrollment-conflict') {
+    return 'This desktop enrollment belongs to a different account'
+  }
+  if (response.status === 429 || reason === 'rate-limited') {
+    return 'Too many pairing attempts. Wait a moment and try again'
+  }
+  if (response.status >= 500) return 'The remote pairing service is unavailable'
+  return `The remote service rejected pairing (HTTP ${response.status})`
+}
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
 }
 
-function parseUsageBreakdown(value: unknown): AccountUsageBreakdown[] | null {
-  if (!Array.isArray(value)) return null
-  const rows: AccountUsageBreakdown[] = []
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
-    const row = item as Record<string, unknown>
-    const messageCount = finiteNumber(row['messageCount'])
-    const costUsd = finiteNumber(row['costUsd'])
-    const tokens = finiteNumber(row['tokens'])
-    if (
-      typeof row['id'] !== 'string' ||
-      messageCount === null ||
-      costUsd === null ||
-      tokens === null
-    ) {
-      return null
-    }
-    rows.push({ id: row['id'], messageCount, costUsd, tokens })
+function parseSyncedDeviceProject(value: unknown): SyncedDeviceProject | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  const messageCount = finiteNumber(row['messageCount'])
+  const costUsd = finiteNumber(row['costUsd'])
+  const tokens = finiteNumber(row['tokens'])
+  const durationMs = finiteNumber(row['durationMs'])
+  const threadCount = finiteNumber(row['threadCount'])
+  if (
+    typeof row['id'] !== 'string' ||
+    typeof row['name'] !== 'string' ||
+    messageCount === null ||
+    costUsd === null ||
+    tokens === null ||
+    durationMs === null ||
+    threadCount === null
+  ) {
+    return null
   }
-  return rows
+  return {
+    id: row['id'],
+    name: row['name'],
+    messageCount,
+    costUsd,
+    tokens,
+    durationMs,
+    threadCount
+  }
 }
 
-function parseAccountUsage(value: unknown): AccountUsageSummary | null {
+function parseSyncedDeviceUsage(value: unknown): SyncedDeviceUsage | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const messageCount = finiteNumber(record['messageCount'])
   const costUsd = finiteNumber(record['costUsd'])
   const tokens = finiteNumber(record['tokens'])
   const durationMs = finiteNumber(record['durationMs'])
-  const generatedAt = finiteNumber(record['generatedAt'])
-  const harnesses = parseUsageBreakdown(record['harnesses'])
-  const models = parseUsageBreakdown(record['models'])
+  const activeDays = finiteNumber(record['activeDays'])
+  const updatedAt = finiteNumber(record['updatedAt'])
   if (
+    typeof record['deviceId'] !== 'string' ||
+    typeof record['deviceLabel'] !== 'string' ||
+    typeof record['platform'] !== 'string' ||
     messageCount === null ||
     costUsd === null ||
     tokens === null ||
     durationMs === null ||
-    generatedAt === null ||
-    !harnesses ||
-    !models ||
-    !Array.isArray(record['activityDays'])
+    activeDays === null ||
+    updatedAt === null ||
+    !Array.isArray(record['projects'])
   ) {
     return null
   }
-  const activityDays = record['activityDays'].flatMap((item) => {
-    if (typeof item !== 'object' || item === null || Array.isArray(item)) return []
-    const day = item as Record<string, unknown>
-    const dayCount = finiteNumber(day['messageCount'])
-    return typeof day['date'] === 'string' && dayCount !== null
-      ? [{ date: day['date'], messageCount: dayCount }]
-      : []
-  })
+  const projects: SyncedDeviceProject[] = []
+  for (const item of record['projects'].slice(0, 10)) {
+    const project = parseSyncedDeviceProject(item)
+    if (!project) return null
+    projects.push(project)
+  }
   return {
+    deviceId: record['deviceId'],
+    deviceLabel: record['deviceLabel'],
+    platform: record['platform'],
     messageCount,
     costUsd,
     tokens,
     durationMs,
-    topHarnessId: typeof record['topHarnessId'] === 'string' ? record['topHarnessId'] : null,
-    topModelId: typeof record['topModelId'] === 'string' ? record['topModelId'] : null,
-    harnesses,
-    models,
-    activityDays,
-    generatedAt
+    activeDays,
+    projects,
+    updatedAt
   }
+}
+
+function parseUsageByDevice(value: unknown): Record<string, SyncedDeviceUsage> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const byDevice: Record<string, SyncedDeviceUsage> = {}
+  for (const [deviceId, raw] of Object.entries(value as Record<string, unknown>)) {
+    const usage = parseSyncedDeviceUsage(raw)
+    if (!usage || usage.deviceId !== deviceId) return null
+    byDevice[deviceId] = usage
+  }
+  return byDevice
+}
+
+function parseMemoryTombstones(value: unknown): MemoryTombstone[] | null {
+  if (!Array.isArray(value)) return null
+  const tombstones: MemoryTombstone[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const tombstone = item as Record<string, unknown>
+    if (typeof tombstone['id'] !== 'string' || typeof tombstone['deletedAt'] !== 'number') {
+      return null
+    }
+    tombstones.push({ id: tombstone['id'], deletedAt: tombstone['deletedAt'] })
+  }
+  return tombstones
 }
 
 function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
@@ -385,16 +455,18 @@ function parseAccountProfile(value: unknown): AccountProfile | null {
   const raw = wrapper['profile']
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const profile = raw as Record<string, unknown>
-  const usage = parseAccountUsage(profile['usage'])
+  const usageByDevice = parseUsageByDevice(profile['usageByDevice'] ?? {})
   const globalMemories = parseGlobalMemories(profile['globalMemories'])
+  const globalMemoryTombstones = parseMemoryTombstones(profile['globalMemoryTombstones'] ?? [])
   if (
     typeof profile['id'] !== 'string' ||
     typeof profile['email'] !== 'string' ||
     typeof profile['displayName'] !== 'string' ||
     (profile['image'] !== null && typeof profile['image'] !== 'string') ||
     typeof profile['updatedAt'] !== 'number' ||
-    !usage ||
-    !globalMemories
+    !usageByDevice ||
+    !globalMemories ||
+    !globalMemoryTombstones
   ) {
     return null
   }
@@ -403,8 +475,9 @@ function parseAccountProfile(value: unknown): AccountProfile | null {
     email: profile['email'],
     displayName: profile['displayName'],
     image: profile['image'],
-    usage,
+    usageByDevice,
     globalMemories,
+    globalMemoryTombstones,
     updatedAt: profile['updatedAt']
   }
 }
@@ -422,6 +495,7 @@ export class RemoteModeController {
   private readonly rpc: RemoteRpcDispatcher | null
   private readonly storage: import('../storage/storage-engine').StorageEngine | null
   private readonly credentials: DeviceCredentialService | null
+  private readonly accountProfileRepo: AccountProfileRepo | null
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
@@ -431,6 +505,10 @@ export class RemoteModeController {
   private accountConfig: AccountSessionConfig | null = null
   private accountSignInServer: Server | null = null
   private accountSignInTimeout: ReturnType<typeof setTimeout> | null = null
+  private accountTokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  private accountTokenRefreshPromise: Promise<AccountSessionConfig> | null = null
+  /** Bumped on sign-out so in-flight profile refreshes never re-broadcast stale state. */
+  private accountProfileGeneration = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
@@ -454,6 +532,7 @@ export class RemoteModeController {
     this.rpc = options.rpc ?? null
     this.storage = options.storage ?? null
     this.credentials = options.credentials ?? null
+    this.accountProfileRepo = options.accountProfileRepo ?? null
     this.vault = this.storage ? new SecretVault(this.storage) : null
     this.onSessionActiveChange = options.onSessionActiveChange
     this.loadAccountProfileData = options.loadAccountProfileData
@@ -915,6 +994,8 @@ export class RemoteModeController {
    */
   async dispose(): Promise<void> {
     this.closeAccountSignInListener()
+    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
+    this.accountTokenRefreshTimer = null
     this.keepAlive.dispatch({ type: 'disarm' })
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
@@ -1006,6 +1087,7 @@ export class RemoteModeController {
     ipcMain.handle('account:syncProfile', (): Promise<AccountProfileState> =>
       this.syncAccountProfile()
     )
+    ipcMain.handle('account:signOut', (): Promise<void> => this.signOutAccount())
   }
 
   private async accountRequest(init?: RequestInit): Promise<Response | null> {
@@ -1015,12 +1097,15 @@ export class RemoteModeController {
       (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
       null
     this.accountConfig = accountConfig
+    const freshAccountConfig = accountConfig
+      ? await this.ensureFreshAccountToken(accountConfig)
+      : null
     const cloudConfig =
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
-    const tokenRef = accountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
+    const tokenRef = freshAccountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
     if (!tokenRef) return null
     const token = await this.vault.resolve(tokenRef)
-    const apiOrigin = accountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
+    const apiOrigin = freshAccountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
     return fetchWithDeadline(
       new URL('/v1/profile', apiOrigin),
       {
@@ -1059,18 +1144,118 @@ export class RemoteModeController {
     }
   }
 
+  /**
+   * Current account profile, served from the SQLite cache first so a restart
+   * (or an offline window) never loses the signed-in identity. When a cached
+   * profile exists the live fetch runs in the background and broadcasts a fresh
+   * copy via `account:profileChanged` when it lands.
+   */
   async accountProfile(): Promise<AccountProfileState> {
+    const cached = await this.readCachedAccountProfile()
+    if (cached) {
+      void this.refreshAccountProfileInBackground()
+      return { status: 'signed-in', profile: cached }
+    }
+    try {
+      return await this.fetchAccountProfile()
+    } catch (error) {
+      Logger.dev('Account profile could not be fetched:', error)
+      return {
+        status:
+          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
+            ? 'pending'
+            : 'signed-out',
+        profile: null
+      }
+    }
+  }
+
+  private async fetchAccountProfile(): Promise<AccountProfileState> {
     const response = await this.accountRequest()
     if (!response || response.status === 401) {
       return {
-        status: this.cloudStatus.state === 'enrollment-pending' ? 'pending' : 'signed-out',
+        status:
+          this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
+            ? 'pending'
+            : 'signed-out',
         profile: null
       }
     }
     if (!response.ok) throw new Error('Account profile is unavailable')
     const profile = parseAccountProfile(await response.json())
     if (!profile) throw new Error('Account profile response is invalid')
-    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+    const withImage = await this.loadProfileImage(profile)
+    await this.cacheAccountProfile(withImage)
+    return { status: 'signed-in', profile: withImage }
+  }
+
+  /**
+   * Revalidate a cached profile from the network without disturbing the state
+   * already served. Network failures are deliberately swallowed — the cached
+   * signed-in identity stays until a successful fetch or an explicit sign-out.
+   */
+  private async refreshAccountProfileInBackground(): Promise<void> {
+    const generation = this.accountProfileGeneration
+    try {
+      const state = await this.fetchAccountProfile()
+      if (generation !== this.accountProfileGeneration) return
+      // A background probe must never drop a cached identity — only a successful
+      // fetch (or an explicit sign-out) changes what the user sees.
+      if (state.status !== 'signed-in') {
+        Logger.dev('Account profile revalidation is not signed in; keeping the cached profile')
+        return
+      }
+      this.broadcastAccountProfile(state)
+    } catch (error) {
+      Logger.dev('Account profile refresh deferred; keeping the cached profile:', error)
+    }
+  }
+
+  private async readCachedAccountProfile(): Promise<AccountProfile | null> {
+    try {
+      return this.accountProfileRepo?.load() ?? null
+    } catch (error) {
+      Logger.dev('Could not read the cached account profile:', error)
+      return null
+    }
+  }
+
+  private async cacheAccountProfile(profile: AccountProfile): Promise<void> {
+    try {
+      this.accountProfileRepo?.save(profile)
+    } catch (error) {
+      Logger.dev('Could not cache the account profile:', error)
+    }
+  }
+
+  private async clearCachedAccountProfile(): Promise<void> {
+    try {
+      this.accountProfileRepo?.clear()
+    } catch (error) {
+      Logger.dev('Could not clear the cached account profile:', error)
+    }
+  }
+
+  /**
+   * Explicit account sign-out: revoke the persisted session token, remove the
+   * session config, and delete the cached profile (the only thing that removes
+   * the cached identity). Remote-device enrollment is independent and untouched.
+   */
+  async signOutAccount(): Promise<void> {
+    this.accountProfileGeneration++
+    const config =
+      this.accountConfig ??
+      (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
+      null
+    if (config?.profileTokenRef && this.vault) {
+      await this.vault.remove(config.profileTokenRef).catch(() => undefined)
+    }
+    if (this.storage) {
+      await this.storage.remove(ACCOUNT_CONFIG_PATH).catch(() => undefined)
+    }
+    this.accountConfig = null
+    await this.clearCachedAccountProfile()
+    this.broadcastAccountProfile({ status: 'signed-out', profile: null })
   }
 
   async beginAccountSignIn(provider: AccountAuthProvider): Promise<AccountSignInStart> {
@@ -1104,6 +1289,11 @@ export class RemoteModeController {
     this.accountSignInServer = null
   }
 
+  private failAccountSignIn(message: string): void {
+    this.closeAccountSignInListener()
+    this.broadcastAccountProfile({ status: 'error', profile: null, message })
+  }
+
   private accountCallbackResponse(response: ServerResponse, status: number, message: string): void {
     response.writeHead(status, {
       'Content-Type': 'text/html; charset=utf-8',
@@ -1119,15 +1309,22 @@ export class RemoteModeController {
     return new Promise((resolve, reject) => {
       const server = createServer((request, response) => {
         void (async () => {
+          let terminalCallback = false
           try {
             const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1')
             if (request.method !== 'GET' || requestUrl.pathname !== '/account/callback') {
               this.accountCallbackResponse(response, 404, 'This callback is not valid.')
               return
             }
+            terminalCallback = true
             const callbackState = requestUrl.searchParams.get('state')
             const code = requestUrl.searchParams.get('code')
             if (callbackState !== state || !code) {
+              this.broadcastAccountProfile({
+                status: 'error',
+                profile: null,
+                message: 'The browser callback could not be verified. Start sign-in again.'
+              })
               this.accountCallbackResponse(
                 response,
                 400,
@@ -1147,15 +1344,24 @@ export class RemoteModeController {
             )
             const payload = (await exchange.json()) as Record<string, unknown>
             const profileToken = payload['profileToken']
-            if (!exchange.ok || typeof profileToken !== 'string' || profileToken.length === 0) {
+            const expiresAt = payload['expiresAt']
+            if (
+              !exchange.ok ||
+              typeof profileToken !== 'string' ||
+              profileToken.length === 0 ||
+              typeof expiresAt !== 'number' ||
+              !Number.isFinite(expiresAt)
+            ) {
               throw new Error('Account credential exchange failed')
             }
             const profileTokenRef = await this.vault!.save(
               profileToken,
               this.accountConfig?.profileTokenRef
             )
-            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef }
+            this.accountConfig = { apiOrigin: this.cloudApiOrigin!, profileTokenRef, expiresAt }
             await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
+            this.scheduleAccountTokenRefresh(expiresAt)
+            this.accountProfileGeneration++
             const profile = await this.syncAccountProfile()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
@@ -1165,18 +1371,23 @@ export class RemoteModeController {
             )
           } catch (error) {
             Logger.error('Desktop account sign-in callback failed:', error)
+            this.broadcastAccountProfile({
+              status: 'error',
+              profile: null,
+              message: 'The browser returned to CodeInOven, but the account could not be connected.'
+            })
             this.accountCallbackResponse(
               response,
               500,
               'CodeInOven could not finish connecting your account. Return to the app and try again.'
             )
           } finally {
-            this.closeAccountSignInListener()
+            if (terminalCallback) this.closeAccountSignInListener()
           }
         })()
       })
       server.once('error', (error) => {
-        this.closeAccountSignInListener()
+        this.failAccountSignIn('CodeInOven could not open a local callback port. Try again.')
         reject(error)
       })
       server.listen(0, '127.0.0.1', () => {
@@ -1188,12 +1399,85 @@ export class RemoteModeController {
           return
         }
         this.accountSignInTimeout = setTimeout(
-          () => this.closeAccountSignInListener(),
+          () =>
+            this.failAccountSignIn('Sign-in timed out. Start again to open a new secure callback.'),
           5 * 60 * 1_000
         )
+        this.broadcastAccountProfile({ status: 'pending', profile: null })
         resolve(`http://127.0.0.1:${address.port}/account/callback`)
       })
     })
+  }
+
+  private scheduleAccountTokenRefresh(expiresAt: number): void {
+    if (this.accountTokenRefreshTimer) clearTimeout(this.accountTokenRefreshTimer)
+    const delay = Math.min(
+      ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS,
+      Math.max(60_000, expiresAt - Date.now() - ACCOUNT_TOKEN_REFRESH_LEAD_MS)
+    )
+    this.accountTokenRefreshTimer = setTimeout(() => {
+      this.accountTokenRefreshTimer = null
+      const config = this.accountConfig
+      if (!config) return
+      void this.ensureFreshAccountToken(config).catch((error) => {
+        Logger.dev('Account token refresh unavailable:', error)
+      })
+    }, delay)
+  }
+
+  private async ensureFreshAccountToken(
+    config: AccountSessionConfig
+  ): Promise<AccountSessionConfig> {
+    if (!config.expiresAt || config.expiresAt - Date.now() > ACCOUNT_TOKEN_REFRESH_LEAD_MS) {
+      if (config.expiresAt) this.scheduleAccountTokenRefresh(config.expiresAt)
+      return config
+    }
+    if (this.accountTokenRefreshPromise) return this.accountTokenRefreshPromise
+    this.accountTokenRefreshPromise = (async () => {
+      try {
+        if (!this.vault || !this.storage) return config
+        const currentToken = await this.vault.resolve(config.profileTokenRef)
+        const response = await fetchWithDeadline(
+          new URL('/v1/desktop-auth/refresh', config.apiOrigin),
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${currentToken}` }
+          },
+          CLOUD_REQUEST_TIMEOUT_MS
+        )
+        const payload = (await response.json()) as Record<string, unknown>
+        const profileToken = payload['profileToken']
+        const expiresAt = payload['expiresAt']
+        if (
+          !response.ok ||
+          typeof profileToken !== 'string' ||
+          !profileToken ||
+          typeof expiresAt !== 'number' ||
+          !Number.isFinite(expiresAt)
+        ) {
+          throw new Error('Account token refresh failed')
+        }
+        const profileTokenRef = await this.vault.save(profileToken, config.profileTokenRef)
+        const refreshed = { ...config, profileTokenRef, expiresAt }
+        this.accountConfig = refreshed
+        await this.storage.write(ACCOUNT_CONFIG_PATH, refreshed)
+        this.scheduleAccountTokenRefresh(expiresAt)
+        return refreshed
+      } catch (error) {
+        this.accountTokenRefreshTimer = setTimeout(() => {
+          this.accountTokenRefreshTimer = null
+          void this.ensureFreshAccountToken(config).catch(() => undefined)
+        }, ACCOUNT_TOKEN_REFRESH_RETRY_MS)
+        if (!config.expiresAt || config.expiresAt > Date.now()) {
+          Logger.dev('Account token refresh deferred; current token remains valid:', error)
+          return config
+        }
+        throw error
+      } finally {
+        this.accountTokenRefreshPromise = null
+      }
+    })()
+    return this.accountTokenRefreshPromise
   }
 
   private broadcastAccountProfile(state: AccountProfileState): void {
@@ -1204,17 +1488,45 @@ export class RemoteModeController {
 
   async syncAccountProfile(): Promise<AccountProfileState> {
     if (!this.loadAccountProfileData) return this.accountProfile()
-    const local = await this.loadAccountProfileData()
-    const response = await this.accountRequest({
-      method: 'PUT',
-      body: JSON.stringify(local)
-    })
-    if (!response || response.status === 401) return { status: 'signed-out', profile: null }
-    if (!response.ok) throw new Error('Account profile sync failed')
-    const profile = parseAccountProfile(await response.json())
-    if (!profile) throw new Error('Account profile response is invalid')
-    await this.applyGlobalMemories?.(profile.globalMemories)
-    return { status: 'signed-in', profile: await this.loadProfileImage(profile) }
+    const cached = await this.readCachedAccountProfile()
+    try {
+      const local = await this.loadAccountProfileData()
+      const now = Date.now()
+      const syncState = await readMemorySyncState(this.storage)
+      const localIds = local.globalMemories.map((entry) => entry.id)
+      // Entries that were part of the last synced snapshot but are gone locally
+      // now were deleted — record a tombstone so the deletion sticks server-side.
+      const newTombstones = syncState
+        ? tombstonesForDeletions(syncState.lastSnapshotIds, localIds, now)
+        : []
+      const tombstones = mergeTombstones(
+        [...(syncState?.tombstones ?? []), ...local.globalMemoryTombstones, ...newTombstones],
+        now
+      )
+      const response = await this.accountRequest({
+        method: 'PUT',
+        body: JSON.stringify({
+          ...local,
+          globalMemoryTombstones: tombstones
+        })
+      })
+      if (!response || response.status === 401) return { status: 'signed-out', profile: null }
+      if (!response.ok) throw new Error('Account profile sync failed')
+      const profile = parseAccountProfile(await response.json())
+      if (!profile) throw new Error('Account profile response is invalid')
+      await this.applyGlobalMemories?.(profile.globalMemories)
+      await writeMemorySyncState(this.storage, {
+        lastSnapshotIds: profile.globalMemories.map((entry) => entry.id),
+        tombstones: profile.globalMemoryTombstones,
+        updatedAt: now
+      })
+      const withImage = await this.loadProfileImage(profile)
+      await this.cacheAccountProfile(withImage)
+      return { status: 'signed-in', profile: withImage }
+    } catch (error) {
+      if (cached) return { status: 'signed-in', profile: cached }
+      throw error
+    }
   }
 
   private scheduleAccountProfileSync(delayMs: number): void {
@@ -1252,10 +1564,19 @@ export class RemoteModeController {
 
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
-    const accountConfig =
+    const storedAccountConfig =
       this.accountConfig ?? (await this.storage.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH))
-    const existingTokenRef = previous?.tokenRef ?? accountConfig?.profileTokenRef
-    const existingToken = existingTokenRef ? await this.vault.resolve(existingTokenRef) : null
+    const accountConfig = storedAccountConfig
+      ? await this.ensureFreshAccountToken(storedAccountConfig)
+      : null
+    const accountToken = accountConfig
+      ? await this.vault.resolve(accountConfig.profileTokenRef)
+      : null
+    const existingDeviceToken = previous?.tokenRef
+      ? await this.vault.resolve(previous.tokenRef)
+      : null
+    const authorizationToken = accountToken ?? existingDeviceToken
+    if (!authorizationToken) throw new Error('Sign in before pairing this desktop')
 
     this.stopCloudAccess()
     this.cloudAbortController = new AbortController()
@@ -1274,7 +1595,10 @@ export class RemoteModeController {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(existingToken ? { Authorization: `Bearer ${existingToken}` } : {})
+          Authorization: `Bearer ${authorizationToken}`,
+          ...(accountToken && existingDeviceToken
+            ? { 'X-CodeInOven-Desktop-Token': existingDeviceToken }
+            : {})
         },
         body: JSON.stringify({
           name: hostname(),
@@ -1286,21 +1610,26 @@ export class RemoteModeController {
       this.cloudAbortController?.signal
     )
     if (!response.ok) {
-      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: 'Enrollment failed' }
+      const message = await enrollmentFailureMessage(response)
+      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: message }
       this.broadcast()
-      throw new Error('Cloud desktop enrollment failed')
+      throw new Error(message)
     }
     const payload = parseEnrollmentResponse(await response.json())
     if (!payload) throw new Error('Cloud service returned an invalid enrollment response')
 
-    const deviceToken = payload.deviceToken ?? existingToken
+    const deviceToken = payload.deviceToken ?? existingDeviceToken
     if (!deviceToken) throw new Error('Cloud service did not issue a desktop credential')
     const tokenRef = await this.vault.save(deviceToken, previous?.tokenRef)
     const profileTokenRef = await this.vault.save(
       payload.profileToken,
       previous?.profileTokenRef ?? accountConfig?.profileTokenRef
     )
-    this.accountConfig = { apiOrigin: this.cloudApiOrigin, profileTokenRef }
+    this.accountConfig = {
+      apiOrigin: this.cloudApiOrigin,
+      profileTokenRef,
+      expiresAt: accountConfig?.expiresAt
+    }
     await this.storage.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
     this.cloudConfig = {
       apiOrigin: this.cloudApiOrigin,

@@ -4,6 +4,7 @@ import { Logger } from './logger'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
+import type { RetrySchedulerService } from './retry-scheduler-service'
 
 /** Thread states that count as "work in progress". */
 const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
@@ -16,9 +17,17 @@ const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 const IDLE_RELEASE_DELAY_MS = 5_000
 
 /**
+ * Upper bound for an unattended scheduled auto-retry wait that justifies
+ * keeping the device awake: waits under six hours are worth powering through so
+ * the reset fires on time; longer waits fall back to normal sleep behavior.
+ */
+const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
+
+/**
  * PowerWakeService — prevents the system and display from sleeping while
- * work is in progress or while a live remote (phone) session is using the
- * desktop. The thread side is gated by the General settings toggle
+ * work is in progress, while a scheduled auto-retry (usage/rate-limit reset) is
+ * due within six hours, or while a live remote (phone) session is using the
+ * desktop. The thread and retry sides are gated by the General settings toggle
  * ("Keep device on while work is in progress"); the remote side is always on
  * so a connected phone session never gets dropped by the display sleeping.
  */
@@ -30,6 +39,7 @@ export class PowerWakeService {
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private enabled = false
   private remoteSessionActive = false
+  private retryScheduler: RetrySchedulerService | null = null
 
   constructor(
     private storage: StorageEngine,
@@ -54,6 +64,16 @@ export class PowerWakeService {
     if (this.enabled) this.refresh()
   }
 
+  /** Re-evaluate after the pending auto-retry set changes (track/clear/fire). */
+  onRetryScheduleChanged(): void {
+    if (this.enabled) this.refresh()
+  }
+
+  /** Let the service consider scheduled auto-retries when keeping the device awake. */
+  attachRetryScheduler(scheduler: RetrySchedulerService): void {
+    this.retryScheduler = scheduler
+  }
+
   /** Keep the display awake while a remote phone session is live. */
   setRemoteSessionActive(active: boolean): void {
     this.remoteSessionActive = active
@@ -67,8 +87,7 @@ export class PowerWakeService {
   }
 
   private refresh(releaseImmediately = false): void {
-    const shouldBlock = this.remoteSessionActive || (this.enabled && this.hasActiveThread())
-    if (shouldBlock) {
+    if (this.shouldKeepAwake()) {
       this.cancelScheduledRelease()
       this.acquire()
       return
@@ -81,6 +100,24 @@ export class PowerWakeService {
     }
 
     this.scheduleRelease()
+  }
+
+  private shouldKeepAwake(): boolean {
+    return (
+      this.remoteSessionActive ||
+      (this.enabled && (this.hasActiveThread() || this.hasScheduledRetry()))
+    )
+  }
+
+  /**
+   * True when a pending auto-resume will fire within the keep-awake window —
+   * the app can retry it unattended, so the device must not sleep through it.
+   */
+  private hasScheduledRetry(): boolean {
+    return (
+      this.retryScheduler?.hasPendingRetryBefore(Date.now() + SCHEDULED_RETRY_WAKE_WINDOW_MS) ??
+      false
+    )
   }
 
   private acquire(): void {
@@ -100,8 +137,7 @@ export class PowerWakeService {
 
     this.releaseTimer = setTimeout(() => {
       this.releaseTimer = null
-      const shouldBlock = this.remoteSessionActive || (this.enabled && this.hasActiveThread())
-      if (shouldBlock) return
+      if (this.shouldKeepAwake()) return
       this.release()
     }, IDLE_RELEASE_DELAY_MS)
     this.releaseTimer.unref()

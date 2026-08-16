@@ -183,6 +183,11 @@ export interface Thread {
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
+  /** Harness that created the bound session. A session never migrates across
+   *  harnesses: even when `settings.harnessId` changes (mid-run switch), this
+   *  field keeps identifying the driver that owns `sessionId` so the old
+   *  session is read/synced through the correct driver. */
+  sessionHarnessId?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -212,6 +217,20 @@ export interface Thread {
   updatedAt: number
   lastActivity: number
   workingDirectory: string
+}
+
+/**
+ * A private, user-only note attached to a thread. Notes are never included in
+ * agent context or prompts — they exist so the user can remind themselves what
+ * they intended to do on a thread and return to it later. Deleting the thread
+ * deletes its note (ON DELETE CASCADE).
+ */
+export interface ThreadNote {
+  threadId: string
+  /** Markdown body of the note. */
+  body: string
+  createdAt: number
+  updatedAt: number
 }
 
 /**
@@ -1713,14 +1732,18 @@ export interface AccountProfile {
   email: string
   displayName: string
   image: string | null
-  usage: AccountUsageSummary
+  /** Per-device usage snapshots keyed by the desktop device id. */
+  usageByDevice: Record<string, SyncedDeviceUsage>
   globalMemories: MemoryEntry[]
+  /** Deleted global memory ids; deletions propagate to every device. */
+  globalMemoryTombstones: MemoryTombstone[]
   updatedAt: number
 }
 
 export type AccountProfileState =
   | { status: 'signed-out'; profile: null }
   | { status: 'pending'; profile: null }
+  | { status: 'error'; profile: null; message: string }
   | { status: 'signed-in'; profile: AccountProfile }
 
 export type AccountAuthProvider = 'google' | 'apple'
@@ -1729,9 +1752,44 @@ export interface AccountSignInStart {
   url: string
 }
 
+/** A memory entry this device deleted; newer than the entry's `updatedAt` it wins. */
+export interface MemoryTombstone {
+  id: string
+  deletedAt: number
+}
+
+/** Compact per-project usage row synced inside a device usage snapshot. */
+export interface SyncedDeviceProject {
+  id: string
+  name: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  threadCount: number
+}
+
+/** Compact per-device usage snapshot synced to the account profile. */
+export interface SyncedDeviceUsage {
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  activeDays: number
+  projects: SyncedDeviceProject[]
+  updatedAt: number
+}
+
 export interface AccountProfileSyncPayload {
-  usage: AccountUsageSummary
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  usage: SyncedDeviceUsage
   globalMemories: MemoryEntry[]
+  globalMemoryTombstones: MemoryTombstone[]
 }
 
 /** A selectable option within an agent question. */
@@ -2908,6 +2966,30 @@ export interface MemoryProposal {
   createdAt: number
   expiresAt: number
   status: 'pending' | 'approved' | 'rejected'
+}
+
+/** Which bucket of memory an export/import targets. */
+export type MemoryExportKind = 'projects' | 'chats' | 'both' | 'project'
+
+/** The on-disk JSON shape written by a memory export and read by an import. */
+export interface MemoryExportFile {
+  format: 'codeinoven-memory'
+  version: 1
+  exportedAt: number
+  kind: MemoryExportKind
+  /** Present only when `kind === 'project'` (the sidebar project export). */
+  projectId?: string
+  entries: MemoryEntry[]
+}
+
+/** Preview of an imported memory file, returned before anything is applied. */
+export interface MemoryImportPreview {
+  format: string
+  version: number
+  kind: MemoryExportKind
+  projectId?: string
+  entryCount: number
+  entries: MemoryEntry[]
 }
 
 export interface AppConfig {

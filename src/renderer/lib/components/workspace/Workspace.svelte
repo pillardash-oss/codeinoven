@@ -18,7 +18,15 @@
     FolderKanban,
     ArrowUpDown,
     Check,
-    ChevronUp
+    BrainCircuit,
+    Bug,
+    Cloud,
+    FileDiff,
+    Files,
+    Info,
+    MessageCircleDashed,
+    SquareTerminal,
+    StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -29,6 +37,7 @@
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
+  import ThreadNoteModal from '../threads/ThreadNoteModal.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
@@ -37,6 +46,8 @@
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
   import TemporaryChatView from '../chats/TemporaryChatView.svelte'
@@ -76,6 +87,8 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -607,6 +620,9 @@
   let editProjectIconType = $state<string | undefined>()
   let editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
 
+  // Thread-note modal opened from the right-dock note indicator
+  let dockNoteThread = $state<Thread | null>(null)
+
   // Edit-scope modal
   let editBucketTarget = $state<ScopeBucket | null>(null)
   let editBucketName = $state('')
@@ -655,53 +671,254 @@
     contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
   }
 
-  let sidebarActions = $derived.by(() => {
+  // ─── Context dock (right rail) ───────────────────────────────────────────
+
+  /** Whether `kind` is the panel currently on screen in the right sidebar. */
+  function dockKindActive(kind: ContextSidebarTab['kind']): boolean {
+    return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === kind
+  }
+
+  /**
+   * The dock's toggle contract: clicking the active tool collapses the panel,
+   * clicking any other tool swaps the panel content without closing it.
+   */
+  function toggleDockPanel(kind: ContextSidebarTab['kind'], open: () => void): void {
+    if (dockKindActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
+    open()
+  }
+
+  /** Quick chats, explains and audits open from inside a thread and live in the
+   *  sidebar as tabs. The rail only mirrors them so they can be toggled away
+   *  and back without losing the conversation. */
+  let temporaryChatTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'temporary-chat')
+  )
+
+  function focusTemporaryChat(): void {
+    const tab = temporaryChatTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
+  function openMemoryTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+  }
+
+  /** The coordinator published by the thread on screen, if it coordinates work. */
+  let coordinator = $derived(
+    coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
+  )
+
+  function openCoordinatorTab(): void {
+    if (!coordinator) return
+    coordinatorDockState.setAutoOpen(true)
+    contextSidebarState.openCoordinator(
+      coordinator.projectId,
+      coordinator.threadId,
+      coordinator.label
+    )
+  }
+
+  /** Terminals toggle their own region: the bottom dock when docked there,
+   *  otherwise the right sidebar like every other tool. */
+  function toggleTerminal(): void {
+    if (!selectedThread) return
+
+    if (contextSidebarState.terminalPlacement === 'bottom') {
+      // The bottom dock is an independent region, so the rail toggles the dock
+      // itself — never the focused tab. Whether a terminal happens to hold the
+      // global focus is irrelevant: if the dock exists in any form it folds
+      // away, and only a dock with no terminals at all opens a fresh shell.
+      if (contextSidebarState.terminalDockVisible || contextSidebarState.terminalDockCollapsed) {
+        contextSidebarState.toggleTerminalDock()
+        return
+      }
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+      return
+    }
+
+    // Docked to the right, the terminal is just another sidebar panel.
+    const sidebarTab = contextSidebarState.sidebarActiveTab
+    const terminalFocused =
+      sidebarTab?.kind === 'terminal' &&
+      sidebarTab.projectId === selectedThread.projectId &&
+      sidebarTab.threadId === selectedThread.id
+
+    if (contextSidebarState.sidebarVisible && terminalFocused) {
+      contextSidebarState.hide()
+    } else {
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+    }
+  }
+
+  /** True while a terminal is on screen in whichever region hosts terminals. */
+  let terminalOpen = $derived(
+    contextSidebarState.terminalPlacement === 'bottom'
+      ? contextSidebarState.terminalDockVisible
+      : Boolean(
+          contextSidebarState.sidebarVisible && contextSidebarState.activeTab?.kind === 'terminal'
+        )
+  )
+
+  /** Project files and diffs only exist for local projects with a real path. */
+  let projectToolsAvailable = $derived(
+    Boolean(activeProject?.source === 'local' && activeProject.path)
+  )
+
+  /** Whether the message-history jump menu (first item on the context dock) is open. */
+  let showHistoryMenu = $state(false)
+
+  function jumpToHistoryMessage(id: string): void {
+    showHistoryMenu = false
+    workspaceState.jumpToMessage?.(id)
+  }
+
+  /**
+   * Dock contents, grouped: history, then workspace tools, then session tools.
+   * Every entry is a toggle — the rail itself is always visible, only the
+   * panel (or, for history, the floating jump menu) comes and goes.
+   */
+  let dockGroups = $derived.by((): ContextDockItem[][] => {
     if (!selectedThread) return []
-    const actions = [
+
+    // Chats are pure conversations: their rail only carries session tools
+    // (sources, memory, debugger in dev) — never project, terminal or cloud tools.
+    const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+
+    // The message-history counter leads the rail so it reads first, like a
+    // running tally of the conversation — click to jump to any past message.
+    const history: ContextDockItem[] =
+      workspaceState.messageCount > 0
+        ? [
+            {
+              id: 'history',
+              label: `Message history (${workspaceState.messageCount} messages you sent)`,
+              countLabel: String(workspaceState.messageCount),
+              active: showHistoryMenu,
+              onSelect: () => (showHistoryMenu = !showHistoryMenu)
+            }
+          ]
+        : []
+
+    const workspaceTools: ContextDockItem[] = []
+    if (!isChatThread && projectToolsAvailable) {
+      workspaceTools.push(
+        {
+          id: 'files',
+          label: 'Files',
+          icon: Files,
+          active: dockKindActive('files'),
+          onSelect: () => toggleDockPanel('files', () => void openFiles())
+        },
+        {
+          id: 'diff',
+          label: 'Changes',
+          icon: FileDiff,
+          active: dockKindActive('diff'),
+          onSelect: () => toggleDockPanel('diff', openDiff)
+        }
+      )
+    }
+    if (!isChatThread && workspaceState.terminalAvailable) {
+      workspaceTools.push({
+        id: 'terminal',
+        label: terminalOpen ? 'Hide terminal' : 'Show terminal',
+        icon: SquareTerminal,
+        active: terminalOpen,
+        onSelect: toggleTerminal
+      })
+    }
+
+    const sessionTools: ContextDockItem[] = [
       {
         id: 'sources',
         label: 'Sources',
-        description: 'View sources attached to this conversation',
-        onSelect: openSourcesTab
-      },
-      ...(activeProject?.source === 'local' && activeProject.path
-        ? [
-            {
-              id: 'files',
-              label: 'Files',
-              description: 'Browse and edit project files',
-              onSelect: () => void openFiles()
-            },
-            {
-              id: 'diff',
-              label: 'Changes',
-              description: 'Review changes from completed runs',
-              onSelect: openDiff
-            }
-          ]
-        : []),
-      {
-        id: 'cloud-deployments',
-        label: 'Cloud Deployments',
-        description: 'Monitor your cloud deployments',
-        onSelect: openCloudDeploymentsTab
+        icon: Info,
+        active: dockKindActive('sources'),
+        onSelect: () => toggleDockPanel('sources', openSourcesTab)
       },
       {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
+        id: 'memory',
+        label: 'Memory',
+        icon: BrainCircuit,
+        active: dockKindActive('memory'),
+        badge: memoryProposalState.hasPending ? 'attention' : undefined,
+        badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
+        onSelect: () => toggleDockPanel('memory', openMemoryTab)
       }
     ]
-    if (import.meta.env.DEV) {
-      actions.push({
-        id: 'debugger',
-        label: 'Debugger',
-        description: 'Inspect agent requests',
-        onSelect: openDebugger
+    if (!isChatThread) {
+      sessionTools.push({
+        id: 'cloud-deployment',
+        label: 'Cloud deployments',
+        icon: Cloud,
+        active: dockKindActive('cloud-deployment'),
+        onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
       })
     }
-    return actions
+    if (import.meta.env.DEV) {
+      sessionTools.push({
+        id: 'debugger',
+        label: 'Debugger',
+        icon: Bug,
+        active: dockKindActive('debugger'),
+        onSelect: () => toggleDockPanel('debugger', openDebugger)
+      })
+    }
+
+    // Temporary chats get their own hairline-separated slot: they are ephemeral
+    // side conversations, not standing tools, and one button toggles the whole
+    // set because the panel tabs them.
+    const temporaryChats: ContextDockItem[] = []
+    if (temporaryChatTabs.length > 0) {
+      const name =
+        temporaryChatTabs.length === 1
+          ? (temporaryChatTabs.at(-1)?.title ?? 'Quick chat')
+          : `${temporaryChatTabs.length} quick chats`
+      temporaryChats.push({
+        id: 'temporary-chat',
+        label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
+        icon: MessageCircleDashed,
+        active: dockKindActive('temporary-chat'),
+        tone: 'info',
+        onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
+      })
+    }
+
+    // The coordinator sits alone at the bottom, below its own hairline: it is
+    // the thread's own supervision surface, not a general workspace tool.
+    const coordination: ContextDockItem[] = coordinator
+      ? [
+          {
+            id: 'coordinator',
+            label: coordinator.label,
+            icon: coordinator.icon,
+            active: dockKindActive('coordinator'),
+            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+          }
+        ]
+      : []
+
+    // The amber thread-note indicator sits alone at the very bottom, below its
+    // own hairline: it marks the selected thread's private note as something
+    // that needs attention and opens it on click.
+    const threadNote: ContextDockItem[] = threadNotesState.has(selectedThread.id)
+      ? [
+          {
+            id: 'note',
+            label: 'Note available',
+            icon: StickyNote,
+            active: false,
+            tone: 'warning',
+            onSelect: () => (dockNoteThread = selectedThread)
+          }
+        ]
+      : []
+
+    return [history, workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -714,34 +931,21 @@
     )
   }
 
-  /** Actions offered inside the bottom terminal dock — only new shells belong there. */
-  let terminalDockActions = $derived.by(() => {
-    if (!selectedThread) return []
-    return [
-      {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
-      }
-    ]
-  })
-
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
-  let terminalDockCollapsed = $derived(contextSidebarState.terminalDockCollapsed)
   let contextPanelColumns = $derived(
     sidebarVisible
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
+  // A folded dock leaves no restore strip behind: the context dock's terminal
+  // icon is always on screen and is the way back, so hiding the terminal really
+  // does give the full height back to the thread.
   let contextPanelRows = $derived(
     terminalDockVisible
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
-      : terminalDockCollapsed
-        ? 'minmax(0, 1fr) 32px'
-        : 'minmax(0, 1fr)'
+      : 'minmax(0, 1fr)'
   )
 
   function openTabFullscreen(tabId: string): void {
@@ -793,6 +997,9 @@
     if (tab.kind === 'files' && tab.fileTabId) {
       projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
     }
+    // Closing the coordinator is a dismissal: it stays undocked until the user
+    // brings it back from the rail, otherwise it would reappear immediately.
+    if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
@@ -2937,9 +3144,9 @@
   {/if}
 
   <!-- Main Content -->
-  <section class="min-w-0 flex-1 overflow-hidden">
+  <section class="flex min-w-0 flex-1 overflow-hidden">
     <div
-      class="grid h-full min-h-0 min-w-0"
+      class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
@@ -3096,6 +3303,10 @@
                 />
               {:else if activeContextTab.kind === 'notifications'}
                 <NotificationPanel />
+              {:else if activeContextTab.kind === 'coordinator'}
+                {#if coordinator}
+                  {@render coordinator.panel()}
+                {/if}
               {:else if activeContextTab.kind === 'memory'}
                 <MemoryPanel
                   variant="sidebar"
@@ -3117,8 +3328,6 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            actions={sidebarActions}
-            hideAddButton={mode === 'chats'}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3128,6 +3337,7 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onNewTerminal={openNewTerminal}
           />
         </div>
       {/if}
@@ -3157,7 +3367,6 @@
             height={contextSidebarState.terminalHeight}
             placement="bottom"
             content={terminalDockContent}
-            actions={terminalDockActions}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3168,23 +3377,49 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
+            onNewTerminal={openNewTerminal}
           />
         </div>
       {/if}
-      {#if terminalDockCollapsed}
-        <button
-          type="button"
-          class="flex h-8 min-h-0 w-full items-center justify-center border-t border-border bg-surface text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          style:grid-column="1 / -1"
-          style:grid-row="2"
-          title="Expand terminal"
-          aria-label="Expand terminal"
-          onclick={() => contextSidebarState.toggleTerminalDock()}
-        >
-          <ChevronUp size={14} />
-        </button>
-      {/if}
     </div>
+    {#if dockGroups.some((group) => group.length > 0)}
+      <div class="relative h-full shrink-0">
+        <ContextDock groups={dockGroups} />
+        {#if showHistoryMenu}
+          <button
+            class="fixed inset-0 z-30 cursor-default"
+            aria-label="Close history"
+            title="Close history"
+            onclick={() => (showHistoryMenu = false)}
+          ></button>
+          <div
+            class="absolute right-10 top-11 z-40 w-72 overflow-hidden border bg-surface shadow-lg"
+            role="menu"
+            aria-label="Jump to message"
+          >
+            <p
+              class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              Your messages
+            </p>
+            <div class="max-h-72 overflow-y-auto p-1">
+              {#each workspaceState.userMessages as message, index (message.id)}
+                <button
+                  class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  role="menuitem"
+                  title={message.content}
+                  onclick={() => jumpToHistoryMessage(message.id)}
+                >
+                  {index + 1}. {message.content}
+                </button>
+              {:else}
+                <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </section>
 </div>
 
@@ -3215,6 +3450,16 @@
     </button>
   {/snippet}
 </Modal>
+
+{#if dockNoteThread}
+  <ThreadNoteModal
+    open
+    projectId={dockNoteThread.projectId}
+    threadId={dockNoteThread.id}
+    threadTitle={dockNoteThread.title}
+    onClose={() => (dockNoteThread = null)}
+  />
+{/if}
 
 <!-- Edit Project Modal -->
 <Modal open={showEditModal} title="Edit Project" onClose={() => (showEditModal = false)}>
