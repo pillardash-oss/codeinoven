@@ -4,7 +4,7 @@
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -57,6 +57,7 @@
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     coordinatorHasActiveDelegates,
@@ -66,6 +67,7 @@
     isThreadWorking,
     type ScopeBucket
   } from '$shared/types'
+  import { SvelteSet } from 'svelte/reactivity'
   import { tick, type Component } from 'svelte'
 
   type View = MainView
@@ -111,23 +113,23 @@
   /** True while the app is actually in the represented project view. */
   let projectViewActive = $derived(projectViewMode === activeView)
 
+  function threadWorkingForIndicator(thread: Thread): boolean {
+    return agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+  }
+
   /** True while any project thread is actively being worked on. */
   let anyProjectWorking = $derived(
     scopeState.allScopeThreads.some(
-      (t) =>
-        !t.archived &&
-        t.projectId !== INBOX_PROJECT_ID &&
-        (t.status === 'planning' || t.status === 'executing')
+      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
     )
   )
 
   /** True while any standalone chat is actively being worked on. */
   let anyChatWorking = $derived(
     scopeState.allScopeThreads.some(
-      (t) =>
-        !t.archived &&
-        t.projectId === INBOX_PROJECT_ID &&
-        (t.status === 'planning' || t.status === 'executing')
+      (t) => !t.archived && t.projectId === INBOX_PROJECT_ID && threadWorkingForIndicator(t)
     )
   )
 
@@ -140,6 +142,38 @@
       if (activeView !== 'projects') void onPrimaryNavClick('projects')
     } else if (activeView !== view) {
       navigate(view)
+    }
+  }
+
+  /** Return the most recently visited thread of one navigation family. */
+  function recentThreadForKind(isChat: boolean): Thread | null {
+    for (const visit of workspaceState.recentThreadVisits) {
+      const candidate = scopeState.allScopeThreads.find(
+        (thread) => threadVisitKey(thread) === visit
+      )
+      if (!candidate || candidate.archived) continue
+      if ((candidate.projectId === INBOX_PROJECT_ID) === isChat) return candidate
+    }
+    return null
+  }
+
+  /** Warm every plausible restore target before a nav click or shortcut lands. */
+  function preloadNavigationThreads(target: 'chats' | 'projects'): void {
+    const isChat = target === 'chats'
+    const targetIds = [
+      isChat ? scopeState.stashedChatThreadId : scopeState.stashedProjectThreadId,
+      recentThreadForKind(isChat)?.id,
+      workspaceState.selectedThread &&
+      (workspaceState.selectedThread.projectId === INBOX_PROJECT_ID) === isChat
+        ? workspaceState.selectedThread.id
+        : null
+    ]
+    const seen = new SvelteSet<string>()
+    for (const threadId of targetIds) {
+      if (!threadId || seen.has(threadId)) continue
+      seen.add(threadId)
+      const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+      if (thread && !thread.archived) void threadMessages.preload(thread.projectId, thread.id)
     }
   }
 
@@ -232,6 +266,8 @@
   /** Navigate to a primary view without any sidebar toggling — used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
+    if (view === 'chats') preloadNavigationThreads('chats')
+    else preloadNavigationThreads('projects')
     if (view === 'threads') {
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
@@ -600,7 +636,10 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={projectViewActive ? 'Exit scope view' : 'Open scope view'}
             title="Scope"
-            onmouseenter={preloadScopeChunk}
+            onmouseenter={() => {
+              preloadNavigationThreads('projects')
+              preloadScopeChunk()
+            }}
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
@@ -617,6 +656,7 @@
                 : 'Hide Threads sidebar'
               : 'Open Threads'}
             title="Threads"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('threads')}
           >
             <Timeline
@@ -637,6 +677,7 @@
                 : 'Hide Projects sidebar'
               : 'Open Projects'}
             title="Projects"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('projects')}
           >
             <FolderKanban
@@ -653,6 +694,7 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={scopeState.sidebarContext ? 'Exit scope state' : 'Show scope state'}
             title="Scope state"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void toggleProjectScopeState()}
           >
             <SquareDashedKanban size={14} strokeWidth={1.8} />
@@ -688,6 +730,7 @@
                       : 'text-muted hover:bg-elevated focus:bg-elevated'
                   ]}
                   onpointerenter={() => {
+                    preloadNavigationThreads('projects')
                     if (option.id === 'scope') preloadScopeChunk()
                   }}
                   onSelect={() => selectProjectView(option.id)}
@@ -720,6 +763,7 @@
           : 'Hide Chats sidebar'
         : 'Open Chats'}
       title="Chats"
+      onmouseenter={() => preloadNavigationThreads('chats')}
       onclick={() => void onPrimaryNavClick('chats')}
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
@@ -801,12 +845,9 @@
         </div>
       {:else if workspaceState.selectedThread}
         {@const thread = workspaceState.selectedThread}
-        {@const threadRunSettled = agentRuns.hasSettled(thread.projectId, thread.id)}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          (threadRunSettled
-            ? agentRuns.isBusy(thread.projectId, thread.id)
-            : isThreadWorking(thread)) ||
+          threadWorkingForIndicator(thread) ||
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}

@@ -24,7 +24,7 @@
   function isLiveWorking(thread: Thread): boolean {
     return agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
-      : isThreadWorking(thread)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
   }
 
   function isCandidate(thread: Thread): boolean {

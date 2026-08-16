@@ -256,10 +256,8 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
-  /** Whether the current run is confirmed by live session activity (vs an
-   *  optimistic restore off a persisted in-flight status). Only a live-confirmed
-   *  run may expand the working trace, so a stale `planning`/`executing` DB
-   *  status can't flash the trace open before the live session settles idle. */
+  /** Whether the current run is confirmed by live session activity. Persisted
+   *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
@@ -279,32 +277,13 @@
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
   })
-  // A persisted in-flight status normally means this thread's harness turn is
-  // still running. Coordinator status also represents delegated workflow work,
-  // though, so only restore non-coordinators synchronously; the coordinator's
-  // live session status below determines whether its own trace is actually busy.
-  // A thread with no bound session can never be working — the persisted status
-  // is stale (a run always binds a session), so skip the optimistic restore and
-  // let the live session check settle the real state.
+  // A persisted in-flight status is only a recovery hint. Start every mount in
+  // a settled idle state unless this thread is already receiving live activity;
+  // `connectSession` will promote it to busy when the live session confirms it.
+  // This removes the false working flash on refresh and on view remounts.
   // svelte-ignore state_referenced_locally
-  if (
-    (thread.status === 'planning' || thread.status === 'executing') &&
-    Boolean(thread.sessionId) &&
-    thread.assignmentRole !== 'coordinator' &&
-    thread.achievementRole !== 'coordinator'
-  ) {
-    // Optimistic restore off the persisted in-flight status: it keeps the
-    // composer/placeholder working, but it is not live-confirmed and must not
-    // expand the working trace (the live session settles the truth on connect).
-    agentRuns.setBusy(
-      thread.projectId,
-      thread.id,
-      true,
-      undefined,
-      thread.lastActivity,
-      false,
-      false
-    )
+  if (!agentRuns.isLiveBusy(thread.projectId, thread.id)) {
+    agentRuns.setIdle(thread.projectId, thread.id)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
@@ -355,8 +334,8 @@
   /** Synthetic authentication issue raised by the thread-open auth probe, so
    *  the sign-in card can tell proactive (no retry) from failure-driven. */
   let proactiveAuthIssue: AgentProviderIssue | null = null
-  /** True once the live session status is established on mount; makes the
-   *  DB-status fallback in loadLocal defer to it instead of racing it. */
+  /** True once the live session probe has completed; prevents persisted
+   *  database status from racing or resurrecting stale busy state. */
   let liveStatusKnown = false
   let compacting = $state(false)
   let commandExecuting = $state(false)
@@ -1617,11 +1596,13 @@
   let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
   let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
   function delegatedThreadWorking(candidate: Thread | undefined): boolean {
+    if (!candidate) return false
+    if (agentRuns.hasSettled(candidate.projectId, candidate.id)) {
+      return agentRuns.isBusy(candidate.projectId, candidate.id)
+    }
     return (
-      candidate !== undefined &&
-      (candidate.status === 'planning' ||
-        candidate.status === 'executing' ||
-        agentRuns.isBusy(candidate.projectId, candidate.id))
+      Boolean(candidate.sessionId) &&
+      (candidate.status === 'planning' || candidate.status === 'executing')
     )
   }
   let activeAssignmentWorkerCount = $derived(
@@ -1639,13 +1620,9 @@
     }
     return achievementOnly && thread.achievementRole !== 'auditor' && achievementAuditorWorking
   })
-  /** Whether this thread is working in any form: its own live harness turn, a
-   *  persisted in-flight status, or delegated work (workers/auditor) it owns.
-   *  The coordinator's own session is intentionally idle between handoffs, so
-   *  delegated activity is the source of truth that its row must stay alive. */
-  let threadWorking = $derived(
-    busy || delegatedWorkBusy || thread.status === 'planning' || thread.status === 'executing'
-  )
+  /** Whether this thread is working in any form. Live run state owns the
+   *  thread's session; delegated activity owns the coordinator row. */
+  let threadWorking = $derived(busy || delegatedWorkBusy)
   let delegatedActivityLabel = $derived.by((): string => {
     const assignmentCoordinator = assignment?.coordinatorThreadId === thread.id
     const workerCount = assignmentCoordinator ? activeAssignmentWorkerCount : 0
@@ -2422,11 +2399,7 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        restoreWorkingState(
-          updatedThread.status,
-          updatedThread.lastActivity,
-          updatedThread.auditState === 'running'
-        )
+        restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
       if (
         updatedThread.projectId === thread.projectId &&
@@ -2541,12 +2514,11 @@
     )
   }
 
-  /** Restore the run's busy state from the persisted thread status. Only the
-   *  genuinely in-flight statuses keep the trace/live timer working across a
-   *  thread switch; an awaiting-approval thread has finished its turn and is
-   *  waiting on the user, so it must read as idle (Needs attention), never as
-   *  still working. Live session activity for pending permission/question gates
-   *  is re-established by connectSession's live status instead.
+  /** Reconcile persisted thread updates without inferring a live turn. The
+   *  live session probe owns session busy state; an awaiting-approval thread
+   *  has finished its turn and is waiting on the user, so it must read as idle
+   *  (Needs attention), never as still working. Live session activity for
+   *  pending permission/question gates is re-established by connectSession.
    *
    *  Coordinator status is broader: it remains executing while workers or an
    *  auditor run. That delegated state keeps the coordination trace visible via
@@ -2554,9 +2526,12 @@
    *  idle Sr. Engineer session. */
   function restoreWorkingState(
     status: Thread['status'],
-    startedAt = thread.lastActivity,
     auditRunning = thread.auditState === 'running'
   ): void {
+    // Once the session probe has completed, persisted thread status must never
+    // resurrect a stale busy flag. New live work enters through agent events or
+    // the send path and establishes the run explicitly.
+    if (liveStatusKnown) return
     // Delegated activity contributes to the aggregate working display, but it
     // says nothing about the Sr. Engineer's own live session. Preserve the raw
     // session state here: live working keeps Steer available, while live idle
@@ -2565,22 +2540,8 @@
       return
     }
     if (status === 'planning' || status === 'executing') {
-      // Without a bound session the thread cannot be running — the persisted
-      // status is a leftover, so never restore the working UI from it (the
-      // live session check settles the real state).
-      if (!thread.sessionId) {
-        setIdleFromRestore()
-        return
-      }
-      agentRuns.setBusy(
-        thread.projectId,
-        thread.id,
-        true,
-        latestUserMessageId(),
-        startedAt,
-        false,
-        false
-      )
+      // Do not infer active work from the database row. The provider status
+      // probe below is the only source that can restore a live turn.
       return
     }
     setIdleFromRestore()
@@ -2621,7 +2582,6 @@
       if (!liveStatusKnown) {
         restoreWorkingState(
           threadData?.status ?? thread.status,
-          threadData?.lastActivity ?? thread.lastActivity,
           (threadData?.auditState ?? thread.auditState) === 'running'
         )
       }
@@ -2677,7 +2637,11 @@
       // it. In particular, a coordinator can be persisted as executing while
       // only its workers or auditor are active; live idle must clear that fake
       // raw-busy state so messages go to the Sr. Engineer normally.
-      liveStatusKnown = providerStatus !== null
+      // A null result is also a completed, authoritative answer: there is no
+      // live session state to restore. The previous implementation left this
+      // false for null, allowing later `thread:updated` events to re-apply the
+      // stale persisted `planning`/`executing` status after we had cleared it.
+      liveStatusKnown = true
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
         agentRuns.setBusy(
           projectId,

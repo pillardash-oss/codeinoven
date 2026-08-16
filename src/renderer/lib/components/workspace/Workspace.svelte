@@ -548,14 +548,10 @@
   }
 
   function threadHasVisibleWork(thread: Thread): boolean {
-    const settledWorking =
-      agentRuns.hasSettled(thread.projectId, thread.id) &&
-      agentRuns.isBusy(thread.projectId, thread.id)
-    return (
-      settledWorking ||
-      (!agentRuns.hasSettled(thread.projectId, thread.id) && isThreadWorking(thread)) ||
-      coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-    )
+    const settledWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+    return settledWorking || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   }
 
   // Threads-view global search (activation + query), mirroring the per-project
