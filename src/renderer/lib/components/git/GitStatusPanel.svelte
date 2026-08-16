@@ -774,6 +774,9 @@
     if (!gitState.error) {
       commitMessage = ''
       amendMode = false
+      // The committed files have left the panel — drop their selection so the
+      // "N selected" counter next to "Stage all" doesn't point at ghosts.
+      clearSelection()
       void refreshStatus()
       void reloadHistory()
     }
