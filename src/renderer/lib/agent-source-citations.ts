@@ -252,6 +252,19 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
   return { path, line, lineEnd }
 }
 
+/** Parse an absolute filesystem path before asynchronous existence checks finish. */
+export function parseAbsoluteFileCitationTarget(
+  value: string
+): { path: string; line?: number } | null {
+  if (value.startsWith('file://')) return null
+  const parsed = parseFileCitation(value, true)
+  if (!parsed || !isAbsoluteCitationPath(parsed.path)) return null
+  return {
+    path: parsed.path,
+    ...(parsed.line === undefined ? {} : { line: parsed.line })
+  }
+}
+
 function citationHref(citation: ParsedFileCitation): string {
   const params = new URLSearchParams({ path: citation.path })
   if (citation.line) params.set('line', String(citation.line))
@@ -357,7 +370,10 @@ export function linkifyFileCitations(
     MARKDOWN_LINK_PATTERN,
     (match, label: string, angleTarget?: string, plainTarget?: string) => {
       const parsed = parseFileCitation(angleTarget ?? plainTarget ?? '', true)
-      if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+      const known =
+        parsed &&
+        (isKnownCitation(parsed.path, isValidPath) || (isExternalPath?.(parsed.path) ?? false))
+      if (!parsed || !known) return match
       return `[${label}](${citationHref(parsed)})`
     }
   )
