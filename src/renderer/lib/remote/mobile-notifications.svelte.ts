@@ -133,7 +133,10 @@ class MobileNotifications {
         // Attention and error demand action, so they stay until tapped.
         // Completion and spec-ready notices are informational and auto-dismiss quietly.
         requireInteraction: payload.kind === 'attention' || payload.kind === 'error',
-        silent: payload.kind === 'completed' || payload.kind === 'spec',
+        silent:
+          payload.kind === 'completed' ||
+          payload.kind === 'chat-completed' ||
+          payload.kind === 'spec',
         data: { projectId: payload.projectId, threadId: payload.threadId },
         icon: './icon.png',
         badge: './icon.png'

@@ -2,11 +2,12 @@ import { APP_SLUG } from '$shared/brand'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
-export type NotificationFilter = 'all' | 'completed' | 'attention' | 'spec' | 'error' | 'app-errors'
+export type NotificationFilter =
+  'all' | 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error' | 'app-errors'
 
 export interface InAppNotification {
   id: string
-  kind: 'completed' | 'attention' | 'spec' | 'error'
+  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
   title: string
   body: string
   projectId: string
@@ -41,6 +42,10 @@ class NotificationPanelState {
 
   get completedCount(): number {
     return this._notifications.filter((n) => n.kind === 'completed').length
+  }
+
+  get chatCompletedCount(): number {
+    return this._notifications.filter((n) => n.kind === 'chat-completed').length
   }
 
   get attentionCount(): number {

@@ -18,6 +18,7 @@
     { key: 'spec', label: 'Spec' },
     { key: 'error', label: 'Errors' },
     { key: 'completed', label: 'Done' },
+    { key: 'chat-completed', label: 'Chats' },
     { key: 'app-errors', label: 'App errors' }
   ]
 
@@ -75,6 +76,8 @@
     switch (kind) {
       case 'completed':
         return 'border-l-success/40'
+      case 'chat-completed':
+        return 'border-l-chat-success/50'
       case 'attention':
         return 'border-l-warning/40'
       case 'spec':
@@ -87,7 +90,9 @@
   function kindLabel(kind: InAppNotification['kind']): string {
     switch (kind) {
       case 'completed':
-        return 'Completed'
+        return 'Project complete'
+      case 'chat-completed':
+        return 'Chat response available'
       case 'attention':
         return 'Needs attention'
       case 'spec':
@@ -138,6 +143,8 @@
           {/if}
         {:else if f.key === 'completed' && notificationPanelState.completedCount > 0}
           <span class="tabular-nums text-dimmed">{notificationPanelState.completedCount}</span>
+        {:else if f.key === 'chat-completed' && notificationPanelState.chatCompletedCount > 0}
+          <span class="tabular-nums text-dimmed">{notificationPanelState.chatCompletedCount}</span>
         {:else if f.key === 'attention' && notificationPanelState.attentionCount > 0}
           <span class="tabular-nums text-dimmed">{notificationPanelState.attentionCount}</span>
         {:else if f.key === 'spec' && notificationPanelState.specCount > 0}
