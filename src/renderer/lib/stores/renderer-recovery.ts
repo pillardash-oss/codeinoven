@@ -73,6 +73,10 @@ export interface QueuedMessageEntry {
   projectReferences: PromptProjectReference[]
   presentation?: UserMessagePresentation
   taskReferences: PromptAssignmentTaskReference[]
+  /** Optional source thread that must reach a terminal state before delivery. */
+  startAfterThreadId?: string
+  /** Display-only source title captured when the dependency was selected. */
+  startAfterThreadTitle?: string
 }
 
 export interface RendererRecoverySnapshot {
@@ -399,7 +403,12 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry>
       promptReferences,
       projectReferences,
       presentation: isUserMessagePresentation(raw.presentation) ? raw.presentation : undefined,
-      taskReferences
+      taskReferences,
+      startAfterThreadId: isRecoveryIdentifier(raw.startAfterThreadId)
+        ? raw.startAfterThreadId
+        : undefined,
+      startAfterThreadTitle:
+        typeof raw.startAfterThreadTitle === 'string' ? raw.startAfterThreadTitle : undefined
     }
     count += 1
   }

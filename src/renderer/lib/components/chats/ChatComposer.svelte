@@ -50,6 +50,7 @@
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
+  import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
@@ -78,7 +79,8 @@
     AssignmentTask,
     AgentModelSelection,
     AttachmentStorageScope,
-    UsageEfficiencyKpis
+    UsageEfficiencyKpis,
+    Thread
   } from '$shared/types'
 
   interface Props {
@@ -90,7 +92,9 @@
       attachments: PromptAttachment[],
       direct?: boolean,
       projectReferences?: PromptProjectReference[],
-      taskReferences?: PromptAssignmentTaskReference[]
+      taskReferences?: PromptAssignmentTaskReference[],
+      startAfterThreadId?: string,
+      startAfterThreadTitle?: string
     ) => void
     disabled?: boolean
     /** True while the agent is running — turns the send button into a stop button. */
@@ -117,6 +121,8 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
+    /** Active thread ID used to prevent selecting the current thread as a dependency. */
+    threadId?: string
     /** Project or app scratch destination for pasted/ephemeral attachment files. */
     attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
@@ -217,6 +223,7 @@
     harnessId = 'opencode',
     projectContext,
     projectId = null,
+    threadId = '',
     attachmentStorage,
     onSwitchProject,
     fileTagProjectId,
@@ -384,6 +391,9 @@
   let permissionMenuOpen = $state(false)
   /** Open state of the thinking-level dropdown inside the shared model picker. */
   let thinkingMenuOpen = $state(false)
+  let startAfterPickerOpen = $state(false)
+  let startAfterEnabled = $state(false)
+  let startAfterThread = $state<Thread | null>(null)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
@@ -431,6 +441,31 @@
     inferenceMenuOpen = false
     permissionMenuOpen = false
     thinkingMenuOpen = false
+  }
+
+  function openStartAfterPicker(): void {
+    if (!projectId || readOnlyMode) return
+    closeAllMenus()
+    startAfterPickerOpen = true
+  }
+
+  function toggleStartAfter(enabled: boolean): void {
+    if (!enabled) {
+      startAfterEnabled = false
+      startAfterThread = null
+      return
+    }
+    if (!projectId || readOnlyMode) return
+    startAfterEnabled = true
+    openStartAfterPicker()
+  }
+
+  function selectStartAfterThread(thread: Thread): void {
+    if (thread.id === threadId) return
+    startAfterThread = thread
+    startAfterEnabled = true
+    startAfterPickerOpen = false
+    focusComposerAtEnd()
   }
 
   function showModelMenu(): void {
@@ -746,7 +781,18 @@
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
-    onSend(msg, files, direct, taggedPaths, taggedTasks)
+    const selectedStartAfterThread = startAfterEnabled ? startAfterThread : null
+    startAfterEnabled = false
+    startAfterThread = null
+    onSend(
+      msg,
+      files,
+      direct,
+      taggedPaths,
+      taggedTasks,
+      selectedStartAfterThread?.id,
+      selectedStartAfterThread?.title
+    )
   }
 
   async function updateFileMention(nextValue: string): Promise<void> {
@@ -1839,6 +1885,42 @@
                 </Switch>
               {/if}
 
+              {#if showEngineeringMode && projectId && !readOnlyMode}
+                <!-- Start-after dependency -->
+                <Switch
+                  checked={startAfterEnabled}
+                  onchange={toggleStartAfter}
+                  title={startAfterThread
+                    ? `Start after ${startAfterThread.title}`
+                    : 'Start this thread after another active thread finishes'}
+                  aria-label="Start after another thread"
+                  activeClass="bg-info"
+                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+                >
+                  <span
+                    class="flex min-w-0 items-center gap-2 {startAfterEnabled
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                  >
+                    <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
+                    <span class="min-w-0 truncate">
+                      {startAfterThread ? `Start after · ${startAfterThread.title}` : 'Start after'}
+                    </span>
+                  </span>
+                </Switch>
+                {#if startAfterThread}
+                  <button
+                    type="button"
+                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    role="menuitem"
+                    title="Choose a different start-after thread"
+                    onclick={openStartAfterPicker}
+                  >
+                    Change thread
+                  </button>
+                {/if}
+              {/if}
+
               <div class="mx-2 my-1 border-t"></div>
             {/if}
 
@@ -2074,6 +2156,17 @@
     </button>
   </div>
 </div>
+
+<StartAfterThreadPicker
+  open={startAfterPickerOpen}
+  {projectId}
+  currentThreadId={threadId}
+  onSelect={selectStartAfterThread}
+  onClose={() => {
+    startAfterPickerOpen = false
+    if (!startAfterThread) startAfterEnabled = false
+  }}
+/>
 
 <style>
   .chat-composer {

@@ -372,7 +372,9 @@ export class RendererRecoveryStore {
       promptReferences: entry.promptReferences,
       projectReferences: entry.projectReferences,
       presentation: entry.presentation,
-      taskReferences: entry.taskReferences
+      taskReferences: entry.taskReferences,
+      startAfterThreadId: entry.startAfterThreadId,
+      startAfterThreadTitle: entry.startAfterThreadTitle
     }
     this.queuedMessages = next
     this.persist()
