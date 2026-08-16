@@ -38,6 +38,15 @@ mac:
     - dmg
     - zip
   artifactName: ${name}-${version}-${arch}.${ext}
+  # The native-splash launcher is the main executable (bundle id
+  # `com.pillardash.codeinoven`); it `execv`s into the renamed Electron binary
+  # `CodeInOven-electron`. Squirrel.Mac validates every update against the
+  # RUNNING process's designated requirement (`identifier "CodeInOven-electron"`),
+  # so the top-level bundle sign must carry that same identifier or every update
+  # fails with "code failed to satisfy specified code requirement(s)".
+  # `mac-sign.js` wraps the default signer and overrides the identifier for the
+  # bundle sign only (helpers/frameworks keep their own identifiers).
+  sign: scripts/native-splash/mac-sign.js
   # Platform-level `files` replaces the top-level list, so the base set is
   # repeated here. better-sqlite3 ships prebuilds for every platform; this app
   # targets Apple Silicon only, so only the darwin-arm64 binary is kept.
