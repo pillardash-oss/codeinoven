@@ -1,14 +1,23 @@
 import { spawn } from 'node:child_process'
-import { readdir } from 'node:fs/promises'
+import { lstat, readdir } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
-import { basename, join } from 'node:path'
+import { basename, isAbsolute, join, relative, sep } from 'node:path'
+import { watch, type FSWatcher } from 'chokidar'
+import { Logger } from '../system/logger'
 import type { ProjectFileEntry } from '../../lib/types'
 
 const MAX_SEARCH_RESULTS = 60
 const MAX_INDEX_ENTRIES = 500_000
 const MAX_GIT_INDEX_BYTES = 128 * 1024 * 1024
-const INDEX_MAX_AGE_MS = 5_000
+const MAX_RELATIVE_PATH_LENGTH = 4_096
+/** How long a built index is trusted before it is rebuilt from disk. The index
+ *  is normally kept fresh incrementally by the filesystem watcher; this is the
+ *  fallback for projects that cannot be watched (e.g. unwatchable roots). */
+const INDEX_MAX_AGE_MS = 60_000
 const MAX_CACHED_INDEXES = 8
+/** Events for the same project are coalesced for this long before the index is
+ *  touched, so a burst of agent file writes costs one batched update. */
+const WATCHER_BATCH_MS = 300
 const INDEX_EXCLUDED_DIRECTORY_NAMES = [
   '.git',
   '.cache',
@@ -48,7 +57,9 @@ interface IndexedProjectEntry {
 
 interface ProjectFileIndex {
   root: string
-  entries: IndexedProjectEntry[]
+  /** Path -> entry. A Map (not an array) so incremental watcher updates can
+   *  add and remove entries without rebuilding the whole project index. */
+  entries: Map<string, IndexedProjectEntry>
   builtAt: number
 }
 
@@ -56,10 +67,44 @@ interface RankedProjectEntry extends ProjectFileEntry {
   score: number
 }
 
+interface ProjectWatcher {
+  watcher: FSWatcher
+  root: string
+}
+
+/** Translate a watcher event path into a clean project-relative path, or null
+ *  when it escapes the root or is malformed. */
+function toProjectRelativePath(root: string, absolutePath: string): string | null {
+  const relativePath = relative(root, absolutePath)
+  if (
+    !relativePath ||
+    relativePath === '..' ||
+    relativePath.startsWith(`..${sep}`) ||
+    isAbsolute(relativePath)
+  ) {
+    return null
+  }
+  const posixPath = relativePath.split(sep).join('/')
+  if (
+    posixPath.includes('\\') ||
+    posixPath.length === 0 ||
+    posixPath.length > MAX_RELATIVE_PATH_LENGTH
+  ) {
+    return null
+  }
+  const segments = posixPath.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null
+  return posixPath
+}
+
 export class ProjectFileIndexService {
   private readonly indexes = new Map<string, ProjectFileIndex>()
   private readonly indexBuilds = new Map<string, Promise<ProjectFileIndex>>()
   private readonly indexVersions = new Map<string, number>()
+  private readonly watchers = new Map<string, ProjectWatcher>()
+  private readonly pendingEventPaths = new Map<string, Set<string>>()
+  private readonly eventTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly flushChains = new Map<string, Promise<void>>()
 
   async search(
     projectId: string,
@@ -75,7 +120,7 @@ export class ProjectFileIndexService {
     const index = await this.indexForProject(projectId, root)
     const matches: RankedProjectEntry[] = []
 
-    for (const indexed of index.entries) {
+    for (const indexed of index.entries.values()) {
       if (category === 'rules' && indexed.ruleScore === 0) continue
       if (!words.every((word) => `${projectHaystack}${indexed.normalizedPath}`.includes(word))) {
         continue
@@ -105,13 +150,47 @@ export class ProjectFileIndexService {
     return matches.map(({ name, path, kind }) => ({ name, path, kind }))
   }
 
+  /** Build the index for a project in the background and keep it fresh by
+   *  watching the root. Fire-and-forget from callers; failures are swallowed
+   *  here so an unwatchable project never breaks the app — `search` rebuilds
+   *  on demand and surfaces real errors there. */
+  async prewarm(projectId: string, root: string): Promise<void> {
+    this.ensureWatcher(projectId, root)
+    try {
+      await this.indexForProject(projectId, root)
+    } catch {
+      // Background warm-up must never crash; search will surface failures.
+    }
+  }
+
+  /** Drop the cached index after an in-app mutation. The watcher stays alive:
+   *  it keeps a rebuilt index fresh, and `ensureWatcher` re-points it when the
+   *  project's root path changes. */
   invalidate(projectId: string): void {
     this.indexes.delete(projectId)
     this.indexBuilds.delete(projectId)
     this.indexVersions.set(projectId, (this.indexVersions.get(projectId) ?? 0) + 1)
   }
 
+  /** Tear down everything for a removed project: watcher, pending batches, and
+   *  the cached index. */
+  dispose(projectId: string): void {
+    const existing = this.watchers.get(projectId)
+    if (existing) {
+      void existing.watcher.close().catch(() => undefined)
+      this.watchers.delete(projectId)
+    }
+    const timer = this.eventTimers.get(projectId)
+    if (timer) clearTimeout(timer)
+    this.eventTimers.delete(projectId)
+    this.pendingEventPaths.delete(projectId)
+    this.indexes.delete(projectId)
+    this.indexBuilds.delete(projectId)
+    this.indexVersions.delete(projectId)
+  }
+
   private async indexForProject(projectId: string, root: string): Promise<ProjectFileIndex> {
+    this.ensureWatcher(projectId, root)
     const cached = this.indexes.get(projectId)
     if (cached?.root === root && Date.now() - cached.builtAt <= INDEX_MAX_AGE_MS) {
       this.indexes.delete(projectId)
@@ -131,6 +210,13 @@ export class ProjectFileIndexService {
           const oldestProjectId = this.indexes.keys().next().value
           if (typeof oldestProjectId !== 'string') break
           this.indexes.delete(oldestProjectId)
+          // Stop watching evicted projects; their watcher is re-established on
+          // the next search/prewarm that uses the index again.
+          const evictedWatcher = this.watchers.get(oldestProjectId)
+          if (evictedWatcher) {
+            void evictedWatcher.watcher.close().catch(() => undefined)
+            this.watchers.delete(oldestProjectId)
+          }
         }
       }
       return index
@@ -150,17 +236,19 @@ export class ProjectFileIndexService {
     const entries =
       gitPaths === null ? await this.walkProjectEntries(root) : this.entriesFromGitPaths(gitPaths)
 
+    const entriesByPath = new Map<string, IndexedProjectEntry>()
+    for (const entry of entries) {
+      const normalizedPath = entry.path.toLocaleLowerCase()
+      entriesByPath.set(entry.path, {
+        entry,
+        normalizedPath,
+        normalizedName: entry.name.toLocaleLowerCase(),
+        ruleScore: entry.kind === 'file' ? this.rulePathScore(normalizedPath) : 0
+      })
+    }
     return {
       root,
-      entries: entries.map((entry) => {
-        const normalizedPath = entry.path.toLocaleLowerCase()
-        return {
-          entry,
-          normalizedPath,
-          normalizedName: entry.name.toLocaleLowerCase(),
-          ruleScore: entry.kind === 'file' ? this.rulePathScore(normalizedPath) : 0
-        }
-      }),
+      entries: entriesByPath,
       builtAt: Date.now()
     }
   }
@@ -332,6 +420,151 @@ export class ProjectFileIndexService {
       }
     }
     return entries
+  }
+
+  /** Start watching a project root, re-pointing the watcher when the root
+   *  changed. Failure to watch is never fatal: the index still works and is
+   *  refreshed by its age limit. */
+  private ensureWatcher(projectId: string, root: string): void {
+    const existing = this.watchers.get(projectId)
+    if (existing && existing.root === root && !existing.watcher.closed) return
+    if (existing) {
+      void existing.watcher.close().catch(() => undefined)
+      this.watchers.delete(projectId)
+    }
+    try {
+      const watcher = watch(root, {
+        persistent: true,
+        ignoreInitial: true,
+        ignored: (candidate) => this.isIgnoredWatchPath(root, candidate)
+      })
+      watcher.on('all', (event, eventPath) => {
+        // Content writes to indexed files are no-ops: the index only stores
+        // names and paths, so only structural events need handling.
+        if (event === 'change') return
+        this.queueEvent(projectId, eventPath)
+      })
+      watcher.on('error', (error) => {
+        Logger.info('Project file watcher error', {
+          projectId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+      this.watchers.set(projectId, { watcher, root })
+    } catch (error) {
+      Logger.info('Project file watcher could not be started', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  /** Ignore any path nested inside an excluded directory (dependencies, build
+   *  output, VCS internals) without ever ignoring the watched root itself. */
+  private isIgnoredWatchPath(root: string, candidate: string): boolean {
+    const relativePath = relative(root, candidate)
+    if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
+      return false
+    }
+    return relativePath.split(/[\\/]/u).some((segment) => INDEX_EXCLUDED_DIRECTORIES.has(segment))
+  }
+
+  private queueEvent(projectId: string, absolutePath: string): void {
+    let paths = this.pendingEventPaths.get(projectId)
+    if (!paths) {
+      paths = new Set<string>()
+      this.pendingEventPaths.set(projectId, paths)
+    }
+    paths.add(absolutePath)
+    const existing = this.eventTimers.get(projectId)
+    if (existing) clearTimeout(existing)
+    this.eventTimers.set(
+      projectId,
+      setTimeout(() => {
+        this.eventTimers.delete(projectId)
+        const batch = this.pendingEventPaths.get(projectId)
+        this.pendingEventPaths.delete(projectId)
+        if (!batch || batch.size === 0) return
+        const pathsSnapshot = [...batch]
+        const previous = this.flushChains.get(projectId) ?? Promise.resolve()
+        const flush = previous
+          .catch(() => undefined)
+          .then(() => this.flushProjectEvents(projectId, pathsSnapshot))
+        this.flushChains.set(projectId, flush)
+      }, WATCHER_BATCH_MS)
+    )
+  }
+
+  /** Apply a batch of external filesystem changes to the live index. When no
+   *  index is live (evicted or being rebuilt), the version is bumped so the
+   *  in-flight build is discarded and the next build re-reads the disk,
+   *  capturing the changes that raced the build. */
+  private async flushProjectEvents(projectId: string, absolutePaths: string[]): Promise<void> {
+    const index = this.indexes.get(projectId)
+    if (!index) {
+      this.indexVersions.set(projectId, (this.indexVersions.get(projectId) ?? 0) + 1)
+      return
+    }
+    for (const absolutePath of absolutePaths) {
+      const path = toProjectRelativePath(index.root, absolutePath)
+      if (!path) continue
+      let kind: ProjectFileEntry['kind'] | null = null
+      try {
+        const metadata = await lstat(absolutePath)
+        if (metadata.isDirectory()) kind = 'directory'
+        else if (metadata.isFile()) kind = 'file'
+      } catch {
+        kind = null
+      }
+      if (kind) {
+        this.addPathToIndex(index, path, kind)
+      } else {
+        this.removePathFromIndex(index, path)
+      }
+    }
+  }
+
+  /** Insert a path into the live index (with its ancestor directories when
+   *  they are missing). Entries whose kind changed on disk are replaced. */
+  private addPathToIndex(
+    index: ProjectFileIndex,
+    path: string,
+    kind: ProjectFileEntry['kind']
+  ): void {
+    const existing = index.entries.get(path)
+    if (existing && existing.entry.kind === kind) return
+    if (index.entries.size >= MAX_INDEX_ENTRIES) return
+    const name = basename(path)
+    const normalizedPath = path.toLocaleLowerCase()
+    index.entries.set(path, {
+      entry: { name, path, kind },
+      normalizedPath,
+      normalizedName: name.toLocaleLowerCase(),
+      ruleScore: kind === 'file' ? this.rulePathScore(normalizedPath) : 0
+    })
+    const segments = path.split('/')
+    let directory = ''
+    for (const segment of segments.slice(0, -1)) {
+      directory = directory ? `${directory}/${segment}` : segment
+      if (index.entries.has(directory)) continue
+      if (index.entries.size >= MAX_INDEX_ENTRIES) return
+      const directoryPath = directory.toLocaleLowerCase()
+      index.entries.set(directory, {
+        entry: { name: segment, path: directory, kind: 'directory' },
+        normalizedPath: directoryPath,
+        normalizedName: segment.toLocaleLowerCase(),
+        ruleScore: 0
+      })
+    }
+  }
+
+  /** Remove a path from the live index together with everything below it. */
+  private removePathFromIndex(index: ProjectFileIndex, path: string): void {
+    const toDelete: string[] = []
+    for (const key of index.entries.keys()) {
+      if (key === path || key.startsWith(`${path}/`)) toDelete.push(key)
+    }
+    for (const key of toDelete) index.entries.delete(key)
   }
 
   private insertRankedResult(results: RankedProjectEntry[], candidate: RankedProjectEntry): void {

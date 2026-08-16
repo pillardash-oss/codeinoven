@@ -2947,7 +2947,17 @@ export function registerIpcHandlers(
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-    ipcMain.handle('project:list', () => projectManager.listProjects())
+    ipcMain.handle('project:list', async () => {
+      const projects = await projectManager.listProjects()
+      // Index every local project's files in the background so the first
+      // search is instant instead of building the whole index on demand.
+      for (const project of projects) {
+        if (project.source === 'local' && project.path.trim()) {
+          void projectFilesService.prewarmProject(project.id)
+        }
+      }
+      return projects
+    })
     ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
     ipcMain.handle('scope:get', (_, projectId: unknown) =>
       scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
@@ -2961,6 +2971,8 @@ export function registerIpcHandlers(
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
       const project = await projectManager.updateProject(projectId, input)
       projectFilesService.invalidateProject(projectId)
+      // The root may have changed; warm the index and re-point the watcher.
+      void projectFilesService.prewarmProject(projectId)
       return project
     }
   )
@@ -2977,7 +2989,7 @@ export function registerIpcHandlers(
       }
     }
     await projectManager.deleteProject(projectId)
-    projectFilesService.invalidateProject(projectId)
+    projectFilesService.disposeProject(projectId)
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
@@ -3003,12 +3015,14 @@ export function registerIpcHandlers(
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
     projectManager.reorderProjects(validateStringArray(orderedIds, 'Ordered IDs'))
   )
-  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) =>
-    projectFilesService.listDirectory(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativeDirectory, 'Project directory', true)
-    )
-  )
+  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) => {
+    const validatedProjectId = validateEntityId(projectId, 'Project ID')
+    const directory = requireString(relativeDirectory, 'Project directory', true)
+    if (directory === '') {
+      void projectFilesService.prewarmProject(validatedProjectId)
+    }
+    return projectFilesService.listDirectory(validatedProjectId, directory)
+  })
   ipcMain.handle(
     'projectFiles:search',
     (_, projectId: unknown, query: unknown, category: unknown) => {

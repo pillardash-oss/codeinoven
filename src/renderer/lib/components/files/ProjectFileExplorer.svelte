@@ -130,11 +130,11 @@
           }
         }
 
-        const sorted = [...dirsToLoad].sort((a, b) => a.split('/').length - b.split('/').length)
-        for (const dir of sorted) {
-          projectFilesWorkspace.markDirectoryExpanded(projectId, dir)
-          await projectFilesWorkspace.loadDirectory(projectId, dir)
-        }
+        // Expand + load every matching folder in one batch. Marking each
+        // directory expanded and persisting the explorer snapshot per folder
+        // serialized the whole snapshot to localStorage once per expansion and
+        // froze the renderer on large trees.
+        await projectFilesWorkspace.expandAndLoadDirectories(projectId, [...dirsToLoad])
       } catch {
         // search failed silently
       }
@@ -209,7 +209,10 @@
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
     projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
-    const selectedFromSearch = filterOpen && Boolean(filterQuery.trim())
+    // Only selecting a file result closes the filter and reveals it. Folder
+    // rows in the filtered tree are ordinary tree rows: clicking one must
+    // toggle it, or the user can never fold/unfold folders while searching.
+    const selectedFromSearch = filterOpen && Boolean(filterQuery.trim()) && entry.kind === 'file'
     if (selectedFromSearch) {
       revealedSearchPath = entry.path
       closeFilter(false)
@@ -759,25 +762,41 @@
     return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
   }
 
-  function directoryMatchesQuery(path: string): boolean {
+  /** For every loaded directory, whether any entry in its subtree matches the
+   *  active filter. Computed once bottom-up (deepest folders first, so a
+   *  parent's result reuses its children's) per filter change instead of being
+   *  re-derived recursively on every tree render — the recursion ran per row
+   *  per render and made each directory expansion quadratic. */
+  let filterMatchesByDirectory = $derived.by((): Record<string, boolean> => {
+    const matches: Record<string, boolean> = {}
     const query = filterQuery.trim().toLocaleLowerCase()
-    if (!query) return true
+    const loaded = projectState.entriesByDirectory
+    if (!query) return matches
 
-    const children = projectState.entriesByDirectory[path]
-    if (!children) return false
+    const directories = Object.keys(loaded).sort(
+      (left, right) => right.split('/').length - left.split('/').length
+    )
+    for (const directory of directories) {
+      const children = loaded[directory] ?? []
+      const anyMatch = children.some((entry) => {
+        const matchesTurn =
+          !lastTurnOnly ||
+          (entry.kind === 'file'
+            ? lastTurnPathSet.has(entry.path)
+            : directoryContainsLastTurnFile(entry.path))
+        if (!matchesTurn) return false
+        return (
+          entry.name.toLocaleLowerCase().includes(query) ||
+          (entry.kind === 'directory' && (matches[entry.path] ?? false))
+        )
+      })
+      matches[directory] = anyMatch
+    }
+    return matches
+  })
 
-    return children.some((entry) => {
-      const matchesTurn =
-        !lastTurnOnly ||
-        (entry.kind === 'file'
-          ? lastTurnPathSet.has(entry.path)
-          : directoryContainsLastTurnFile(entry.path))
-      return (
-        matchesTurn &&
-        (entry.name.toLocaleLowerCase().includes(query) ||
-          (entry.kind === 'directory' && directoryMatchesQuery(entry.path)))
-      )
-    })
+  function directoryMatchesQuery(path: string): boolean {
+    return filterMatchesByDirectory[path] ?? false
   }
 
   function visibleEntries(directory: string): ProjectFileEntry[] {
