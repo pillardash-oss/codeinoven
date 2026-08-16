@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process'
 import { lstat, readdir } from 'node:fs/promises'
+import { watch, type FSWatcher } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
-import { watch, type FSWatcher } from 'chokidar'
 import { Logger } from '../system/logger'
 import type { ProjectFileEntry } from '../../lib/types'
 
@@ -70,6 +70,9 @@ interface RankedProjectEntry extends ProjectFileEntry {
 interface ProjectWatcher {
   watcher: FSWatcher
   root: string
+  /** Whether the watcher has been closed. Node's FSWatcher exposes no public
+   *  `closed` flag, so the service tracks it to avoid re-watching a dead root. */
+  closed: boolean
 }
 
 /** Translate a watcher event path into a clean project-relative path, or null
@@ -177,7 +180,8 @@ export class ProjectFileIndexService {
   dispose(projectId: string): void {
     const existing = this.watchers.get(projectId)
     if (existing) {
-      void existing.watcher.close().catch(() => undefined)
+      existing.watcher.close()
+      existing.closed = true
       this.watchers.delete(projectId)
     }
     const timer = this.eventTimers.get(projectId)
@@ -214,7 +218,8 @@ export class ProjectFileIndexService {
           // the next search/prewarm that uses the index again.
           const evictedWatcher = this.watchers.get(oldestProjectId)
           if (evictedWatcher) {
-            void evictedWatcher.watcher.close().catch(() => undefined)
+            evictedWatcher.watcher.close()
+            evictedWatcher.closed = true
             this.watchers.delete(oldestProjectId)
           }
         }
@@ -424,25 +429,34 @@ export class ProjectFileIndexService {
 
   /** Start watching a project root, re-pointing the watcher when the root
    *  changed. Failure to watch is never fatal: the index still works and is
-   *  refreshed by its age limit. */
+   *  refreshed by its age limit.
+   *
+   *  Uses the platform's native recursive watcher (FSEvents on macOS,
+   *  ReadDirectoryChangesW on Windows, inotify on Linux) instead of a
+   *  per-path watcher library: chokidar 5 opens one `fs.watch` handle per
+   *  path, which exhausted the process file-descriptor table on large
+   *  projects (ENFILE) and made every later `spawn` fail with EBADF. */
   private ensureWatcher(projectId: string, root: string): void {
     const existing = this.watchers.get(projectId)
-    if (existing && existing.root === root && !existing.watcher.closed) return
+    if (existing && existing.root === root && !existing.closed) return
     if (existing) {
-      void existing.watcher.close().catch(() => undefined)
+      existing.watcher.close()
+      existing.closed = true
       this.watchers.delete(projectId)
     }
     try {
-      const watcher = watch(root, {
-        persistent: true,
-        ignoreInitial: true,
-        ignored: (candidate) => this.isIgnoredWatchPath(root, candidate)
-      })
-      watcher.on('all', (event, eventPath) => {
+      // Node's recursive fs.watch is kernel-backed (FSEvents/inotify) and uses
+      // one file descriptor per watched root regardless of tree size.
+      const watcher = watch(root, { recursive: true, persistent: true })
+      watcher.on('change', (event, eventPath) => {
         // Content writes to indexed files are no-ops: the index only stores
-        // names and paths, so only structural events need handling.
+        // names and paths, so only structural events need handling. The native
+        // watcher reports relative paths; resolve them against the root.
         if (event === 'change') return
-        this.queueEvent(projectId, eventPath)
+        const path = typeof eventPath === 'string' ? eventPath : eventPath?.toString()
+        const absolutePath = path ? join(root, path) : root
+        if (this.isIgnoredWatchPath(root, absolutePath)) return
+        this.queueEvent(projectId, absolutePath)
       })
       watcher.on('error', (error) => {
         Logger.info('Project file watcher error', {
@@ -450,7 +464,11 @@ export class ProjectFileIndexService {
           error: error instanceof Error ? error.message : String(error)
         })
       })
-      this.watchers.set(projectId, { watcher, root })
+      watcher.on('close', () => {
+        const tracked = this.watchers.get(projectId)
+        if (tracked && tracked.watcher === watcher) tracked.closed = true
+      })
+      this.watchers.set(projectId, { watcher, root, closed: false })
     } catch (error) {
       Logger.info('Project file watcher could not be started', {
         projectId,
