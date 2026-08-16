@@ -177,6 +177,11 @@ class CloudRequestTimeoutError extends Error {
   }
 }
 
+/** Cancellation and deadline timeouts are expected while offline or during teardown. */
+function isExpectedCloudFailure(error: unknown): boolean {
+  return error instanceof CloudRequestCancelledError || error instanceof CloudRequestTimeoutError
+}
+
 /**
  * Fetch with an application-level deadline and external cancellation. The
  * request aborts when the timeout elapses or the owning controller shuts the
@@ -1159,7 +1164,9 @@ export class RemoteModeController {
     try {
       return await this.fetchAccountProfile()
     } catch (error) {
-      Logger.dev('Account profile could not be fetched:', error)
+      if (!isExpectedCloudFailure(error)) {
+        Logger.dev('Account profile could not be fetched:', error)
+      }
       return {
         status:
           this.accountSignInServer || this.cloudStatus.state === 'enrollment-pending'
@@ -1207,7 +1214,12 @@ export class RemoteModeController {
       }
       this.broadcastAccountProfile(state)
     } catch (error) {
-      Logger.dev('Account profile refresh deferred; keeping the cached profile:', error)
+      // Cancellation (cloud teardown/enrollment resets the shared abort
+      // controller) and timeouts are expected while offline — retried on the
+      // next probe, so keep the log quiet.
+      if (!isExpectedCloudFailure(error)) {
+        Logger.dev('Account profile refresh deferred; keeping the cached profile:', error)
+      }
     }
   }
 
