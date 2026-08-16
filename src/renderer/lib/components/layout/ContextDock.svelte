@@ -11,8 +11,9 @@
     badge?: 'completed' | 'attention' | 'error'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
-    /** Amber emphasis for attention-worthy tools (e.g. a thread note). */
-    tone?: 'warning'
+    /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
+     *  info for ephemeral tools that match their in-panel icon colour. */
+    tone?: 'warning' | 'info'
     onSelect: () => void
   }
 </script>
@@ -28,6 +29,20 @@
   let { groups }: Props = $props()
 
   let visibleGroups = $derived(groups.filter((group) => group.length > 0))
+
+  /** Toned tools keep their colour in every state so the rail icon reads as the
+   *  same tool as its panel icon; untoned tools use the neutral active styling. */
+  function toneClass(item: ContextDockItem): string {
+    if (item.tone === 'warning') return 'text-warning hover:bg-elevated'
+    if (item.tone === 'info') {
+      return item.active
+        ? 'bg-elevated text-info'
+        : 'text-info/80 hover:bg-elevated hover:text-info'
+    }
+    return item.active
+      ? 'bg-elevated text-foreground'
+      : 'text-muted hover:bg-elevated hover:text-foreground'
+  }
 </script>
 
 <!--
@@ -48,12 +63,9 @@
       {@const Icon = item.icon}
       <button
         type="button"
-        class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {item.tone ===
-        'warning'
-          ? 'text-warning hover:bg-elevated'
-          : item.active
-            ? 'bg-elevated text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+        class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 {toneClass(
+          item
+        )}"
         aria-label={item.label}
         aria-current={item.active ? 'true' : undefined}
         title={item.label}
