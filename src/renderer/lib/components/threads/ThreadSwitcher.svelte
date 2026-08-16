@@ -4,6 +4,7 @@
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
   import ThreadRow from './ThreadRow.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import type { Project, Thread } from '$shared/types'
 
@@ -92,6 +93,16 @@
     // focus scope. Focuses directly; it never remounts the composer.
     workspaceState.requestFocusComposerEditor()
   }
+
+  /** Warm the highlighted thread's message cache so releasing Ctrl (or
+   *  clicking) opens it without the loading spinner. */
+  $effect(() => {
+    if (!open) return
+    const thread = threads[highlightedIndex]
+    if (!thread) return
+    if (threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
+  })
 
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Tab' && event.ctrlKey) {

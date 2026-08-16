@@ -18,6 +18,7 @@
   } from '$lib/stores/renderer-recovery.svelte'
   import ProjectCreateControl from '$lib/components/shared/ProjectCreateControl.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { preloadScopeChunk } from '$lib/page-preload'
   import ScopeCreateControl from '$lib/components/shared/ScopeCreateControl.svelte'
   import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
@@ -598,6 +599,7 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={projectViewActive ? 'Exit scope view' : 'Open scope view'}
             title="Scope"
+            onmouseenter={preloadScopeChunk}
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
@@ -684,6 +686,9 @@
                       ? 'text-foreground'
                       : 'text-muted hover:bg-elevated focus:bg-elevated'
                   ]}
+                  onpointerenter={() => {
+                    if (option.id === 'scope') preloadScopeChunk()
+                  }}
                   onSelect={() => selectProjectView(option.id)}
                 >
                   <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />

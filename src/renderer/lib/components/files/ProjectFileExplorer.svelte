@@ -60,7 +60,7 @@
    *  regardless of expansion state, so a deliberate fold must be remembered
    *  here to actually hide the subtree again. Cleared whenever a new filter
    *  session starts (query change, filter close, last-turn toggle). */
-  let collapsedOverrides = $state(new SvelteSet<string>())
+  let collapsedOverrides = new SvelteSet<string>()
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
@@ -236,7 +236,7 @@
         await projectFilesWorkspace.revealFile(projectId, entry.path)
       }
     } else if (entry.kind === 'directory') {
-      await toggleDirectoryRow(entry)
+      await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
     }
 
     if (entry.kind === 'file') {
