@@ -942,8 +942,48 @@
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+
+  // The grid column/row that hosts each panel collapses the instant
+  // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
+  // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
+  // orphaned outside the (now single-track) grid for that whole window —
+  // a stray gap opens up where its column used to be. Reserving the track
+  // until the outro actually finishes keeps the panel inside its cell for
+  // the whole animation.
+  const PANEL_EXIT_MS = 160
+  let sidebarTrackReserved = $state(false)
+  let sidebarWasVisible = false
+  $effect(() => {
+    if (sidebarVisible) {
+      sidebarWasVisible = true
+      sidebarTrackReserved = true
+      return
+    }
+    if (!sidebarWasVisible) return
+    sidebarWasVisible = false
+    const timer = setTimeout(() => {
+      sidebarTrackReserved = false
+    }, motionDuration(PANEL_EXIT_MS))
+    return () => clearTimeout(timer)
+  })
+  let terminalTrackReserved = $state(false)
+  let terminalWasVisible = false
+  $effect(() => {
+    if (terminalDockVisible) {
+      terminalWasVisible = true
+      terminalTrackReserved = true
+      return
+    }
+    if (!terminalWasVisible) return
+    terminalWasVisible = false
+    const timer = setTimeout(() => {
+      terminalTrackReserved = false
+    }, motionDuration(PANEL_EXIT_MS))
+    return () => clearTimeout(timer)
+  })
+
   let contextPanelColumns = $derived(
-    sidebarVisible
+    sidebarTrackReserved
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
@@ -951,7 +991,7 @@
   // icon is always on screen and is the way back, so hiding the terminal really
   // does give the full height back to the thread.
   let contextPanelRows = $derived(
-    terminalDockVisible
+    terminalTrackReserved
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
       : 'minmax(0, 1fr)'
   )
@@ -3335,7 +3375,7 @@
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
           out:fly={{
             x: contextSidebarState.width,
-            duration: motionDuration(160),
+            duration: motionDuration(PANEL_EXIT_MS),
             easing: cubicOut
           }}
         >
@@ -3388,7 +3428,7 @@
           }}
           out:fly={{
             y: contextSidebarState.terminalHeight,
-            duration: motionDuration(160),
+            duration: motionDuration(PANEL_EXIT_MS),
             easing: cubicOut
           }}
         >
