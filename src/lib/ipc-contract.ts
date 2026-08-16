@@ -1184,6 +1184,8 @@ export interface IpcInvokeContract {
     void
   >
   'harnessManifest:reset': Contract<[input: { harnessId: string; behavior: string }], void>
+  'harnessAutoUpdate:list': Contract<[], Record<string, boolean>>
+  'harnessAutoUpdate:set': Contract<[input: { harnessId: string; value: boolean }], void>
   'providerAccounts:getAuthStatus': Contract<
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus

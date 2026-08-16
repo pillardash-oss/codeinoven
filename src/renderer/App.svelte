@@ -1445,6 +1445,7 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    void harnessLifecycleStore.autoUpdateOnStartup()
     const hydrationTimer = window.setTimeout(() => {
       void loadScopeData().finally(() => {
         // Signal the main process that the renderer finished its initial
