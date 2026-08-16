@@ -25,7 +25,6 @@ const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
-const MAX_MEMORY_CLOCK_SKEW_MS = 5 * 60_000
 const SESSION_PERSIST_INTERVAL_MS = 5 * 60_000
 const CONVEX_SESSION_TTL_MS = 24 * 60 * 60_000
 const CONVEX_REQUEST_TIMEOUT_MS = 10_000
@@ -184,18 +183,6 @@ async function sessionFromRequest(request: Request): Promise<AuthenticatedSessio
     persistedSessions.set(session.id, { identity: identitySnapshot, persistedAt: now })
   }
   return session
-}
-
-function profileIdentityFromRequest(
-  request: Request
-): { userId: string; desktop: DesktopRecord | null } | null {
-  const token = bearerToken(request)
-  if (!token) return null
-  const hash = tokenHash(token)
-  const accountUserId = database.findUserIdByAccountTokenHash(hash)
-  if (accountUserId) return { userId: accountUserId, desktop: null }
-  const desktop = database.findDesktopByProfileTokenHash(hash)
-  return desktop?.user_id ? { userId: desktop.user_id, desktop } : null
 }
 
 function validDesktopCallback(value: string | null): string | null {
@@ -357,144 +344,6 @@ async function exchangeDesktopAuthorizationCode(request: Request): Promise<Respo
   return json({ profileToken, expiresAt: Date.now() + ACCOUNT_TOKEN_TTL_MS })
 }
 
-function emptyUsageSummary(): Record<string, unknown> {
-  return {
-    messageCount: 0,
-    costUsd: 0,
-    tokens: 0,
-    durationMs: 0,
-    topHarnessId: null,
-    topModelId: null,
-    harnesses: [],
-    models: [],
-    activityDays: [],
-    generatedAt: Date.now()
-  }
-}
-
-function parseStoredJson(value: string, fallback: unknown): unknown {
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return fallback
-  }
-}
-
-function nonnegativeNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-}
-
-function validUsageSummary(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const usage = value as Record<string, unknown>
-  const validRows = (rows: unknown): boolean =>
-    Array.isArray(rows) &&
-    rows.length <= 100 &&
-    rows.every(
-      (row) =>
-        typeof row === 'object' &&
-        row !== null &&
-        !Array.isArray(row) &&
-        typeof (row as Record<string, unknown>)['id'] === 'string' &&
-        nonnegativeNumber((row as Record<string, unknown>)['messageCount']) &&
-        nonnegativeNumber((row as Record<string, unknown>)['costUsd']) &&
-        nonnegativeNumber((row as Record<string, unknown>)['tokens'])
-    )
-  return (
-    nonnegativeNumber(usage['messageCount']) &&
-    nonnegativeNumber(usage['costUsd']) &&
-    nonnegativeNumber(usage['tokens']) &&
-    nonnegativeNumber(usage['durationMs']) &&
-    nonnegativeNumber(usage['generatedAt']) &&
-    validRows(usage['harnesses']) &&
-    validRows(usage['models']) &&
-    Array.isArray(usage['activityDays']) &&
-    usage['activityDays'].length <= 3_660
-  )
-}
-
-interface ValidGlobalMemory extends Record<string, unknown> {
-  id: string
-  updatedAt: number
-}
-
-function validGlobalMemory(value: unknown, now = Date.now()): value is ValidGlobalMemory {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const entry = value as Record<string, unknown>
-  return (
-    typeof entry['id'] === 'string' &&
-    typeof entry['label'] === 'string' &&
-    typeof entry['content'] === 'string' &&
-    typeof entry['enabled'] === 'boolean' &&
-    nonnegativeNumber(entry['updatedAt']) &&
-    entry['updatedAt'] <= now + MAX_MEMORY_CLOCK_SKEW_MS &&
-    typeof entry['category'] === 'string' &&
-    typeof entry['priority'] === 'string' &&
-    entry['scope'] === 'global' &&
-    typeof entry['source'] === 'string' &&
-    nonnegativeNumber(entry['frequency']) &&
-    nonnegativeNumber(entry['lastReinforced'])
-  )
-}
-
-function mergeGlobalMemories(storedJson: string | null, incoming: unknown[]): unknown[] {
-  const now = Date.now()
-  const stored = storedJson ? parseStoredJson(storedJson, []) : []
-  const merged = new Map<string, Record<string, unknown>>()
-  for (const item of [...(Array.isArray(stored) ? stored : []), ...incoming]) {
-    if (!validGlobalMemory(item, now)) continue
-    const entry = item
-    const previous = merged.get(entry['id'])
-    if (!previous || Number(previous['updatedAt'] ?? 0) <= entry['updatedAt']) {
-      merged.set(entry['id'], entry)
-    }
-  }
-  return [...merged.values()].sort(
-    (left, right) => Number(right['updatedAt'] ?? 0) - Number(left['updatedAt'] ?? 0)
-  )
-}
-
-function accountProfile(userId: string): Response {
-  const user = database.findUserById(userId)
-  if (!user) return json({ error: 'unauthorized' }, 401)
-  const stored = database.accountProfile(userId)
-  return json({
-    profile: {
-      id: user.id,
-      email: user.email,
-      displayName: user.display_name,
-      image: user.image_url,
-      usage: stored ? parseStoredJson(stored.usage_json, emptyUsageSummary()) : emptyUsageSummary(),
-      globalMemories: stored ? mergeGlobalMemories(stored.global_memories_json, []) : [],
-      updatedAt: stored?.updated_at ?? user.created_at
-    }
-  })
-}
-
-async function saveAccountProfile(request: Request, userId: string): Promise<Response> {
-  const body = await readJsonObject(request, 512 * 1_024)
-  const usage = body?.['usage']
-  const memories = body?.['globalMemories']
-  const now = Date.now()
-  if (
-    !validUsageSummary(usage) ||
-    !Array.isArray(memories) ||
-    !memories.every((memory) => validGlobalMemory(memory, now))
-  ) {
-    return json({ error: 'invalid-profile' }, 400)
-  }
-  const usageJson = JSON.stringify(usage)
-  const existing = database.accountProfile(userId)
-  const memoriesJson = JSON.stringify(
-    mergeGlobalMemories(existing?.global_memories_json ?? null, memories)
-  )
-  if (usageJson.length > 128 * 1_024 || memoriesJson.length > 384 * 1_024) {
-    return json({ error: 'profile-too-large' }, 413)
-  }
-  database.saveAccountProfile(userId, usageJson, memoriesJson)
-  return accountProfile(userId)
-}
-
 function bearerToken(request: Request): string | null {
   const authorization = request.headers.get('authorization')
   if (!authorization?.startsWith('Bearer ')) return null
@@ -556,11 +405,21 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
 
   const presentedToken = bearerToken(request)
   const presentedHash = presentedToken ? tokenHash(presentedToken) : null
-  const existing = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
-  const accountIdentity =
-    presentedToken && !existing ? await accountIdentityFromRequest(request) : null
+  const desktopTokenHeader = request.headers.get('x-codeinoven-desktop-token')?.trim() ?? ''
+  const desktopToken = desktopTokenHeader.length <= 256 ? desktopTokenHeader : ''
+  const headerDesktop = desktopToken
+    ? database.findDesktopByTokenHash(tokenHash(desktopToken))
+    : null
+  const legacyDesktop = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
+  const existing = headerDesktop ?? legacyDesktop
+  const accountIdentity = presentedToken ? await accountIdentityFromRequest(request) : null
   const accountUserId = accountIdentity?.id ?? null
-  if (presentedToken && !existing && !accountUserId) return json({ error: 'unauthorized' }, 401)
+  if ((!existing && !accountUserId) || (desktopToken && !accountUserId)) {
+    return json({ error: 'unauthorized' }, 401)
+  }
+  if (existing?.user_id && accountUserId && existing.user_id !== accountUserId) {
+    return json({ error: 'enrollment-conflict' }, 403)
+  }
   if (accountIdentity) {
     database.upsertOAuthUser({
       id: accountIdentity.id,
@@ -862,26 +721,6 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   const deviceEnrollment = url.pathname.match(/^\/v1\/device-enrollments\/([^/]+)$/)
   if (deviceEnrollment && request.method === 'DELETE') {
     return revokeFromDesktop(request, deviceEnrollment[1] ?? '')
-  }
-
-  if (url.pathname === '/v1/profile') {
-    const session = await sessionFromRequest(request)
-    const profileIdentity = session ? null : profileIdentityFromRequest(request)
-    const profileDesktop = profileIdentity?.desktop ?? null
-    const userId = session?.userId ?? profileIdentity?.userId ?? null
-    if (!userId) return json({ error: 'unauthorized' }, 401)
-    if (request.method === 'GET') return accountProfile(userId)
-    if (request.method === 'PUT') {
-      if (profileDesktop && !withinRateLimit(request, `profile:${profileDesktop.id}`, 12)) {
-        return json({ error: 'rate-limited' }, 429)
-      }
-      const response = await saveAccountProfile(request, userId)
-      if (profileDesktop && response.ok) {
-        database.audit('desktop.profile-synced', userId, profileDesktop.id)
-      }
-      return response
-    }
-    return json({ error: 'method-not-allowed' }, 405)
   }
 
   const session = await sessionFromRequest(request)

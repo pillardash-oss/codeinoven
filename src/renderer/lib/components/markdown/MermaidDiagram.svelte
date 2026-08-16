@@ -22,6 +22,9 @@
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')
+  /** Bumped to force the attachment to re-run — an in-place retry after a
+   *  transient failure, so the user never has to switch threads to recover. */
+  let retryKey = $state(0)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   function cssToken(style: CSSStyleDeclaration, name: string, fallback: string): string {
@@ -43,7 +46,7 @@
     }
   }
 
-  function renderDiagram(source: string): Attachment<HTMLElement> {
+  function renderDiagram(source: string, _retryKey: number): Attachment<HTMLElement> {
     return () => {
       let currentRender = 0
       let disposed = false
@@ -57,9 +60,13 @@
         try {
           const nextSvg = await renderMermaid(`${diagramId}-${renderNumber}`, source, readTheme())
           if (disposed || renderNumber !== currentRender) return
+          if (nextSvg.trim() === '') throw new Error('Empty diagram output')
           svg = nextSvg
         } catch (reason) {
           if (disposed || renderNumber !== currentRender) return
+          // A re-render failure must never destroy an already-rendered
+          // diagram — keep the last good SVG on screen.
+          if (svg) return
           error = 'This Mermaid diagram could not be rendered.'
           errorDetail = reason instanceof Error ? reason.message : String(reason)
         } finally {
@@ -121,7 +128,10 @@
   </div>
 {/snippet}
 
-<div class="overflow-hidden rounded-lg border bg-elevated" {@attach renderDiagram(code.trim())}>
+<div
+  class="overflow-hidden rounded-lg border bg-elevated"
+  {@attach renderDiagram(code.trim(), retryKey)}
+>
   <div class="flex h-8 items-center justify-between border-b px-2">
     <span class="px-1 font-mono text-[10px] uppercase tracking-wide text-dimmed">Mermaid</span>
     <div class="flex items-center gap-0.5">
@@ -177,12 +187,25 @@
 
   {#if error}
     <div class="border-b bg-danger/5 px-3 py-2 text-xs text-danger" role="alert">
-      <p>{error}</p>
-      {#if errorDetail}
-        <p class="mt-0.5 break-words font-mono text-[10px] text-danger/70" title={errorDetail}>
-          {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
-        </p>
-      {/if}
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p>{error}</p>
+          {#if errorDetail}
+            <p class="mt-0.5 break-words font-mono text-[10px] text-danger/70" title={errorDetail}>
+              {errorDetail.slice(0, 240)}{errorDetail.length > 240 ? '…' : ''}
+            </p>
+          {/if}
+        </div>
+        <button
+          type="button"
+          class="shrink-0 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 text-[10px] font-semibold text-danger transition-colors hover:bg-danger/20"
+          title="Try rendering this Mermaid diagram again"
+          aria-label="Try rendering this Mermaid diagram again"
+          onclick={() => (retryKey += 1)}
+        >
+          Try again
+        </button>
+      </div>
     </div>
   {/if}
 

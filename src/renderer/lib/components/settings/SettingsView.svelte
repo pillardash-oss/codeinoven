@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
@@ -235,6 +235,22 @@
 
   onMount(() => {
     void refreshNotificationPermission()
+    // The main process re-verifies a 'denied' state on every permission query
+    // and pushes the outcome; keep the panel in sync without a remount.
+    const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
+      notificationPermission = status
+    })
+    // The user may have just toggled notifications in System Settings —
+    // returning to the app must re-derive the state instead of showing a
+    // stale warning.
+    const onWindowFocus = (): void => {
+      void refreshNotificationPermission()
+    }
+    window.addEventListener('focus', onWindowFocus)
+    return () => {
+      unsubscribePermissionStatus()
+      window.removeEventListener('focus', onWindowFocus)
+    }
   })
 
   const isNightlyChannel = $derived(config.updateChannel === 'nightly')

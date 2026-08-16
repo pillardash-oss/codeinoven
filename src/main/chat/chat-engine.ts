@@ -1131,6 +1131,17 @@ class GeneratedSpecOutputError extends Error {
   }
 }
 
+class GeneratedBrainstormOutputError extends Error {
+  constructor(
+    readonly diagnostic: string,
+    readonly rejectedOutput: string,
+    readonly repairArtifactPath?: string
+  ) {
+    super(repairArtifactPath ? `${diagnostic} Repair artifact: ${repairArtifactPath}` : diagnostic)
+    this.name = 'GeneratedBrainstormOutputError'
+  }
+}
+
 class AssignmentApiRequestError extends Error {
   constructor(
     readonly statusCode: number,
@@ -1979,7 +1990,14 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) return []
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // Pending provider questions belong to the thread's bound session, which
+    // after a mid-run harness switch is owned by the original harness even
+    // when settings point at a new one.
+    const driverId =
+      thread.sessionHarnessId ??
+      this.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.settings?.harnessId ??
+      'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     const providerRequests = await driver.listPendingQuestions(projectPath)
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
@@ -2821,17 +2839,22 @@ export class ChatEngine {
     const driverId = requestedDriverId ?? thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
 
-    // A harness switch orphans the old harness's session. Capture it before the
-    // binding below is reset so it can be released (best-effort) once the
-    // replacement session is created successfully.
-    const previousHarnessId = thread.settings?.harnessId
-    const switchedHarness = Boolean(previousHarnessId && previousHarnessId !== driverId)
+    // A harness switch orphans the old harness's session. The thread's bound
+    // session belongs to the harness that created it — after a mid-run switch
+    // `settings.harnessId` already points at the new harness while `sessionId`
+    // still lives in the old one, so the switch is detected by comparing the
+    // session OWNER (persisted or registered) with the requested driver, never
+    // the current settings. Capture the previous session before the binding
+    // below is reset so it can be fully synced and released (best-effort)
+    // before the new harness takes over.
+    const sessionOwner = thread.sessionId
+      ? (thread.sessionHarnessId ?? this.sessionRegistry.get(thread.sessionId)?.driverId)
+      : undefined
+    const switchedHarness = Boolean(thread.sessionId && sessionOwner && sessionOwner !== driverId)
+    const previousHarnessId = switchedHarness ? sessionOwner : undefined
     const previousSessionId = switchedHarness ? thread.sessionId : undefined
 
-    let sessionId =
-      thread.settings?.harnessId && thread.settings.harnessId !== driverId
-        ? undefined
-        : thread.sessionId
+    let sessionId = switchedHarness ? undefined : thread.sessionId
     if (sessionId && thread.settings?.engineeringMode) {
       this.planningSessions.add(sessionId)
     }
@@ -2869,7 +2892,7 @@ export class ChatEngine {
     }
     if (!sessionId) {
       sessionId = await driver.createSession(projectPath, thread.title)
-      await this.threadManager.setSessionId(projectId, threadId, sessionId)
+      await this.threadManager.setSessionId(projectId, threadId, sessionId, driverId)
       if (rotatedPlanningSession) {
         this.preparedImplementationSessions.add(sessionId)
         Logger.info('Prepared a clean implementation session for the approved specification', {
@@ -2994,6 +3017,41 @@ export class ChatEngine {
   ): Promise<void> {
     this.retireSessionState(previousSessionId)
     const previousDriver = this.drivers.get(previousHarnessId)
+    // The orphaned session's transcript must land in the app mirror before its
+    // native session is destroyed, so the user never loses the old harness's
+    // final output when they switch harnesses. Best-effort and non-throwing:
+    // the idle sync usually already mirrored the completed turn.
+    if (previousDriver?.loadMessages) {
+      try {
+        const previousMessages = stampHarnessId(
+          await previousDriver.loadMessages(projectPath, previousSessionId),
+          previousHarnessId
+        )
+        if (previousMessages.length > 0) {
+          const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+          const merged = restoreMirrorThinkingLevel(
+            mergeAgentMessages(mirror, previousMessages),
+            mirror
+          )
+          await this.threadManager.upsertMessages(projectId, threadId, merged, previousSessionId)
+          Logger.info('Synced orphaned harness session transcript before release', {
+            projectId,
+            threadId,
+            previousHarnessId,
+            previousSessionId,
+            messageCount: previousMessages.length
+          })
+        }
+      } catch (error) {
+        Logger.info('Orphaned harness session transcript sync skipped', {
+          projectId,
+          threadId,
+          previousHarnessId,
+          previousSessionId,
+          detail: rawErrorMessage(error)
+        })
+      }
+    }
     if (!previousDriver?.deleteSession) {
       Logger.info('Orphaned harness session has no deletable native session', {
         projectId,
@@ -3032,7 +3090,15 @@ export class ChatEngine {
     if (!thread.sessionId) {
       return this.threadManager.loadMessages(projectId, threadId)
     }
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // The thread's bound session belongs to the harness that created it, not
+    // necessarily the one currently selected in settings: after a mid-run
+    // harness switch `settings.harnessId` points at the new harness while
+    // `sessionId` still lives in the old one. Always read through the session's
+    // owning driver (registry first, persisted owner second) so the old
+    // transcript syncs completely and the new harness never sees a foreign id.
+    const registeredOwner = this.sessionRegistry.get(thread.sessionId)?.driverId
+    const driverId =
+      registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'opencode'
     try {
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
       this.registerSession(
@@ -3147,7 +3213,14 @@ export class ChatEngine {
       throw new Error('Sub-agent session does not belong to this thread')
     }
 
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // Child sessions belong to the harness that owns the parent session, which
+    // after a mid-run harness switch is the thread's persisted owner rather
+    // than the currently selected harness.
+    const driverId =
+      thread.sessionHarnessId ??
+      (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.driverId : undefined) ??
+      thread.settings?.harnessId ??
+      'opencode'
     const { projectPath } = await this.resolve(projectId, driverId, threadId)
     const owner: ChildSessionInfo = {
       projectId,
@@ -3946,7 +4019,15 @@ export class ChatEngine {
     if (this.sessionStatuses.get(activeSessionId)?.state !== 'working') {
       throw new Error('The harness turn finished before the steer message could be delivered')
     }
-    const driverId = activeBrainstorm?.driverId ?? thread.settings?.harnessId ?? 'opencode'
+    // Steering targets the ACTIVE session, which belongs to the harness that
+    // created it — after a mid-run harness switch the active session still
+    // lives in the old harness while `settings.harnessId` points at the new
+    // one. Resolve the driver by the active session's owner so a steer after a
+    // switch reaches the running turn instead of a foreign harness.
+    const activeSessionOwner =
+      this.sessionRegistry.get(activeSessionId)?.driverId ?? thread.sessionHarnessId
+    const driverId =
+      activeBrainstorm?.driverId ?? activeSessionOwner ?? thread.settings?.harnessId ?? 'opencode'
     const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
@@ -8891,10 +8972,13 @@ export class ChatEngine {
       !isZenFreeModel &&
       !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
     let lastError: Error | null = null
+    let repairError: GeneratedBrainstormOutputError | null = null
 
-    const attempts = structured ? ['structured', 'json', 'json_repair'] : ['json', 'json_repair']
+    const attempts = structured
+      ? ['structured', 'json', 'json_repair']
+      : ['json', 'json_repair', 'json_repair']
     const operationKey = `${projectId}:${threadId}`
-    for (const attempt of attempts) {
+    for (const [attemptIndex, attempt] of attempts.entries()) {
       const useStructuredOutput = attempt === 'structured'
       const isolated =
         driver instanceof OpenCodeDriver
@@ -8939,15 +9023,9 @@ export class ChatEngine {
             assignmentMode: false,
             loopMode: false
           },
-          text:
-            attempt === 'json_repair'
-              ? [
-                  source,
-                  'The previous JSON response failed validation.',
-                  `Validation error: ${lastError?.message ?? 'invalid Brainstorm shape'}`,
-                  'Correct the reported violation and return the complete Brainstorm object using the contract already supplied in this request.'
-                ].join('\n\n')
-              : source,
+          text: [source, repairError ? this.brainstormRepairInstruction(repairError) : '']
+            .filter(Boolean)
+            .join('\n\n'),
           attachments: [],
           systemPrompt: [
             useStructuredOutput
@@ -8975,13 +9053,7 @@ export class ChatEngine {
         }
         const streamed = await completion
         if (streamed !== undefined) {
-          return finish(
-            requireEvidenceDrivenBrainstorm(
-              useStructuredOutput
-                ? parseGeneratedBrainstormContent(streamed)
-                : parseGeneratedBrainstormFallbackContent(streamed)
-            )
-          )
+          return finish(this.parseBrainstormGeneratedOutput(streamed, useStructuredOutput))
         }
         const generated =
           isolated && driver instanceof OpenCodeDriver
@@ -8992,11 +9064,7 @@ export class ChatEngine {
         if (response.error) throw new Error(response.error)
         if (response.structuredOutput !== undefined) {
           return finish(
-            requireEvidenceDrivenBrainstorm(
-              useStructuredOutput
-                ? parseGeneratedBrainstormContent(response.structuredOutput)
-                : parseGeneratedBrainstormFallbackContent(response.structuredOutput)
-            )
+            this.parseBrainstormGeneratedOutput(response.structuredOutput, useStructuredOutput)
           )
         }
         const text = response.parts
@@ -9004,10 +9072,9 @@ export class ChatEngine {
           .map((part) => part.text)
           .join('\n')
         return finish(
-          requireEvidenceDrivenBrainstorm(
-            parseGeneratedBrainstormFallbackContent(
-              parseGeneratedJson(text, 'The Brainstorm agent returned invalid JSON')
-            )
+          this.parseBrainstormGeneratedOutput(
+            parseGeneratedJson(text, 'The Brainstorm agent returned invalid JSON'),
+            false
           )
         )
       } catch (error) {
@@ -9016,11 +9083,36 @@ export class ChatEngine {
         } else {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
         }
-        lastError = error instanceof Error ? error : new Error('The Brainstorm agent failed.')
+        const rejectedSource =
+          error instanceof GeneratedBrainstormOutputError
+            ? error
+            : error instanceof GeneratedJsonParseError
+              ? new GeneratedBrainstormOutputError(error.message, error.rawOutput)
+              : null
+        const rejected = rejectedSource
+          ? await this.prepareRejectedBrainstormRepair({
+              projectId,
+              threadId,
+              attempt: attemptIndex + 1,
+              format: useStructuredOutput ? 'structured' : 'json',
+              settings,
+              error: rejectedSource
+            })
+          : null
+        lastError =
+          rejected ?? (error instanceof Error ? error : new Error('The Brainstorm agent failed.'))
+        if (rejected) repairError = rejected
         if (this.userAbortedBrainstormOperations.has(operationKey)) {
           await this.failBrainstormConversationTurn(projectId, threadId, lastError, settings)
           throw lastError
         }
+        Logger.error('Brainstorm generation session rejected', {
+          projectId,
+          threadId,
+          sessionId,
+          structuredOutput: useStructuredOutput,
+          error: lastError.message
+        })
         if (useStructuredOutput) {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
           Logger.info('Structured Brainstorm generation failed; using JSON-only output:', {
@@ -9041,9 +9133,27 @@ export class ChatEngine {
         if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
       }
     }
-    const failure = lastError ?? new Error('The Brainstorm agent failed.')
+    const failure = repairError ?? lastError ?? new Error('The Brainstorm agent failed.')
     await this.failBrainstormConversationTurn(projectId, threadId, failure, settings)
     throw failure
+  }
+
+  private parseBrainstormGeneratedOutput(
+    value: unknown,
+    useStructuredOutput: boolean
+  ): BrainstormContent {
+    try {
+      return requireEvidenceDrivenBrainstorm(
+        useStructuredOutput
+          ? parseGeneratedBrainstormContent(value)
+          : parseGeneratedBrainstormFallbackContent(value)
+      )
+    } catch (error) {
+      throw new GeneratedBrainstormOutputError(
+        error instanceof Error ? error.message : 'Invalid Brainstorm output',
+        typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+      )
+    }
   }
 
   private async brainstormSourceWithConversationContext(
@@ -11782,6 +11892,84 @@ export class ChatEngine {
       error.repairArtifactPath
         ? `Read the rejected output and diagnostic at ${error.repairArtifactPath}. Correct that output and return one complete replacement JSON object matching the required schema.`
         : 'Correct the reported contract violation and return one complete replacement JSON object matching the required schema.',
+      'Do not explain the correction and do not return a partial patch.'
+    ].join('\n')
+  }
+
+  private async prepareRejectedBrainstormRepair(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: 'structured' | 'json'
+    settings: ThreadSettings
+    error: GeneratedBrainstormOutputError
+  }): Promise<GeneratedBrainstormOutputError> {
+    let artifactPath: string | undefined
+    try {
+      artifactPath = await this.persistRejectedBrainstormOutput(input)
+    } catch (artifactError) {
+      Logger.error('Rejected Brainstorm artifact persistence failed', {
+        projectId: input.projectId,
+        threadId: input.threadId,
+        attempt: input.attempt,
+        format: input.format,
+        error: rawErrorMessage(artifactError)
+      })
+    }
+    return new GeneratedBrainstormOutputError(
+      input.error.diagnostic,
+      input.error.rejectedOutput,
+      artifactPath
+    )
+  }
+
+  private async persistRejectedBrainstormOutput(input: {
+    projectId: string
+    threadId: string
+    attempt: number
+    format: 'structured' | 'json'
+    settings: ThreadSettings
+    error: GeneratedBrainstormOutputError
+  }): Promise<string> {
+    const featureSlug = await ensureFeatureSlug(this.database, input.projectId, input.threadId)
+    const relativePath = join(
+      'err-brainstorm',
+      `attempt-${Math.max(1, input.attempt)}-${input.format}.json`
+    )
+    const artifactPath = join(featureArtifactDirectory(featureSlug), relativePath).replace(
+      /\\/gu,
+      '/'
+    )
+    const artifact = {
+      schemaVersion: 1,
+      projectId: input.projectId,
+      threadId: input.threadId,
+      attempt: Math.max(1, input.attempt),
+      format: input.format,
+      harnessId: input.settings.harnessId || 'opencode',
+      providerId: input.settings.providerId,
+      modelId: input.settings.modelId,
+      diagnostic: input.error.diagnostic,
+      rejectedOutput: input.error.rejectedOutput,
+      createdAt: Date.now()
+    }
+    await this.storage.writeProjectSpecRaw(
+      input.projectId,
+      featureSlug,
+      relativePath,
+      `${JSON.stringify(artifact, null, 2)}\n`,
+      requireLocalProject(this.database, input.projectId)
+    )
+    return artifactPath
+  }
+
+  private brainstormRepairInstruction(error: GeneratedBrainstormOutputError): string {
+    return [
+      'The previous Brainstorm output failed deterministic validation.',
+      `Exact validator diagnostic: ${error.diagnostic}`,
+      error.repairArtifactPath
+        ? `Read the rejected output and diagnostic at ${error.repairArtifactPath}. Correct that output and return one complete replacement Brainstorm JSON object matching the required schema.`
+        : 'Correct the reported contract violation and return one complete replacement Brainstorm JSON object matching the required schema.',
       'Do not explain the correction and do not return a partial patch.'
     ].join('\n')
   }
@@ -14936,7 +15124,12 @@ export class ChatEngine {
       threadId,
       projectPath,
       permissionLevel,
-      driverId,
+      // A session id is owned by the harness that created it and never
+      // migrates: when the user switches harness, `ensureSession` binds a
+      // fresh session id from the new driver and retires the old one. Preserve
+      // the registered owner so a settings-derived re-registration (mid-run
+      // harness switch) can never clobber which driver owns the session.
+      driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,

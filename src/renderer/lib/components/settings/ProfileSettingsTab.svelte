@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, RefreshCw } from '@lucide/svelte'
-  import { Popover } from 'bits-ui'
+  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
+  import { AlertDialog, Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
     AccountProfileState,
@@ -78,6 +78,7 @@
   let loading = $state(true)
   let errorMessage = $state('')
   let signInOpen = $state(false)
+  let signOutOpen = $state(false)
   let accountBusy = $state(false)
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
@@ -86,6 +87,11 @@
   let usageRequestGeneration = 0
 
   const accountProfile = $derived(accountState.profile)
+  const syncedDevices = $derived(
+    accountProfile
+      ? Object.values(accountProfile.usageByDevice).sort((a, b) => b.durationMs - a.durationMs)
+      : []
+  )
   const selectedRange = $derived(analyticsRange(rangeOffset))
   const rangeLabel = $derived(formatDateRange(selectedRange))
   const accountInitials = $derived.by(() => {
@@ -252,6 +258,19 @@
     }
   }
 
+  function platformLabel(platform: string): string {
+    switch (platform) {
+      case 'darwin':
+        return 'macOS'
+      case 'win32':
+        return 'Windows'
+      case 'linux':
+        return 'Linux'
+      default:
+        return platform
+    }
+  }
+
   function formatDateRange(range: LocalProfileAnalyticsRange): string {
     const format = new Intl.DateTimeFormat(undefined, {
       day: 'numeric',
@@ -372,6 +391,23 @@
     }
   }
 
+  async function signOut(): Promise<void> {
+    if (accountBusy) return
+    accountBusy = true
+    signInError = ''
+    try {
+      await invoke('account:signOut')
+      accountState = { status: 'signed-out', profile: null }
+      signInOpen = false
+      signOutOpen = false
+    } catch {
+      signOutOpen = false
+      signInError = 'Sign-out could not be completed. Try again in a moment.'
+    } finally {
+      accountBusy = false
+    }
+  }
+
   function handleWindowFocus(): void {
     if (accountState.status === 'pending') void refreshAccount()
   }
@@ -384,6 +420,9 @@
       if (state.status === 'signed-in') {
         signInOpen = false
         signInError = ''
+      } else if (state.status === 'error') {
+        signInOpen = true
+        signInError = state.message
       }
     })
   })
@@ -465,6 +504,21 @@
               <p class="mt-3 text-xs leading-relaxed text-muted">
                 Your account is connected. Local analytics remain available on this device.
               </p>
+              {#if signInError}
+                <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+                  {signInError}
+                </p>
+              {/if}
+              <button
+                type="button"
+                class="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg border text-xs font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+                title="Sign out of CodeInOven"
+                disabled={accountBusy}
+                onclick={() => (signOutOpen = true)}
+              >
+                <LogOut size={14} />
+                Sign out
+              </button>
             {:else if accountState.status === 'pending'}
               <p class="text-sm font-semibold">Finish signing in</p>
               <p class="mt-1 text-xs leading-relaxed text-muted">
@@ -554,6 +608,82 @@
       <p class="mt-1 text-xs text-dimmed">{formatDuration(usage.durationMs)} of agent runtime</p>
     </div>
   </section>
+
+  {#if accountProfile}
+    <section class="mt-4 rounded-xl border" aria-labelledby="devices-heading">
+      <div class="border-b px-4 py-3">
+        <h2 id="devices-heading" class="text-sm font-semibold">Devices</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          Synced usage from every device signed in to this account.
+        </p>
+      </div>
+      {#if syncedDevices.length > 0}
+        <div class="grid gap-4 p-4 lg:grid-cols-2">
+          {#each syncedDevices as device (device.deviceId)}
+            <article class="rounded-xl border p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold">{device.deviceLabel}</p>
+                  <p class="mt-0.5 text-[11px] text-dimmed">
+                    {platformLabel(device.platform)} · last synced {formatDate(device.updatedAt)}
+                  </p>
+                </div>
+                <span
+                  class="shrink-0 rounded-md bg-raised px-2 py-1 text-[10px] font-medium tabular-nums text-muted"
+                  title="Total agent runtime"
+                >
+                  {formatDuration(device.durationMs)}
+                </span>
+              </div>
+              <dl class="mt-4 grid grid-cols-4 gap-2 text-xs">
+                <div>
+                  <dt class="text-dimmed">Sessions</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">
+                    {formatNumber(device.messageCount)}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-dimmed">Tokens</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">{formatNumber(device.tokens)}</dd>
+                </div>
+                <div>
+                  <dt class="text-dimmed">Cost</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">{formatCost(device.costUsd)}</dd>
+                </div>
+                <div>
+                  <dt class="text-dimmed">Active days</dt>
+                  <dd class="mt-0.5 font-semibold tabular-nums">{device.activeDays}</dd>
+                </div>
+              </dl>
+              {#if device.projects.length > 0}
+                <div class="mt-4 border-t pt-3">
+                  <p class="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                    Top projects
+                  </p>
+                  <ul class="mt-2 space-y-1.5">
+                    {#each device.projects.slice(0, 4) as project (project.id)}
+                      <li class="flex items-center justify-between gap-3 text-xs">
+                        <span class="min-w-0 truncate font-medium">{project.name}</span>
+                        <span class="shrink-0 tabular-nums text-muted">
+                          {formatNumber(project.messageCount)} sessions · {formatDuration(
+                            project.durationMs
+                          )}
+                        </span>
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+              {/if}
+            </article>
+          {/each}
+        </div>
+      {:else}
+        <p class="px-4 py-8 text-center text-xs text-muted">
+          No device usage has been synced yet. It appears after your first signed-in agent session.
+        </p>
+      {/if}
+    </section>
+  {/if}
 
   {#if mostUsedModel}
     <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
@@ -1087,6 +1217,36 @@
     </div>
   </section>
 </div>
+
+<AlertDialog.Root open={signOutOpen} onOpenChange={(open) => (signOutOpen = open)}>
+  <AlertDialog.Portal>
+    <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+    <AlertDialog.Content
+      class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+    >
+      <AlertDialog.Title class="text-sm font-semibold text-foreground">
+        Sign out of CodeInOven?
+      </AlertDialog.Title>
+      <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+        Your saved profile will be removed from this device and you will be signed out. You can sign
+        in again anytime.
+      </AlertDialog.Description>
+      <div class="mt-5 flex justify-end gap-2">
+        <AlertDialog.Cancel
+          class="h-8 cursor-pointer rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+        >
+          Cancel
+        </AlertDialog.Cancel>
+        <AlertDialog.Action
+          class="h-8 cursor-pointer rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+          onclick={() => void signOut()}
+        >
+          Sign out
+        </AlertDialog.Action>
+      </div>
+    </AlertDialog.Content>
+  </AlertDialog.Portal>
+</AlertDialog.Root>
 
 <style>
   .activity-columns {

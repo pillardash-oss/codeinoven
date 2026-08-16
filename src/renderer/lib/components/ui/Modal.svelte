@@ -11,9 +11,19 @@
     children: Snippet
     footer?: Snippet
     size?: 'md' | 'lg' | 'xl'
+    /** Clicking the backdrop calls onClose. Off for surfaces that hold drafts. */
+    closeOnBackdrop?: boolean
   }
 
-  let { open, title, onClose, children, footer, size = 'md' }: Props = $props()
+  let {
+    open,
+    title,
+    onClose,
+    children,
+    footer,
+    size = 'md',
+    closeOnBackdrop = true
+  }: Props = $props()
 
   const widths = {
     md: 'max-w-md',
@@ -45,7 +55,7 @@
       <button
         class="absolute inset-0 bg-overlay/70 backdrop-blur-[1px]"
         aria-label="Close modal"
-        onclick={onClose}
+        onclick={closeOnBackdrop ? onClose : undefined}
       ></button>
 
       <!-- Panel -->

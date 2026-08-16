@@ -1,10 +1,37 @@
 import type { ActionCtx } from './_generated/server'
 import { internal } from './_generated/api'
+import {
+  sanitizeMemoriesForResponse,
+  sanitizeTombstonesForResponse,
+  sanitizeUsageMapForResponse
+} from './profiles'
 import { createAuth, socialProviderConfigured } from './auth'
 
 const DESKTOP_AUTHORIZATION_TTL_MS = 2 * 60 * 1_000
 const ACCOUNT_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1_000
 const MAX_PROFILE_BYTES = 512 * 1_024
+
+/** Tolerant JSON parse for stored profile blobs. */
+const parseStoredJson = (raw: string, fallback: unknown): unknown => {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return fallback
+  }
+}
+
+const emptyUsage = (generatedAt: number): Record<string, unknown> => ({
+  messageCount: 0,
+  costUsd: 0,
+  tokens: 0,
+  durationMs: 0,
+  topHarnessId: null,
+  topModelId: null,
+  harnesses: [],
+  models: [],
+  activityDays: [],
+  generatedAt
+})
 
 const json = (value: unknown, status = 200): Response =>
   Response.json(value, {
@@ -184,6 +211,16 @@ export const desktopAuthorize = async (ctx: ActionCtx, request: Request): Promis
     callback.searchParams.set('error', 'unauthorized')
     return redirect(callback.toString())
   }
+  const now = Date.now()
+  await ctx.runMutation(internal.profiles.ensure, {
+    authUserId: session.user.id,
+    email: session.user.email,
+    displayName: session.user.name,
+    image: session.user.image ?? undefined,
+    usageJson: JSON.stringify(emptyUsage(now)),
+    globalMemoriesJson: '[]',
+    updatedAt: now
+  })
   const code = randomToken(32)
   await ctx.runMutation(internal.desktop_auth.createAuthorizationCode, {
     codeHash: await tokenHash(code),
@@ -194,6 +231,21 @@ export const desktopAuthorize = async (ctx: ActionCtx, request: Request): Promis
   })
   callback.searchParams.set('code', code)
   return redirect(callback.toString())
+}
+
+export const desktopRefresh = async (ctx: ActionCtx, request: Request): Promise<Response> => {
+  const authorization = request.headers.get('authorization')
+  const currentToken = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
+  if (!currentToken) return json({ error: 'unauthorized' }, 401)
+  const profileToken = randomToken(48)
+  const expiresAt = Date.now() + ACCOUNT_TOKEN_TTL_MS
+  const refreshed = await ctx.runMutation(internal.desktop_auth.refreshAccountToken, {
+    tokenHash: await tokenHash(currentToken),
+    replacementTokenHash: await tokenHash(profileToken),
+    replacementExpiresAt: expiresAt,
+    now: Date.now()
+  })
+  return refreshed ? json({ profileToken, expiresAt }) : json({ error: 'unauthorized' }, 401)
 }
 
 export const desktopExchange = async (ctx: ActionCtx, request: Request): Promise<Response> => {
@@ -229,6 +281,9 @@ export const accountProfile = async (ctx: ActionCtx, request: Request): Promise<
   const identity = await identityForRequest(ctx, request)
   if (!identity) return json({ error: 'unauthorized' }, 401)
   const stored = await ctx.runQuery(internal.profiles.get, { authUserId: identity.id })
+  const usageByDevice = stored
+    ? sanitizeUsageMapForResponse(parseStoredJson(stored.usageJson, null))
+    : {}
   if (request.method === 'GET') {
     return json({
       profile: {
@@ -236,8 +291,13 @@ export const accountProfile = async (ctx: ActionCtx, request: Request): Promise<
         email: identity.email,
         displayName: identity.name,
         image: identity.image ?? null,
-        usage: stored ? JSON.parse(stored.usageJson) : null,
-        globalMemories: stored ? JSON.parse(stored.globalMemoriesJson) : [],
+        usageByDevice,
+        globalMemories: stored
+          ? sanitizeMemoriesForResponse(parseStoredJson(stored.globalMemoriesJson, []))
+          : [],
+        globalMemoryTombstones: stored
+          ? sanitizeTombstonesForResponse(parseStoredJson(stored.globalMemoryTombstonesJson ?? '', []))
+          : [],
         updatedAt: stored?.updatedAt ?? Date.now()
       }
     })
@@ -256,27 +316,51 @@ export const accountProfile = async (ctx: ActionCtx, request: Request): Promise<
     return json({ error: 'invalid-profile' }, 400)
   }
   const record = body as Record<string, unknown>
-  if (typeof record['usage'] !== 'object' || !Array.isArray(record['globalMemories'])) {
+  if (
+    typeof record['deviceId'] !== 'string' ||
+    typeof record['deviceLabel'] !== 'string' ||
+    typeof record['platform'] !== 'string' ||
+    typeof record['usage'] !== 'object' ||
+    record['usage'] === null ||
+    Array.isArray(record['usage']) ||
+    !Array.isArray(record['globalMemories']) ||
+    !Array.isArray(record['globalMemoryTombstones'])
+  ) {
     return json({ error: 'invalid-profile' }, 400)
   }
   const updatedAt = Date.now()
-  await ctx.runMutation(internal.profiles.save, {
+  const mergedResult = (await ctx.runMutation(internal.profiles.save, {
     authUserId: identity.id,
     email: identity.email,
     displayName: identity.name,
     image: identity.image,
+    deviceId: record['deviceId'],
+    deviceLabel: record['deviceLabel'],
+    platform: record['platform'],
     usageJson: JSON.stringify(record['usage']),
     globalMemoriesJson: JSON.stringify(record['globalMemories']),
+    globalMemoryTombstonesJson: JSON.stringify(record['globalMemoryTombstones']),
     updatedAt
-  })
+  })) as
+    | {
+        usageByDevice: Record<string, unknown>
+        globalMemories: unknown[]
+        globalMemoryTombstones: unknown[]
+      }
+    | null
   return json({
     profile: {
       id: identity.id,
       email: identity.email,
       displayName: identity.name,
       image: identity.image ?? null,
-      usage: record['usage'],
-      globalMemories: record['globalMemories'],
+      // The server returns the per-device map and the tombstone-filtered
+      // memory union (not the request echo) so every device adopts state
+      // written on other devices.
+      usageByDevice: mergedResult?.usageByDevice ?? usageByDevice,
+      globalMemories: mergedResult?.globalMemories ?? record['globalMemories'],
+      globalMemoryTombstones:
+        mergedResult?.globalMemoryTombstones ?? record['globalMemoryTombstones'],
       updatedAt
     }
   })

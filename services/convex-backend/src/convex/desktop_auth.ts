@@ -50,3 +50,25 @@ export const exchangeAuthorizationCode = internalMutation({
     return { authUserId: authorization.authUserId }
   }
 })
+
+export const refreshAccountToken = internalMutation({
+  args: {
+    tokenHash: v.string(),
+    replacementTokenHash: v.string(),
+    replacementExpiresAt: v.number(),
+    now: v.number()
+  },
+  handler: async (ctx, args) => {
+    const token = await ctx.db
+      .query('accountTokens')
+      .withIndex('by_token_hash', (query) => query.eq('tokenHash', args.tokenHash))
+      .unique()
+    if (!token || token.expiresAt <= args.now) return false
+    await ctx.db.patch(token._id, {
+      tokenHash: args.replacementTokenHash,
+      expiresAt: args.replacementExpiresAt,
+      lastUsedAt: args.now
+    })
+    return true
+  }
+})

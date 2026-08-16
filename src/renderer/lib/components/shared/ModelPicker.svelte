@@ -656,6 +656,22 @@
     if (modelList) modelList.scrollTop = pickerListScrollTop
   }
 
+  /** True for a plain printable character key (not a modifier/control combo). */
+  function isTypeableKey(event: KeyboardEvent): boolean {
+    return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey
+  }
+
+  /** Return focus to the search box and place the caret near its end (a negative
+   *  `offset` steps the caret back) so the user can keep editing the query while
+   *  navigating the list. */
+  function focusSearchInput(offset = 0): void {
+    if (!searchInput) return
+    searchInput.focus()
+    const len = searchInput.value.length
+    const target = Math.max(0, Math.min(len, len + offset))
+    searchInput.setSelectionRange(target, target)
+  }
+
   /** Keep the viewport height and scroll position in sync for the virtual list. */
   function measurePickerList(node: HTMLDivElement): { destroy(): void } {
     pickerViewport = node.clientHeight
@@ -806,6 +822,7 @@
               align="start"
               sideOffset={4}
               collisionPadding={12}
+              onCloseAutoFocus={(event) => event.preventDefault()}
               class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
@@ -1196,6 +1213,34 @@
       if (event.key === 'Enter') {
         event.preventDefault()
         choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
+        return
+      }
+      // Editing intent: left/right moves the caret and characters/backspace edit
+      // the query. Return focus to the search box so typing continues naturally.
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        focusSearchInput(event.key === 'ArrowLeft' ? -1 : 0)
+        return
+      }
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        focusSearchInput(0)
+        if (search) {
+          search = search.slice(0, -1)
+          scrollPickerListTo(0)
+        }
+        return
+      }
+      if (event.key === 'Delete') {
+        event.preventDefault()
+        focusSearchInput(0)
+        return
+      }
+      if (isTypeableKey(event)) {
+        event.preventDefault()
+        focusSearchInput(0)
+        search += event.key
+        scrollPickerListTo(0)
         return
       }
     }}

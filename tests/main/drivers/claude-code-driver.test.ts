@@ -7,7 +7,10 @@ import type { ChildProcess } from 'child_process'
 import type { AgentEvent } from '../../../src/lib/types'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { ClaudeCodeDriver, mapClaudeCodeRecord } from '../../../src/main/drivers/claude-code-driver'
-import type { CliLineParseContext } from '../../../src/main/drivers/persistent-cli-driver'
+import type {
+  CliLineParseContext,
+  CliLineParseResult
+} from '../../../src/main/drivers/persistent-cli-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
 const execFileMock = vi.hoisted(() => vi.fn())
@@ -371,6 +374,76 @@ describe('mapClaudeCodeRecord rate limits', () => {
     const usage = result?.events?.find((event) => event.type === 'usage.updated')
     const rateLimits = usage && 'rateLimits' in usage ? usage.rateLimits : undefined
     expect(rateLimits?.[0]).toMatchObject({ label: '5-hour limit', usedPercent: 21 })
+  })
+})
+
+describe('mapClaudeCodeRecord api_retry', () => {
+  const context: CliLineParseContext = {
+    sessionId: 'sess-retry',
+    session: {
+      id: 'sess-retry',
+      title: 'Retry',
+      projectPathHash: 'hash',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1
+    }
+  }
+
+  function retryEvent(overrides: Record<string, unknown> = {}): CliLineParseResult | null {
+    return mapClaudeCodeRecord(
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        session_id: 'native-retry',
+        attempt: 1,
+        max_retries: 4,
+        retry_delay_ms: 8_000,
+        error_status: 529,
+        error: 'overloaded',
+        ...overrides
+      },
+      context
+    )
+  }
+
+  function waitingIssue(result: CliLineParseResult | null) {
+    const event = result?.events?.[0]
+    if (event?.type !== 'session.status') return undefined
+    const { status } = event
+    return status.state === 'waiting' ? status.issue : undefined
+  }
+
+  it('labels overloaded server retries as provider_unavailable, not a usage limit', () => {
+    const issue = waitingIssue(retryEvent())
+    expect(issue).toMatchObject({
+      kind: 'provider_unavailable',
+      harnessId: 'claude-code',
+      retryable: true,
+      statusCode: 529
+    })
+    expect(issue?.retryAt).toBeGreaterThan(Date.now())
+  })
+
+  it('labels 429 rate-limit retries as rate_limit with a retry time', () => {
+    const issue = waitingIssue(
+      retryEvent({ error: 'rate_limit', error_status: 429, retry_delay_ms: 15_000 })
+    )
+    expect(issue?.kind).toBe('rate_limit')
+    expect(issue?.statusCode).toBe(429)
+    expect(issue?.retryAt).toBeGreaterThan(Date.now())
+  })
+
+  it('labels connection retries (null error_status) as network', () => {
+    const issue = waitingIssue(retryEvent({ error: 'unknown', error_status: null }))
+    expect(issue?.kind).toBe('network')
+    expect(issue?.statusCode).toBeUndefined()
+  })
+
+  it('omits retryAt when the retry is immediate', () => {
+    const issue = waitingIssue(retryEvent({ retry_delay_ms: 0 }))
+    expect(issue?.kind).toBe('provider_unavailable')
+    expect(issue?.retryAt).toBeUndefined()
   })
 })
 
