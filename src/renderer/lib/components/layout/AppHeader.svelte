@@ -36,7 +36,6 @@
     GitFork,
     GitMergeConflict,
     GitPullRequest,
-    History,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -367,13 +366,6 @@
     } else {
       scopeState.showSidebarForProject(targetProjectId)
     }
-  }
-
-  let showHistory = $state(false)
-
-  function jumpTo(id: string): void {
-    showHistory = false
-    workspaceState.jumpToMessage?.(id)
   }
 
   $effect(() => {
@@ -1055,59 +1047,6 @@
   {/if}
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
-    <!-- History — user-message count and jump menu. -->
-    {#if !onSettings && !onScope && workspaceState.selectedThread && workspaceState.messageCount > 0}
-      <div class="relative">
-        <button
-          class="flex h-8 items-center gap-1.5 px-2 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-          aria-label={`Message history (${workspaceState.messageCount} messages you sent)`}
-          aria-haspopup="menu"
-          aria-expanded={showHistory}
-          title="Message history"
-          onclick={() => (showHistory = !showHistory)}
-        >
-          <History size={15} />
-          <span class="header-control-label text-[11px] font-medium tabular-nums"
-            >{workspaceState.messageCount}</span
-          >
-        </button>
-
-        {#if showHistory}
-          <button
-            class="fixed inset-0 z-30 cursor-default"
-            aria-label="Close history"
-            title="Close history"
-            onclick={() => (showHistory = false)}
-          ></button>
-          <div
-            class="absolute right-0 top-9 z-40 w-72 overflow-hidden border bg-surface shadow-lg"
-            role="menu"
-            aria-label="Jump to message"
-          >
-            <p
-              class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
-            >
-              Your messages
-            </p>
-            <div class="max-h-72 overflow-y-auto p-1">
-              {#each workspaceState.userMessages as message, index (message.id)}
-                <button
-                  class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  role="menuitem"
-                  title={message.content}
-                  onclick={() => jumpTo(message.id)}
-                >
-                  {index + 1}. {message.content}
-                </button>
-              {:else}
-                <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
-
     <!-- Editor preference — hidden in chat mode, scope view, and when no project is selected -->
     {#if !chatMode && !onScope && workspaceState.activeProject}
       <div class="relative flex items-center">
@@ -1281,7 +1220,7 @@
     >
       <Bell size={16} />
       {#if notificationPanelState.totalCount > 0}
-        <div class="absolute -top-0.5 -right-0.5 flex items-start gap-px">
+        <div class="absolute -top-0.5 -left-0.5 flex items-start gap-px">
           {#if notificationPanelState.hasCompleted}
             <StatusBadge kind="completed" title="Completed notifications" />
           {/if}

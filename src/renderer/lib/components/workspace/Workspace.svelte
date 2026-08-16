@@ -768,9 +768,18 @@
     Boolean(activeProject?.source === 'local' && activeProject.path)
   )
 
+  /** Whether the message-history jump menu (first item on the context dock) is open. */
+  let showHistoryMenu = $state(false)
+
+  function jumpToHistoryMessage(id: string): void {
+    showHistoryMenu = false
+    workspaceState.jumpToMessage?.(id)
+  }
+
   /**
-   * Dock contents, grouped: workspace tools, then session tools. Every entry is
-   * a toggle — the rail itself is always visible, only the panel comes and goes.
+   * Dock contents, grouped: history, then workspace tools, then session tools.
+   * Every entry is a toggle — the rail itself is always visible, only the
+   * panel (or, for history, the floating jump menu) comes and goes.
    */
   let dockGroups = $derived.by((): ContextDockItem[][] => {
     if (!selectedThread) return []
@@ -778,6 +787,21 @@
     // Chats are pure conversations: their rail only carries session tools
     // (sources, memory, debugger in dev) — never project, terminal or cloud tools.
     const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+
+    // The message-history counter leads the rail so it reads first, like a
+    // running tally of the conversation — click to jump to any past message.
+    const history: ContextDockItem[] =
+      workspaceState.messageCount > 0
+        ? [
+            {
+              id: 'history',
+              label: `Message history (${workspaceState.messageCount} messages you sent)`,
+              countLabel: String(workspaceState.messageCount),
+              active: showHistoryMenu,
+              onSelect: () => (showHistoryMenu = !showHistoryMenu)
+            }
+          ]
+        : []
 
     const workspaceTools: ContextDockItem[] = []
     if (!isChatThread && projectToolsAvailable) {
@@ -894,7 +918,7 @@
         ]
       : []
 
-    return [workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
+    return [history, workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -3359,7 +3383,42 @@
       {/if}
     </div>
     {#if dockGroups.some((group) => group.length > 0)}
-      <ContextDock groups={dockGroups} />
+      <div class="relative h-full shrink-0">
+        <ContextDock groups={dockGroups} />
+        {#if showHistoryMenu}
+          <button
+            class="fixed inset-0 z-30 cursor-default"
+            aria-label="Close history"
+            title="Close history"
+            onclick={() => (showHistoryMenu = false)}
+          ></button>
+          <div
+            class="absolute right-10 top-11 z-40 w-72 overflow-hidden border bg-surface shadow-lg"
+            role="menu"
+            aria-label="Jump to message"
+          >
+            <p
+              class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+            >
+              Your messages
+            </p>
+            <div class="max-h-72 overflow-y-auto p-1">
+              {#each workspaceState.userMessages as message, index (message.id)}
+                <button
+                  class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                  role="menuitem"
+                  title={message.content}
+                  onclick={() => jumpToHistoryMessage(message.id)}
+                >
+                  {index + 1}. {message.content}
+                </button>
+              {:else}
+                <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
     {/if}
   </section>
 </div>
