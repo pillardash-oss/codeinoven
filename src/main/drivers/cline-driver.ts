@@ -695,6 +695,29 @@ function mapClineRecordToEvents(
     const questionType = ask ?? 'tool'
     const questionText = text || `Allow ${questionType}?`
 
+    if (questionType === 'tool') {
+      return {
+        events: [
+          {
+            type: 'message.part.updated',
+            sessionId,
+            part: {
+              type: 'tool',
+              id: partId,
+              messageID: messageId,
+              callID: partId,
+              tool: 'permission',
+              state: {
+                status: 'running',
+                input: { prompt: questionText, ask: questionType },
+                title: questionText
+              }
+            }
+          }
+        ]
+      }
+    }
+
     return {
       events: [
         {

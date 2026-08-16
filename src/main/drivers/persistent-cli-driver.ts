@@ -32,6 +32,12 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  isPermissionToolName,
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 
 export interface TitleModelCandidate {
   providerId: string
@@ -146,6 +152,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
+  /** Provider-neutral interaction cards already surfaced for this driver instance. */
+  private interactionRequests = new Set<string>()
 
   constructor(protected readonly storage: StorageEngine) {}
 
@@ -544,6 +552,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
     this.titleTurnWaiters.clear()
     this.titleSessions.clear()
+    this.interactionRequests.clear()
     this.eventCallback = null
   }
 
@@ -700,7 +709,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (!result) return
     if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
     if (result.messages) this.mergeMessages(session, result.messages)
-    for (const event of result.events ?? []) {
+    for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
       if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
         this.structuredProcessIssues.add(session.id)
       } else if (event.type === 'session.status') {
@@ -797,6 +806,80 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         this.estimateMissingCost(message)
       }
     }
+  }
+
+  /** Promote JSONL question/approval tool parts into the shared interaction stream. */
+  protected normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized: SessionAgentEvent[] = []
+    for (const event of events) {
+      normalized.push(event)
+      if (event.type === 'question.asked') {
+        this.interactionRequests.add(this.interactionKey('question', sessionId, event.requestId))
+        continue
+      }
+      if (event.type !== 'message.part.updated') continue
+      const part = event.part
+      if (part.type === 'question') {
+        const requestId = this.interactionRequestId('question', sessionId, part.callID ?? part.id)
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: [{ ...part.question, requestId }],
+          tool: { messageID: part.messageID, callID: part.callID ?? part.id }
+        })
+        continue
+      }
+      if (part.type !== 'tool') continue
+      const active = part.state.status === 'pending' || part.state.status === 'running'
+      if (!active) continue
+      const requestId = this.interactionRequestId('interaction', sessionId, part.callID || part.id)
+      if (isQuestionToolName(part.tool)) {
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: normalizeAgentQuestions(part.state.input),
+          tool: { messageID: part.messageID, callID: part.callID }
+        })
+        continue
+      }
+      if (!isPermissionToolName(part.tool)) continue
+      const key = this.interactionKey('permission', sessionId, requestId)
+      if (this.interactionRequests.has(key)) continue
+      this.interactionRequests.add(key)
+      normalized.push({
+        type: 'permission.asked',
+        sessionId,
+        permission: {
+          id: requestId,
+          sessionId,
+          permission: part.tool,
+          patterns: permissionPatterns(part.state.input),
+          metadata: { tool: part.tool, input: part.state.input }
+        }
+      })
+    }
+    return normalized
+  }
+
+  private interactionRequestId(kind: string, sessionId: string, providerId: string): string {
+    return `${this.id}-${kind}-${sessionId}-${providerId}`
+      .replace(/[^a-zA-Z0-9._-]/gu, '-')
+      .slice(0, 256)
+  }
+
+  private interactionKey(kind: string, sessionId: string, requestId: string): string {
+    return `${kind}:${sessionId}:${requestId}`
   }
 
   /**

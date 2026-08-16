@@ -4,6 +4,7 @@ import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  AgentQuestion,
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
@@ -14,8 +15,11 @@ import type {
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
+  PermissionReply,
+  SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -155,6 +159,12 @@ interface ClaudeAuthenticationReadiness {
   promise: Promise<boolean>
   resolve: (authenticated: boolean) => void
   settled: boolean
+}
+
+interface ClaudeQuestionRequest {
+  sessionId: string
+  callId: string
+  questions: AgentQuestion[]
 }
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
@@ -777,6 +787,32 @@ export function mapClaudeCodeRecord(
   const nativeSessionId = string(entry['session_id'])
   if (type === 'system' && entry['subtype'] === 'init') return { nativeSessionId }
 
+  if (type === 'control_request') {
+    const request = record(entry['request'])
+    const requestId = string(entry['request_id'])
+    if (request?.['subtype'] !== 'can_use_tool' || !requestId) {
+      return nativeSessionId ? { nativeSessionId } : null
+    }
+    const input = record(request['input']) ?? {}
+    const toolName = string(request['tool_name']) ?? 'tool'
+    return {
+      nativeSessionId,
+      events: [
+        {
+          type: 'permission.asked',
+          sessionId: context.sessionId,
+          permission: {
+            id: requestId,
+            sessionId: context.sessionId,
+            permission: toolName,
+            patterns: permissionPatterns(input),
+            metadata: { subtype: 'can_use_tool', toolName, input, request }
+          }
+        }
+      ]
+    }
+  }
+
   if (type === 'system' && entry['subtype'] === 'api_retry') {
     const delayMs = numberProperty(entry, 'retry_delay_ms', 'retryDelayMs') ?? 0
     const rawError =
@@ -1091,7 +1127,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -1119,6 +1155,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly authenticatedSessions = new Map<string, number>()
   /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
   private readonly firstPartySessions = new Set<string>()
+  private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
+  private readonly pendingClaudePermissions = new Map<string, string>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -1211,6 +1249,117 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     )
     this.appendUserMessage(session, options)
     await this.persistSession(session)
+  }
+
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    sessionId?: string
+  ): Promise<void> {
+    const targetSessionId = sessionId ?? this.pendingClaudePermissions.get(requestId)
+    if (!targetSessionId)
+      throw new Error(`Claude permission request is no longer pending: ${requestId}`)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    this.writeActiveInput(targetSessionId, `${JSON.stringify(response)}\n`)
+    this.pendingClaudePermissions.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    const answerMap = Object.fromEntries(
+      request.questions.map((question, index) => [
+        question.prompt,
+        (answers[index] ?? []).join(', ')
+      ])
+    )
+    this.writeClaudeToolResult(
+      request.sessionId,
+      request.callId,
+      JSON.stringify({ answers: answerMap })
+    )
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    this.writeClaudeToolResult(
+      request.sessionId,
+      request.callId,
+      'The user dismissed this question.',
+      true
+    )
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeClaudeToolResult(
+    sessionId: string,
+    callId: string,
+    content: string,
+    isError = false
+  ): void {
+    const message = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: callId,
+            content,
+            ...(isError ? { is_error: true } : {})
+          }
+        ]
+      },
+      parent_tool_use_id: null
+    }
+    this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
+  }
+
+  protected override normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized = super.normalizeInteractionEvents(sessionId, events)
+    for (const event of normalized) {
+      if (event.type === 'permission.asked' && event.permission.id) {
+        this.pendingClaudePermissions.set(event.permission.id, sessionId)
+      }
+      if (event.type === 'question.asked' && event.tool) {
+        this.pendingClaudeQuestions.set(event.requestId, {
+          sessionId,
+          callId: event.tool.callID,
+          questions: event.questions
+        })
+      }
+    }
+    return normalized
   }
 
   async prepareUtilityRuntime(
@@ -1354,9 +1503,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
     if (options.settings.permissionLevel === 'full_access')
       args.push('--permission-mode', 'bypassPermissions')
-    else if (options.settings.permissionLevel === 'auto_review')
-      args.push('--permission-mode', 'dontAsk')
-    else args.push('--permission-mode', 'dontAsk')
+    else args.push('--permission-mode', 'default')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
     const trackAuthentication =
@@ -1854,6 +2001,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       if (!readiness.settled) readiness.resolve(false)
       this.authenticationReadiness.delete(sessionId)
     }
+    this.pendingClaudeQuestions.clear()
+    this.pendingClaudePermissions.clear()
     super.dispose()
   }
 

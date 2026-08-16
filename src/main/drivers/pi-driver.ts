@@ -13,6 +13,7 @@ import type {
   SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildHarnessEnvironment } from './cli-environment'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -249,6 +250,13 @@ function findToolPart(
 interface PiTurnState {
   assistantMessageId: string | null
   turnIndex: number
+}
+
+interface PiUiRequest {
+  sessionId: string
+  method: string
+  client: PiRpcClient
+  request: Record<string, unknown>
 }
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
@@ -582,7 +590,7 @@ export class PiDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: false,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -597,6 +605,7 @@ export class PiDriver extends PersistentCliDriver {
   private rpcClients = new Map<string, PiRpcClient>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
+  private pendingUiRequests = new Map<string, PiUiRequest>()
 
   constructor(
     storage: StorageEngine,
@@ -883,6 +892,7 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.pendingUiRequests.clear()
     super.dispose()
   }
 
@@ -911,10 +921,15 @@ export class PiDriver extends PersistentCliDriver {
       onEvent: (record) => {
         void this.handleRpcEvent(record, sessionId, projectPath)
       },
+      onUiRequest: (record) => {
+        this.handleUiRequest(record, sessionId)
+      },
       onExit: (code) => {
         this.handleRpcExit(code, sessionId)
       }
     })
+    this.rpcClients.set(sessionId, client)
+    this.sessionProjects.set(sessionId, projectPath)
     try {
       await client.newSession()
     } catch (error) {
@@ -926,8 +941,6 @@ export class PiDriver extends PersistentCliDriver {
         { cause: error }
       )
     }
-    this.rpcClients.set(sessionId, client)
-    this.sessionProjects.set(sessionId, projectPath)
     return client
   }
 
@@ -942,7 +955,7 @@ export class PiDriver extends PersistentCliDriver {
         if (!result) return
         if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
         if (result.messages) this.mergeMessages(session, result.messages)
-        for (const event of result.events ?? []) {
+        for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
           this.applyEventToSession(session, event)
           this.emit({ ...event, sessionId: session.id })
         }
@@ -963,6 +976,71 @@ export class PiDriver extends PersistentCliDriver {
     if (this.activeTurns.has(sessionId)) {
       this.activeTurns.delete(sessionId)
     }
+  }
+
+  private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
+    const rawId = record['id']
+    const method = stringValue(record['method'])
+    const client = this.rpcClients.get(sessionId)
+    if ((typeof rawId !== 'string' && typeof rawId !== 'number') || !method || !client) return
+    const requestId = `pi-ui-${sessionId}-${String(rawId)}`.replace(/[^a-zA-Z0-9._-]/gu, '-')
+    const prompt =
+      stringValue(record['title']) ?? stringValue(record['message']) ?? 'Pi needs your input.'
+    const questions = normalizeAgentQuestions({
+      questions: [
+        {
+          prompt,
+          header: stringValue(record['title']),
+          description: stringValue(record['message']),
+          options: Array.isArray(record['options']) ? record['options'] : undefined,
+          custom: method !== 'confirm'
+        }
+      ]
+    })
+    this.pendingUiRequests.set(requestId, { sessionId, method, client, request: record })
+    this.emit({ type: 'question.asked', sessionId, requestId, questions })
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingUiRequests.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+    }
+    const answer = answers[0]?.[0] ?? ''
+    const rawId = request.request['id']
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+      throw new Error(`Pi question request has an invalid id: ${requestId}`)
+    }
+    if (request.method === 'confirm') {
+      request.client.respondToExtensionUiRequest(rawId, {
+        confirmed: /^(true|yes|y|allow|ok)$/iu.test(answer)
+      })
+    } else {
+      request.client.respondToExtensionUiRequest(rawId, { value: answer })
+    }
+    this.pendingUiRequests.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingUiRequests.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+    }
+    const rawId = request.request['id']
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+      throw new Error(`Pi question request has an invalid id: ${requestId}`)
+    }
+    request.client.respondToExtensionUiRequest(rawId, { cancelled: true })
+    this.pendingUiRequests.delete(requestId)
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
