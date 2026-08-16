@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import {
@@ -14,6 +16,7 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { motionDuration } from '$lib/motion'
   import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -744,15 +747,21 @@
     </section>
 
     {#if projectState.explorerVisible}
-      <ProjectFileExplorer
-        {projectId}
-        {projectName}
-        {projectState}
-        selectedPath={activeTab?.path ?? null}
-        {lastTurnPaths}
-        {activeCheckpointPaths}
-        activeCheckpointId={activeTab?.checkpointId ?? null}
-      />
+      <div
+        class="flex min-h-0"
+        in:fly={{ x: 208, duration: motionDuration(180), easing: cubicOut }}
+        out:fly={{ x: 208, duration: motionDuration(150), easing: cubicOut }}
+      >
+        <ProjectFileExplorer
+          {projectId}
+          {projectName}
+          {projectState}
+          selectedPath={activeTab?.path ?? null}
+          {lastTurnPaths}
+          {activeCheckpointPaths}
+          activeCheckpointId={activeTab?.checkpointId ?? null}
+        />
+      </div>
     {/if}
   </div>
 </div>
@@ -1008,16 +1017,22 @@
           {/if}
         </div>
         {#if fullscreenExplorerOpen && activeTab}
-          <ProjectFileExplorer
-            {projectId}
-            {projectName}
-            {projectState}
-            selectedPath={activeTab.path}
-            {lastTurnPaths}
-            {activeCheckpointPaths}
-            activeCheckpointId={activeTab.checkpointId}
-            onFileSelect={fullscreenOpenFile}
-          />
+          <div
+            class="flex min-h-0"
+            in:fly={{ x: 208, duration: motionDuration(180), easing: cubicOut }}
+            out:fly={{ x: 208, duration: motionDuration(150), easing: cubicOut }}
+          >
+            <ProjectFileExplorer
+              {projectId}
+              {projectName}
+              {projectState}
+              selectedPath={activeTab.path}
+              {lastTurnPaths}
+              {activeCheckpointPaths}
+              activeCheckpointId={activeTab.checkpointId}
+              onFileSelect={fullscreenOpenFile}
+            />
+          </div>
         {/if}
       </div>
     </Dialog.Content>
