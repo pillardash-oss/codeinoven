@@ -1,5 +1,4 @@
 import { APP_SLUG } from '$shared/brand'
-import { untrack } from 'svelte'
 import type { Component, Snippet } from 'svelte'
 
 const AUTO_OPEN_STORAGE_KEY = `${APP_SLUG}.coordinator-auto-open.v1`
@@ -26,6 +25,16 @@ export interface CoordinatorDockRegistration {
 class CoordinatorDockState {
   /** Raw, not proxied — the payload holds a component and a snippet. */
   private registration = $state.raw<CoordinatorDockRegistration | null>(null)
+  /**
+   * Plain (non-reactive) mirror of `registration`, used only for the dedup
+   * comparison inside `register()`. Callers invoke `register()` from inside a
+   * `$effect`; reading the reactive `registration` field there would make
+   * that effect depend on the very state it goes on to write, which
+   * self-triggers a rerun forever ("effect reads and writes the same piece
+   * of state"). Comparing against this plain mirror instead means the
+   * dedup check never touches a signal, so no dependency is ever created.
+   */
+  private lastRegistration: CoordinatorDockRegistration | null = null
   /** Whether a coordinator docks itself when its thread opens. Cleared when the
    *  user closes the tab, so a dismissed coordinator stays dismissed. */
   autoOpen = $state(loadAutoOpen())
@@ -44,33 +53,26 @@ class CoordinatorDockState {
    * Publish a coordinator. Re-registering identical values keeps the existing
    * object so the sidebar never remounts the panel mid-coordination. Returns a
    * disposer for the caller's effect cleanup.
-   *
-   * Callers invoke this from inside a `$effect`. Reading/writing `registration`
-   * without `untrack` would make that effect depend on its own write — every
-   * rerun (even for unrelated reasons) nulls the registration in cleanup and
-   * immediately rewrites it, which is exactly the "effect reads and writes the
-   * same state" cycle Svelte's loop guard trips on. `untrack` keeps this
-   * bookkeeping invisible to the caller's reactive graph.
    */
   register(next: CoordinatorDockRegistration): () => void {
-    untrack(() => {
-      const current = this.registration
-      const unchanged =
-        current !== null &&
-        current.projectId === next.projectId &&
-        current.threadId === next.threadId &&
-        current.label === next.label &&
-        current.icon === next.icon &&
-        current.panel === next.panel
-      if (!unchanged) this.registration = next
-    })
+    const current = this.lastRegistration
+    const unchanged =
+      current !== null &&
+      current.projectId === next.projectId &&
+      current.threadId === next.threadId &&
+      current.label === next.label &&
+      current.icon === next.icon &&
+      current.panel === next.panel
+    if (!unchanged) {
+      this.registration = next
+      this.lastRegistration = next
+    }
     return () => {
-      untrack(() => {
-        const active = this.registration
-        if (active && active.projectId === next.projectId && active.threadId === next.threadId) {
-          this.registration = null
-        }
-      })
+      const active = this.lastRegistration
+      if (active && active.projectId === next.projectId && active.threadId === next.threadId) {
+        this.registration = null
+        this.lastRegistration = null
+      }
     }
   }
 
