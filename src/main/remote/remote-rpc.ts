@@ -1107,7 +1107,7 @@ export class RemoteRpcDispatcher {
         const projectId = this.string(args[0])
         const threadId = this.string(args[1])
         const assignment = await this.assignmentEngine.makeAuditAvailable(projectId, threadId)
-        await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval')
+        await this.threadManager.setStatus(projectId, threadId, 'spec')
         return assignment
       }
 

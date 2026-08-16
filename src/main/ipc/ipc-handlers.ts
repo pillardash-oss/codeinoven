@@ -2349,7 +2349,7 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     const assignment = await assignmentEngine.makeAuditAvailable(validProjectId, validThreadId)
-    await threadManager.setStatus(validProjectId, validThreadId, 'awaiting_approval')
+    await threadManager.setStatus(validProjectId, validThreadId, 'spec')
     await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
     return assignment
   })

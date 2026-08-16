@@ -43,6 +43,7 @@
       if (thread.status === 'planning') return 'Working · planning'
       return 'Working'
     }
+    if (thread.status === 'spec') return 'Spec ready'
     if (thread.status === 'awaiting_approval') return 'Needs attention · approval'
     if (thread.status === 'failed') return 'Needs attention · error'
     if (thread.status === 'interrupted') return 'Needs attention · interrupted'

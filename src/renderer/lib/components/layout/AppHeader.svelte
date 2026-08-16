@@ -1236,6 +1236,9 @@
           {#if notificationPanelState.hasAttention}
             <StatusBadge kind="attention" title="Notifications needing attention" />
           {/if}
+          {#if notificationPanelState.hasSpec}
+            <StatusBadge kind="spec" title="Specifications ready for review" />
+          {/if}
           {#if notificationPanelState.hasError}
             <StatusBadge kind="error" title="Error notifications" />
           {/if}

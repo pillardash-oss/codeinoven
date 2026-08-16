@@ -3,7 +3,7 @@
 
   type Props = {
     stage?: ThreadStage
-    kind?: 'completed' | 'attention' | 'error'
+    kind?: 'completed' | 'attention' | 'spec' | 'error'
     color?: string
     variant?: 'dot' | 'spinner'
     size?: 'sm' | 'md' | 'lg'
@@ -32,6 +32,8 @@
           return 'var(--color-thread-done)'
         case 'attention':
           return 'var(--color-warning)'
+        case 'spec':
+          return 'var(--color-thread-spec)'
         case 'error':
           return 'var(--color-danger)'
       }

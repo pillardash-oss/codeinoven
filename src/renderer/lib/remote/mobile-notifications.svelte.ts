@@ -131,9 +131,9 @@ class MobileNotifications {
         tag: `${APP_SLUG}-${payload.projectId}-${payload.threadId}`,
         renotify: true,
         // Attention and error demand action, so they stay until tapped.
-        // Completion is informational and auto-dismisses quietly.
+        // Completion and spec-ready notices are informational and auto-dismiss quietly.
         requireInteraction: payload.kind === 'attention' || payload.kind === 'error',
-        silent: payload.kind === 'completed',
+        silent: payload.kind === 'completed' || payload.kind === 'spec',
         data: { projectId: payload.projectId, threadId: payload.threadId },
         icon: './icon.png',
         badge: './icon.png'

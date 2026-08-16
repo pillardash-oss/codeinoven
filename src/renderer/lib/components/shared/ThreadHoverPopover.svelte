@@ -16,7 +16,8 @@
     /** Human-readable current-stage label shown next to the working badge. */
     stageLabel?: string
     /** Overall thread state used to render the approval stage row. */
-    threadState?: 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+    threadState?:
+      'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
   }
 
   let { thread, isWorking = false, stageLabel = '', threadState = 'read' }: Props = $props()
@@ -116,6 +117,15 @@
       <dd class="flex items-center gap-1 text-warning">
         <StatusBadge kind="attention" animated size="sm" title="Needs Attention" />
         Needs Attention
+      </dd>
+    </div>
+  {/if}
+  {#if threadState === 'spec'}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1" style="color: var(--color-thread-spec)">
+        <StatusBadge stage="spec" size="sm" title="Spec ready" />
+        Spec ready
       </dd>
     </div>
   {/if}

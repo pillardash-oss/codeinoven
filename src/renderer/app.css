@@ -40,9 +40,11 @@
   --color-info: #2563eb;
 
   /* Thread state indicators (sidebar) — mapped to canonical status colours:
-     Todo=light grey | Working=blue | Issue=amber | Unread=green | Done=dark grey | Pinned=yellow */
+     Todo=light grey | Working=blue | Spec=purple | Issue=amber | Unread=green | Done=dark grey | Pinned=yellow */
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
+  /* Quiet but unmistakable purple for reviewable engineering artifacts. */
+  --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);
   --color-thread-error: var(--color-danger);
   --color-thread-done: var(--color-muted);
@@ -100,6 +102,7 @@
   --color-border-strong: #3b3b42;
 
   --color-info: #7ba3d4;
+  --color-thread-spec: #a78bfa;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */

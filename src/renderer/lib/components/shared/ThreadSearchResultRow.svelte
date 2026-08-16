@@ -31,6 +31,9 @@
     if (thread.status === 'awaiting_approval') {
       return { kind: 'attention' as const, animated: true }
     }
+    if (thread.status === 'spec') {
+      return { stage: 'spec' as const }
+    }
     if (thread.status === 'failed') {
       return { kind: 'error' as const }
     }
@@ -39,7 +42,8 @@
     return null
   })
 
-  type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+  type ThreadState =
+    'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
 
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {
@@ -55,6 +59,7 @@
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
     if (thread.status === 'awaiting_approval') return 'approval'
+    if (thread.status === 'spec') return 'spec'
     if (isWorking) return 'working'
     if (!thread.read) return 'unread'
     if (thread.status === 'created') return 'todo'
@@ -176,7 +181,7 @@
           variant={badgeProps.variant ?? 'dot'}
           animated={badgeProps.animated}
           size="sm"
-          title={thread.status.replace('_', ' ')}
+          title={thread.status === 'spec' ? 'Spec ready' : thread.status.replace('_', ' ')}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
