@@ -21,6 +21,7 @@
     Brain,
     Check,
     ChevronDown,
+    Clock,
     Copy,
     Ellipsis,
     FileText,
@@ -364,6 +365,8 @@
   let turnSawAnswer = $state(false)
   /** Suppresses the "message not processed" notice after an intentional stop. */
   let userRequestedStop = $state(false)
+  /** Prevents duplicate manual retries while the paused provider turn is being replaced. */
+  let providerRetrying = $state(false)
   /** Gentle inline notice when an interrupted compaction ate the user's turn. */
   let compactionInterruptedNotice = $state('')
   const visibleProviderStatus = $derived.by<Extract<
@@ -1302,7 +1305,9 @@
     attachments: PromptAttachment[],
     direct?: boolean,
     projectReferences: PromptProjectReference[] = [],
-    taskReferences: PromptAssignmentTaskReference[] = []
+    taskReferences: PromptAssignmentTaskReference[] = [],
+    startAfterThreadId?: string,
+    startAfterThreadTitle?: string
   ): void {
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
@@ -1338,7 +1343,9 @@
       projectReferences,
       undefined,
       currentTaskReferences,
-      true
+      true,
+      startAfterThreadId,
+      startAfterThreadTitle
     )
   }
 
@@ -2427,6 +2434,13 @@
       ) {
         void reconcileReadySpec()
       }
+      if (
+        updatedThread.projectId === thread.projectId &&
+        updatedThread.id === queuedStartAfterThreadId
+      ) {
+        idleAttentionHandled = false
+        scheduleIdleAttention()
+      }
     })
     // Task mount restores app-owned state only. Native harness transport stays
     // cold until user sends a message.
@@ -2798,11 +2812,26 @@
       .catch(() => {})
   }
 
-  /** Retry after an error — sends a continue message to resume the agent on the same session. */
-  function retryConnection(): void {
-    void sendMessage('Continue', [], undefined, true, undefined, [], [], {
-      action: 'Retry connection'
-    })
+  /** Retry after an error or a paused provider retry — replace the live turn first. */
+  async function retryConnection(): Promise<void> {
+    if (providerRetrying) return
+    providerRetrying = true
+    try {
+      if (busy) {
+        userRequestedStop = true
+        await invoke('agent:abort', thread.projectId, thread.id)
+        clearLocalTurn()
+        agentRuns.setIdle(thread.projectId, thread.id)
+        providerStatus = null
+      }
+      await sendMessage('Continue', [], undefined, true, undefined, [], [], {
+        action: 'Retry connection'
+      })
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The connection could not be retried.'
+    } finally {
+      providerRetrying = false
+    }
   }
   /** Detect an expired Claude Code session at thread open so the user can sign
    *  in before their first message fails mid-turn. */
@@ -3165,6 +3194,10 @@
     }
   }
 
+  function isTerminalThread(status: Thread['status']): boolean {
+    return status === 'completed' || status === 'failed' || status === 'interrupted'
+  }
+
   async function handleIdleAttention(): Promise<void> {
     const { projectId, id } = thread
     try {
@@ -3209,6 +3242,13 @@
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
     if (!pending && !queuedHasContent) return
+    if (queuedStartAfterThreadId) {
+      const dependency = await invoke('thread:get', projectId, queuedStartAfterThreadId)
+      if (dependency && !isTerminalThread(dependency.status)) {
+        idleAttentionHandled = false
+        return
+      }
+    }
     // Claim synchronously before sending so the background dispatcher (or any
     // concurrent path) cannot also deliver this same queued message. If we lose
     // the race, whoever claimed it will send it — never send here.
@@ -3247,6 +3287,8 @@
     queuedProjectReferences = []
     queuedPresentation = undefined
     queuedTaskReferences = []
+    queuedStartAfterThreadId = undefined
+    queuedStartAfterThreadTitle = undefined
     queuedHasContent = false
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
@@ -3262,6 +3304,8 @@
     queuedProjectReferences = entry.projectReferences
     queuedPresentation = entry.presentation
     queuedTaskReferences = entry.taskReferences
+    queuedStartAfterThreadId = entry.startAfterThreadId
+    queuedStartAfterThreadTitle = entry.startAfterThreadTitle
     queuedHasContent =
       entry.text !== '' ||
       entry.attachments.length > 0 ||
@@ -3300,6 +3344,8 @@
   let queuedProjectReferences = $state<PromptProjectReference[]>([])
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
+  let queuedStartAfterThreadId = $state<string | undefined>()
+  let queuedStartAfterThreadTitle = $state<string | undefined>()
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
@@ -3371,7 +3417,9 @@
     projectReferences: PromptProjectReference[] = [],
     presentation?: UserMessagePresentation,
     taskReferences: PromptAssignmentTaskReference[] = [],
-    restorable?: boolean
+    restorable?: boolean,
+    startAfterThreadId?: string,
+    startAfterThreadTitle?: string
   ): Promise<void> {
     const msg = text.trim()
     const hasAttachments = (attachments?.length ?? 0) > 0
@@ -3392,7 +3440,9 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
-    if (busy && !direct) {
+    const dependencyId =
+      startAfterThreadId && startAfterThreadId !== thread.id ? startAfterThreadId : undefined
+    if (dependencyId || (busy && !direct)) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext
@@ -3400,6 +3450,8 @@
       queuedProjectReferences = projectReferences
       queuedPresentation = presentation
       queuedTaskReferences = taskReferences
+      queuedStartAfterThreadId = dependencyId
+      queuedStartAfterThreadTitle = dependencyId ? startAfterThreadTitle : undefined
       queuedHasContent = true
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
@@ -3408,8 +3460,12 @@
         promptReferences,
         projectReferences,
         presentation,
-        taskReferences
+        taskReferences,
+        startAfterThreadId: dependencyId,
+        startAfterThreadTitle: dependencyId ? startAfterThreadTitle : undefined
       })
+      idleAttentionHandled = false
+      void handleIdleAttention()
       return
     }
 
@@ -7136,6 +7192,7 @@
                     : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onStop={abortRun}
                 onRetry={retryConnection}
+                retrying={providerRetrying}
                 onSignedIn={proactiveAuthVisible
                   ? () => void refreshAfterProactiveSignIn()
                   : undefined}
@@ -7258,6 +7315,14 @@
                         {/if}
                       </span>
                     {/each}
+                  </div>
+                {/if}
+                {#if queuedStartAfterThreadId}
+                  <div class="flex items-center gap-1.5 px-3 pb-2 text-[11px] text-info">
+                    <Clock size={12} class="shrink-0" />
+                    <span class="truncate">
+                      Starts after {queuedStartAfterThreadTitle ?? 'the selected thread'} finishes
+                    </span>
                   </div>
                 {/if}
                 {#if queuedPresentation}
@@ -7548,6 +7613,7 @@
                   onCompact={() => void compactWork()}
                   projectContext={composerProject}
                   projectId={thread.projectId}
+                  threadId={thread.id}
                   attachmentStorage={{
                     kind: chatMode ? 'chat' : 'project',
                     projectId: thread.projectId,

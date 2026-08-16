@@ -1,0 +1,109 @@
+<script lang="ts">
+  import { Clock, MessagesSquare } from '@lucide/svelte'
+  import type { Thread } from '$shared/types'
+  import { isOrchestrationChildThread, isThreadWorking } from '$shared/types'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import CommandPalette from '../actions/CommandPalette.svelte'
+  import type { ActionDefinition, ActionSelection } from '$lib/actions'
+
+  interface Props {
+    open: boolean
+    projectId: string | null
+    currentThreadId: string
+    onSelect: (thread: Thread) => void
+    onClose: () => void
+  }
+
+  let { open, projectId, currentThreadId, onSelect, onClose }: Props = $props()
+
+  let threads = $state<Thread[]>([])
+  let loading = $state(false)
+  let requestId = 0
+
+  function isLiveWorking(thread: Thread): boolean {
+    return agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : isThreadWorking(thread)
+  }
+
+  function isCandidate(thread: Thread): boolean {
+    if (thread.id === currentThreadId || thread.archived || isOrchestrationChildThread(thread)) {
+      return false
+    }
+    if (isLiveWorking(thread)) return true
+    if (thread.status === 'completed' && !thread.read) return true
+    // The picker intentionally includes every non-draft, non-completed state,
+    // plus unread completions: working threads and anything needing attention.
+    return thread.status !== 'created' && thread.status !== 'completed'
+  }
+
+  function stageLabel(thread: Thread): string {
+    if (isLiveWorking(thread)) {
+      if (thread.status === 'planning') return 'Working · planning'
+      return 'Working'
+    }
+    if (thread.status === 'awaiting_approval') return 'Needs attention · approval'
+    if (thread.status === 'failed') return 'Needs attention · error'
+    if (thread.status === 'interrupted') return 'Needs attention · interrupted'
+    return 'Needs attention'
+  }
+
+  $effect(() => {
+    if (!open || !projectId) return
+    const activeRequest = ++requestId
+    loading = true
+    void invoke('thread:list', projectId)
+      .then((result) => {
+        if (activeRequest !== requestId) return
+        threads = result.filter(isCandidate).sort((left, right) => {
+          const leftWorking = isLiveWorking(left)
+          const rightWorking = isLiveWorking(right)
+          if (leftWorking !== rightWorking) return leftWorking ? -1 : 1
+          return right.lastActivity - left.lastActivity
+        })
+        loading = false
+      })
+      .catch(() => {
+        if (activeRequest !== requestId) return
+        threads = []
+        loading = false
+      })
+  })
+
+  let actions = $derived<ActionDefinition[]>(
+    threads.map((thread) => ({
+      id: `start-after:${thread.id}`,
+      title: thread.title,
+      description: stageLabel(thread),
+      category: 'thread',
+      source: {
+        id: `project:${thread.projectId}`,
+        label: 'This project',
+        kind: 'app'
+      },
+      icon: isLiveWorking(thread) ? MessagesSquare : Clock,
+      keywords: [stageLabel(thread), 'working', 'attention', 'start after']
+    }))
+  )
+
+  function selectThread(selection: ActionSelection): void {
+    const threadId = selection.action.id.slice('start-after:'.length)
+    const thread = threads.find((candidate) => candidate.id === threadId)
+    if (thread) onSelect(thread)
+  }
+</script>
+
+<CommandPalette
+  {open}
+  {actions}
+  title="Start after a thread"
+  placeholder="Search working or attention threads…"
+  emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
+  headerIcon={Clock}
+  headerIconBadge
+  headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+  onSelect={selectThread}
+  {onClose}
+  shortcutLabel="ESC"
+/>
