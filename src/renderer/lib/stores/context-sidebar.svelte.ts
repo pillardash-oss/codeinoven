@@ -90,6 +90,26 @@ export interface GitContextTab {
   threadId: string
 }
 
+export interface ThreadNoteContextTab {
+  id: string
+  kind: 'thread-note'
+  title: string
+  projectId: string
+  threadId: string
+  /** Display name of the owning thread, used in the delete confirmation. */
+  threadTitle: string
+  /** The last-saved body, or null before the first save. Diffing against
+   *  this (rather than a separate `dirty` flag) is what lets the panel
+   *  survive a hide/show without losing an unsaved draft — both fields
+   *  live on the tab itself, not in the component that gets unmounted. */
+  savedBody: string | null
+  draftBody: string
+  mode: 'edit' | 'read'
+  loading: boolean
+  saving: boolean
+  error: string | null
+}
+
 export interface CloudDeploymentContextTab {
   id: string
   kind: 'cloud-deployment'
@@ -166,6 +186,7 @@ export type ContextSidebarTab =
   | DebuggerContextTab
   | SourcesContextTab
   | GitContextTab
+  | ThreadNoteContextTab
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
@@ -658,6 +679,59 @@ class ContextSidebarState {
     // re-reads local status and the connection-gated PR indicators so the
     // panel never shows data older than the moment it was opened.
     gitState.notifyGitPanelOpened(projectId)
+  }
+
+  /** Opens the thread's note as a sidebar panel, creating one the first time
+   *  it's visited so the panel is ready to write into even before a note
+   *  exists. The body loads asynchronously onto the tab itself (not local
+   *  component state) so an in-progress draft survives the panel being
+   *  hidden and shown again. */
+  openThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `note:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'thread-note',
+      title: 'Notes',
+      projectId,
+      threadId,
+      threadTitle,
+      savedBody: null,
+      draftBody: '',
+      mode: 'edit',
+      loading: true,
+      saving: false,
+      error: null
+    })
+    void this.loadThreadNote(context, id, projectId, threadId)
+  }
+
+  private async loadThreadNote(
+    context: ThreadSidebarContext,
+    tabId: string,
+    projectId: string,
+    threadId: string
+  ): Promise<void> {
+    try {
+      const note = await invoke('note:get', projectId, threadId)
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.savedBody = note?.body ?? null
+      tab.draftBody = note?.body ?? ''
+      // A saved note opens in read mode so the user reads it, not its source.
+      tab.mode = note ? 'read' : 'edit'
+      tab.loading = false
+    } catch (err) {
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.error = err instanceof Error ? err.message : 'Could not load the note'
+      tab.loading = false
+    }
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {

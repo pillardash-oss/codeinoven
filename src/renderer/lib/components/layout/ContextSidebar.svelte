@@ -19,6 +19,7 @@
     PanelRight,
     Plus,
     SquareTerminal,
+    StickyNote,
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
@@ -87,7 +88,8 @@
     'cloud-deployment',
     'debugger',
     'notifications',
-    'git'
+    'git',
+    'thread-note'
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
@@ -232,6 +234,8 @@
       <GitBranch size={12} class="shrink-0" />
     {:else if tab.kind === 'cloud-deployment'}
       <Cloud size={12} class="shrink-0" />
+    {:else if tab.kind === 'thread-note'}
+      <StickyNote size={12} class="shrink-0" />
     {:else if tab.kind === 'coordinator'}
       <Network size={12} class="shrink-0 text-primary" />
     {:else}
