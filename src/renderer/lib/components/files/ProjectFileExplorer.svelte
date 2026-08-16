@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { motionDuration } from '$lib/motion'
@@ -61,6 +61,10 @@
    *  here to actually hide the subtree again. Cleared whenever a new filter
    *  session starts (query change, filter close, last-turn toggle). */
   let collapsedOverrides = new SvelteSet<string>()
+  /** Directories expanded by the current search, so closing the filter can
+   *  revert them. Search expansions are transient view state: persisting them
+   *  would leave huge subtrees (e.g. `.cio`) marked expanded across sessions. */
+  let searchExpandedDirectories = new SvelteSet<string>()
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
@@ -122,12 +126,12 @@
 
   $effect(() => {
     const query = filterQuery.trim()
+    const requestId = ++searchRequestId
+
     // A new query starts a fresh filter session: drop the collapse overrides
     // so the search can re-expand every matching folder again.
     if (collapsedOverrides.size > 0) collapsedOverrides.clear()
     if (!query) return
-
-    const requestId = ++searchRequestId
 
     const timer = setTimeout(async () => {
       try {
@@ -142,11 +146,19 @@
           }
         }
 
+        const directories = [...dirsToLoad]
+        for (const directory of directories) {
+          if (!projectState.expandedDirectories[directory]) {
+            searchExpandedDirectories.add(directory)
+          }
+        }
+
         // Expand + load every matching folder in one batch. Marking each
         // directory expanded and persisting the explorer snapshot per folder
         // serialized the whole snapshot to localStorage once per expansion and
-        // froze the renderer on large trees.
-        await projectFilesWorkspace.expandAndLoadDirectories(projectId, [...dirsToLoad])
+        // froze the renderer on large trees. Search-driven expansions are
+        // transient, so they do not pollute the persisted explorer state.
+        await projectFilesWorkspace.expandAndLoadDirectories(projectId, directories, false)
       } catch {
         // search failed silently
       }
@@ -161,6 +173,23 @@
     if (collapsedOverrides.size > 0) collapsedOverrides.clear()
   }
 
+  function clearSearchExpansions(): void {
+    if (searchExpandedDirectories.size === 0) return
+    projectFilesWorkspace.collapseDirectories(projectId, [...searchExpandedDirectories])
+    searchExpandedDirectories.clear()
+  }
+
+  function handleFilterInput(event: Event): void {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return
+    const nextQuery = event.currentTarget.value
+    if (nextQuery === filterQuery) return
+    searchRequestId += 1
+    clearSearchExpansions()
+    filterQuery = nextQuery
+  }
+
+  onDestroy(clearSearchExpansions)
+
   async function openFilter(): Promise<void> {
     filterOpen = true
     await tick()
@@ -170,6 +199,7 @@
 
   function closeFilter(clearReveal = true): void {
     searchRequestId += 1
+    clearSearchExpansions()
     filterQuery = ''
     filterOpen = false
     if (collapsedOverrides.size > 0) collapsedOverrides.clear()
@@ -215,6 +245,40 @@
     }, 0)
   }
 
+  /** Toggle a directory row, tracking the collapse while a filter is active so
+   *  folding during search actually hides the subtree (the filter's force-render
+   *  would otherwise keep it visible). Only one of `expandedDirectories` and
+   *  `collapsedOverrides` is true for a path at a time. */
+  async function toggleDirectoryRow(entry: ProjectFileEntry): Promise<void> {
+    const filterActive = Boolean(filterQuery.trim()) || lastTurnOnly
+    const wasExpanded = Boolean(projectState.expandedDirectories[entry.path])
+    if (!filterActive) {
+      searchExpandedDirectories.delete(entry.path)
+      collapsedOverrides.delete(entry.path)
+    } else {
+      // Once the user touches a search-expanded directory, it is no longer
+      // owned by the search session. This preserves an explicit user expansion
+      // when the filter closes and prevents a later cleanup from undoing it.
+      searchExpandedDirectories.delete(entry.path)
+      if (wasExpanded) {
+        // Record the override before the store call so the chevron and subtree
+        // change in the same render, rather than leaving a one-tick mismatch.
+        collapsedOverrides.add(entry.path)
+        const prefix = `${entry.path}/`
+        const transientDescendants = [...searchExpandedDirectories].filter((path) =>
+          path.startsWith(prefix)
+        )
+        if (transientDescendants.length > 0) {
+          projectFilesWorkspace.collapseDirectories(projectId, transientDescendants, false)
+          for (const path of transientDescendants) searchExpandedDirectories.delete(path)
+        }
+      } else {
+        collapsedOverrides.delete(entry.path)
+      }
+    }
+    await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+  }
+
   async function selectEntry(
     entry: ProjectFileEntry,
     mode: 'normal' | 'preview' = 'preview'
@@ -236,7 +300,7 @@
         await projectFilesWorkspace.revealFile(projectId, entry.path)
       }
     } else if (entry.kind === 'directory') {
-      await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+      await toggleDirectoryRow(entry)
     }
 
     if (entry.kind === 'file') {
@@ -380,7 +444,7 @@
       event.preventDefault()
       if (entry.kind === 'directory') {
         if (!projectState.expandedDirectories[entry.path]) {
-          void projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+          void toggleDirectoryRow(entry)
         } else {
           const child = visibleRows[currentIndex + 1]
           if (child) {
@@ -395,7 +459,7 @@
     if (key === 'ArrowLeft') {
       event.preventDefault()
       if (entry.kind === 'directory' && projectState.expandedDirectories[entry.path]) {
-        void projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+        void toggleDirectoryRow(entry)
       } else {
         const parent = parentDirectory(entry.path)
         const parentIndex = parent ? rowIndexByPath.get(parent) : undefined
@@ -574,7 +638,17 @@
     try {
       if (anyDirExpanded) {
         projectFilesWorkspace.collapseAllDirectories(projectId)
+        searchExpandedDirectories.clear()
+        // With a filter active the matching directories would force-render
+        // again; remember them as collapsed so the whole tree actually folds.
+        if (filterQuery.trim() || lastTurnOnly) {
+          collapsedOverrides.clear()
+          for (const directory of Object.keys(projectState.entriesByDirectory)) {
+            if (directory) collapsedOverrides.add(directory)
+          }
+        }
       } else {
+        collapsedOverrides.clear()
         await projectFilesWorkspace.expandAllDirectories(projectId)
       }
     } finally {
@@ -832,8 +906,12 @@
   }
 
   function shouldRenderDirectory(path: string): boolean {
-    if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
+    // An explicit expansion always renders, even if a stale override lingers.
     if (projectState.expandedDirectories[path]) return true
+    // A deliberate fold during a filter session hides the subtree even when
+    // the filter would otherwise force-render it as a matching ancestor.
+    if (collapsedOverrides.has(path)) return false
+    if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
     if (!filterQuery.trim() || !projectState.entriesByDirectory[path]) return false
     return directoryMatchesQuery(path)
   }
@@ -1079,7 +1157,8 @@
         type="search"
         class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
         placeholder="Search files and folders…"
-        bind:value={filterQuery}
+        value={filterQuery}
+        oninput={handleFilterInput}
         onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
       />
       <button
