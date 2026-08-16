@@ -25,6 +25,15 @@ const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
 ])
 const MAX_RETAINED_NOTIFICATIONS = 200
 const BADGE_STATE_PATH = 'state/notification-badge.json'
+const PERMISSION_STATE_PATH = 'state/notification-permission.json'
+/**
+ * Cooldown between background permission re-verifications: when the Settings
+ * panel is opened while the app thinks notifications are blocked, one silent
+ * verification delivery is attempted so the OS can confirm or clear the state.
+ */
+const PERMISSION_VERIFY_DEDUP_MS = 15_000
+/** How long a background verification delivery may take before it is dropped. */
+const PERMISSION_VERIFY_TIMEOUT_MS = 4_000
 /**
  * Cooldown covering the alert's duration. Only the first notification of a
  * burst plays a sound — notifications arriving inside this window still show
@@ -37,7 +46,23 @@ interface BadgeStateRecord {
   threads: string[]
 }
 
+interface PermissionStateRecord {
+  version: 1
+  status: 'granted' | 'denied' | 'prompt'
+}
+
 type ThreadClickedHandler = (payload: ThreadClickedPayload) => void
+
+/**
+ * Detect a macOS permission refusal from the `failed` event payload. Electron
+ * forwards `NSError.localizedDescription` (a string); a denied/unsigned app
+ * gets `UNErrorNotAllowed`, whose description reads "Notifications are not
+ * allowed for this application". Any other failure (invalid attachment, etc.)
+ * is delivery noise and must not flip the permission state.
+ */
+function isPermissionRefusal(error: unknown): boolean {
+  return typeof error === 'string' && /not allowed/i.test(error)
+}
 
 export class NotificationService {
   private readonly storage: StorageEngine
@@ -56,11 +81,15 @@ export class NotificationService {
    * Last observed macOS notification delivery outcome, used to surface a
    * permission warning in Settings. Electron exposes no native notification
    * authorization query, so this is inferred from the OS delivery events:
-   * 'show' means permission granted; 'failed' or a test timeout means the OS
-   * refused delivery (permission denied or an unsigned/ad-hoc build that
-   * macOS silently blocks).
+   * 'show' means permission granted; 'failed' with a permission-refusal error
+   * (UNErrorNotAllowed) means the OS refused delivery (permission denied or an
+   * unsigned/ad-hoc build that macOS silently blocks). The state is persisted
+   * and re-verified on demand when the Settings panel opens, so it can never
+   * stay stuck at 'denied' after the user re-enables notifications.
    */
   private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
+  private permissionVerifyInFlight = false
+  private lastPermissionVerifyAt = 0
 
   constructor(storage: StorageEngine, db: Database, onThreadClicked: ThreadClickedHandler) {
     this.storage = storage
@@ -74,8 +103,9 @@ export class NotificationService {
     if (this.started) return
     this.started = true
     void this.hydrateBadge()
+    void this.hydratePermissionStatus()
     ipcMain.handle('notification:test', () => this.sendTestNotification())
-    ipcMain.handle('notification:getPermissionStatus', () => this.getPermissionStatus())
+    ipcMain.handle('notification:getPermissionStatus', () => this.getVerifiedPermissionStatus())
     ipcMain.handle('notification:openSettings', () => this.openSettings())
   }
 
@@ -96,13 +126,109 @@ export class NotificationService {
    * notification-permission query API on macOS, so the OS delivery events are
    * the authoritative signal: a shown notification implies permission, a
    * refused one implies the app is blocked (permission denied or unsigned).
+   * Only a refusal error (`UNErrorNotAllowed` — "not allowed") marks the state
+   * as denied: other failures are logged but never flip the state, so a
+   * transient error can never permanently lock the app into "blocked".
    */
-  private recordNotificationOutcome(outcome: 'shown' | 'failed'): void {
+  private recordNotificationOutcome(outcome: 'shown' | 'failed', error?: unknown): void {
     if (process.platform !== 'darwin') return
+    const previous = this.macosNotificationPermission
     if (outcome === 'shown') {
       this.macosNotificationPermission = 'granted'
-    } else if (this.macosNotificationPermission !== 'granted') {
+    } else if (this.macosNotificationPermission !== 'granted' && isPermissionRefusal(error)) {
       this.macosNotificationPermission = 'denied'
+    }
+    if (this.macosNotificationPermission !== previous) {
+      this.persistPermissionStatus()
+      this.pushPermissionStatus()
+    }
+  }
+
+  private async hydratePermissionStatus(): Promise<void> {
+    try {
+      const state = await this.storage.read<PermissionStateRecord>(PERMISSION_STATE_PATH)
+      if (
+        state &&
+        (state.status === 'granted' || state.status === 'denied' || state.status === 'prompt')
+      ) {
+        this.macosNotificationPermission = state.status
+      }
+    } catch (error) {
+      Logger.dev('Notification permission state restore failed:', error)
+    }
+  }
+
+  private persistPermissionStatus(): void {
+    void (async (): Promise<void> => {
+      try {
+        await this.storage.write(PERMISSION_STATE_PATH, {
+          version: 1,
+          status: this.macosNotificationPermission
+        } satisfies PermissionStateRecord)
+      } catch (error) {
+        Logger.dev('Notification permission state persist failed:', error)
+      }
+    })()
+  }
+
+  /** Push the current permission status to every live renderer. */
+  private pushPermissionStatus(): void {
+    const status = this.getPermissionStatus()
+    if (status.platform !== 'darwin') return
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+        sendToRenderer(window.webContents, 'notification:permissionStatus', status)
+      }
+    }
+  }
+
+  /**
+   * Re-verify a previously observed `denied` state against the OS by silently
+   * delivering one verification notification. A successful delivery flips the
+   * state back to `granted` (the user re-enabled notifications in System
+   * Settings); a refusal keeps it `denied`. If the OS actually still has the
+   * permission prompt pending (fresh install), the request re-prompts — which
+   * is exactly what the notification settings panel is for. Deduped so
+   * repeated settings queries only re-check every few seconds.
+   */
+  private verifyPermissionDelivery(): void {
+    if (this.permissionVerifyInFlight) return
+    const now = Date.now()
+    if (now - this.lastPermissionVerifyAt < PERMISSION_VERIFY_DEDUP_MS) return
+    this.lastPermissionVerifyAt = now
+    if (!Notification.isSupported()) return
+
+    const notification = new Notification({
+      id: `${APP_SLUG}-permission-verify`,
+      groupId: `${APP_SLUG}-system`,
+      title: `${APP_NAME} notifications`,
+      body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
+      silent: true
+    })
+    this.permissionVerifyInFlight = true
+    let settled = false
+    const settle = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      this.permissionVerifyInFlight = false
+    }
+    const timeout = setTimeout(settle, PERMISSION_VERIFY_TIMEOUT_MS)
+    notification.once('show', () => {
+      this.recordNotificationOutcome('shown')
+      settle()
+    })
+    notification.once('failed', (_event, error) => {
+      this.recordNotificationOutcome('failed', error)
+      Logger.dev('Permission verification delivery was refused:', error)
+      settle()
+    })
+    this.retainNotification('system-verify', notification)
+    try {
+      notification.show()
+    } catch (error) {
+      Logger.dev('Permission verification could not be shown:', error)
+      settle()
     }
   }
 
@@ -111,12 +237,29 @@ export class NotificationService {
    * 'prompt' means the OS has not delivered nor refused yet — the first
    * notification (or the Settings test) will decide it. Exposed so the UI can
    * warn when notifications are blocked and deep-link into System Settings.
+   * While 'denied', every query re-verifies against the OS so the warning
+   * clears as soon as the user re-enables notifications — it can never stay
+   * stale across Settings visits.
    */
   getPermissionStatus(): SystemNotificationPermissionStatus {
     if (process.platform !== 'darwin') {
       return { platform: 'other' }
     }
     return { platform: 'darwin', status: this.macosNotificationPermission }
+  }
+
+  /**
+   * The permission status used by the Settings panel: returns the current
+   * state and, when it is 'denied', kicks a deduped background verification so
+   * the OS itself confirms or clears the block. The result arrives over the
+   * `notification:permissionStatus` event.
+   */
+  async getVerifiedPermissionStatus(): Promise<SystemNotificationPermissionStatus> {
+    const status = this.getPermissionStatus()
+    if (status.platform === 'darwin' && status.status === 'denied') {
+      this.verifyPermissionDelivery()
+    }
+    return status
   }
 
   /**
@@ -378,7 +521,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
-        this.recordNotificationOutcome('failed')
+        this.recordNotificationOutcome('failed', error)
         Logger.error('System notification failed:', error)
       })
 
@@ -468,7 +611,7 @@ export class NotificationService {
         })
       })
       notification.on('failed', (_event, error): void => {
-        this.recordNotificationOutcome('failed')
+        this.recordNotificationOutcome('failed', error)
         Logger.error('Temporary chat system notification failed:', error)
       })
 
@@ -480,15 +623,6 @@ export class NotificationService {
   }
 
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
-    const permission = this.getPermissionStatus()
-    if (permission.platform === 'darwin' && permission.status === 'denied') {
-      return {
-        status: 'failed',
-        message:
-          'macOS is blocking notifications for this app. Allow notifications in System Settings > Notifications.'
-      }
-    }
-
     this.dispatchNotificationSound()
     const silent = this.appManagesSound()
     if (!Notification.isSupported()) {
@@ -513,14 +647,16 @@ export class NotificationService {
         clearTimeout(timeout)
         resolve(result)
       }
+      // No state change on timeout: the OS neither confirmed nor refused the
+      // delivery (the first-time permission prompt may still be on screen),
+      // so a slow test must never poison the persisted permission state.
       const timeout = setTimeout(() => {
-        this.recordNotificationOutcome('failed')
         finish({
           status: 'failed',
           message:
             'macOS did not confirm delivery. Notifications are likely blocked — allow them in System Settings > Notifications (unsigned builds also require app signing).'
         })
-      }, 5_000)
+      }, 8_000)
 
       notification.once('show', () => {
         this.recordNotificationOutcome('shown')
@@ -530,7 +666,7 @@ export class NotificationService {
         })
       })
       notification.once('failed', (_event, error) => {
-        this.recordNotificationOutcome('failed')
+        this.recordNotificationOutcome('failed', error)
         Logger.error('System notification test failed:', error)
         finish({
           status: 'failed',

@@ -468,6 +468,14 @@
     modelWasOpen = modelMenuOpen
   })
 
+  let thinkingWasOpen = false
+  $effect(() => {
+    if (thinkingWasOpen && !thinkingMenuOpen) {
+      focusComposerAtEnd()
+    }
+    thinkingWasOpen = thinkingMenuOpen
+  })
+
   function toggleInferenceMenu(): void {
     if (inferenceMenuOpen) closeAllMenus()
     else showInferenceMenu()

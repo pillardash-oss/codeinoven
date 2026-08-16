@@ -29,7 +29,9 @@
     Info,
     Loader2,
     MessageSquare,
+    Network,
     Pencil,
+    Target,
     Trash2,
     Video,
     X,
@@ -95,6 +97,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -1493,14 +1496,6 @@
   let assignmentAuditThread = $state<Thread | undefined>()
   let achievementAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
-  let assignmentPanelWidth = $state(320)
-  let coordinatorCollapsed = $state(
-    localStorage.getItem('codeinoven:coordinator-collapsed') === '1'
-  )
-  function toggleCoordinatorCollapsed(): void {
-    coordinatorCollapsed = !coordinatorCollapsed
-    localStorage.setItem('codeinoven:coordinator-collapsed', coordinatorCollapsed ? '1' : '0')
-  }
   let assignmentBusy = $state(false)
   let assignmentError = $state('')
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
@@ -1552,6 +1547,41 @@
       thread.achievementRole === 'auditor'
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
+
+  /** Which coordinator, if any, this thread publishes to the context dock. */
+  let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | null => {
+    if (isAssignmentAuditorThread) return null
+    if (assignment && assignment.status !== 'draft') return 'assignment'
+    if (achievementOnly && spec) return 'achievement'
+    return null
+  })
+
+  // The coordinator is a sidebar tool, not a floating panel: the thread owns the
+  // data and the callbacks, so it publishes the panel as a snippet and the
+  // context dock renders it. Only the coordination kind is tracked here, so a
+  // task update never re-registers (and never remounts) the panel.
+  $effect(() => {
+    const kind = coordinatorKind
+    if (!kind) return
+    const label = kind === 'assignment' ? 'Assignment coordinator' : 'Achievement coordinator'
+    const dispose = coordinatorDockState.register({
+      projectId: thread.projectId,
+      threadId: thread.id,
+      label,
+      icon: kind === 'assignment' ? Network : Target,
+      panel: kind === 'assignment' ? assignmentCoordinatorPanel : achievementCoordinatorPanel
+    })
+    // Docks itself the first time a thread starts coordinating, unless the user
+    // closed it before; later runs are no-ops because the tab already exists.
+    if (
+      coordinatorDockState.autoOpen &&
+      !contextSidebarState.hasCoordinator(thread.projectId, thread.id)
+    ) {
+      contextSidebarState.openCoordinator(thread.projectId, thread.id, label)
+    }
+    return dispose
+  })
+
   type AssignmentAuditDisplayState = Thread['auditState'] | 'failed'
   let assignmentAuditState = $derived.by<AssignmentAuditDisplayState>(() => {
     if (auditBusy) return 'running'
@@ -6293,19 +6323,7 @@
 
 <div
   bind:this={threadViewElement}
-  class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col {(assignment &&
-    assignment.status !== 'draft' &&
-    !showSpecStudio &&
-    !isAssignmentAuditorThread &&
-    !coordinatorCollapsed) ||
-  (achievementOnly &&
-    spec &&
-    !showSpecStudio &&
-    !isAssignmentAuditorThread &&
-    !coordinatorCollapsed)
-    ? 'assignment-panel-open'
-    : ''}"
-  style:--assignment-panel-width={`${assignmentPanelWidth}px`}
+  class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col"
   data-region={showSpecStudio ? 'spec-studio' : undefined}
 >
   {#if showSpecStudio}
@@ -7595,60 +7613,64 @@
         </div>
       </div>
     </div>
-    {#if assignment && assignment.status !== 'draft' && !isAssignmentAuditorThread}
-      <AssignmentCoordinatorPanel
-        {assignment}
-        auditThread={assignmentAuditThread}
-        auditState={assignmentAuditState}
-        finalComplete={assignmentFinalComplete}
-        reportAvailable={auditReport !== null}
-        threads={assignmentThreads}
-        selectedThreadId={thread.id}
-        width={assignmentPanelWidth}
-        collapsed={coordinatorCollapsed}
-        coordinatorWorking={busy || delegatedWorkBusy}
-        onToggleCollapsed={toggleCoordinatorCollapsed}
-        onOpenAssignment={openAssignmentStudio}
-        onOpenAuditWork={openAssignmentAuditWork}
-        onViewReport={openAuditStudio}
-        onOpenThread={(worker) => workspaceState.openThread(worker, project)}
-        onOpenTask={openAssignmentTask}
-        onResume={resumeAssignmentCoordination}
-        onStop={stopAssignment}
-        onResumeAssignment={resumeStoppedAssignment}
-        onWidthChange={(width) => (assignmentPanelWidth = width)}
-      />
-    {:else if achievementOnly && spec && !isAssignmentAuditorThread}
-      <AchievementCoordinatorPanel
-        specTitle={thread.title}
-        specSummary={spec.content.resolutionSummary}
-        auditThread={achievementAuditThread}
-        {auditState}
-        reportAvailable={auditReport !== null}
-        selectedThreadId={thread.id}
-        width={assignmentPanelWidth}
-        collapsed={coordinatorCollapsed}
-        auditorSettings={auditSettings}
-        {providers}
-        projectId={thread.projectId}
-        favoriteModels={rendererRecovery.favoriteModels}
-        recentModels={rendererRecovery.recentModels}
-        coordinatorWorking={busy || delegatedWorkBusy}
-        onToggleCollapsed={toggleCoordinatorCollapsed}
-        onOpenAudit={() => void generateAudit(auditSettings)}
-        onViewReport={openAuditStudio}
-        onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
-        onResume={resumeAchievementCoordination}
-        onModelChange={changeAuditModel}
-        onToggleFavorite={(providerId, modelId, harnessId) =>
-          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-        onReorderFavorite={(draggedKey, targetKey, position) =>
-          rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-        onWidthChange={(width) => (assignmentPanelWidth = width)}
-      />
-    {/if}
   {/if}
 </div>
+
+<!--
+  The coordinator panels are published to the context dock rather than rendered
+  here: they dock into the right sidebar as their own tool, so the thread keeps
+  its full width and the coordinator gets a rail icon like every other panel.
+-->
+{#snippet assignmentCoordinatorPanel()}
+  {#if assignment}
+    <AssignmentCoordinatorPanel
+      {assignment}
+      auditThread={assignmentAuditThread}
+      auditState={assignmentAuditState}
+      finalComplete={assignmentFinalComplete}
+      reportAvailable={auditReport !== null}
+      threads={assignmentThreads}
+      selectedThreadId={thread.id}
+      coordinatorWorking={busy || delegatedWorkBusy}
+      onOpenAssignment={openAssignmentStudio}
+      onOpenAuditWork={openAssignmentAuditWork}
+      onViewReport={openAuditStudio}
+      onOpenThread={(worker) => workspaceState.openThread(worker, project)}
+      onOpenTask={openAssignmentTask}
+      onResume={resumeAssignmentCoordination}
+      onStop={stopAssignment}
+      onResumeAssignment={resumeStoppedAssignment}
+    />
+  {/if}
+{/snippet}
+
+{#snippet achievementCoordinatorPanel()}
+  {#if spec}
+    <AchievementCoordinatorPanel
+      specTitle={thread.title}
+      specSummary={spec.content.resolutionSummary}
+      auditThread={achievementAuditThread}
+      {auditState}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      coordinatorWorking={busy || delegatedWorkBusy}
+      onOpenAudit={() => void generateAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
+      onResume={resumeAchievementCoordination}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {/if}
+{/snippet}
 
 <ContinueInProjectModal
   open={continueInProjectOpen}
@@ -7720,11 +7742,6 @@
 <style>
   .thread-view {
     container-type: inline-size;
-  }
-
-  .thread-view.assignment-panel-open > .conversation-gutter,
-  .thread-view.assignment-panel-open > .bottom-chrome {
-    margin-right: var(--assignment-panel-width);
   }
 
   @container (max-width: 480px) {

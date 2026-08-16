@@ -592,7 +592,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   protected observeHarnessProcess(
-    sessionId: string,
+    sessionId: string | undefined,
     child: ChildProcess,
     command: string,
     cwd: string
