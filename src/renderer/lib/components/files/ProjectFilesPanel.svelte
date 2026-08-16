@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
-  import { fly } from 'svelte/transition'
+  import { slide } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -748,9 +748,8 @@
 
     {#if projectState.explorerVisible}
       <div
-        class="flex min-h-0"
-        in:fly={{ x: 208, duration: motionDuration(180), easing: cubicOut }}
-        out:fly={{ x: 208, duration: motionDuration(150), easing: cubicOut }}
+        class="min-h-0"
+        transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
       >
         <ProjectFileExplorer
           {projectId}
@@ -1018,9 +1017,8 @@
         </div>
         {#if fullscreenExplorerOpen && activeTab}
           <div
-            class="flex min-h-0"
-            in:fly={{ x: 208, duration: motionDuration(180), easing: cubicOut }}
-            out:fly={{ x: 208, duration: motionDuration(150), easing: cubicOut }}
+            class="min-h-0"
+            transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
           >
             <ProjectFileExplorer
               {projectId}
