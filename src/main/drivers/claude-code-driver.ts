@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,6 +87,38 @@ const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
 const AUTH_CONFIRM_TIMEOUT_MS = 60_000
 /** Poll interval while waiting for a spawned session to prove authentication. */
 const AUTH_CONFIRM_POLL_MS = 200
+/**
+ * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
+ * refresh, version probe, model discovery). Every one-shot spawn holds several
+ * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
+ * projects refreshing simultaneously can exhaust the process fd table and
+ * fail later spawns with `EBADF`. Bounding the one-shots keeps the fd table
+ * stable without touching long-lived session processes, which are gated
+ * separately by the credential-refresh slot.
+ */
+const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
+class OneShotSpawnGate {
+  private readonly queue: (() => void)[] = []
+  private active = 0
+
+  constructor(private readonly limit: number) {}
+
+  async acquire(): Promise<() => void> {
+    while (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve))
+    }
+    this.active += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.active -= 1
+      this.queue.shift()?.()
+    }
+  }
+}
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -1076,6 +1108,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Cached `claude auth status` verdict per project, so a fresh thread never
    *  re-spawns the CLI for auth on every message. */
   private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
+  /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
+  private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
   /**
    * Sessions whose live process proved authentication this run, with the time
    * it was proven. A session only counts while its proof is fresh (within
@@ -1227,27 +1261,44 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('claude', ['--version'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) =>
-        reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-      )
-      child.on('exit', (code) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(`Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`)
+    const release = await this.oneShotSpawnGate.acquire()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let child: ChildProcess
+        try {
+          child = spawn('claude', ['--version'], {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            stdio: ['ignore', 'ignore', 'pipe']
+          })
+        } catch (error) {
+          reject(
+            new Error(
+              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
             )
-      )
-    })
+          )
+          return
+        }
+        let stderr = ''
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString()
+        })
+        child.on('error', (error) =>
+          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
+        )
+        child.on('exit', (code) =>
+          code === 0
+            ? resolve()
+            : reject(
+                new Error(
+                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
+                )
+              )
+        )
+      })
+    } finally {
+      release()
+    }
   }
 
   /** Claude Code accepts ephemeral settings JSON, avoiding global or project config writes. */
@@ -1263,9 +1314,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     // authentication issue instead of a confusing mid-turn authentication_failed.
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (firstParty && !this.isTitleSession(session.id)) {
-      const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
-      if (!authenticated) {
-        throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
+        if (!authenticated) {
+          throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+        }
+      } finally {
+        releaseSpawn()
       }
     }
     const args = [
@@ -1424,15 +1480,26 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /**
    * Run an auth-touching CLI operation under the credential-refresh gate. The
    * gate is engaged only while no live session has authenticated; once one has,
-   * the credential is fresh and the operation runs with full concurrency.
+   * the credential is fresh and the operation runs with full concurrency. The
+   * one-shot spawn gate then bounds concurrent short-lived claude spawns (auth
+   * probe, usage refresh, model discovery) so they cannot exhaust the process
+   * file-descriptor table and fail later spawns with `EBADF`.
+   *
+   * Lock ordering: the auth slot is always acquired before the spawn gate
+   * (sendPrompt → buildTurnCommand probe follows the same order), so no path
+   * ever holds the gate while waiting for the auth slot.
    */
   private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.hasLiveAuthenticatedSession()) return operation()
-    const release = await this.acquireAuthSlot()
+    const releaseAuth = this.hasLiveAuthenticatedSession() ? null : await this.acquireAuthSlot()
     try {
-      return await operation()
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        return await operation()
+      } finally {
+        releaseSpawn()
+      }
     } finally {
-      release()
+      releaseAuth?.()
     }
   }
 
@@ -1466,28 +1533,34 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const cached = this.authProbeCache.get(projectPath)
     if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
     const authenticated = await new Promise<boolean>((resolve) => {
-      execFile(
-        'claude',
-        ['auth', 'status', '--json'],
-        {
-          cwd: projectPath,
-          env: buildHarnessEnvironment(),
-          timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024
-        },
-        (error, stdout) => {
-          if (error) {
-            resolve(true)
-            return
+      try {
+        execFile(
+          'claude',
+          ['auth', 'status', '--json'],
+          {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024
+          },
+          (error, stdout) => {
+            if (error) {
+              resolve(true)
+              return
+            }
+            try {
+              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+              resolve(parsed['loggedIn'] === true)
+            } catch {
+              resolve(true)
+            }
           }
-          try {
-            const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
-            resolve(parsed['loggedIn'] === true)
-          } catch {
-            resolve(true)
-          }
-        }
-      )
+        )
+      } catch {
+        // Spawn itself threw synchronously (e.g. EBADF when the process is low
+        // on file descriptors). Fail open so the turn still has a chance.
+        resolve(true)
+      }
     })
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
@@ -1660,22 +1733,30 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       const telemetry = await this.runAuthSerialized(
         () =>
           new Promise<Record<string, unknown> | null>((resolve) => {
-            const child = spawn(
-              'claude',
-              [
-                '--print',
-                '--output-format',
-                'stream-json',
-                '--input-format',
-                'stream-json',
-                '--verbose'
-              ],
-              {
-                cwd: projectPath,
-                env: buildHarnessEnvironment(),
-                stdio: ['pipe', 'pipe', 'pipe']
-              }
-            )
+            let child: ChildProcess
+            try {
+              child = spawn(
+                'claude',
+                [
+                  '--print',
+                  '--output-format',
+                  'stream-json',
+                  '--input-format',
+                  'stream-json',
+                  '--verbose'
+                ],
+                {
+                  cwd: projectPath,
+                  env: buildHarnessEnvironment(),
+                  stdio: ['pipe', 'pipe', 'pipe']
+                }
+              )
+            } catch {
+              // Spawn itself threw synchronously (e.g. EBADF when the process is
+              // low on file descriptors). Report no usage rather than rejecting.
+              resolve(null)
+              return
+            }
             let buffer = ''
             let settled = false
             const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
