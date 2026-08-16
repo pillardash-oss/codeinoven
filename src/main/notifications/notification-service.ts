@@ -376,7 +376,7 @@ export class NotificationService {
     await this.restoreBadgeState()
 
     try {
-      const threads = this.threadRepo.listAll()
+      const threads = await this.threadRepo.listAllViaWorker()
       const validKeys = new Set<string>()
       for (const thread of threads) {
         if (

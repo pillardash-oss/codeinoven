@@ -377,6 +377,15 @@ export class ThreadRepo {
     return result
   }
 
+  private hydrateThreads(rows: ThreadRow[]): Thread[] {
+    const threads = rows.map(rowToThread)
+    const used = this.usedHarnessesFor(threads.map((t) => t.id))
+    for (const thread of threads) {
+      thread.usedHarnessIds = used.get(thread.id)
+    }
+    return threads
+  }
+
   listByProject(projectId: string, options: ThreadListOptions = {}): Thread[] {
     const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
     const rows = this.db.all<ThreadRow>(
@@ -384,12 +393,7 @@ export class ThreadRepo {
        ${buildOrderBy(options)}${limit}`,
       ...params
     )
-    const threads = rows.map(rowToThread)
-    const used = this.usedHarnessesFor(threads.map((t) => t.id))
-    for (const thread of threads) {
-      thread.usedHarnessIds = used.get(thread.id)
-    }
-    return threads
+    return this.hydrateThreads(rows)
   }
 
   listAll(options: ThreadListOptions = {}): Thread[] {
@@ -399,12 +403,20 @@ export class ThreadRepo {
        ${buildOrderBy(options)}${limit}`,
       ...params
     )
-    const threads = rows.map(rowToThread)
-    const used = this.usedHarnessesFor(threads.map((t) => t.id))
-    for (const thread of threads) {
-      thread.usedHarnessIds = used.get(thread.id)
-    }
-    return threads
+    return this.hydrateThreads(rows)
+  }
+
+  /** Load every thread on the database worker so unbounded hydration does not block Electron. */
+  async listAllViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
+    const { where, params, limit } = buildListClauses([], [], options)
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where}
+       ${buildOrderBy(options)}${limit}`,
+      params,
+      0
+    )
+    if (!result.ok) return this.listAll(options)
+    return this.hydrateThreads(result.rows as unknown as ThreadRow[])
   }
 
   delete(id: string): void {
