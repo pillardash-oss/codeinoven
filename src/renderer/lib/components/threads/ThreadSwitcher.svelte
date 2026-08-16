@@ -23,6 +23,22 @@
   let previousFocus: HTMLElement | null = null
   let restoreFocusOnClose = false
 
+  let lastPointer = { x: 0, y: 0 }
+  let pointerAtOpen = { x: 0, y: 0 }
+
+  function handleWindowPointerMove(event: PointerEvent): void {
+    lastPointer = { x: event.clientX, y: event.clientY }
+  }
+
+  /** Hover only steals the highlight once the user has actually moved the
+   *  pointer after opening the switcher with Ctrl+Tab. A resting cursor that
+   *  happens to sit over the dialog must not capture the keyboard selection. */
+  function pointerMovedSinceOpen(event: PointerEvent): boolean {
+    const dx = event.clientX - pointerAtOpen.x
+    const dy = event.clientY - pointerAtOpen.y
+    return dx * dx + dy * dy > 16
+  }
+
   let projectsById = $derived.by(() => {
     const result = new SvelteMap<string, Project>()
     for (const project of projects) result.set(project.id, project)
@@ -49,6 +65,7 @@
     if (!open) {
       previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
       restoreFocusOnClose = true
+      pointerAtOpen = lastPointer
       const selectedIndex = threads.findIndex((thread) => thread.id === selectedThreadId)
       const startingIndex = selectedIndex >= 0 ? selectedIndex : direction === 1 ? -1 : 0
       highlightedIndex = (startingIndex + direction + threads.length) % threads.length
@@ -108,6 +125,7 @@
 <svelte:window
   onkeydown={handleWindowKeydown}
   onkeyup={handleWindowKeyup}
+  onpointermove={handleWindowPointerMove}
   onblur={handleWindowBlur}
 />
 
@@ -157,8 +175,8 @@
             data-thread-index={index}
             class="w-full overflow-hidden rounded-lg text-left outline-none transition-colors hover:bg-elevated focus-visible:ring-2 focus-visible:ring-primary"
             title="Open {thread.title}"
-            onpointerenter={() => {
-              highlightedIndex = index
+            onpointerenter={(event) => {
+              if (pointerMovedSinceOpen(event)) highlightedIndex = index
             }}
             onclick={() => void selectThread(thread)}
           >
