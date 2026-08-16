@@ -43,6 +43,11 @@ export interface SelectedThreadReference {
   threadId: string
 }
 
+export interface StartAfterThreadReference {
+  id: string
+  title: string
+}
+
 /** A single saved composer draft — text plus any file attachments. */
 export interface ComposerDraftEntry {
   text: string
@@ -51,6 +56,10 @@ export interface ComposerDraftEntry {
   taskReferences: PromptAssignmentTaskReference[]
   /** Response-selection annotations attached to the composer (agent-output excerpts + comments). */
   promptReferences: QueuedResponseReference[]
+  /** Optional source thread selected for the next message. */
+  startAfterThreadId?: string
+  /** Display title for the selected source thread. */
+  startAfterThreadTitle?: string
 }
 
 /** A selected assistant-response excerpt anchored to a message range. */
@@ -317,6 +326,14 @@ function parseSelectedThread(value: unknown): SelectedThreadReference | null {
   return { projectId: value.projectId, threadId: value.threadId }
 }
 
+function parseStartAfterThread(value: unknown): StartAfterThreadReference | null {
+  if (!isRecord(value) || !isRecoveryIdentifier(value.id)) return null
+  return {
+    id: value.id,
+    title: typeof value.title === 'string' && value.title.length > 0 ? value.title : 'Thread'
+  }
+}
+
 function parseFavoriteModels(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -343,7 +360,9 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
         attachments: [],
         projectReferences: [],
         taskReferences: [],
-        promptReferences: []
+        promptReferences: [],
+        startAfterThreadId: undefined,
+        startAfterThreadTitle: undefined
       }
       count += 1
       continue
@@ -365,7 +384,19 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const promptReferences = Array.isArray(raw.promptReferences)
       ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
       : []
-    drafts[key] = { text, attachments, projectReferences, taskReferences, promptReferences }
+    const startAfterThread = parseStartAfterThread({
+      id: raw.startAfterThreadId,
+      title: raw.startAfterThreadTitle
+    })
+    drafts[key] = {
+      text,
+      attachments,
+      projectReferences,
+      taskReferences,
+      promptReferences,
+      startAfterThreadId: startAfterThread?.id,
+      startAfterThreadTitle: startAfterThread?.title
+    }
     count += 1
   }
   return drafts
