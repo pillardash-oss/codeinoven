@@ -15,7 +15,11 @@ const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   '.svelte-kit',
   `.${APP_SLUG}`,
   `.${APP_SLUG}-temp`,
-  `${APP_SLUG}-temp`
+  `${APP_SLUG}-temp`,
+  // Agent scratch space (gitignored by convention). Backups there (e.g. a
+  // multi-megabyte live-state rollback DB) must never trip the per-file
+  // snapshot limit and silently disable rollback checkpoints for the project.
+  'agent-out'
 ])
 
 export interface CheckpointBlobStore {
