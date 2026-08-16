@@ -1598,7 +1598,7 @@ export interface CloseConfirmationPayload {
   files: CloseConfirmationFile[]
 }
 
-export type AgentNotificationKind = 'completed' | 'attention' | 'error'
+export type AgentNotificationKind = 'completed' | 'attention' | 'spec' | 'error'
 
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string

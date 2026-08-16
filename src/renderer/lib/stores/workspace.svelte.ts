@@ -364,11 +364,12 @@ export function threadStatusSortKey(
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  // Todo first, then unread, then anything that still needs attention, then done.
+  // Todo first, then unread, then spec-ready artifacts, then other attention, then done.
   if (t.status === 'created') return 0
   if (!t.read) return 1
-  if (t.status !== 'completed') return 2
-  return 3
+  if (t.status === 'spec') return 2
+  if (t.status !== 'completed') return 3
+  return 4
 }
 
 /** Threads view sort grouped by attention status, most recent activity first within each group. */

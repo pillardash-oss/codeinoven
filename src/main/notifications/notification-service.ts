@@ -21,6 +21,7 @@ import type {
 const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
   'completed',
   'awaiting_approval',
+  'spec',
   'failed'
 ])
 const MAX_RETAINED_NOTIFICATIONS = 200
@@ -202,7 +203,7 @@ export class NotificationService {
       id: `${APP_SLUG}-permission-verify`,
       groupId: `${APP_SLUG}-system`,
       title: `${APP_NAME} notifications`,
-      body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
+      body: 'You will be notified when an agent finishes, has a specification ready, needs attention, or encounters an error.',
       silent: true
     })
     this.permissionVerifyInFlight = true
@@ -694,19 +695,25 @@ export class NotificationService {
         ? 'completed'
         : thread.status === 'awaiting_approval'
           ? 'attention'
-          : 'error'
+          : thread.status === 'spec'
+            ? 'spec'
+            : 'error'
     const title =
       kind === 'completed'
         ? 'Agent turn complete'
         : kind === 'attention'
           ? 'Agent needs your attention'
-          : 'Agent encountered an error'
+          : kind === 'spec'
+            ? 'Specification ready for review'
+            : 'Agent encountered an error'
     const body =
       kind === 'completed'
         ? `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? `${thread.title} is waiting for your input in ${projectName}.`
-          : `${thread.title} stopped with an error in ${projectName}.`
+          : kind === 'spec'
+            ? `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+            : `${thread.title} stopped with an error in ${projectName}.`
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,

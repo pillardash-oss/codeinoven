@@ -7784,7 +7784,7 @@ export class ChatEngine {
             await this.threadManager.setStatus(
               result.assignment.projectId,
               result.assignment.coordinatorThreadId,
-              'awaiting_approval',
+              'spec',
               { read: false }
             )
             automaticReaudit = Boolean(result.assignment.auditCycle.reworkCycle)
@@ -7882,14 +7882,9 @@ export class ChatEngine {
               modelId: coordinator.settings.modelId
             }
           )
-          await this.threadManager.setStatus(
-            current.projectId,
-            capability.threadId,
-            'awaiting_approval',
-            {
-              read: false
-            }
-          )
+          await this.threadManager.setStatus(current.projectId, capability.threadId, 'spec', {
+            read: false
+          })
           this.writeAssignmentApiResponse(response, 200, {
             assignment,
             status: 'awaiting_user_review'
@@ -7924,14 +7919,9 @@ export class ChatEngine {
                   capability.threadId
                 )
           await this.threadManager.setAuditState(current.projectId, capability.threadId, 'offered')
-          await this.threadManager.setStatus(
-            current.projectId,
-            capability.threadId,
-            'awaiting_approval',
-            {
-              read: false
-            }
-          )
+          await this.threadManager.setStatus(current.projectId, capability.threadId, 'spec', {
+            read: false
+          })
           this.writeAssignmentApiResponse(response, 200, { assignment, status: 'audit_available' })
           void this.startAssignmentReaudit(assignment).catch((error) => {
             Logger.error('Requested Assignment reaudit failed', {
@@ -8672,7 +8662,7 @@ export class ChatEngine {
         )
         if (unchanged) return unchanged
       }
-      await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', { read: false })
+      await this.threadManager.setStatus(projectId, threadId, 'spec', { read: false })
       throw error
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
@@ -8752,14 +8742,9 @@ export class ChatEngine {
     brainstorm: BrainstormDocument,
     sessionId?: string
   ): Promise<void> {
-    await this.threadManager.setStatus(
-      brainstorm.projectId,
-      brainstorm.threadId,
-      'awaiting_approval',
-      {
-        read: false
-      }
-    )
+    await this.threadManager.setStatus(brainstorm.projectId, brainstorm.threadId, 'spec', {
+      read: false
+    })
     this.broadcast({
       type: 'brainstorm.ready',
       sessionId: sessionId ?? `brainstorm-${brainstorm.id}`,
@@ -9465,7 +9450,7 @@ export class ChatEngine {
       )
       const concurrentlyCreated = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
       if (concurrentlyCreated) {
-        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
           read: false
         })
         return concurrentlyCreated
@@ -9492,12 +9477,12 @@ export class ChatEngine {
           modelId: settings.modelId
         }
       })
-      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
       return assignment
     } catch (error) {
-      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+      await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
       throw error
@@ -10004,7 +9989,7 @@ export class ChatEngine {
         await this.threadManager.setStatus(
           assignment.projectId,
           assignment.coordinatorThreadId,
-          'awaiting_approval',
+          'spec',
           { read: false }
         )
         if (assignment.auditorThreadId) {
@@ -10181,7 +10166,7 @@ export class ChatEngine {
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator?.settings?.loopMode) throw new Error('Achievement is not active.')
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
-    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
@@ -10737,12 +10722,9 @@ export class ChatEngine {
     await this.threadManager.setStatus(input.projectId, input.auditorThread.id, 'completed', {
       read: false
     })
-    await this.threadManager.setStatus(
-      input.projectId,
-      input.coordinatorThreadId,
-      'awaiting_approval',
-      { read: false }
-    )
+    await this.threadManager.setStatus(input.projectId, input.coordinatorThreadId, 'spec', {
+      read: false
+    })
     await this.loadMessages(input.projectId, input.auditorThread.id)
     return {
       report,
@@ -11162,7 +11144,7 @@ export class ChatEngine {
     })
     await this.assignmentEngine.failAuditCycle(projectId, coordinatorThreadId, failure.message)
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
-    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
     await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
@@ -11299,7 +11281,7 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
           read: false
         })
-        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
           read: false
         })
         await this.loadMessages(projectId, auditorThread.id)
@@ -11317,7 +11299,7 @@ export class ChatEngine {
     }
 
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
-    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'awaiting_approval', {
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false
     })
     await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
@@ -12458,7 +12440,7 @@ export class ChatEngine {
       },
       context: current.context
     })
-    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'awaiting_approval', {
+    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'spec', {
       read: false
     })
     this.broadcast({
@@ -12503,7 +12485,7 @@ export class ChatEngine {
       }
     }
     const thread = await this.threadManager.getThread(pending.projectId, pending.threadId)
-    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'awaiting_approval', {
+    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'spec', {
       read: false
     })
     this.broadcast({
@@ -14239,11 +14221,13 @@ export class ChatEngine {
         ? 'interrupted'
         : failure
           ? 'failed'
-          : revisedSpec || revisedBrainstorm || awaitingUser
-            ? 'awaiting_approval'
-            : threadBeforeFinalize?.status === 'failed'
-              ? 'failed'
-              : 'completed'
+          : revisedSpec || revisedBrainstorm
+            ? 'spec'
+            : awaitingUser
+              ? 'awaiting_approval'
+              : threadBeforeFinalize?.status === 'failed'
+                ? 'failed'
+                : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
@@ -14303,7 +14287,7 @@ export class ChatEngine {
           assignment?.status === 'draft' &&
           assignment.auditCycle?.status === 'awaiting_rework_approval'
         ) {
-          await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'spec', {
             read: false
           })
         }

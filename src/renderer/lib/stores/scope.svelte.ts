@@ -49,6 +49,7 @@ export const STAGE_LABELS: Record<ThreadStage, string> = {
   pinned: 'Pinned',
   todo: 'Todo',
   working: 'Working',
+  spec: 'Spec',
   issue: 'Issue',
   unread: 'Unread',
   done: 'Done'
@@ -58,12 +59,21 @@ export const STAGE_COLORS: Record<ThreadStage, string> = {
   pinned: 'var(--color-thread-pinned)',
   todo: 'var(--color-dimmed)',
   working: 'var(--color-thread-working)',
+  spec: 'var(--color-thread-spec)',
   issue: 'var(--color-warning)',
   unread: 'var(--color-thread-unread)',
   done: 'var(--color-thread-done)'
 }
 
-export const STAGE_ORDER: ThreadStage[] = ['pinned', 'todo', 'working', 'issue', 'unread', 'done']
+export const STAGE_ORDER: ThreadStage[] = [
+  'pinned',
+  'todo',
+  'working',
+  'spec',
+  'issue',
+  'unread',
+  'done'
+]
 
 const EMPTY_BOARD: ScopeBoard = {
   version: 1,

@@ -6,7 +6,11 @@ import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { RetrySchedulerService } from './retry-scheduler-service'
 
-/** Thread states that count as "work in progress". */
+/**
+ * Thread states that count as "work in progress". `spec` is intentionally
+ * absent: a review-ready artifact has finished its agent work and can wait for
+ * the user indefinitely without keeping the device awake.
+ */
 const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
 /**

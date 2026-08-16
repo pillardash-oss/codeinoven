@@ -69,7 +69,7 @@ export interface AttachmentStorageScope {
 
 export const DEFAULT_SCOPE_BUCKET_ID = 'default'
 
-export type ScopeSlice = 'todo' | 'working' | 'issue' | 'unread' | 'done' | 'pinned'
+export type ScopeSlice = 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
 
 export interface ScopeBucket {
   id: string
@@ -127,6 +127,7 @@ export type ThreadStatus =
   | 'created'
   | 'planning'
   | 'awaiting_approval'
+  | 'spec'
   | 'executing'
   | 'interrupted'
   | 'completed'
@@ -140,6 +141,8 @@ export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
     case 'executing':
     case 'awaiting_approval':
       return 'working'
+    case 'spec':
+      return 'spec'
     case 'interrupted':
       return 'done'
     case 'failed':
@@ -3018,7 +3021,7 @@ export interface AppConfig {
   autoInstallUpdates: boolean
   /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
   updateChannel: 'stable' | 'nightly'
-  /** Prevent the display and system from sleeping while any agent is working. */
+  /** Prevent sleep while a harness is actively working; review-ready spec threads stay idle. */
   keepAwakeWhileWorking: boolean
   /** When true, sending an image to a text-only model auto-uses the configured
    *  image descriptor model instead of showing the vision-model picker card. */

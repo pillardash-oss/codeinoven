@@ -78,15 +78,14 @@ WHEN new.name != old.name BEGIN
   INSERT INTO project_fts(rowid, name) VALUES (new.rowid, new.name);
 END;`
 
-export const THREADS_SQL = `
--- ─── Threads ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS threads (
+export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
   id                   TEXT PRIMARY KEY NOT NULL,
   project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   provider_id          TEXT NOT NULL DEFAULT '',
   title                TEXT NOT NULL DEFAULT 'New Thread',
   title_source         TEXT NOT NULL DEFAULT 'default' CHECK(title_source IN ('default','auto','manual')),
-  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','executing','interrupted','completed','failed')),
+  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
   sort_order           INTEGER,
@@ -117,8 +116,10 @@ CREATE TABLE IF NOT EXISTS threads (
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,
   working_directory    TEXT NOT NULL DEFAULT ''
-);
+);`
+}
 
+export const THREAD_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
 CREATE INDEX IF NOT EXISTS idx_threads_project_listing
   ON threads(project_id, archived, pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
@@ -126,6 +127,12 @@ CREATE INDEX IF NOT EXISTS idx_threads_activity_listing
   ON threads(pinned DESC, pinned_at DESC, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_default_listing
   ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);`
+
+export const THREADS_SQL = `
+-- ─── Threads ────────────────────────────────────────────────────────────
+${threadsTableSql('threads')}
+
+${THREAD_INDEXES_SQL}`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
@@ -744,7 +751,7 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
-/** Canonical fresh-install schema. There are no historical migrations. */
+/** Canonical fresh-install schema; targeted legacy migrations run in Database.applySchema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
   PROJECT_FTS_SQL,

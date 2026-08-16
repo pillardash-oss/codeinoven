@@ -15,6 +15,7 @@
   const filters: { key: NotificationFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'attention', label: 'Attention' },
+    { key: 'spec', label: 'Spec' },
     { key: 'error', label: 'Errors' },
     { key: 'completed', label: 'Done' },
     { key: 'app-errors', label: 'App errors' }
@@ -76,6 +77,8 @@
         return 'border-l-success/40'
       case 'attention':
         return 'border-l-warning/40'
+      case 'spec':
+        return 'border-l-thread-spec/40'
       case 'error':
         return 'border-l-danger/40'
     }
@@ -87,6 +90,8 @@
         return 'Completed'
       case 'attention':
         return 'Needs attention'
+      case 'spec':
+        return 'Spec ready'
       case 'error':
         return 'Error'
     }
@@ -135,6 +140,8 @@
           <span class="tabular-nums text-dimmed">{notificationPanelState.completedCount}</span>
         {:else if f.key === 'attention' && notificationPanelState.attentionCount > 0}
           <span class="tabular-nums text-dimmed">{notificationPanelState.attentionCount}</span>
+        {:else if f.key === 'spec' && notificationPanelState.specCount > 0}
+          <span class="tabular-nums text-dimmed">{notificationPanelState.specCount}</span>
         {:else if f.key === 'error' && notificationPanelState.errorCount > 0}
           <span class="tabular-nums text-dimmed">{notificationPanelState.errorCount}</span>
         {:else if f.key === 'app-errors' && appErrorState.count > 0}

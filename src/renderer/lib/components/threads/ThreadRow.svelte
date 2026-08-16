@@ -298,14 +298,15 @@
   // ─── Status vs Stage ──────────────────────────────────────────────────────
   //
   //   Status  = overall thread state for the dot indicator
-  //             working | unread | error | completed | approval | read
+  //             working | spec | unread | error | completed | approval | read
   //   Stage   = what the agent is currently DOING (only when working)
   //             planning | executing
   //   Stage appears only in the hover popover, never on the row itself.
   //
   //   Badge dot conventions: todo = filled gray, done/read = transparent ring.
 
-  type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+  type ThreadState =
+    'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot). */
   let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
@@ -362,6 +363,7 @@
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
     if (thread.status === 'awaiting_approval') return 'approval'
+    if (thread.status === 'spec') return 'spec'
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
@@ -415,7 +417,7 @@
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
     (): {
-      stage?: 'todo' | 'working' | 'issue' | 'unread' | 'done' | 'pinned'
+      stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
       kind?: 'completed' | 'attention' | 'error'
       variant?: 'dot' | 'spinner'
       animated?: boolean
@@ -427,6 +429,8 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'spec':
+          return { stage: 'spec' }
         case 'approval':
           return { kind: 'attention', animated: true }
         case 'error':
@@ -587,7 +591,7 @@
             variant={badgeProps.variant ?? 'dot'}
             animated={badgeProps.animated}
             size="md"
-            title={isWorking ? stageLabel : threadState}
+            title={isWorking ? stageLabel : thread.status === 'spec' ? 'Spec ready' : threadState}
           />
         {:else}
           <span
@@ -734,7 +738,7 @@
               variant={badgeProps.variant ?? 'dot'}
               animated={badgeProps.animated}
               size="md"
-              title={isWorking ? stageLabel : threadState}
+              title={isWorking ? stageLabel : thread.status === 'spec' ? 'Spec ready' : threadState}
             />
           {:else}
             <span

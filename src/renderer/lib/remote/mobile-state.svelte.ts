@@ -35,6 +35,7 @@ function threadSortKey(thread: Thread): number {
     thread.status === 'planning' ||
     thread.status === 'executing' ||
     thread.status === 'awaiting_approval' ||
+    thread.status === 'spec' ||
     thread.status === 'failed' ||
     thread.status === 'interrupted'
   ) {

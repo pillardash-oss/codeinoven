@@ -1161,6 +1161,8 @@
       toast.success(payload.title, options)
     } else if (payload.kind === 'attention') {
       toast.warning(payload.title, options)
+    } else if (payload.kind === 'spec') {
+      toast.info(payload.title, options)
     } else {
       toast.error(payload.title, options)
     }
