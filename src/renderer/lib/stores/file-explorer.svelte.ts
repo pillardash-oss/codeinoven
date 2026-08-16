@@ -116,8 +116,15 @@ function persistSnapshot(snapshot: FileExplorerSnapshot): void {
   }
 }
 
+/** Debounce window for writing the snapshot to localStorage. Expanding the tree
+ *  (e.g. the search flow expanding every result's ancestor folders) mutates the
+ *  snapshot in a burst; serializing the whole snapshot synchronously on every
+ *  single update froze the renderer. Only the latest state is ever written. */
+const PERSIST_DEBOUNCE_MS = 150
+
 class FileExplorerStore {
   private byProject: Record<string, FileExplorerProjectState> = $state(loadSnapshot().projects)
+  private persistTimer: ReturnType<typeof setTimeout> | null = null
 
   /** The persisted explorer position for a project, or a fresh default. */
   project(projectId: string): FileExplorerProjectState {
@@ -130,7 +137,15 @@ class FileExplorerStore {
       ...this.byProject,
       [projectId]: { ...this.project(projectId), ...patch }
     }
-    persistSnapshot({ version: 1, projects: this.byProject })
+    this.schedulePersist()
+  }
+
+  private schedulePersist(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer)
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      persistSnapshot({ version: 1, projects: this.byProject })
+    }, PERSIST_DEBOUNCE_MS)
   }
 }
 

@@ -107,6 +107,25 @@ export class ProjectFilesService {
     this.fileIndex.invalidate(projectId)
   }
 
+  /** Warm the file index for a project in the background and start watching
+   *  its root for external changes (agent file writes, git operations, other
+   *  editors), so searches are instant and stay fresh without a full rebuild
+   *  per search. Fire-and-forget: projects without a usable local root
+   *  (remote, cloud) simply never get an index or watcher. */
+  async prewarmProject(projectId: string): Promise<void> {
+    try {
+      const root = await this.projectRoot(projectId)
+      await this.fileIndex.prewarm(projectId, root)
+    } catch {
+      // No local root; nothing to index or watch.
+    }
+  }
+
+  /** Stop watching a project and drop its index (project removed). */
+  disposeProject(projectId: string): void {
+    this.fileIndex.dispose(projectId)
+  }
+
   /**
    * Resolve agent-authored file citations against the project root. A candidate
    * resolves to a canonical project-relative path only when the entry actually

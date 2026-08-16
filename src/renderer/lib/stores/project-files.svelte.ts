@@ -207,6 +207,20 @@ class ProjectFilesWorkspace {
     this.persistExplorer(projectId)
   }
 
+  /** Expand a batch of directories (e.g. every ancestor of search results) and
+   *  load their contents in parallel. The explorer snapshot is persisted once
+   *  after the whole batch instead of once per directory — persisting per
+   *  expansion serialized the full snapshot to localStorage on every folder and
+   *  froze the renderer during searches on large trees. */
+  async expandAndLoadDirectories(projectId: string, directories: string[]): Promise<void> {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      state.expandedDirectories[directory] = true
+    }
+    this.persistExplorer(projectId)
+    await Promise.all(directories.map((directory) => this.loadDirectory(projectId, directory)))
+  }
+
   /** Expand every folder in the tree, loading their contents recursively. */
   async expandAllDirectories(projectId: string): Promise<void> {
     const state = this.ensureState(projectId)
