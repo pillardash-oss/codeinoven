@@ -296,6 +296,8 @@ const INVOKE_CHANNELS = [
   'harnessManifest:list',
   'harnessManifest:confirm',
   'harnessManifest:reset',
+  'harnessAutoUpdate:list',
+  'harnessAutoUpdate:set',
   'providerAccounts:getAuthStatus',
   'providerAccounts:beginLogin',
   'providerAccounts:listOffered',

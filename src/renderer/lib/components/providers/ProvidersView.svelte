@@ -54,6 +54,9 @@
   /** Confirmed/effective harness behavior manifests, keyed by harness id. */
   let manifestEntries = $state<Record<string, HarnessManifestEntry>>({})
   let manifestSaving = $state<Record<string, boolean>>({})
+  /** Per-harness "update automatically on launch" preference, keyed by harness id. */
+  let autoUpdatePrefs = $state<Record<string, boolean>>({})
+  let autoUpdateSaving = $state<Record<string, boolean>>({})
 
   function manifestFor(harnessId: string): HarnessManifestEntry | undefined {
     return manifestEntries[harnessId]
@@ -105,6 +108,34 @@
   function manifestSourceLabel(entry: HarnessManifestEntry): string {
     if (!entry.confirmed) return 'declared in manifest'
     return entry.confirmed.source === 'user' ? 'confirmed by you' : 'confirmed in use'
+  }
+
+  async function loadAutoUpdatePrefs(): Promise<void> {
+    try {
+      autoUpdatePrefs = await invoke('harnessAutoUpdate:list')
+    } catch (autoUpdateError) {
+      toast.error(
+        autoUpdateError instanceof Error
+          ? autoUpdateError.message
+          : 'Harness auto-update preferences could not be loaded.'
+      )
+    }
+  }
+
+  async function setAutoUpdatePref(harnessId: string, value: boolean): Promise<void> {
+    autoUpdateSaving[harnessId] = true
+    try {
+      await invoke('harnessAutoUpdate:set', { harnessId, value })
+      await loadAutoUpdatePrefs()
+    } catch (autoUpdateError) {
+      toast.error(
+        autoUpdateError instanceof Error
+          ? autoUpdateError.message
+          : 'Auto-update preference could not be saved.'
+      )
+    } finally {
+      autoUpdateSaving[harnessId] = false
+    }
   }
 
   async function openInstallPage(provider: ProviderConnectionInfo): Promise<void> {
@@ -216,7 +247,8 @@
         providerStore.checkAll().then(() => checkAllAuth()),
         baseUrlProviderStore.load(),
         harnessLifecycleStore.checkAll(),
-        loadManifests()
+        loadManifests(),
+        loadAutoUpdatePrefs()
       ])
     })()
   })
@@ -412,6 +444,25 @@
             </div>
           </div>
         {/if}
+
+        <div class="mt-3 flex items-center justify-between gap-3 border-t border-border pt-2.5">
+          <div class="min-w-0">
+            <p class="text-xs font-medium text-foreground">Update automatically on launch</p>
+            <p class="mt-0.5 text-[10px] text-dimmed">
+              When on, {provider.name} is updated in the background whenever you open {APP_NAME} — no
+              need to update it manually.
+            </p>
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            <Switch
+              checked={autoUpdatePrefs[provider.id] === true}
+              disabled={autoUpdateSaving[provider.id]}
+              onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+              aria-label={`Update ${provider.name} automatically on launch`}
+              title={`Set whether ${provider.name} updates automatically on launch`}
+            />
+          </div>
+        </div>
       </div>
     {/each}
   </div>

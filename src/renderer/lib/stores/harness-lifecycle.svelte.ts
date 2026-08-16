@@ -5,6 +5,7 @@ import type {
 } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
 import { toast } from 'svelte-sonner'
+import { providerStore } from '$lib/stores/providers.svelte'
 
 /** What the embedded terminal is doing for this harness. */
 export type HarnessRunKind = 'update' | 'uninstall'
@@ -98,6 +99,49 @@ class HarnessLifecycleStore {
         uninstallError instanceof Error ? uninstallError.message : 'Uninstall failed to start.'
       toast.error(message)
     }
+  }
+
+  /**
+   * Fire-and-forget auto-update on app open: probe installed harnesses, then
+   * start the self-update terminal for every harness that opted in to auto-update
+   * and has an update available. Runs asynchronously so it never blocks first
+   * paint. Best-effort — failures are swallowed (the dock still shows any runs).
+   */
+  async autoUpdateOnStartup(): Promise<void> {
+    try {
+      // Wait for the optional harness/provider services to be registered after
+      // first paint (they resolve after `app:waitForFeatures`), then read prefs.
+      const prefs = await this.waitForReady()
+      if (!prefs) return
+      const enabledIds = Object.keys(prefs).filter((harnessId) => prefs[harnessId])
+      if (enabledIds.length === 0) return
+
+      await providerStore.init()
+      // Probe installed versions first — update availability compares the
+      // freshly detected installed version against the published latest.
+      await providerStore.checkAll()
+      await this.checkAll()
+
+      for (const provider of providerStore.providers) {
+        if (enabledIds.includes(provider.id) && this.updateAvailableFor(provider.id)) {
+          await this.startUpdate(provider.id, provider.name)
+        }
+      }
+    } catch {
+      // Auto-update is best-effort on startup.
+    }
+  }
+
+  /** Poll the persisted auto-update prefs until the service is ready. */
+  private async waitForReady(): Promise<Record<string, boolean> | undefined> {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try {
+        return await invoke('harnessAutoUpdate:list')
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    }
+    return undefined
   }
 
   /** One process exited: record it, then re-probe so version/badge refresh. */
