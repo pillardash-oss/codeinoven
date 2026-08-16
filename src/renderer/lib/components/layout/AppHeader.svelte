@@ -556,7 +556,7 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <header
-  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4"
+  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
   style={trafficLightInsetStyle()}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
