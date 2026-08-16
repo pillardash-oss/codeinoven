@@ -851,7 +851,9 @@ class ProjectFilesWorkspace {
       projectId,
       previousTabId,
       nextTabId,
-      nextPath
+      nextPath,
+      preview,
+      true
     )
     if (remapped) return
     const threadId = contextSidebarState.threadIdForProject(projectId)
@@ -992,7 +994,15 @@ class ProjectFilesWorkspace {
     }
     for (const previousId of Object.keys(remapped)) {
       const next = remapped[previousId]
-      contextSidebarState.remapProjectFile(projectId, previousId, next.id, next.path)
+      const tab = state.tabs.find((candidate) => candidate.id === next.id)
+      contextSidebarState.remapProjectFile(
+        projectId,
+        previousId,
+        next.id,
+        next.path,
+        tab?.preview ?? false,
+        false
+      )
     }
 
     for (const path of Object.keys(state.expandedDirectories).filter(isWithin)) {
