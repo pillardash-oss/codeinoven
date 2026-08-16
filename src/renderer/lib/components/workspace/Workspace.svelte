@@ -105,6 +105,8 @@
   } from '$lib/stores/workspace.svelte'
   import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -546,8 +548,13 @@
   }
 
   function threadHasVisibleWork(thread: Thread): boolean {
+    const settledWorking =
+      agentRuns.hasSettled(thread.projectId, thread.id) &&
+      agentRuns.isBusy(thread.projectId, thread.id)
     return (
-      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
+      settledWorking ||
+      (!agentRuns.hasSettled(thread.projectId, thread.id) && isThreadWorking(thread)) ||
+      coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
     )
   }
 
@@ -1295,6 +1302,18 @@
   $effect(() => {
     const selected = workspaceState.selectedThread
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
+  })
+
+  // Warm the message cache the moment a thread is selected (including the
+  // view-switch restores between Chats and Projects) so the keyed ThreadView
+  // mounts straight onto its history instead of flashing "Loading
+  // conversation…" while `loadLocal` fetches the page. Non-destructive —
+  // ThreadView merges the same bounded window and never reloads a warm cache.
+  $effect(() => {
+    const selected = workspaceState.selectedThread
+    if (!selected) return
+    if (threadMessages.loaded(selected.projectId, selected.id)) return
+    void threadMessages.preload(selected.projectId, selected.id)
   })
 
   // Live thread updates pushed from the main process (status/read changes

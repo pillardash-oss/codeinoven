@@ -56,6 +56,15 @@ class AgentRunsStore {
     return this.runs.get(threadKey(projectId, threadId))?.busy ?? false
   }
 
+  /** Whether this thread's run state has been settled by a live session check
+   *  (a ThreadView mounted for it and its live status was observed, or its
+   *  session streamed activity). Once settled, `isBusy` is authoritative and a
+   *  stale persisted `planning`/`executing` status must not keep the working
+   *  UI (row spinner, header indicator) alive. */
+  hasSettled(projectId: string, threadId: string): boolean {
+    return this.runs.has(threadKey(projectId, threadId))
+  }
+
   /** ID of the user message that started the current turn, if any. */
   currentTurnUserMessageId(projectId: string, threadId: string): string | null {
     return this.runs.get(threadKey(projectId, threadId))?.currentTurnUserMessageId ?? null

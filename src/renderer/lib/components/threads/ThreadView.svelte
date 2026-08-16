@@ -282,9 +282,13 @@
   // still running. Coordinator status also represents delegated workflow work,
   // though, so only restore non-coordinators synchronously; the coordinator's
   // live session status below determines whether its own trace is actually busy.
+  // A thread with no bound session can never be working — the persisted status
+  // is stale (a run always binds a session), so skip the optimistic restore and
+  // let the live session check settle the real state.
   // svelte-ignore state_referenced_locally
   if (
     (thread.status === 'planning' || thread.status === 'executing') &&
+    Boolean(thread.sessionId) &&
     thread.assignmentRole !== 'coordinator' &&
     thread.achievementRole !== 'coordinator'
   ) {
@@ -2547,6 +2551,13 @@
       return
     }
     if (status === 'planning' || status === 'executing') {
+      // Without a bound session the thread cannot be running — the persisted
+      // status is a leftover, so never restore the working UI from it (the
+      // live session check settles the real state).
+      if (!thread.sessionId) {
+        setIdleFromRestore()
+        return
+      }
       agentRuns.setBusy(
         thread.projectId,
         thread.id,
@@ -2676,6 +2687,15 @@
       // mirror + restore to finish so the queue is populated before deciding.
       await localReady
       if (!alive) return
+      // No live session record means the persisted in-flight status is stale: a
+      // genuinely running turn always registers its session status (or a pending
+      // spec/retry surfaces it). loadLocal may have optimistically restored busy
+      // off a leftover `planning`/`executing` DB row — clear it so a finished or
+      // never-started thread never keeps the composer/rows looking busy after a
+      // view switch or refresh.
+      if (providerStatus === null) {
+        setIdleFromRestore()
+      }
       // A thread opened while its turn is still running has its accumulated
       // working trace only in the live harness session: the mirror persists
       // assistant parts only when the turn idles/completes, and parts that
@@ -6523,7 +6543,7 @@
       data-region="conversation"
     >
       <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
-        {#if !loaded}
+        {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
             <Loader2 size={16} class="animate-spin" />
             Loading conversation...
@@ -7027,7 +7047,7 @@
             />
           {/if}
 
-          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && threadWorking && latestTurnRenderableParts.length === 0)}
+          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>

@@ -4,6 +4,7 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
 
   interface Props {
@@ -16,8 +17,15 @@
 
   let thread = $derived(result.thread)
 
+  /** Live-settled run state wins over the persisted status, matching ThreadRow. */
+  let isWorking = $derived(
+    agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : isThreadWorking(thread)
+  )
+
   let badgeProps = $derived.by(() => {
-    if (thread.status === 'planning' || thread.status === 'executing') {
+    if (isWorking) {
       return { stage: 'working' as const, variant: 'spinner' as const }
     }
     if (thread.status === 'awaiting_approval') {
@@ -32,8 +40,6 @@
   })
 
   type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
-
-  let isWorking = $derived(isThreadWorking(thread))
 
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {

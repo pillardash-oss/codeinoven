@@ -56,6 +56,7 @@
   import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     coordinatorHasActiveDelegates,
@@ -800,9 +801,12 @@
         </div>
       {:else if workspaceState.selectedThread}
         {@const thread = workspaceState.selectedThread}
+        {@const threadRunSettled = agentRuns.hasSettled(thread.projectId, thread.id)}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          isThreadWorking(thread) ||
+          (threadRunSettled
+            ? agentRuns.isBusy(thread.projectId, thread.id)
+            : isThreadWorking(thread)) ||
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}

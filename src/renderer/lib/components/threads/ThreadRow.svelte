@@ -321,7 +321,17 @@
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
-  let isWorking = $derived(isThreadWorking(thread) || delegatedWorkActive)
+  /** Once the run state has been settled by a live session check (a ThreadView
+   *  mounted for this thread, or its session streamed activity), the live busy
+   *  flag is authoritative — a stale persisted `planning`/`executing` status
+   *  must not keep the spinner alive after the turn actually finished. Before
+   *  anything settles (fresh app start), the persisted status is the only
+   *  signal and stands in for genuinely in-flight work. */
+  let isWorking = $derived(
+    (agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : isThreadWorking(thread)) || delegatedWorkActive
+  )
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
