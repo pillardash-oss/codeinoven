@@ -5,7 +5,10 @@
     id: string
     /** Used for both the tooltip and the accessible name. */
     label: string
-    icon: Component
+    /** Omit in favor of `countLabel` for items that show a number instead of an icon. */
+    icon?: Component
+    /** Renders as plain text instead of `icon` — e.g. the message-history count. */
+    countLabel?: string
     active: boolean
     /** Renders a small status dot on the icon — e.g. pending memory proposals. */
     badge?: 'completed' | 'attention' | 'error'
@@ -77,7 +80,11 @@
             : 'opacity-0'}"
           aria-hidden="true"
         ></span>
-        <Icon size={16} strokeWidth={1.8} />
+        {#if item.countLabel !== undefined}
+          <span class="text-[11px] font-semibold tabular-nums">{item.countLabel}</span>
+        {:else if Icon}
+          <Icon size={16} strokeWidth={1.8} />
+        {/if}
         {#if item.badge}
           <span class="absolute -top-0.5 -right-0.5 flex items-start">
             <StatusBadge kind={item.badge} title={item.badgeTitle ?? item.label} />
