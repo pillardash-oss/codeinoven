@@ -239,27 +239,6 @@ export class RemoteControlDatabase {
     displayName: string
     image: string | null
   }): void {
-    try {
-      this.insertOrUpdateOAuthUser(input)
-    } catch (error) {
-      // The users table keys on id but also enforces UNIQUE(email). Accounts
-      // created before desktop auth moved to Convex hold the same email under
-      // an older id, so the upsert can collide on email. Self-heal by merging
-      // the stale row (and its dependents) into the canonical identity.
-      if (isUniqueConstraintError(error)) {
-        this.mergeOAuthUserByEmail(input)
-        return
-      }
-      throw error
-    }
-  }
-
-  private insertOrUpdateOAuthUser(input: {
-    id: string
-    email: string
-    displayName: string
-    image: string | null
-  }): void {
     const now = Date.now()
     this.db
       .prepare(
@@ -271,53 +250,6 @@ export class RemoteControlDatabase {
            image_url = excluded.image_url`
       )
       .run(input.id, input.email, input.displayName, input.image, now)
-  }
-
-  /**
-   * Merge a duplicate user row (same email, older id) into the canonical
-   * identity: free the email for the canonical row, re-parent every dependent,
-   * then drop the stale row. Runs atomically so a failure leaves the database
-   * untouched.
-   */
-  private mergeOAuthUserByEmail(input: {
-    id: string
-    email: string
-    displayName: string
-    image: string | null
-  }): void {
-    this.db.transaction(() => {
-      const existing = this.db
-        .prepare('SELECT id FROM users WHERE email = ? ORDER BY created_at ASC LIMIT 1')
-        .get(input.email) as { id: string } | undefined
-      if (!existing || existing.id === input.id) {
-        this.insertOrUpdateOAuthUser(input)
-        return
-      }
-      // The canonical row cannot be inserted while the stale row holds the
-      // email (UNIQUE), and dependents cannot be re-parented before the
-      // canonical row exists (FK). Free the email with a unique placeholder
-      // first; the stale row is deleted at the end of the transaction.
-      this.db
-        .prepare('UPDATE users SET email = ? WHERE id = ?')
-        .run(`legacy-migrated:${existing.id}`, existing.id)
-      this.insertOrUpdateOAuthUser(input)
-      for (const table of [
-        'desktop_authorization_codes',
-        'account_tokens',
-        'sessions',
-        'desktops',
-        'mobile_devices'
-      ]) {
-        this.db
-          .prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`)
-          .run(input.id, existing.id)
-      }
-      this.db
-        .prepare('UPDATE audit_events SET user_id = ? WHERE user_id = ?')
-        .run(input.id, existing.id)
-      this.db.prepare('DELETE FROM users WHERE id = ?').run(existing.id)
-      this.insertOrUpdateOAuthUser(input)
-    })()
   }
 
   createDesktopAuthorizationCode(input: {
@@ -708,11 +640,4 @@ export class RemoteControlDatabase {
         .run(maxEvents)
     }
   }
-}
-
-/** bun:sqlite surfaces UNIQUE violations as SQLITE_CONSTRAINT_UNIQUE (errno 2067). */
-function isUniqueConstraintError(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false
-  const record = error as Record<string, unknown>
-  return record['code'] === 'SQLITE_CONSTRAINT_UNIQUE' || record['errno'] === 2067
 }
