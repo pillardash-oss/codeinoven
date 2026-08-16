@@ -84,6 +84,7 @@
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
   let dropHoverPath: string | null = null
   let treeBusy = $state(false)
+  const filterActive = $derived(Boolean(filterQuery.trim()) || lastTurnOnly)
   /** When true, the next reveal scroll is suppressed. Set during a pointer
    *  interaction on the tree so a user clicking a row isn't yanked around;
    *  cleared on a macrotask so external reveals still auto-scroll. */
@@ -906,11 +907,10 @@
   }
 
   function shouldRenderDirectory(path: string): boolean {
-    // An explicit expansion always renders, even if a stale override lingers.
-    if (projectState.expandedDirectories[path]) return true
     // A deliberate fold during a filter session hides the subtree even when
     // the filter would otherwise force-render it as a matching ancestor.
     if (collapsedOverrides.has(path)) return false
+    if (projectState.expandedDirectories[path]) return true
     if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
     if (!filterQuery.trim() || !projectState.entriesByDirectory[path]) return false
     return directoryMatchesQuery(path)
@@ -1074,9 +1074,13 @@
         </button>
       </div>
     {:else if entry.kind === 'directory' && shouldRenderDirectory(entry.path)}
-      <div transition:slide={{ duration: motionDuration(140), easing: cubicOut }}>
+      {#if filterActive}
         {@render directoryRows(entry.path, depth + 1)}
-      </div>
+      {:else}
+        <div transition:slide={{ duration: motionDuration(140), easing: cubicOut }}>
+          {@render directoryRows(entry.path, depth + 1)}
+        </div>
+      {/if}
     {/if}
   {/each}
 {/snippet}
