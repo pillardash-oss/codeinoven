@@ -914,8 +914,10 @@
     if (collapsedOverrides.has(path)) return false
     if (projectState.expandedDirectories[path]) return true
     if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
-    if (!filterQuery.trim() || !projectState.entriesByDirectory[path]) return false
-    return directoryMatchesQuery(path)
+    // Search matching controls which directory rows are visible. The search
+    // effect already expands and loads every ancestor of each result, so a
+    // matching but collapsed directory must not render its descendants.
+    return false
   }
 
   async function loadLastTurnDirectories(paths: string[]): Promise<void> {
