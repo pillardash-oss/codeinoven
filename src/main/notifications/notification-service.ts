@@ -731,14 +731,16 @@ export class NotificationService {
     kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
     projectName: string
   ): AgentNotificationPayload {
-    const title = kind === 'completed' ? 'Side chat complete' : 'Side chat failed'
+    const notificationKind: AgentNotificationKind =
+      kind === 'completed' ? 'chat-completed' : 'error'
+    const title = kind === 'completed' ? 'Chat response available' : 'Chat response failed'
     const body =
       kind === 'completed'
-        ? `${thread.title} — your side chat is ready in ${projectName}.`
-        : `${thread.title} — your side chat stopped with an error in ${projectName}.`
+        ? `${thread.title} — your chat response is ready in ${projectName}.`
+        : `${thread.title} — your chat response stopped with an error in ${projectName}.`
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-temp-${temporaryChatId}-${Date.now()}`,
-      kind,
+      kind: notificationKind,
       title,
       body,
       projectId: thread.projectId,

@@ -36,6 +36,7 @@
 
   /* Success / Status */
   --color-success: #16a34a;
+  --color-chat-success: #0f766e;
   --color-warning: #d97706;
   --color-info: #2563eb;
 
@@ -102,6 +103,7 @@
   --color-border-strong: #3b3b42;
 
   --color-info: #7ba3d4;
+  --color-chat-success: #34d399;
   --color-thread-spec: #a78bfa;
 }
 

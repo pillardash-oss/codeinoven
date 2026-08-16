@@ -1157,8 +1157,15 @@
       }
     }
 
+    const chatResponseToastStyle =
+      '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
+      ' --success-border: var(--color-chat-success);' +
+      ' --success-text: var(--color-chat-success);'
+
     if (payload.kind === 'completed') {
       toast.success(payload.title, options)
+    } else if (payload.kind === 'chat-completed') {
+      toast.success(payload.title, { ...options, style: chatResponseToastStyle })
     } else if (payload.kind === 'attention') {
       toast.warning(payload.title, options)
     } else if (payload.kind === 'spec') {
