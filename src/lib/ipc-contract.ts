@@ -1,4 +1,5 @@
 import type {
+  AgentArtifact,
   AgentMessage,
   AgentModelSelection,
   AgentRole,
@@ -575,6 +576,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentContextCapabilities
   >
+  'agent:listArtifacts': Contract<[projectId: string, threadId: string], AgentArtifact[]>
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>

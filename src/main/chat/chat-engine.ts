@@ -78,6 +78,7 @@ import {
 } from '../services/image-descriptor'
 import type {
   AgentAccountUsage,
+  AgentArtifact,
   AgentEvent,
   AgentMessage,
   AgentModelSelection,
@@ -168,6 +169,7 @@ import {
 } from '../../lib/brainstorm/brainstorm-validation'
 import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
+import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
@@ -1286,6 +1288,7 @@ export class ChatEngine {
   /** Coalesces live-activity repairs of a task's persisted working status. */
   private workingStatusReconciliations = new Map<string, Promise<void>>()
   private readonly agentProcesses = new AgentProcessService()
+  private generatedArtifactService: GeneratedArtifactService
 
   /**
    * Tracks reasoning start timestamps per session per part id.
@@ -1413,6 +1416,7 @@ export class ChatEngine {
       }
     )
     this.memoryService = new MemoryService(storage)
+    this.generatedArtifactService = new GeneratedArtifactService(storage)
     this.promptAssembler = new PromptAssembler(this.memoryService)
     this.secretVault = new SecretVault(storage)
     this.utilityRuntime = new UtilityRuntimeService(storage)
@@ -1424,8 +1428,8 @@ export class ChatEngine {
       this.executeImageDescriptor(request)
     )
     if (this.computerUsePip) {
-      this.utilityOrchestration.onCuaActivity((pid, threadId) => {
-        void this.computerUsePip?.track(pid, threadId)
+      this.utilityOrchestration.onCuaActivity((pid, threadId, sessionId) => {
+        void this.computerUsePip?.track(pid, threadId, sessionId)
       })
     }
     this.specEngine = new SpecEngine(storage, database, {
@@ -1483,6 +1487,9 @@ export class ChatEngine {
     )
     ipcMain.handle('agent:listContextCapabilities', (_, projectId: string, threadId: string) =>
       this.listContextCapabilities(projectId, threadId)
+    )
+    ipcMain.handle('agent:listArtifacts', (_, projectId: string, threadId: string) =>
+      this.listArtifacts(projectId, threadId)
     )
     ipcMain.handle('agent:listProcesses', (_, projectId: unknown, threadId: unknown) =>
       this.agentProcesses.list(
@@ -3088,7 +3095,17 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     if (!thread.sessionId) {
-      return this.threadManager.loadMessages(projectId, threadId)
+      const messages = await this.threadManager.loadMessages(projectId, threadId)
+      const projectPath = await this.resolveProjectPath(projectId)
+      const synchronized = await this.generatedArtifactService.synchronize(
+        thread,
+        projectPath,
+        messages
+      )
+      if (synchronized.changed) {
+        await this.threadManager.upsertMessages(projectId, threadId, synchronized.messages)
+      }
+      return synchronized.messages
     }
     // The thread's bound session belongs to the harness that created it, not
     // necessarily the one currently selected in settings: after a mid-run
@@ -3123,7 +3140,7 @@ export class ChatEngine {
       // Preserve thinking and tool timestamps from the mirror for parts the driver lacks.
       this.preserveMirrorReasoningStamps(mirror, messages)
       this.preserveMirrorToolStamps(mirror, messages)
-      const merged = restoreMirrorThinkingLevel(
+      let merged = restoreMirrorThinkingLevel(
         mergeAgentMessages(
           mirror,
           classifyProviderMessages(
@@ -3134,6 +3151,13 @@ export class ChatEngine {
         ),
         mirror
       )
+      const artifactProjectPath = await this.resolveProjectPath(projectId)
+      const synchronized = await this.generatedArtifactService.synchronize(
+        thread,
+        artifactProjectPath,
+        merged
+      )
+      merged = synchronized.messages
       await this.threadManager.upsertMessages(projectId, threadId, merged)
       return presentableMessages(merged, isDedicatedAssignmentAuditorThread(thread))
     } catch (error) {
@@ -3147,7 +3171,16 @@ export class ChatEngine {
             previousSessionId: thread.sessionId,
             replacementSessionId
           })
-          return mirror
+          const projectPath = await this.resolveProjectPath(projectId)
+          const synchronized = await this.generatedArtifactService.synchronize(
+            thread,
+            projectPath,
+            mirror
+          )
+          if (synchronized.changed) {
+            await this.threadManager.upsertMessages(projectId, threadId, synchronized.messages)
+          }
+          return synchronized.messages
         } catch (repairError) {
           Logger.error('Structured-output session replacement failed', repairError)
         }
@@ -3159,8 +3192,28 @@ export class ChatEngine {
         thread.sessionId,
         historyMirrorIssue(error, driverId)
       )
-      return this.threadManager.loadMessages(projectId, threadId)
+      const mirror = await this.threadManager.loadMessages(projectId, threadId)
+      const projectPath = await this.resolveProjectPath(projectId)
+      const synchronized = await this.generatedArtifactService.synchronize(
+        thread,
+        projectPath,
+        mirror
+      )
+      if (synchronized.changed) {
+        await this.threadManager.upsertMessages(projectId, threadId, synchronized.messages)
+      }
+      return synchronized.messages
     }
+  }
+
+  async listArtifacts(projectId: string, threadId: string): Promise<AgentArtifact[]> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread) return []
+    const messages = await this.loadMessages(projectId, threadId)
+    const projectPath = await this.resolveProjectPath(projectId)
+    return this.generatedArtifactService.artifactsFor(thread, projectPath, messages)
   }
 
   /**
@@ -4782,6 +4835,15 @@ export class ChatEngine {
       transportPromise
     ])
     const imageDescriptorNote = modelNeedsImageDescriptor ? IMAGE_DESCRIPTOR_SYSTEM_NOTE : ''
+    const generatedArtifactPrompt = artifactInstruction(
+      targetThread ?? {
+        projectId,
+        id: threadId,
+        title: 'current-work',
+        featureSlug: undefined
+      }
+    )
+    const promptBehavior = [behaviorPrompt, generatedArtifactPrompt].filter(Boolean).join('\n\n')
     // One aggregate selected-model input budget across user text + the final
     // system/behavior/tool prompt + hidden orchestration context + history
     // recap, with output/tool headroom reserved once (A-13). The recap takes
@@ -4795,7 +4857,7 @@ export class ChatEngine {
           revisionPrompt: '',
           memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
           imageDescriptorNote,
-          behaviorPrompt,
+          behaviorPrompt: promptBehavior,
           utilityInstructions,
           historyRecap: ''
         })
@@ -4808,7 +4870,7 @@ export class ChatEngine {
           memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
           imageDescriptorNote,
           assignmentCoordinatorSystemPrompt,
-          behaviorPrompt,
+          behaviorPrompt: promptBehavior,
           utilityInstructions,
           behaviorMode,
           historyRecap: ''
