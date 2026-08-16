@@ -88,6 +88,7 @@ const INVOKE_CHANNELS = [
   'agent:getHarnessAuthStatus',
   'agent:listTools',
   'agent:listContextCapabilities',
+  'agent:listArtifacts',
   'agent:listProcesses',
   'agent:killProcess',
   'agent:killThreadProcesses',

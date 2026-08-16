@@ -716,6 +716,13 @@ export interface CuaBridgeStatus {
   detail?: string
 }
 
+/** Cursor position projected into the dimensions of a computer-use PiP frame. */
+export interface ComputerUsePipCursor {
+  visible: boolean
+  x: number
+  y: number
+}
+
 /** One rendered frame of the app an agent is driving, pushed to the renderer. */
 export interface ComputerUsePipFrame {
   pid: number
@@ -725,6 +732,7 @@ export interface ComputerUsePipFrame {
   width: number
   height: number
   timestamp: number
+  cursor?: ComputerUsePipCursor
 }
 
 /** Live state of the computer-use PiP monitor. */
@@ -1928,6 +1936,21 @@ export type AgentPart =
       messageID: string
       presentation: UserMessagePresentation
     }
+
+/** A generated image that can be previewed from a conversation or its context sidebar. */
+export interface AgentArtifact {
+  id: string
+  kind: 'image'
+  filename: string
+  mime: string
+  path: string
+  url: string
+  messageId: string
+  createdAt: number
+  scope: 'chat' | 'project'
+  /** Project-relative path when the artifact lives inside the active project. */
+  relativePath?: string
+}
 
 /** A message in the agent conversation. */
 export interface AgentMessage {

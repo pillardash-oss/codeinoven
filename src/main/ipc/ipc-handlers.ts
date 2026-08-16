@@ -1409,6 +1409,7 @@ export function registerIpcHandlers(
         const projects = await projectManager.listProjects()
         return [
           join(getConfigRoot(), 'chats'),
+          join(getConfigRoot(), 'chat-artifacts'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
