@@ -41,7 +41,7 @@
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
-  import ThreadNoteModal from '../threads/ThreadNoteModal.svelte'
+  import ThreadNotePanel from '../threads/ThreadNotePanel.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
@@ -627,9 +627,6 @@
   let editProjectIconType = $state<string | undefined>()
   let editProjectPendingIcon = $state<{ path: string; dataUrl: string } | undefined>()
 
-  // Thread-note modal opened from the right-dock note indicator
-  let dockNoteThread = $state<Thread | null>(null)
-
   // Edit-scope modal
   let editBucketTarget = $state<ScopeBucket | null>(null)
   let editBucketName = $state('')
@@ -913,21 +910,28 @@
         ]
       : []
 
-    // The amber thread-note indicator sits alone at the very bottom, below its
-    // own hairline: it marks the selected thread's private note as something
-    // that needs attention and opens it on click.
-    const threadNote: ContextDockItem[] = threadNotesState.has(selectedThread.id)
-      ? [
-          {
-            id: 'note',
-            label: 'Note available',
-            icon: StickyNote,
-            active: false,
-            tone: 'warning',
-            onSelect: () => (dockNoteThread = selectedThread)
-          }
-        ]
-      : []
+    // The thread-note indicator sits alone at the very bottom, below its own
+    // hairline. It's always present — not just once a note exists — so it
+    // also doubles as the "add a note" entry point; the amber tone only
+    // kicks in once there's something written to draw attention to.
+    const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNote: ContextDockItem[] = [
+      {
+        id: 'note',
+        label: hasThreadNote ? 'Note available' : 'Add note',
+        icon: StickyNote,
+        active: dockKindActive('thread-note'),
+        tone: hasThreadNote ? 'warning' : undefined,
+        onSelect: () =>
+          toggleDockPanel('thread-note', () =>
+            contextSidebarState.openThreadNote(
+              selectedThread.projectId,
+              selectedThread.id,
+              selectedThread.title
+            )
+          )
+      }
+    ]
 
     return [history, workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
   })
@@ -3383,6 +3387,8 @@
                   threadId={activeContextTab.threadId}
                   bind:activeSection={activeContextTab.memorySection}
                 />
+              {:else if activeContextTab.kind === 'thread-note'}
+                <ThreadNotePanel tab={activeContextTab} />
               {:else}
                 <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
               {/if}
@@ -3540,16 +3546,6 @@
     </button>
   {/snippet}
 </Modal>
-
-{#if dockNoteThread}
-  <ThreadNoteModal
-    open
-    projectId={dockNoteThread.projectId}
-    threadId={dockNoteThread.id}
-    threadTitle={dockNoteThread.title}
-    onClose={() => (dockNoteThread = null)}
-  />
-{/if}
 
 <!-- Edit Project Modal -->
 <Modal open={showEditModal} title="Edit Project" onClose={() => (showEditModal = false)}>
