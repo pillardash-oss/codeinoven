@@ -169,7 +169,7 @@ function claudeAuthenticationResult(value: unknown): boolean | undefined {
 function claudeModelName(model: ModelInfo): string {
   const resolvedName = model.description.split(' · ', 1)[0]?.trim()
   if (!resolvedName) return model.displayName
-  if (model.value === 'default') return `${model.displayName} · ${resolvedName}`
+  if (model.value === 'default') return model.displayName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
