@@ -85,7 +85,9 @@
     'sources',
     'memory',
     'cloud-deployment',
-    'debugger'
+    'debugger',
+    'notifications',
+    'git'
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
