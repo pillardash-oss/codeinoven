@@ -1163,12 +1163,12 @@
       </div>
     {/if}
 
-    <!-- Spec studio — only for engineering-mode threads, never in chat mode -->
+    <!-- Spec studio — only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
           ? 'bg-elevated text-foreground'
-          : workspaceState.specStudioError
+          : workspaceState.specStudioRetryable
             ? 'text-danger hover:bg-danger/10'
             : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:opacity-50"
         disabled={workspaceState.specStudioBusy}
@@ -1176,13 +1176,16 @@
           ? 'Formulating specification'
           : workspaceState.specStudioOpen
             ? 'Close spec studio'
-            : workspaceState.specStudioError
+            : workspaceState.specStudioRetryable
               ? 'Retry specification generation'
               : 'Open spec studio'}
         title={workspaceState.specStudioFormulating
           ? 'Formulating specification'
-          : workspaceState.specStudioError ||
-            (workspaceState.specStudioOpen ? 'Close spec studio' : 'Open spec studio')}
+          : workspaceState.specStudioRetryable
+            ? workspaceState.specStudioError || 'Retry specification generation'
+            : workspaceState.specStudioOpen
+              ? 'Close spec studio'
+              : 'Open spec studio'}
         onclick={() => workspaceState.toggleSpecStudio?.()}
       >
         {#if workspaceState.specStudioBusy}
@@ -1195,7 +1198,7 @@
             ? workspaceState.specStudioFormulating
               ? 'Formulating…'
               : 'Preparing…'
-            : workspaceState.specStudioError
+            : workspaceState.specStudioRetryable
               ? 'Retry spec'
               : 'Spec'}
         </span>
