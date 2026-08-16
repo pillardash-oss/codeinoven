@@ -19,8 +19,6 @@ import type {
 } from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
-const DESKTOP_AUTHORIZATION_TTL_MS = 2 * 60 * 1_000
-const ACCOUNT_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
@@ -183,165 +181,6 @@ async function sessionFromRequest(request: Request): Promise<AuthenticatedSessio
     persistedSessions.set(session.id, { identity: identitySnapshot, persistedAt: now })
   }
   return session
-}
-
-function validDesktopCallback(value: string | null): string | null {
-  if (!value || value.length > 500) return null
-  try {
-    const url = new URL(value)
-    const port = Number.parseInt(url.port, 10)
-    if (
-      url.protocol !== 'http:' ||
-      url.hostname !== '127.0.0.1' ||
-      !Number.isInteger(port) ||
-      port < 1 ||
-      port > 65_535 ||
-      url.pathname !== '/account/callback' ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    ) {
-      return null
-    }
-    return url.toString()
-  } catch {
-    return null
-  }
-}
-
-function validBase64Url(value: string | null, minimum: number, maximum: number): value is string {
-  return Boolean(
-    value && value.length >= minimum && value.length <= maximum && /^[A-Za-z0-9_-]+$/u.test(value)
-  )
-}
-
-function publicRequestOrigin(url: URL): string | null {
-  if (url.host === new URL(remoteAuthOrigin).host) return remoteAuthOrigin
-  if (url.host === new URL(remotePublicOrigin).host) return remotePublicOrigin
-  return null
-}
-
-function redirect(location: string, source?: Response): Response {
-  const headers = new Headers({
-    Location: location,
-    'Cache-Control': 'no-store',
-    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
-    'Referrer-Policy': 'no-referrer',
-    'X-Content-Type-Options': 'nosniff'
-  })
-  for (const cookie of source?.headers.getSetCookie() ?? []) headers.append('Set-Cookie', cookie)
-  return new Response(null, { status: 302, headers })
-}
-
-async function beginDesktopSignIn(request: Request, url: URL): Promise<Response> {
-  const { auth } = await import('./auth')
-  const publicOrigin = publicRequestOrigin(url)
-  const provider = url.searchParams.get('provider')
-  const redirectUri = validDesktopCallback(url.searchParams.get('redirect_uri'))
-  const state = url.searchParams.get('state')
-  const codeChallenge = url.searchParams.get('code_challenge')
-  if (
-    !publicOrigin ||
-    (provider !== 'google' && provider !== 'apple') ||
-    !redirectUri ||
-    !validBase64Url(state, 32, 128) ||
-    !validBase64Url(codeChallenge, 43, 43) ||
-    url.searchParams.get('code_challenge_method') !== 'S256'
-  ) {
-    return json({ error: 'invalid-desktop-sign-in' }, 400)
-  }
-  if (!withinRateLimit(request, 'desktop-sign-in', 20)) {
-    return json({ error: 'rate-limited' }, 429)
-  }
-
-  const authorizeUrl = new URL('/desktop/authorize', publicOrigin)
-  authorizeUrl.search = new URLSearchParams({
-    redirect_uri: redirectUri,
-    state,
-    code_challenge: codeChallenge
-  }).toString()
-  const errorUrl = new URL(authorizeUrl)
-  errorUrl.searchParams.set('oauth_error', provider)
-
-  const headers = new Headers(request.headers)
-  headers.set('Content-Type', 'application/json')
-  headers.set('Origin', publicOrigin)
-  headers.delete('Content-Length')
-  const authRequest = new Request(new URL('/api/auth/sign-in/social', publicOrigin), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      provider,
-      callbackURL: authorizeUrl.toString(),
-      errorCallbackURL: errorUrl.toString()
-    })
-  })
-  const response = await auth.handler(authRequest)
-  if (!response.ok) return response
-  const payload = (await response.json()) as Record<string, unknown>
-  const providerUrl = payload['url']
-  if (typeof providerUrl !== 'string') return json({ error: 'oauth-start-failed' }, 502)
-  return redirect(providerUrl, response)
-}
-
-async function authorizeDesktop(request: Request, url: URL): Promise<Response> {
-  const redirectUri = validDesktopCallback(url.searchParams.get('redirect_uri'))
-  const state = url.searchParams.get('state')
-  const codeChallenge = url.searchParams.get('code_challenge')
-  if (!redirectUri || !validBase64Url(state, 32, 128) || !validBase64Url(codeChallenge, 43, 43)) {
-    return json({ error: 'invalid-desktop-authorization' }, 400)
-  }
-  const callback = new URL(redirectUri)
-  callback.searchParams.set('state', state)
-  if (url.searchParams.has('oauth_error')) {
-    callback.searchParams.set('error', 'oauth-failed')
-    return redirect(callback.toString())
-  }
-  const session = await sessionFromRequest(request)
-  if (!session) {
-    callback.searchParams.set('error', 'unauthorized')
-    return redirect(callback.toString())
-  }
-  const code = randomToken(32)
-  database.createDesktopAuthorizationCode({
-    codeHash: tokenHash(code),
-    userId: session.userId,
-    codeChallenge,
-    redirectUri,
-    expiresAt: Date.now() + DESKTOP_AUTHORIZATION_TTL_MS
-  })
-  callback.searchParams.set('code', code)
-  return redirect(callback.toString())
-}
-
-async function exchangeDesktopAuthorizationCode(request: Request): Promise<Response> {
-  if (!withinRateLimit(request, 'desktop-auth-exchange', 30)) {
-    return json({ error: 'rate-limited' }, 429)
-  }
-  const body = await readJsonObject(request)
-  const code = typeof body?.['code'] === 'string' ? body['code'] : null
-  const codeVerifier = typeof body?.['codeVerifier'] === 'string' ? body['codeVerifier'] : null
-  const redirectUri = validDesktopCallback(
-    typeof body?.['redirectUri'] === 'string' ? body['redirectUri'] : null
-  )
-  if (!validBase64Url(code, 32, 128) || !validBase64Url(codeVerifier, 43, 128) || !redirectUri) {
-    return json({ error: 'invalid-authorization-code' }, 400)
-  }
-  const authorization = database.consumeDesktopAuthorizationCode({
-    codeHash: tokenHash(code),
-    codeChallenge: tokenHash(codeVerifier),
-    redirectUri
-  })
-  if (!authorization) return json({ error: 'invalid-authorization-code' }, 400)
-
-  const profileToken = randomToken(48)
-  database.createAccountToken({
-    tokenHash: tokenHash(profileToken),
-    userId: authorization.user_id,
-    expiresAt: Date.now() + ACCOUNT_TOKEN_TTL_MS
-  })
-  return json({ profileToken, expiresAt: Date.now() + ACCOUNT_TOKEN_TTL_MS })
 }
 
 function bearerToken(request: Request): string | null {
@@ -682,30 +521,11 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   if (!requestOriginAllowed(request)) return json({ error: 'origin-not-allowed' }, 403)
   if (!withinRateLimit(request)) return json({ error: 'rate-limited' }, 429)
   if (url.pathname === '/healthz' && request.method === 'GET') return json({ ok: true })
-  if (url.pathname === '/desktop/sign-in' && request.method === 'GET') {
-    return beginDesktopSignIn(request, url)
-  }
-  if (url.pathname === '/desktop/authorize' && request.method === 'GET') {
-    return authorizeDesktop(request, url)
-  }
-  if (url.pathname === '/v1/desktop-auth/exchange' && request.method === 'POST') {
-    return exchangeDesktopAuthorizationCode(request)
-  }
   if (
     url.pathname === '/v1/relay' &&
     request.headers.get('upgrade')?.toLowerCase() === 'websocket'
   ) {
     return websocketUpgrade(request, url)
-  }
-  if (url.pathname.startsWith('/api/auth/')) {
-    const { auth } = await import('./auth')
-    const endingSession =
-      url.pathname === '/api/auth/sign-out' ? await sessionFromRequest(request) : null
-    const response = await auth.handler(request)
-    if (endingSession && response.ok) {
-      closeSessionSockets(endingSession.id, 4003, 'session-ended')
-    }
-    return response
   }
   if (url.pathname === '/v1/device-enrollments' && request.method === 'POST') {
     return handleEnrollmentRequest(request)

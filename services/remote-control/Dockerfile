@@ -1,8 +1,8 @@
 FROM oven/bun:1.3.10-alpine
 
 WORKDIR /app
-COPY services/remote-control/package.json services/remote-control/bun.lock ./
-RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY services/remote-control/package.json ./
+RUN bun install --production --ignore-scripts
 COPY services/remote-control/*.ts ./
 
 ENV HOST=0.0.0.0
