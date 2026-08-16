@@ -21,7 +21,7 @@
   let isWorking = $derived(
     agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
-      : isThreadWorking(thread)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
   )
 
   let badgeProps = $derived.by(() => {

@@ -331,7 +331,7 @@
   let isWorking = $derived(
     (agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
-      : isThreadWorking(thread)) || delegatedWorkActive
+      : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
   )
 
   /**
