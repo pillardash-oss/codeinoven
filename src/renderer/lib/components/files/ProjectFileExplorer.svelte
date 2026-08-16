@@ -129,9 +129,6 @@
     const query = filterQuery.trim()
     const requestId = ++searchRequestId
 
-    // A new query starts a fresh filter session: drop the collapse overrides
-    // so the search can re-expand every matching folder again.
-    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
     if (!query) return
 
     const timer = setTimeout(async () => {
@@ -171,7 +168,7 @@
   function toggleLastTurnFilter(): void {
     lastTurnOnly = !lastTurnOnly
     autoFiltered = false
-    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
+    clearCollapsedOverrides()
   }
 
   function clearSearchExpansions(): void {
@@ -180,12 +177,17 @@
     searchExpandedDirectories.clear()
   }
 
+  function clearCollapsedOverrides(): void {
+    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
+  }
+
   function handleFilterInput(event: Event): void {
     if (!(event.currentTarget instanceof HTMLInputElement)) return
     const nextQuery = event.currentTarget.value
     if (nextQuery === filterQuery) return
     searchRequestId += 1
     clearSearchExpansions()
+    clearCollapsedOverrides()
     filterQuery = nextQuery
   }
 
@@ -203,7 +205,7 @@
     clearSearchExpansions()
     filterQuery = ''
     filterOpen = false
-    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
+    clearCollapsedOverrides()
     if (clearReveal) revealedSearchPath = null
   }
 
