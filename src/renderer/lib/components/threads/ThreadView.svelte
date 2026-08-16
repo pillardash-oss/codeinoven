@@ -113,7 +113,7 @@
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
-  import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
+  import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
@@ -3868,25 +3868,8 @@
     void revealCitationFile(thread.projectId, path)
   }
 
-  async function openFilePart(url: string): Promise<void> {
-    const projectPath = workspaceState.activeProject?.path
-    if (!projectPath || !url.startsWith('file://')) return
-
-    const absolutePath = fileUrlToPath(url)
-    const normalizedProjectPath = projectPath.replace(/\\/gu, '/').replace(/\/$/u, '')
-    const normalizedFilePath = absolutePath.replace(/\\/gu, '/')
-    if (
-      normalizedFilePath === normalizedProjectPath ||
-      normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
-    ) {
-      await revealFileInAppTree(thread.projectId, absolutePath)
-      return
-    }
-
-    const revealed = await invoke('shell:revealPath', absolutePath)
-    if (!revealed) {
-      toast.error('This local file is outside the active project or no longer exists.')
-    }
+  function openFilePart(url: string): void {
+    void revealLocalFile(thread.projectId, url)
   }
 
   function citationForFilePart(
