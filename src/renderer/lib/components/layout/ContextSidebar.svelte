@@ -74,7 +74,22 @@
   // so only these kinds get a tab strip — the rest get a plain titled header.
   const TABBED_KINDS = new Set<ContextSidebarTab['kind']>(['terminal', 'temporary-chat'])
 
+  // These tools are opened and closed from their own rail icon, and each one
+  // already owns its full-height content — the generic title-and-close header
+  // was a redundant layer stacked on top of a panel that either has its own
+  // internal toolbar (files, diff, debugger) or needs no title at all (sources,
+  // memory, cloud deployment). Terminal keeps its header because it needs tabs.
+  const HEADERLESS_KINDS = new Set<ContextSidebarTab['kind']>([
+    'files',
+    'diff',
+    'sources',
+    'memory',
+    'cloud-deployment',
+    'debugger'
+  ])
+
   let tabbedMode = $derived(activeTab ? TABBED_KINDS.has(activeTab.kind) : false)
+  let headerless = $derived(activeTab ? HEADERLESS_KINDS.has(activeTab.kind) : false)
   /** The strip never mixes tools: it lists siblings of the active kind only. */
   let stripTabs = $derived(
     activeTab && tabbedMode ? tabs.filter((tab) => tab.kind === activeTab.kind) : []
@@ -214,186 +229,190 @@
     {/if}
   {/snippet}
 
-  <div class="flex h-10 shrink-0 items-center border-b border-border">
-    {#if tabbedMode}
-      <div class="min-w-0 flex-1 overflow-x-auto">
-        <div class="flex h-10 min-w-max items-stretch">
-          {#each stripTabs as tab (tab.id)}
-            <div
-              class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
-              tab.id
-                ? 'bg-app text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
-                ? 'cursor-grab active:cursor-grabbing'
-                : ''}"
-              draggable={onMoveTab ? 'true' : 'false'}
-              role="listitem"
-              ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
-              ondragend={handleDragEnd}
-              ondragover={(e: DragEvent) => handleDragOver(e, tab)}
-              ondrop={(e: DragEvent) => handleDrop(e, tab)}
-              ondragleave={() => {
-                if (dropTargetId === tab.id) {
-                  dropTargetId = null
-                  dropPosition = null
-                }
-              }}
-            >
+  {#if !headerless}
+    <div class="flex h-10 shrink-0 items-center border-b border-border">
+      {#if tabbedMode}
+        <div class="min-w-0 flex-1 overflow-x-auto">
+          <div class="flex h-10 min-w-max items-stretch">
+            {#each stripTabs as tab (tab.id)}
               <div
-                class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                  tab.id && dropPosition === 'before'
-                  ? 'bg-primary opacity-100'
-                  : 'opacity-0'}"
-              ></div>
-              <div
-                class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
-                  tab.id && dropPosition === 'after'
-                  ? 'bg-primary opacity-100'
-                  : 'opacity-0'}"
-              ></div>
-              <button
-                type="button"
-                class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
-                aria-current={activeTabId === tab.id ? 'page' : undefined}
-                title={tab.title}
-                onclick={() => onSelect(tab.id)}
+                class="group relative flex max-w-52 items-center border-r border-border {activeTabId ===
+                tab.id
+                  ? 'bg-app text-foreground'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'} {onMoveTab
+                  ? 'cursor-grab active:cursor-grabbing'
+                  : ''}"
+                draggable={onMoveTab ? 'true' : 'false'}
+                role="listitem"
+                ondragstart={(e: DragEvent) => handleDragStart(e, tab)}
+                ondragend={handleDragEnd}
+                ondragover={(e: DragEvent) => handleDragOver(e, tab)}
+                ondrop={(e: DragEvent) => handleDrop(e, tab)}
+                ondragleave={() => {
+                  if (dropTargetId === tab.id) {
+                    dropTargetId = null
+                    dropPosition = null
+                  }
+                }}
               >
-                {@render tabIcon(tab)}
-                <span class="truncate text-[11px] font-medium">{tab.title}</span>
-                {#if tab.kind === 'temporary-chat' && tab.busy}
-                  <StatusBadge stage="working" animated title="Working" />
-                {/if}
-              </button>
-              {#if tab.kind === 'terminal' && onFullscreenTab}
+                <div
+                  class="pointer-events-none absolute left-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+                    tab.id && dropPosition === 'before'
+                    ? 'bg-primary opacity-100'
+                    : 'opacity-0'}"
+                ></div>
+                <div
+                  class="pointer-events-none absolute right-0 top-0 bottom-0 w-[2px] transition-opacity duration-100 {dropTargetId ===
+                    tab.id && dropPosition === 'after'
+                    ? 'bg-primary opacity-100'
+                    : 'opacity-0'}"
+                ></div>
                 <button
                   type="button"
-                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                  aria-label={`Fullscreen ${tab.title}`}
-                  title="Fullscreen"
-                  onclick={() => onFullscreenTab(tab.id)}
+                  class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+                  aria-current={activeTabId === tab.id ? 'page' : undefined}
+                  title={tab.title}
+                  onclick={() => onSelect(tab.id)}
                 >
-                  <Maximize2 size={11} />
+                  {@render tabIcon(tab)}
+                  <span class="truncate text-[11px] font-medium">{tab.title}</span>
+                  {#if tab.kind === 'temporary-chat' && tab.busy}
+                    <StatusBadge stage="working" animated title="Working" />
+                  {/if}
                 </button>
+                {#if tab.kind === 'terminal' && onFullscreenTab}
+                  <button
+                    type="button"
+                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                    aria-label={`Fullscreen ${tab.title}`}
+                    title="Fullscreen"
+                    onclick={() => onFullscreenTab(tab.id)}
+                  >
+                    <Maximize2 size={11} />
+                  </button>
+                {/if}
+                <button
+                  type="button"
+                  class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                  aria-label={`Close ${tab.title}`}
+                  title={tab.kind === 'terminal' ? 'Close terminal' : 'Close chat'}
+                  onclick={() => onClose(tab.id)}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else if activeTab}
+        <div class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-foreground">
+          {@render tabIcon(activeTab)}
+          <span
+            class="truncate text-[11px] font-medium {activeTab.kind === 'files' && activeTab.preview
+              ? 'italic'
+              : ''}"
+          >
+            {activeTab.title}
+          </span>
+          {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
+            <StatusBadge stage="working" animated title="Running" />
+          {/if}
+          {#if siblingTabs.length > 1}
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger
+                class="flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Switch to another open panel"
+                title="Switch open panel"
+              >
+                <span class="text-[10px] font-medium">{siblingTabs.length}</span>
+                <ChevronDown size={11} />
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="start"
+                  sideOffset={6}
+                  class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+                >
+                  {#each siblingTabs as tab (tab.id)}
+                    <DropdownMenu.Item
+                      class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
+                      textValue={tab.title}
+                      onSelect={() => onSelect(tab.id)}
+                    >
+                      {@render tabIcon(tab)}
+                      <span class="min-w-0 flex-1 truncate text-xs text-foreground"
+                        >{tab.title}</span
+                      >
+                      {#if tab.id === activeTabId}
+                        <span class="text-[10px] text-dimmed">open</span>
+                      {/if}
+                    </DropdownMenu.Item>
+                  {/each}
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          {/if}
+        </div>
+      {/if}
+
+      {#if showHeaderControls}
+        <div class="flex shrink-0 items-center border-l border-border px-1">
+          {#if terminalMode}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label={placement === 'bottom'
+                ? 'Move terminal to the right'
+                : 'Move terminal to the bottom'}
+              title={placement === 'bottom'
+                ? 'Move terminal to the right'
+                : 'Move terminal to the bottom'}
+              onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
+            >
+              {#if placement === 'bottom'}
+                <PanelRight size={13} />
+              {:else}
+                <PanelBottom size={13} />
               {/if}
+            </button>
+            {#if onNewTerminal}
               <button
                 type="button"
-                class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                aria-label={`Close ${tab.title}`}
-                title={tab.kind === 'terminal' ? 'Close terminal' : 'Close chat'}
-                onclick={() => onClose(tab.id)}
+                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Open another terminal"
+                title="New terminal"
+                onclick={onNewTerminal}
               >
-                <X size={11} />
+                <Plus size={13} />
               </button>
-            </div>
-          {/each}
-        </div>
-      </div>
-    {:else if activeTab}
-      <div class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-foreground">
-        {@render tabIcon(activeTab)}
-        <span
-          class="truncate text-[11px] font-medium {activeTab.kind === 'files' && activeTab.preview
-            ? 'italic'
-            : ''}"
-        >
-          {activeTab.title}
-        </span>
-        {#if activeTab.kind === 'subagent' && activeTab.activity.status === 'running'}
-          <StatusBadge stage="working" animated title="Running" />
-        {/if}
-        {#if siblingTabs.length > 1}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="flex h-6 shrink-0 items-center gap-0.5 rounded px-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Switch to another open panel"
-              title="Switch open panel"
-            >
-              <span class="text-[10px] font-medium">{siblingTabs.length}</span>
-              <ChevronDown size={11} />
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="bottom"
-                align="start"
-                sideOffset={6}
-                class="z-50 min-w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
-              >
-                {#each siblingTabs as tab (tab.id)}
-                  <DropdownMenu.Item
-                    class="flex items-center gap-2 rounded-md px-2.5 py-1.5 outline-none transition-colors data-[highlighted]:bg-elevated"
-                    textValue={tab.title}
-                    onSelect={() => onSelect(tab.id)}
-                  >
-                    {@render tabIcon(tab)}
-                    <span class="min-w-0 flex-1 truncate text-xs text-foreground">{tab.title}</span>
-                    {#if tab.id === activeTabId}
-                      <span class="text-[10px] text-dimmed">open</span>
-                    {/if}
-                  </DropdownMenu.Item>
-                {/each}
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
-        {/if}
-      </div>
-    {/if}
-
-    {#if showHeaderControls}
-      <div class="flex shrink-0 items-center border-l border-border px-1">
-        {#if terminalMode}
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label={placement === 'bottom'
-              ? 'Move terminal to the right'
-              : 'Move terminal to the bottom'}
-            title={placement === 'bottom'
-              ? 'Move terminal to the right'
-              : 'Move terminal to the bottom'}
-            onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
-          >
-            {#if placement === 'bottom'}
-              <PanelRight size={13} />
-            {:else}
-              <PanelBottom size={13} />
             {/if}
-          </button>
-          {#if onNewTerminal}
+            {#if placement === 'bottom' && onTerminalDockToggle}
+              <button
+                type="button"
+                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Hide terminal dock"
+                title="Hide terminal dock"
+                onclick={onTerminalDockToggle}
+              >
+                <ChevronDown size={13} />
+              </button>
+            {/if}
+          {:else if activeTab}
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Open another terminal"
-              title="New terminal"
-              onclick={onNewTerminal}
+              aria-label={`Close ${activeTab.title}`}
+              title="Close panel"
+              onclick={() => onClose(activeTab.id)}
             >
-              <Plus size={13} />
+              <X size={13} />
             </button>
           {/if}
-          {#if placement === 'bottom' && onTerminalDockToggle}
-            <button
-              type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Hide terminal dock"
-              title="Hide terminal dock"
-              onclick={onTerminalDockToggle}
-            >
-              <ChevronDown size={13} />
-            </button>
-          {/if}
-        {:else if activeTab}
-          <button
-            type="button"
-            class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label={`Close ${activeTab.title}`}
-            title="Close panel"
-            onclick={() => onClose(activeTab.id)}
-          >
-            <X size={13} />
-          </button>
-        {/if}
-      </div>
-    {/if}
-  </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <div class="min-h-0 flex-1 overflow-hidden">
     {#if tabs.length === 0}
