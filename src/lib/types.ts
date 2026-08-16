@@ -2266,6 +2266,8 @@ export interface TurnCheckpointSummary {
   label: string
   status: TurnCheckpointStatus
   changes: TurnCheckpointChangeSummary[]
+  /** Paths too large to be captured by the checkpoint (no rollback coverage). */
+  skippedFiles?: string[]
   createdAt: number
   completedAt?: number
   rolledBackAt?: number

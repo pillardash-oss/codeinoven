@@ -423,6 +423,9 @@ export class CheckpointManager {
       rolledBackAt: checkpoint.rolledBackAt,
       rolledBackPaths: checkpoint.rolledBackPaths,
       failure: checkpoint.failure,
+      ...(checkpoint.after?.skippedFiles && checkpoint.after.skippedFiles.length > 0
+        ? { skippedFiles: checkpoint.after.skippedFiles }
+        : {}),
       gitHead: checkpoint.before.git?.head
     }))
   }
