@@ -961,9 +961,12 @@
     }
     if (!sidebarWasVisible) return
     sidebarWasVisible = false
-    const timer = setTimeout(() => {
-      sidebarTrackReserved = false
-    }, motionDuration(PANEL_EXIT_MS))
+    const timer = setTimeout(
+      () => {
+        sidebarTrackReserved = false
+      },
+      motionDuration(PANEL_EXIT_MS + 40)
+    )
     return () => clearTimeout(timer)
   })
   let terminalTrackReserved = $state(false)
@@ -976,9 +979,12 @@
     }
     if (!terminalWasVisible) return
     terminalWasVisible = false
-    const timer = setTimeout(() => {
-      terminalTrackReserved = false
-    }, motionDuration(PANEL_EXIT_MS))
+    const timer = setTimeout(
+      () => {
+        terminalTrackReserved = false
+      },
+      motionDuration(PANEL_EXIT_MS + 40)
+    )
     return () => clearTimeout(timer)
   })
 
