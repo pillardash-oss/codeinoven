@@ -1,5 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import { motionDuration } from '$lib/motion'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -52,6 +55,12 @@
   let lastTurnOnly = $state(false)
   let autoFiltered = $state(false)
   let searchRequestId = 0
+  /** Directories the user explicitly collapsed while a filter (search query or
+   *  last-turn mode) is active. Filtered trees force-render matching folders
+   *  regardless of expansion state, so a deliberate fold must be remembered
+   *  here to actually hide the subtree again. Cleared whenever a new filter
+   *  session starts (query change, filter close, last-turn toggle). */
+  let collapsedOverrides = $state(new SvelteSet<string>())
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
@@ -113,6 +122,9 @@
 
   $effect(() => {
     const query = filterQuery.trim()
+    // A new query starts a fresh filter session: drop the collapse overrides
+    // so the search can re-expand every matching folder again.
+    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
     if (!query) return
 
     const requestId = ++searchRequestId
@@ -146,6 +158,7 @@
   function toggleLastTurnFilter(): void {
     lastTurnOnly = !lastTurnOnly
     autoFiltered = false
+    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
   }
 
   async function openFilter(): Promise<void> {
@@ -159,6 +172,7 @@
     searchRequestId += 1
     filterQuery = ''
     filterOpen = false
+    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
     if (clearReveal) revealedSearchPath = null
   }
 
@@ -222,7 +236,7 @@
         await projectFilesWorkspace.revealFile(projectId, entry.path)
       }
     } else if (entry.kind === 'directory') {
-      await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+      await toggleDirectoryRow(entry)
     }
 
     if (entry.kind === 'file') {
@@ -982,7 +996,9 @@
         </button>
       </div>
     {:else if entry.kind === 'directory' && shouldRenderDirectory(entry.path)}
-      {@render directoryRows(entry.path, depth + 1)}
+      <div transition:slide={{ duration: motionDuration(140), easing: cubicOut }}>
+        {@render directoryRows(entry.path, depth + 1)}
+      </div>
     {/if}
   {/each}
 {/snippet}

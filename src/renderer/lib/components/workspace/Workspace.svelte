@@ -1,5 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import { motionDuration } from '$lib/motion'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
     Plus,
@@ -3325,7 +3328,17 @@
             {/key}
           {/if}
         {/snippet}
-        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+        <div
+          class="min-h-0 min-w-0"
+          style:grid-column="2"
+          style:grid-row="1"
+          in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
+          out:fly={{
+            x: contextSidebarState.width,
+            duration: motionDuration(160),
+            easing: cubicOut
+          }}
+        >
           <ContextSidebar
             tabs={contextSidebarState.sidebarTabs}
             activeTabId={contextSidebarState.sidebarActiveTabId}
@@ -3364,7 +3377,21 @@
             {/if}
           {/if}
         {/snippet}
-        <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
+        <div
+          class="min-h-0 min-w-0"
+          style:grid-column="1 / -1"
+          style:grid-row="2"
+          in:fly={{
+            y: contextSidebarState.terminalHeight,
+            duration: motionDuration(200),
+            easing: cubicOut
+          }}
+          out:fly={{
+            y: contextSidebarState.terminalHeight,
+            duration: motionDuration(160),
+            easing: cubicOut
+          }}
+        >
           <ContextSidebar
             tabs={contextSidebarState.terminalTabs}
             activeTabId={contextSidebarState.terminalActiveTabId}

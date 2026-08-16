@@ -108,6 +108,10 @@
   border-color: var(--color-border);
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--color-app);
@@ -115,6 +119,16 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+}
+
+/* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
+   instant auto-scroll while streaming) overrides this, so it only smooths
+   scrolling that doesn't already opt in/out itself — wheel, keyboard, and
+   plain scrollIntoView() calls. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 /* ─── Workspace controls ────────────────────────────────────────────────── */
