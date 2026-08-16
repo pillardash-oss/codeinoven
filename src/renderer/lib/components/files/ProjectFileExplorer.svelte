@@ -1004,7 +1004,7 @@
 {/snippet}
 
 <aside
-  class="relative flex h-full min-h-0 w-52 min-w-44 max-w-[45%] shrink-0 flex-col border-l border-border bg-surface"
+  class="relative flex h-full min-h-0 w-52 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
   aria-label="Project file explorer"
   data-region="file-tree"
   ondragover={handleDragOver}
