@@ -75,11 +75,16 @@ const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
  * How long a first-party session spawn may hold the credential-refresh gate
  * while it resolves authentication. The gate exists because Claude Code's
  * macOS keychain OAuth store races when two processes refresh a single-use
- * token concurrently (anthropics/claude-code#76905); it is released early as
- * soon as the session proves authentication, and this bound keeps unrelated
- * threads/projects from ever stalling indefinitely.
+ * token concurrently (anthropics/claude-code#76905); the loser wipes the
+ * shared credential. The gate must stay held until authentication is PROVEN
+ * (message_start), not a short timer: a fast cap re-opens the race window
+ * whenever the first refresh takes longer than the cap (the CLI retries a
+ * failing refresh for ~45s, so a 1.5s cap let concurrent spawns through).
+ * This bound is only a safety valve so a pathological CLI cannot stall other
+ * threads/projects indefinitely; normal auth confirms in ~1-3s and releases
+ * the gate immediately.
  */
-const AUTH_CONFIRM_TIMEOUT_MS = 1_500
+const AUTH_CONFIRM_TIMEOUT_MS = 60_000
 /** Poll interval while waiting for a spawned session to prove authentication. */
 const AUTH_CONFIRM_POLL_MS = 200
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
