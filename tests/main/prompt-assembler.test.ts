@@ -51,7 +51,7 @@ describe('PromptAssembler instruction cache', () => {
     )
   })
 
-  it('caches nested AGENTS.md files too', async () => {
+  it('delegates nested AGENTS.md discovery from the root instruction layer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codeinoven-instruction-nested-'))
     temporaryRoots.push(root)
     await writeFile(join(root, 'AGENTS.md'), 'Root rules', 'utf-8')
@@ -60,7 +60,18 @@ describe('PromptAssembler instruction cache', () => {
 
     const service = assembler()
     const layers = await service.getLayers('project-1', 'thread-1', root, null)
-    expect(layers.some((layer) => layer.content === 'Package rules')).toBe(true)
-    expect(instructionCacheSize()).toBeGreaterThan(1)
+    const projectLayer = layers.find((layer) => layer.title === 'AGENTS.md (Project)')
+    expect(projectLayer?.content).toContain('Root rules')
+    expect(projectLayer?.content).toContain('Nested AGENTS.md discovery:')
+    expect(projectLayer?.content).toContain('CodeInOven injects the root AGENTS.md')
+    expect(layers.some((layer) => layer.content === 'Package rules')).toBe(false)
+    expect(instructionCacheSize()).toBe(1)
+
+    await rm(join(root, 'AGENTS.md'))
+    clearInstructionCache()
+    const withoutRoot = await service.getLayers('project-1', 'thread-1', root, null)
+    const guidanceLayer = withoutRoot.find((layer) => layer.title === 'AGENTS.md (Project)')
+    expect(guidanceLayer?.content).toContain('AGENTS.md files are directory-scoped instructions.')
+    expect(withoutRoot.some((layer) => layer.content === 'Package rules')).toBe(false)
   })
 })
