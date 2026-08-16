@@ -15,11 +15,7 @@ const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   '.svelte-kit',
   `.${APP_SLUG}`,
   `.${APP_SLUG}-temp`,
-  `${APP_SLUG}-temp`,
-  // Agent scratch space (gitignored by convention). Backups there (e.g. a
-  // multi-megabyte live-state rollback DB) must never trip the per-file
-  // snapshot limit and silently disable rollback checkpoints for the project.
-  'agent-out'
+  `${APP_SLUG}-temp`
 ])
 
 export interface CheckpointBlobStore {
@@ -51,6 +47,11 @@ export interface ProjectCheckpoint {
   projectRoot: string
   createdAt: number
   files: Record<string, CheckpointFile>
+  /** Paths skipped because they exceeded the per-file size limit. They are
+   *  absent from `files` (their content is never read or stored), so rollback
+   *  cannot restore them; recording them keeps the limitation visible instead
+   *  of failing the whole snapshot. */
+  skippedFiles?: string[]
   git?: GitCheckpointMetadata
 }
 
@@ -142,6 +143,7 @@ export class ChangeTrackingService {
       ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
       : undefined
     const files: Record<string, CheckpointFile> = {}
+    const skippedFiles: string[] = []
     const nextCache = new Map<string, CachedCheckpointFile>()
     let fileCount = 0
     let totalBytes = 0
@@ -160,10 +162,13 @@ export class ChangeTrackingService {
       const relativePath = this.relativePath(projectRoot, resolvedFile)
       const size = metadata.size
 
+      // A single oversized file must never disable rollback for the whole
+      // project: skip its content (never read/hash/store it) and keep
+      // snapshotting everything else. The skipped path is recorded so the
+      // limitation stays visible instead of failing the entire snapshot.
       if (size > this.limits.maxFileBytes) {
-        throw new CheckpointLimitError(
-          `Checkpoint file limit exceeded: ${relativePath} is ${size} bytes (maximum ${this.limits.maxFileBytes})`
-        )
+        skippedFiles.push(relativePath)
+        return
       }
       if (fileCount >= this.limits.maxFiles) {
         throw new CheckpointLimitError(
@@ -204,6 +209,7 @@ export class ChangeTrackingService {
       projectRoot,
       createdAt: Date.now(),
       files,
+      ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
       ...(git ? { git } : {})
     }
   }
