@@ -3038,6 +3038,8 @@ export interface AppConfig {
   memory: MemoryConfig
   /** User-selected defaults for Engineering agent roles. Roles remain unset after installation. */
   agentDefaults: AgentDefaultsConfig
+  /** Editable default behavior prompt for project Engineering implementation turns. */
+  agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
@@ -3082,6 +3084,7 @@ export type AppConfigPatch = Partial<
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'
+    | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
     | 'updateChannel'

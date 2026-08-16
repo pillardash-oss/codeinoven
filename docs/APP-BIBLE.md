@@ -1,6 +1,6 @@
 # CodeInOven — The App Bible
 
-This is the canonical reference for the principles, philosophies, design language, and engineering standards of **CodeInOven**. Every contributor — human or agent — must read this document before making changes. When any other document conflicts with this one, this document wins (except `AGENTS.md` operational rules, which remain binding for agents).
+This is the canonical reference for the principles, philosophies, design language, and engineering standards of **CodeInOven**. Every contributor — human or agent — must read this document before making changes. When any other document conflicts with this one, this document wins. Project Engineering agents receive their operational behavior from the application prompt layer and its editable Agent behavior setting.
 
 ---
 
@@ -225,7 +225,7 @@ Unless explicitly asked to run against the whole project:
 
 ## 5. Agent Workflow Contract
 
-These rules bind every AI agent contributing to this repository (see `AGENTS.md` for the authoritative operational text):
+These rules bind every AI agent contributing to this repository. The operational work ethic is supplied by CodeInOven's application prompt layer and can be edited in Settings → Agents → Agent behavior:
 
 ### 5.1 Planning and progress
 

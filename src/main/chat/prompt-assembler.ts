@@ -1,94 +1,17 @@
-import { readFile, stat } from 'fs/promises'
-import { join } from 'path'
 import { createHash } from 'node:crypto'
 import { APP_NAME } from '../../lib/brand'
+import {
+  AGENT_BEHAVIOR_PROMPT_MAX_LENGTH,
+  DEFAULT_AGENT_BEHAVIOR_PROMPT
+} from '../../lib/agent-behavior'
 import type { MemoryService } from './memory-service'
-
-const INSTRUCTION_CACHE_LIMIT = 256
-const DELEGATED_AGENTS_MD_GUIDANCE = [
-  'Nested AGENTS.md discovery:',
-  'AGENTS.md files are directory-scoped instructions. An AGENTS.md applies to the directory that contains it and all child directories beneath it.',
-  'Before working in a directory, check that directory for AGENTS.md and read it before inspecting or modifying files there. When moving into a child directory, check again for a more-specific AGENTS.md.',
-  'CodeInOven injects the root AGENTS.md but does not scan nested AGENTS.md files into this prompt. You must discover and apply each applicable AGENTS.md as you work through the project.'
-].join('\n')
-
-interface CachedInstructionMeta {
-  mtimeMs: number
-  size: number
-  /** SHA-256 of the content — the operative content identity. */
-  contentHash: string
-}
-
-/**
- * Project AGENTS.md instruction content cached by path with
- * mtime+size as the cheap invalidation probe and the content hash as the
- * operative identity: identical content across paths shares one blob, and a
- * changed path entry re-reads + re-hashes to invalidate (A-13).
- */
-const instructionPathIndex = new Map<string, CachedInstructionMeta>()
-const instructionContentByHash = new Map<string, string>()
-
-function evictInstructionCache(): void {
-  while (instructionContentByHash.size > INSTRUCTION_CACHE_LIMIT) {
-    const oldest = instructionContentByHash.keys().next().value
-    if (oldest === undefined) break
-    instructionContentByHash.delete(oldest)
-  }
-}
-
-/** Number of distinct instruction blobs currently cached (test helper). */
-export function instructionCacheSize(): number {
-  return instructionContentByHash.size
-}
-
-/** Clear the instruction cache (test isolation). */
-export function clearInstructionCache(): void {
-  instructionPathIndex.clear()
-  instructionContentByHash.clear()
-}
-
-async function readCachedInstructionFile(filePath: string): Promise<string> {
-  let fileStat
-  try {
-    fileStat = await stat(filePath)
-  } catch {
-    instructionPathIndex.delete(filePath)
-    return ''
-  }
-  const meta = instructionPathIndex.get(filePath)
-  if (meta && meta.mtimeMs === fileStat.mtimeMs && meta.size === fileStat.size) {
-    const cached = instructionContentByHash.get(meta.contentHash)
-    if (cached !== undefined) return cached
-  }
-  try {
-    const content = await readFile(filePath, 'utf-8')
-    const contentHash = createHash('sha256').update(content, 'utf8').digest('hex')
-    if (!instructionContentByHash.has(contentHash)) {
-      instructionContentByHash.set(contentHash, content)
-      evictInstructionCache()
-    }
-    instructionPathIndex.set(filePath, {
-      mtimeMs: fileStat.mtimeMs,
-      size: fileStat.size,
-      contentHash
-    })
-    return content
-  } catch {
-    instructionPathIndex.delete(filePath)
-    return ''
-  }
-}
 
 export interface BehaviorLayer {
   title: string
   content: string
   editable: boolean
   defaultOpen: boolean
-  /**
-   * True for layers that exist only for transparency in the behavior-layer UI
-   * and must never be serialized into the assembled system prompt (e.g. the
-   * AGENTS.md placeholder when the harness already loads it natively).
-   */
+  /** True for display-only layers that must not be sent to the harness. */
   skipInPrompt?: boolean
   /** Normalized development hash of the layer content. */
   devHash?: string
@@ -114,13 +37,6 @@ function withLayerAccounting(layer: BehaviorLayer): BehaviorLayer {
 export interface DriverInfo {
   id: string
   name: string
-  /**
-   * True when the harness CLI natively loads the project's AGENTS.md into the
-   * model context on its own. When true, the AGENTS.md layers are still listed
-   * for transparency but excluded from the assembled prompt so the stack-
-   * agnostic instruction file is not sent twice.
-   */
-  loadsAgentsMd: boolean
 }
 
 /**
@@ -177,7 +93,8 @@ export class PromptAssembler {
       SPEC_IMPLEMENT_SYSTEM_PROMPT?: string
       MERMAID_OUTPUT_INSTRUCTION?: string
     },
-    mode: BehaviorMode = 'implement'
+    mode: BehaviorMode = 'implement',
+    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -190,6 +107,17 @@ export class PromptAssembler {
         defaultOpen: false
       })
     )
+
+    if (mode === 'implement') {
+      layers.push(
+        withLayerAccounting({
+          title: 'Agent behavior (Engineering implementation)',
+          content: normalizeAgentBehaviorPrompt(agentBehaviorPrompt),
+          editable: true,
+          defaultOpen: false
+        })
+      )
+    }
 
     const appContent = this.buildAppLayerContent(mode, systemPromptConstants)
     layers.push(
@@ -210,29 +138,6 @@ export class PromptAssembler {
         defaultOpen: false
       })
     )
-
-    const projectBehavior = await readAgentsMd(projectPath)
-    const skipAgentsMd = driver?.loadsAgentsMd === true
-    if (skipAgentsMd) {
-      layers.push(
-        withLayerAccounting({
-          title: 'AGENTS.md (Project)',
-          content: `Loaded natively by ${driver.name}; not re-sent to avoid duplicate tokens.`,
-          editable: false,
-          defaultOpen: false,
-          skipInPrompt: true
-        })
-      )
-    } else {
-      layers.push(
-        withLayerAccounting({
-          title: 'AGENTS.md (Project)',
-          content: appendDelegatedAgentsMdGuidance(projectBehavior),
-          editable: true,
-          defaultOpen: true
-        })
-      )
-    }
 
     return layers
   }
@@ -271,7 +176,8 @@ export class PromptAssembler {
       SPEC_IMPLEMENT_SYSTEM_PROMPT?: string
       MERMAID_OUTPUT_INSTRUCTION?: string
     },
-    mode: BehaviorMode = 'implement'
+    mode: BehaviorMode = 'implement',
+    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
   ): Promise<string> {
     const layers = await this.getLayers(
       projectId,
@@ -279,14 +185,14 @@ export class PromptAssembler {
       projectPath,
       driver,
       systemPromptConstants,
-      mode
+      mode,
+      agentBehaviorPrompt
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)
       .map((layer) => {
         const content = layer.content.trim()
         if (!content || (content.startsWith('No ') && content.endsWith(' configured.'))) return ''
-        if (content.startsWith('No ') && content.includes(' AGENTS.md found.')) return ''
         return content
       })
       .filter(Boolean)
@@ -324,8 +230,8 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '',
     'AGENT SCRATCH SPACE — where non-source outputs live:',
     `1. The project's \`.cio/\` folder is the agent scratch pad. ${APP_NAME} creates it when the project is added and gitignores it from day one, so nothing inside it is ever committed.`,
-    '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents the agent or the user should read, plans, progress, walkthroughs, reports, test output, and temporary work.',
-    '3. Keep it organized for a human: feature work (plan*.md, progress*.md, walkthroughs, reports, test output) goes in `.cio/work/<feature>/`; disposable temp work (cloned repos, `.venv`, build scratch) goes in `.cio/tmp/`. Name files so a human can read them at a glance.',
+    '2. Unless the user explicitly asks otherwise, put every artifact that is not part of the application source here: context documents, walkthroughs, reports, test output, and temporary work.',
+    '3. CodeInOven-managed Engineering lifecycle files (spec.md, plan.md, progress.md, Assignment, audit, and task evidence) belong in `.cio/specs/<feature-slug>/`; other feature work (walkthroughs, reports, and test output) belongs in `.cio/work/<feature>/`; disposable temp work belongs in `.cio/tmp/`. Name files so a human can read them at a glance.',
     '4. Never write these outputs to the repository root or the working tree, and never add them to source control.',
     '5. The platform owns `.cio/specs/<feature-slug>/spec.md` and `.cio/git/pr/<n>/`; never create or overwrite files there.',
     '',
@@ -336,13 +242,10 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
   ].join('\n')
 }
 
-async function readAgentsMd(projectPath: string): Promise<string> {
-  return readCachedInstructionFile(join(projectPath, 'AGENTS.md'))
-}
-
-function appendDelegatedAgentsMdGuidance(projectBehavior: string): string {
-  const trimmed = projectBehavior.trimEnd()
-  return trimmed ? `${trimmed}\n\n${DELEGATED_AGENTS_MD_GUIDANCE}` : DELEGATED_AGENTS_MD_GUIDANCE
+function normalizeAgentBehaviorPrompt(prompt: string): string {
+  const normalized = prompt.trim()
+  if (normalized.length === 0) return DEFAULT_AGENT_BEHAVIOR_PROMPT
+  return normalized.slice(0, AGENT_BEHAVIOR_PROMPT_MAX_LENGTH)
 }
 
 function modeLabel(mode: BehaviorMode): string {

@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig } from '../../lib/types'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../../lib/project-artifacts'
@@ -35,6 +36,7 @@ const DEFAULT_CONFIG: AppConfig = {
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
@@ -103,7 +105,12 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
-      }
+      },
+      agentBehaviorPrompt:
+        typeof config?.agentBehaviorPrompt === 'string' &&
+        config.agentBehaviorPrompt.trim().length > 0
+          ? config.agentBehaviorPrompt
+          : DEFAULT_AGENT_BEHAVIOR_PROMPT
     }
   }
 
