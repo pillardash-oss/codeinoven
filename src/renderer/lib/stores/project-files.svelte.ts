@@ -211,14 +211,32 @@ class ProjectFilesWorkspace {
    *  load their contents in parallel. The explorer snapshot is persisted once
    *  after the whole batch instead of once per directory — persisting per
    *  expansion serialized the full snapshot to localStorage on every folder and
-   *  froze the renderer during searches on large trees. */
-  async expandAndLoadDirectories(projectId: string, directories: string[]): Promise<void> {
+   *  froze the renderer during searches on large trees.
+   *
+   *  `persist` is false for search-driven expansions: they are transient view
+   *  state, and persisting them would leave huge subtrees (e.g. `.cio`) marked
+   *  expanded across sessions, which slows every later tree render. */
+  async expandAndLoadDirectories(
+    projectId: string,
+    directories: string[],
+    persist = true
+  ): Promise<void> {
     const state = this.ensureState(projectId)
     for (const directory of directories) {
       state.expandedDirectories[directory] = true
     }
-    this.persistExplorer(projectId)
+    if (persist) this.persistExplorer(projectId)
     await Promise.all(directories.map((directory) => this.loadDirectory(projectId, directory)))
+  }
+
+  /** Collapse a batch of directories without loading anything (used to revert
+   *  transient search-driven expansions when the filter closes). */
+  collapseDirectories(projectId: string, directories: string[], persist = true): void {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      delete state.expandedDirectories[directory]
+    }
+    if (persist) this.persistExplorer(projectId)
   }
 
   /** Expand every folder in the tree, loading their contents recursively. */
