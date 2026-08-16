@@ -78,6 +78,106 @@ export interface ThreadListOptions {
   order?: 'default' | 'activity'
 }
 
+type SqlStatement = { sql: string; params: unknown[] }
+
+function placeholdersFor(count: number): string {
+  return Array.from({ length: count }, () => '?').join(', ')
+}
+
+/** Build one set-based cleanup transaction for a thread tree. */
+function buildThreadDeletionStatements(
+  threads: Thread[],
+  assignmentIds: Set<string>
+): SqlStatement[] {
+  if (threads.length === 0) return []
+
+  const threadIds = threads.map((thread) => thread.id)
+  const threadPlaceholders = placeholdersFor(threadIds.length)
+  const projectId = threads[0].projectId
+  const statements: SqlStatement[] = []
+  const assignmentValues = [...assignmentIds]
+
+  if (assignmentValues.length > 0) {
+    const assignmentPlaceholders = placeholdersFor(assignmentValues.length)
+    statements.push(
+      {
+        sql: `DELETE FROM assignment_operations WHERE assignment_id IN (${assignmentPlaceholders})`,
+        params: assignmentValues
+      },
+      {
+        sql: `DELETE FROM assignment_coordinator_snapshots WHERE assignment_id IN (${assignmentPlaceholders})`,
+        params: assignmentValues
+      }
+    )
+  }
+
+  const capabilityPredicate =
+    assignmentValues.length > 0
+      ? `assignment_id IN (${placeholdersFor(assignmentValues.length)}) OR thread_id IN (${threadPlaceholders})`
+      : `thread_id IN (${threadPlaceholders})`
+  statements.push({
+    sql: `DELETE FROM assignment_api_capabilities WHERE ${capabilityPredicate}`,
+    params: assignmentValues.length > 0 ? [...assignmentValues, ...threadIds] : threadIds
+  })
+
+  statements.push(
+    {
+      sql: `DELETE FROM spec_workflow WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
+      params: [projectId, ...threadIds]
+    },
+    {
+      sql: `DELETE FROM spec_versions WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
+      params: [projectId, ...threadIds]
+    },
+    {
+      sql: `DELETE FROM plans WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM checklists WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM audit_reports WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
+      params: [projectId, ...threadIds]
+    },
+    {
+      sql: `DELETE FROM turn_checkpoints WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
+      params: [projectId, ...threadIds]
+    },
+    {
+      sql: `DELETE FROM active_turns WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
+      params: [projectId, ...threadIds]
+    },
+    {
+      sql: `DELETE FROM provider_sync_cursors WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM agent_messages WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM harness_usage WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM harness_usage_messages WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM harness_usage_models WHERE thread_id IN (${threadPlaceholders})`,
+      params: threadIds
+    },
+    {
+      sql: `DELETE FROM threads WHERE id IN (${threadPlaceholders})`,
+      params: threadIds
+    }
+  )
+
+  return statements
+}
+
 /**
  * Re-key copied messages and their parts so they can live in a new thread
  * without colliding with the originals. Used when forking a thread or when
@@ -541,14 +641,12 @@ export class ThreadManager {
     for (const candidate of deletionOrder) {
       this.turnFeedbackRepo.resolvePendingForThread(candidate.id, 'success', 'cleaned_up', 1)
     }
-    this.db.transaction(() => {
-      for (const assignmentId of assignmentIds) {
-        this.deleteAssignmentRows(assignmentId)
-      }
-      for (const candidate of deletionOrder) {
-        this.deleteThreadRows(candidate)
-      }
-    })
+    const outcome = await this.db.transactionViaWorker(
+      buildThreadDeletionStatements(deletionOrder, assignmentIds)
+    )
+    if (!outcome.ok) {
+      throw new Error(outcome.error ?? 'thread deletion failed')
+    }
     await this.onDeleted?.(deletionOrder)
   }
 
@@ -594,32 +692,6 @@ export class ThreadManager {
       for (const version of versions) assignmentIds.add(version.assignment_id)
     }
     return assignmentIds
-  }
-
-  private deleteAssignmentRows(assignmentId: string): void {
-    this.db.run('DELETE FROM assignment_operations WHERE assignment_id=?', assignmentId)
-    this.db.run('DELETE FROM assignment_coordinator_snapshots WHERE assignment_id=?', assignmentId)
-    this.db.run('DELETE FROM assignment_api_capabilities WHERE assignment_id=?', assignmentId)
-  }
-
-  private deleteThreadRows(thread: Thread): void {
-    const { projectId, id: threadId } = thread
-    this.db.run('DELETE FROM spec_workflow WHERE project_id=? AND thread_id=?', projectId, threadId)
-    this.db.run('DELETE FROM spec_versions WHERE project_id=? AND thread_id=?', projectId, threadId)
-    this.db.run('DELETE FROM plans WHERE thread_id=?', threadId)
-    this.db.run('DELETE FROM checklists WHERE thread_id=?', threadId)
-    this.db.run('DELETE FROM audit_reports WHERE project_id=? AND thread_id=?', projectId, threadId)
-    this.db.run(
-      'DELETE FROM turn_checkpoints WHERE project_id=? AND thread_id=?',
-      projectId,
-      threadId
-    )
-    this.db.run('DELETE FROM active_turns WHERE project_id=? AND thread_id=?', projectId, threadId)
-    this.db.run('DELETE FROM provider_sync_cursors WHERE thread_id=?', threadId)
-    this.db.run('DELETE FROM assignment_api_capabilities WHERE thread_id=?', threadId)
-    this.agentMessageRepo.deleteByThread(threadId)
-    this.harnessUsageRepo.deleteByThread(threadId)
-    this.threadRepo.delete(threadId)
   }
 
   async setStatus(
@@ -966,7 +1038,7 @@ export class ThreadManager {
 
   /** List threads across all projects, sorted pinned-first then by last activity. */
   async listAllThreads(options?: ThreadListOptions): Promise<Thread[]> {
-    return this.threadRepo.listAll(options)
+    return this.threadRepo.listAllViaWorker(options)
   }
 
   /**
