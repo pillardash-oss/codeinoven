@@ -61,6 +61,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import {
@@ -479,6 +480,15 @@
   }
 
   function navigate(view: View): void {
+    // Warm the lazy page chunks so the view swap resolves instantly — the
+    // sidebar/header hover preloads cover the mouse path; this covers every
+    // other entry point (shortcuts, palette, programmatic navigation). The
+    // imports are memoized, so repeated calls are no-ops.
+    if (view === 'scope') {
+      preloadScopeChunk()
+    } else if (isSettingsView(view)) {
+      preloadSettingsChunk()
+    }
     if (view === 'scope') {
       const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
       if (projectId) void scopeState.activateProject(projectId)

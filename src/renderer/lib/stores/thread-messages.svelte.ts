@@ -30,6 +30,10 @@ interface ThreadMessagesEntry {
   error: string
 }
 
+/** Bounded window warmed on hover, matching the ThreadView history window so a
+ *  preloaded thread opens to the same recent-message tail it would load live. */
+export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
+
 const EMPTY_MESSAGES: AgentMessage[] = []
 
 function threadKey(projectId: string, threadId: string): string {
@@ -160,6 +164,17 @@ class ThreadMessagesStore {
       entry.loading = false
       this.#notify()
     }
+  }
+
+  /** Bounded warmup for the message cache so opening the thread (sidebar
+   *  click, Ctrl+Tab) renders instantly instead of showing the loading
+   *  spinner. Non-destructive: merges into the cache, never marks read, and
+   *  never clobbers newer live data. Skipped when the thread already has
+   *  messages or a load is in flight. */
+  async preload(projectId: string, threadId: string): Promise<void> {
+    const entry = this.entry(projectId, threadId)
+    if (entry.loaded || entry.loading) return
+    await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
   }
 
   /** Non-destructively merge server messages with the local cache. */

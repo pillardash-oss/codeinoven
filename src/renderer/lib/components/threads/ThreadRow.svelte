@@ -11,6 +11,7 @@
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -132,6 +133,19 @@
   let popoverEl = $state<HTMLDivElement>()
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
+  /** Debounces the message warmup so a fast mouse pass never fires an IPC call. */
+  let preloadTimer: ReturnType<typeof setTimeout> | undefined
+  const PRELOAD_DEBOUNCE_MS = 200
+
+  /** Warm the thread's message cache so a click opens without the "Loading
+   *  conversation…" spinner. The bounded load is non-destructive and skipped
+   *  once the thread has messages (the currently selected row is already
+   *  loading through the open view, so it never needs this). */
+  function preloadMessages(): void {
+    if (picker || selected) return
+    if (threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
+  }
 
   /** Distinct harnesses used in this thread's session, newest first. */
   let harnessIds = $derived.by((): string[] => {
@@ -476,6 +490,10 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
+    // Warm the cache early — before the popover (550ms) — so the click path
+    // into the thread is already fast by the time the user acts.
+    clearTimeout(preloadTimer)
+    preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -484,6 +502,7 @@
   function onRowLeave(): void {
     hovered = false
     clearTimeout(popoverTimer)
+    clearTimeout(preloadTimer)
     showPopover = false
   }
 
