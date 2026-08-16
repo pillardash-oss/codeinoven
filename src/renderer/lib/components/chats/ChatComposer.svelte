@@ -1726,7 +1726,7 @@
                 <div
                   class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
                 >
-                  Starts after
+                  Starts after thread
                 </div>
                 <button
                   type="button"
@@ -1737,16 +1737,6 @@
                 >
                   <Clock size={12} class="shrink-0 text-info" />
                   <span class="min-w-0 flex-1 truncate">{selectedStartAfterThread.title}</span>
-                </button>
-                <button
-                  type="button"
-                  class="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-danger transition-colors hover:bg-danger/10"
-                  title="Remove Start after"
-                  aria-label="Remove Start after"
-                  onclick={clearStartAfterThread}
-                >
-                  <X size={12} class="shrink-0" />
-                  Remove dependency
                 </button>
               </div>
             {/if}
