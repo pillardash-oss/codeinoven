@@ -1,11 +1,16 @@
 import { readFile, stat } from 'fs/promises'
-import { join, resolve } from 'path'
+import { join } from 'path'
 import { createHash } from 'node:crypto'
 import { APP_NAME } from '../../lib/brand'
 import type { MemoryService } from './memory-service'
 
-const NESTED_AGENTS_DEPTH_LIMIT = 3
 const INSTRUCTION_CACHE_LIMIT = 256
+const DELEGATED_AGENTS_MD_GUIDANCE = [
+  'Nested AGENTS.md discovery:',
+  'AGENTS.md files are directory-scoped instructions. An AGENTS.md applies to the directory that contains it and all child directories beneath it.',
+  'Before working in a directory, check that directory for AGENTS.md and read it before inspecting or modifying files there. When moving into a child directory, check again for a more-specific AGENTS.md.',
+  'CodeInOven injects the root AGENTS.md but does not scan nested AGENTS.md files into this prompt. You must discover and apply each applicable AGENTS.md as you work through the project.'
+].join('\n')
 
 interface CachedInstructionMeta {
   mtimeMs: number
@@ -15,7 +20,7 @@ interface CachedInstructionMeta {
 }
 
 /**
- * Instruction files (AGENTS.md and nested AGENTS.md) cached by path with
+ * Project AGENTS.md instruction content cached by path with
  * mtime+size as the cheap invalidation probe and the content hash as the
  * operative identity: identical content across paths shares one blob, and a
  * changed path entry re-reads + re-hashes to invalidate (A-13).
@@ -222,23 +227,9 @@ export class PromptAssembler {
       layers.push(
         withLayerAccounting({
           title: 'AGENTS.md (Project)',
-          content: projectBehavior || 'No project AGENTS.md found.',
+          content: appendDelegatedAgentsMdGuidance(projectBehavior),
           editable: true,
           defaultOpen: true
-        })
-      )
-    }
-
-    const nestedAgents = await scanNestedAgentsMd(projectPath)
-    for (const nested of nestedAgents) {
-      const dirName = nested.path.split('/').pop() ?? nested.path
-      layers.push(
-        withLayerAccounting({
-          title: `AGENTS.md (${dirName})`,
-          content: nested.content,
-          editable: !skipAgentsMd,
-          defaultOpen: !skipAgentsMd,
-          ...(skipAgentsMd ? { skipInPrompt: true } : {})
         })
       )
     }
@@ -349,34 +340,9 @@ async function readAgentsMd(projectPath: string): Promise<string> {
   return readCachedInstructionFile(join(projectPath, 'AGENTS.md'))
 }
 
-async function scanNestedAgentsMd(
-  projectPath: string,
-  depth = NESTED_AGENTS_DEPTH_LIMIT
-): Promise<Array<{ path: string; content: string }>> {
-  const { listDir } = await import('../../lib/utils')
-  const results: Array<{ path: string; content: string }> = []
-  if (depth <= 0) return results
-  try {
-    const entries = await listDir(projectPath)
-    const dirs = entries.filter(
-      (entry) => !entry.startsWith('.') && !entry.startsWith('node_modules')
-    )
-    for (const dir of dirs) {
-      const dirPath = join(projectPath, dir)
-      const agentPath = join(dirPath, 'AGENTS.md')
-      const content = await readCachedInstructionFile(agentPath)
-      if (content.trim()) {
-        const relativePath = resolve(projectPath, dir)
-        results.push({ path: relativePath, content })
-      } else {
-        const nested = await scanNestedAgentsMd(dirPath, depth - 1)
-        results.push(...nested)
-      }
-    }
-  } catch {
-    // Not a directory or not accessible — skip
-  }
-  return results
+function appendDelegatedAgentsMdGuidance(projectBehavior: string): string {
+  const trimmed = projectBehavior.trimEnd()
+  return trimmed ? `${trimmed}\n\n${DELEGATED_AGENTS_MD_GUIDANCE}` : DELEGATED_AGENTS_MD_GUIDANCE
 }
 
 function modeLabel(mode: BehaviorMode): string {
