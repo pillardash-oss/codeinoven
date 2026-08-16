@@ -39,6 +39,7 @@ import {
   type ImageDescriptorExecutor
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
+import { Logger } from '../system/logger'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const MAX_REQUEST_BYTES = 1_000_000
@@ -111,6 +112,8 @@ interface TurnState {
   attributionSequence: number
   /** True once the agent has called utility_search this turn. */
   searched: boolean
+  /** Session ids created for Cua utilities so cursor state is turn-scoped. */
+  cuaSessionIds: Map<string, string>
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -132,7 +135,8 @@ export class UtilityOrchestrationService {
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
-  private cuaActivityListener: ((pid: number, threadId: string) => void) | null = null
+  private cuaActivityListener:
+    ((pid: number, threadId: string, sessionId?: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
@@ -185,7 +189,7 @@ export class UtilityOrchestrationService {
    * a target pid — used by the PiP monitor to latch onto the app a thread's
    * agent is driving.
    */
-  onCuaActivity(listener: (pid: number, threadId: string) => void): void {
+  onCuaActivity(listener: (pid: number, threadId: string, sessionId?: string) => void): void {
     this.cuaActivityListener = listener
   }
 
@@ -229,7 +233,8 @@ export class UtilityOrchestrationService {
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
       attributionSequence: 0,
-      searched: false
+      searched: false,
+      cuaSessionIds: new Map()
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
@@ -288,6 +293,7 @@ export class UtilityOrchestrationService {
     if (!turn) return
     this.turns.delete(id)
     this.turnIdsByToken.delete(turn.token)
+    await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     await this.storage.remove(turn.scriptPath)
     await this.audit(turn.state, 'turn.cleaned', {
@@ -409,9 +415,20 @@ export class UtilityOrchestrationService {
 
     let capability: unknown
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
-      await state.clients.get(utilityId)?.close()
+      const previousClient = state.clients.get(utilityId)
+      const previousSessionId = state.cuaSessionIds.get(utilityId)
+      if (previousClient && previousSessionId) {
+        await previousClient
+          .callTool('end_session', { session: previousSessionId })
+          .catch(() => undefined)
+      }
+      await previousClient?.close()
+      state.cuaSessionIds.delete(utilityId)
       const client = await this.mcpClient(resolved.utility)
       state.clients.set(utilityId, client)
+      if (this.isComputerUseUtility(resolved)) {
+        await this.prepareComputerUseSession(state, utilityId, client)
+      }
       capability = { tools: await client.listTools() }
     } else if (resolved.utility.kind === 'skill') {
       capability = { instructions: resolved.utility.config.instructions }
@@ -459,10 +476,17 @@ export class UtilityOrchestrationService {
     if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = state.clients.get(utilityId)
       if (!client) throw new Error('Activated MCP client is unavailable')
-      result = await client.callTool(operation, operationInput)
-      if (this.isComputerUseUtility(resolved) && Number.isInteger(operationInput['pid'])) {
-        const pid = Number(operationInput['pid'])
-        if (pid > 0) this.cuaActivityListener?.(pid, state.request.threadId)
+      const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
+      result = await client.callTool(operation, routedInput)
+      if (this.isComputerUseUtility(resolved)) {
+        const pid = operationPid(routedInput)
+        if (pid !== null) {
+          this.cuaActivityListener?.(
+            pid,
+            state.request.threadId,
+            state.cuaSessionIds.get(utilityId)
+          )
+        }
       }
     } else if (resolved.utility.kind === 'web_search' || resolved.utility.kind === 'web_fetch') {
       result = await this.invokeWeb(state, resolved.utility, operation, operationInput)
@@ -523,6 +547,56 @@ export class UtilityOrchestrationService {
     if (resolved.utility.id === CUA_UTILITY_ID) return true
     const capability = normalizeCapability(resolved.binding.nativeCapability ?? '')
     return capability === 'computer_use'
+  }
+
+  /** Establish a visible, never-idle-hidden cursor for one Cua turn. */
+  private async prepareComputerUseSession(
+    state: TurnState,
+    utilityId: string,
+    client: McpClient
+  ): Promise<void> {
+    const sessionId = `codeinoven-${state.id}`
+    try {
+      await client.callTool('start_session', { session: sessionId })
+    } catch (error) {
+      Logger.dev('Cua cursor session could not be started:', error)
+      return
+    }
+    state.cuaSessionIds.set(utilityId, sessionId)
+    try {
+      await client.callTool('set_agent_cursor_enabled', { session: sessionId, enabled: true })
+    } catch (error) {
+      Logger.dev('Cua agent cursor could not be enabled:', error)
+    }
+    try {
+      await client.callTool('set_agent_cursor_motion', {
+        session: sessionId,
+        idle_hide_ms: 0
+      })
+    } catch (error) {
+      Logger.dev('Cua agent cursor motion could not be configured:', error)
+    }
+  }
+
+  /** Keep every Cua operation on the app-owned visible session. */
+  private routeComputerUseInput(
+    state: TurnState,
+    utilityId: string,
+    input: Record<string, unknown>
+  ): Record<string, unknown> {
+    const sessionId = state.cuaSessionIds.get(utilityId)
+    return sessionId ? { ...input, session: sessionId } : input
+  }
+
+  private async endComputerUseSessions(state: TurnState): Promise<void> {
+    await Promise.allSettled(
+      [...state.cuaSessionIds.entries()].map(async ([utilityId, sessionId]) => {
+        const client = state.clients.get(utilityId)
+        if (!client) return
+        await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
+      })
+    )
+    state.cuaSessionIds.clear()
   }
 
   private async invokeWeb(
@@ -773,6 +847,18 @@ function normalizeCapability(value: string): string {
     .trim()
     .toLocaleLowerCase()
     .replace(/[\s-]+/gu, '_')
+}
+
+function operationPid(input: Record<string, unknown>): number | null {
+  const directPid = input['pid']
+  if (typeof directPid === 'number' && Number.isInteger(directPid) && directPid > 0) {
+    return directPid
+  }
+  const target = recordValue(input['target'])
+  const targetPid = target['pid']
+  return typeof targetPid === 'number' && Number.isInteger(targetPid) && targetPid > 0
+    ? targetPid
+    : null
 }
 
 function matchesUtilityKinds(
