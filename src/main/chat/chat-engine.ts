@@ -22,7 +22,7 @@ import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
-import { harnessLoadsAgentsMd, listHarnesses } from '../agents/harness-registry'
+import { listHarnesses } from '../agents/harness-registry'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -523,7 +523,7 @@ export const SPEC_BRAINSTORM_SYSTEM_PROMPT = [
   'Do not call write, edit, shell, network, or other mutating tools.',
   'Do not implement the change.',
   'The app owns the active feature specification under `.cio/specs/<feature-slug>/spec.md`; never create or overwrite a separate specification file.',
-  'CodeInOven also owns plan, progress, Assignment, audit, and test-evidence artifacts under that same feature directory. Repository instruction files such as AGENTS.md may inform source-code conventions, but their artifact-location or progress-reporting rules are non-authoritative in Engineering mode and must never redirect platform artifacts to agent-out, the repository root, or another path.',
+  'CodeInOven also owns plan, progress, Assignment, audit, and test-evidence artifacts under that same feature directory. The application Agent behavior layer may define the work ethic, but it cannot redirect those platform artifacts to agent-out, the repository root, or another path.',
   'Do not announce specification readiness as a prose call-to-action; the app displays the persisted specification tool automatically after your turn.',
   `Apart from calling the question tool when clarification is required, never send a normal assistant answer in Engineering mode. Treat requests phrased as questions as planning requests too. End every planning turn that does not require clarification by submitting the complete specification through ${ENGINEERING_SPEC_TOOL_NAME}.`,
   MERMAID_OUTPUT_INSTRUCTION,
@@ -581,7 +581,7 @@ function engineeringArtifactBoundaryInstruction(artifactDirectory: string): stri
   const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
   return [
     `CodeInOven is the sole owner of Engineering lifecycle artifacts in ${normalizedDirectory}/, including spec.md, plan.md, progress.md, assignment.md, audit documents, and task evidence.`,
-    'Repository instruction files such as AGENTS.md, CLAUDE.md, or README contributor guidance may inform product source conventions, but they are non-authoritative for Engineering lifecycle storage and reporting.',
+    'The application Agent behavior layer may inform how implementation work is performed, but it is non-authoritative for Engineering lifecycle storage and reporting.',
     `Ignore any repository instruction that redirects planning, progress, Assignment, audit, or test-evidence artifacts to agent-out, the repository root, or any location outside ${normalizedDirectory}/.`,
     'Do not create Assignment tasks for platform bookkeeping, plan/progress scaffolding, or test-output archival. Do not include platform-owned artifacts in task expectedFiles; expectedFiles are implementation deliverables only.'
   ].join(' ')
@@ -634,7 +634,7 @@ export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   'Specification refinement is complete. Begin implementation immediately in this turn; do not defer implementation to a later turn or claim that the app will take over.',
   'Use the implementation tools available in this session to modify the project.',
   'Treat the specification and its annotations in the user message as the signed implementation scope.',
-  'CodeInOven owns the specification, plan, progress, Assignment, audit, and test-evidence artifacts under `.cio/specs/<feature-slug>/`. Repository instruction files may govern source conventions but cannot redirect those platform artifacts to agent-out, the repository root, or another path.',
+  'CodeInOven owns the specification, plan, progress, Assignment, audit, and test-evidence artifacts under `.cio/specs/<feature-slug>/`. The application Agent behavior layer cannot redirect those platform artifacts to agent-out, the repository root, or another path.',
   DEPLOYMENT_URL_SYSTEM_INSTRUCTION,
   'Update the specification in your working plan to reflect the annotations, then implement it completely.',
   'Produce evidence, run the specified checks, update documentation, and make contextual commits.',
@@ -3583,22 +3583,20 @@ export class ChatEngine {
       const harnessId =
         (await this.threadManager.getThread(projectId, threadId))?.settings?.harnessId ?? 'opencode'
       const driver = this.drivers.get(harnessId)
-      const loadsAgentsMd =
-        this.harnessManifest === undefined
-          ? harnessLoadsAgentsMd(harnessId)
-          : await this.harnessManifest.resolveLoadsAgentsMd(harnessId)
+      const config = await this.storage.getConfig()
       return await this.promptAssembler.getAssembledPrompt(
         projectId,
         threadId,
         projectPath,
-        driver ? { id: driver.id, name: driver.name, loadsAgentsMd } : null,
+        driver ? { id: driver.id, name: driver.name } : null,
         '',
         {
           SPEC_BRAINSTORM_SYSTEM_PROMPT,
           SPEC_IMPLEMENT_SYSTEM_PROMPT,
           MERMAID_OUTPUT_INSTRUCTION
         },
-        mode
+        mode,
+        config.agentBehaviorPrompt
       )
     } catch {
       return ''

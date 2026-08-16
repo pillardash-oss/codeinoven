@@ -86,6 +86,7 @@
     type Thread,
     type ThreadSearchResult
   } from '$shared/types'
+  import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
@@ -103,6 +104,7 @@
     preferredEditor: 'system',
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
     updateChannel: 'stable',

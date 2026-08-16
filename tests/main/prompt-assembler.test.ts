@@ -1,77 +1,40 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises'
-import { tmpdir } from 'os'
-import { join } from 'path'
+import { describe, expect, it } from 'vitest'
 import type { MemoryService } from '../../src/main/chat/memory-service'
-import {
-  PromptAssembler,
-  clearInstructionCache,
-  instructionCacheSize
-} from '../../src/main/chat/prompt-assembler'
-
-const temporaryRoots: string[] = []
-
-afterEach(async () => {
-  clearInstructionCache()
-  await Promise.all(
-    temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true }))
-  )
-})
+import { PromptAssembler } from '../../src/main/chat/prompt-assembler'
 
 function assembler(): PromptAssembler {
   const memoryService = { formatCurrent: async () => '' } as unknown as MemoryService
   return new PromptAssembler(memoryService)
 }
 
-describe('PromptAssembler instruction cache', () => {
-  it('serves AGENTS.md from the path+mtime+size cache and invalidates on change', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codeinoven-instruction-'))
-    temporaryRoots.push(root)
-    const agentsPath = join(root, 'AGENTS.md')
-    await writeFile(agentsPath, 'Rule one', 'utf-8')
-
-    const service = assembler()
-    const first = await service.getLayers('project-1', 'thread-1', root, null)
-    expect(first.find((layer) => layer.title === 'AGENTS.md (Project)')?.content).toContain(
-      'Rule one'
+describe('PromptAssembler application behavior', () => {
+  it('uses the application behavior layer for implementation turns without reading AGENTS.md', async () => {
+    const layers = await assembler().getLayers(
+      'project-1',
+      'thread-1',
+      '/nonexistent-project',
+      null,
+      undefined,
+      'implement',
+      'Custom implementation behavior.'
     )
-    expect(instructionCacheSize()).toBeGreaterThan(0)
-
-    // An unchanged file is served from cache without re-reading.
-    const second = await service.getLayers('project-1', 'thread-1', root, null)
-    expect(second.find((layer) => layer.title === 'AGENTS.md (Project)')?.content).toContain(
-      'Rule one'
+    const behaviorLayer = layers.find((layer) =>
+      layer.title.startsWith('Agent behavior (Engineering implementation)')
     )
-
-    // Changing the file (mtime/size) invalidates the cached entry.
-    await writeFile(agentsPath, 'Rule one\nRule two', 'utf-8')
-    const third = await service.getLayers('project-1', 'thread-1', root, null)
-    expect(third.find((layer) => layer.title === 'AGENTS.md (Project)')?.content).toContain(
-      'Rule two'
-    )
+    expect(behaviorLayer?.content).toBe('Custom implementation behavior.')
+    expect(layers.some((layer) => layer.title.includes('AGENTS.md'))).toBe(false)
   })
 
-  it('delegates nested AGENTS.md discovery from the root instruction layer', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'codeinoven-instruction-nested-'))
-    temporaryRoots.push(root)
-    await writeFile(join(root, 'AGENTS.md'), 'Root rules', 'utf-8')
-    await mkdir(join(root, 'packages'))
-    await writeFile(join(root, 'packages', 'AGENTS.md'), 'Package rules', 'utf-8')
-
-    const service = assembler()
-    const layers = await service.getLayers('project-1', 'thread-1', root, null)
-    const projectLayer = layers.find((layer) => layer.title === 'AGENTS.md (Project)')
-    expect(projectLayer?.content).toContain('Root rules')
-    expect(projectLayer?.content).toContain('Nested AGENTS.md discovery:')
-    expect(projectLayer?.content).toContain('CodeInOven injects the root AGENTS.md')
-    expect(layers.some((layer) => layer.content === 'Package rules')).toBe(false)
-    expect(instructionCacheSize()).toBe(1)
-
-    await rm(join(root, 'AGENTS.md'))
-    clearInstructionCache()
-    const withoutRoot = await service.getLayers('project-1', 'thread-1', root, null)
-    const guidanceLayer = withoutRoot.find((layer) => layer.title === 'AGENTS.md (Project)')
-    expect(guidanceLayer?.content).toContain('AGENTS.md files are directory-scoped instructions.')
-    expect(withoutRoot.some((layer) => layer.content === 'Package rules')).toBe(false)
+  it('omits the application behavior layer from chat turns', async () => {
+    const layers = await assembler().getLayers(
+      'project-1',
+      'thread-1',
+      '/nonexistent-project',
+      null,
+      undefined,
+      'chat',
+      'Custom implementation behavior.'
+    )
+    expect(layers.some((layer) => layer.title.startsWith('Agent behavior'))).toBe(false)
   })
 })

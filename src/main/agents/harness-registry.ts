@@ -76,8 +76,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    // Claude Code reads CLAUDE.md natively, not AGENTS.md — the app injects
-    // AGENTS.md so the project rules reach it deterministically.
+    // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
+    // CodeInOven's application prompt layer rather than project AGENTS.md.
     manifest: manifest({ loadsAgentsMd: false })
   },
   {
@@ -87,7 +87,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    // Pi has no native AGENTS.md/CLAUDE.md instruction loading.
+    // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
+    // behavior prompt remains available for Engineering implementation turns.
     manifest: manifest({ loadsAgentsMd: false })
   },
   {
@@ -138,11 +139,10 @@ export function harnessManifestFor(id: string): HarnessManifest | undefined {
 
 /**
  * Declared (manifest) value of whether the harness CLI natively loads the
- * project's AGENTS.md into the model context by itself. This is the reliable
- * baseline; `HarnessManifestService.resolveLoadsAgentsMd` layers a confirmed
- * runtime override on top. Unknown harnesses default to `false` so the app
- * keeps the deterministic injection guarantee for harnesses it does not yet
- * recognize.
+ * project's AGENTS.md into the model context by itself. This remains visible
+ * as harness capability metadata, while CodeInOven's own Engineering behavior
+ * comes from the application prompt layer. `HarnessManifestService` layers a
+ * confirmed runtime override on top.
  */
 export function harnessLoadsAgentsMd(id: string): boolean {
   return harnessManifestFor(id)?.behaviors['loadsAgentsMd'] ?? false

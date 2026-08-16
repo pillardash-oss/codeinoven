@@ -32,11 +32,11 @@ import {
   validateMemoryConfig,
   validateMemoryExportKind
 } from '../chat/memory-service'
-import { harnessLoadsAgentsMd } from '../agents/harness-registry'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
+import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../lib/agent-behavior'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
@@ -293,6 +293,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'preferredEditor',
   'memory',
   'agentDefaults',
+  'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
   'updateChannel',
@@ -1043,6 +1044,15 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.agentDefaults = validateAgentDefaults(value.agentDefaults)
   }
 
+  if ('agentBehaviorPrompt' in value) {
+    patch.agentBehaviorPrompt = validateBoundedString(
+      value.agentBehaviorPrompt,
+      'Agent behavior prompt',
+      1,
+      AGENT_BEHAVIOR_PROMPT_MAX_LENGTH
+    )
+  }
+
   if ('autoDownloadUpdates' in value) {
     if (typeof value.autoDownloadUpdates !== 'boolean') {
       throw new TypeError('autoDownloadUpdates must be a boolean')
@@ -1534,14 +1544,9 @@ export function registerIpcHandlers(
                   ? 'Muse Code'
                   : 'OpenCode'
     const harnessId = thread?.settings?.harnessId ?? 'opencode'
-    const loadsAgentsMd =
-      options.harnessManifestService === undefined
-        ? harnessLoadsAgentsMd(harnessId)
-        : await options.harnessManifestService.resolveLoadsAgentsMd(harnessId)
     const driverInfo = {
       id: harnessId,
-      name: driverName,
-      loadsAgentsMd
+      name: driverName
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
@@ -1557,7 +1562,8 @@ export function registerIpcHandlers(
         SPEC_IMPLEMENT_SYSTEM_PROMPT,
         MERMAID_OUTPUT_INSTRUCTION
       },
-      mode
+      mode,
+      (await storage.getConfig()).agentBehaviorPrompt
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>

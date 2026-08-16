@@ -50,7 +50,7 @@ A feature that only flatters its author does not belong here. A feature earns it
 ## Before you start
 
 1. **Open an issue or discussion first** for anything beyond a small fix. Describe the problem you hit, who else it affects, and the change you propose. This catches vanity features and duplicates early, and it lets maintainers point you at existing design.
-2. **Read the source of truth:** [`docs/APP-BIBLE.md`](docs/APP-BIBLE.md) defines the product philosophy and engineering standards, and [`docs/DESIGN.md`](docs/DESIGN.md) defines the visual language. The top-level `AGENTS.md` contains the operational rules agents follow. If a document conflicts with `docs/APP-BIBLE.md`, the Bible wins.
+2. **Read the source of truth:** [`docs/APP-BIBLE.md`](docs/APP-BIBLE.md) defines the product philosophy and engineering standards, and [`docs/DESIGN.md`](docs/DESIGN.md) defines the visual language. Project Engineering agents receive their editable operational behavior from Settings → Agents → Agent behavior. If a document conflicts with `docs/APP-BIBLE.md`, the Bible wins.
 3. **Make a plan.** Before writing code, write a short plan with your phases and keep it updated as you work. Keep all planning and progress documents under `agent-out/` — never pollute the repo root.
 4. **Understand the architecture** (see [Architecture rules](#architecture-rules)) so your change lands in the right layer.
 
