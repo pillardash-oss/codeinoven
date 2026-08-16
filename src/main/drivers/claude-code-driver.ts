@@ -64,6 +64,14 @@ const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
 /** Bounded wait for the `claude auth status` pre-flight probe. */
 const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
 /**
+ * How long a proven authentication keeps the shared credential trusted for
+ * concurrent spawns. The bypass must expire with the access token itself;
+ * otherwise an idle "authenticated" session would let fresh spawns skip the
+ * gate while the token is already expired, reopening the refresh race
+ * (anthropics/claude-code#76905). Conservative vs the ~5h access-token TTL.
+ */
+const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
+/**
  * How long a first-party session spawn may hold the credential-refresh gate
  * while it resolves authentication. The gate exists because Claude Code's
  * macOS keychain OAuth store races when two processes refresh a single-use
@@ -1064,12 +1072,12 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    *  re-spawns the CLI for auth on every message. */
   private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
   /**
-   * Sessions whose live process has already proven authentication this run.
-   * Once any live session authenticates, the shared keychain credential is
-   * fresh, so concurrent spawns are safe and the credential-refresh gate is
-   * skipped for every other thread and project.
+   * Sessions whose live process proved authentication this run, with the time
+   * it was proven. A session only counts while its proof is fresh (within
+   * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
+   * may have expired, so concurrent spawns must go through the gate again.
    */
-  private readonly authenticatedSessions = new Set<string>()
+  private readonly authenticatedSessions = new Map<string, number>()
   /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
   private readonly firstPartySessions = new Set<string>()
   /** Held while a first-party session spawn may be refreshing the credential. */
@@ -1377,11 +1385,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * credential is considered fresh in that case, so no serialization is needed.
    */
   private hasLiveAuthenticatedSession(): boolean {
+    const now = Date.now()
     const live = this.activeSessionIds()
-    return live.some(
-      (sessionId) =>
-        this.firstPartySessions.has(sessionId) && this.authenticatedSessions.has(sessionId)
-    )
+    return live.some((sessionId) => {
+      if (!this.firstPartySessions.has(sessionId)) return false
+      const authenticatedAt = this.authenticatedSessions.get(sessionId)
+      return authenticatedAt !== undefined && now - authenticatedAt < ACCESS_TOKEN_FRESH_MS
+    })
   }
 
   /**
@@ -1764,7 +1774,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     if (claudeAuthenticationResult(entry) === true) {
-      this.authenticatedSessions.add(context.sessionId)
+      this.authenticatedSessions.set(context.sessionId, Date.now())
     }
     this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
