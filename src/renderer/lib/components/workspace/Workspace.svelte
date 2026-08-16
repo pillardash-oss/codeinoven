@@ -24,6 +24,7 @@
     FileDiff,
     Files,
     Info,
+    MessageCircleDashed,
     SquareTerminal,
     StickyNote
   } from '@lucide/svelte'
@@ -689,6 +690,18 @@
     open()
   }
 
+  /** Quick chats, explains and audits open from inside a thread and live in the
+   *  sidebar as tabs. The rail only mirrors them so they can be toggled away
+   *  and back without losing the conversation. */
+  let temporaryChatTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'temporary-chat')
+  )
+
+  function focusTemporaryChat(): void {
+    const tab = temporaryChatTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
   function openMemoryTab(): void {
     if (!selectedThread) return
     contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
@@ -832,6 +845,25 @@
       })
     }
 
+    // Temporary chats get their own hairline-separated slot: they are ephemeral
+    // side conversations, not standing tools, and one button toggles the whole
+    // set because the panel tabs them.
+    const temporaryChats: ContextDockItem[] = []
+    if (temporaryChatTabs.length > 0) {
+      const name =
+        temporaryChatTabs.length === 1
+          ? (temporaryChatTabs.at(-1)?.title ?? 'Quick chat')
+          : `${temporaryChatTabs.length} quick chats`
+      temporaryChats.push({
+        id: 'temporary-chat',
+        label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
+        icon: MessageCircleDashed,
+        active: dockKindActive('temporary-chat'),
+        tone: 'info',
+        onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
+      })
+    }
+
     // The coordinator sits alone at the bottom, below its own hairline: it is
     // the thread's own supervision surface, not a general workspace tool.
     const coordination: ContextDockItem[] = coordinator
@@ -862,7 +894,7 @@
         ]
       : []
 
-    return [workspaceTools, sessionTools, coordination, threadNote]
+    return [workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
