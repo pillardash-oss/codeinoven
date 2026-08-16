@@ -126,7 +126,10 @@ CREATE INDEX IF NOT EXISTS idx_threads_project_listing
 CREATE INDEX IF NOT EXISTS idx_threads_activity_listing
   ON threads(pinned DESC, pinned_at DESC, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_default_listing
-  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);`
+  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_active_listing
+  ON threads(last_activity DESC, id ASC)
+  WHERE archived = 0 AND status IN ('planning', 'executing');`
 
 export const THREADS_SQL = `
 -- ─── Threads ────────────────────────────────────────────────────────────

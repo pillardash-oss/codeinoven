@@ -30,7 +30,6 @@ import {
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
-import type { Thread } from '../lib/types'
 import { startupTelemetry } from './system/startup-telemetry'
 import {
   handleFatalStartupFailure,
@@ -124,14 +123,7 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
   try {
     const threadRepo = new ThreadRepo(database)
     const projectRepo = new ProjectRepo(database)
-    type ActiveThread = Thread & { status: 'planning' | 'executing' }
-    const active: ActiveThread[] = threadRepo
-      .listAll()
-      .filter(
-        (t): t is ActiveThread =>
-          !t.archived && (t.status === 'planning' || t.status === 'executing')
-      )
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+    const active = threadRepo.listActive()
     if (active.length === 0) return []
     const byProject = new Map<string, CloseConfirmationProject>()
     for (const thread of active) {
