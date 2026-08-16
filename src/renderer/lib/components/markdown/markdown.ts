@@ -14,6 +14,7 @@ import {
   collectSectionKeys,
   linkifyFileCitations,
   linkifySectionReferences,
+  parseAbsoluteFileCitationTarget,
   sectionAnchor,
   sectionKeyFromHeading
 } from '$lib/agent-source-citations'
@@ -37,7 +38,7 @@ export function fileCitationTarget(href: string): MarkdownFileCitationTarget | n
     : href.startsWith(LEGACY_OPENCODE_SOURCE_PREFIX)
       ? LEGACY_OPENCODE_SOURCE_PREFIX
       : null
-  if (!prefix) return null
+  if (!prefix) return parseAbsoluteFileCitationTarget(href)
 
   try {
     const url = new URL(href.substring(prefix.length), 'resolve://citation/')
