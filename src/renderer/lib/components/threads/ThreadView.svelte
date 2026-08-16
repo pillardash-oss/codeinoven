@@ -1493,6 +1493,36 @@
   let assignmentWorkerRetryingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
+  /** A retry may only follow a completed, non-error assistant response for the
+   * current user turn. Older responses must not unlock a new spec request. */
+  let hasFinalAgentResponse = $derived.by(() => {
+    let latestUserIndex = -1
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'user') {
+        latestUserIndex = index
+        break
+      }
+    }
+    if (latestUserIndex === -1) return false
+    return messages
+      .slice(latestUserIndex + 1)
+      .some(
+        (message) =>
+          message.role === 'assistant' &&
+          message.completedAt !== undefined &&
+          message.error === undefined &&
+          message.parts.some((part) => part.type === 'text' && part.text.trim().length > 0)
+      )
+  })
+  let specStudioRetryable = $derived(
+    !spec &&
+      !brainstorm &&
+      !assignment &&
+      !auditReport &&
+      !busy &&
+      specError.trim().length > 0 &&
+      hasFinalAgentResponse
+  )
   // Intentional mounted-thread snapshot; live changes are reconciled from persisted thread state.
   // svelte-ignore state_referenced_locally
   let auditState = $state<Thread['auditState']>(thread.auditState)
@@ -2049,17 +2079,18 @@
     })
   })
 
-  // Engineering can request a spec; a persisted spec remains available
-  // from the header after planning has ended.
+  // A persisted studio document remains available from the header. A missing
+  // specification is only retryable after the current agent turn has produced
+  // a final response and the generation path has reported an error.
   $effect(() => {
     const hasStudioDocument =
       brainstorm !== null || spec !== null || assignment !== null || auditReport !== null
-    workspaceState.specStudioAvailable =
-      !chatMode && (settings.engineeringMode || hasStudioDocument)
+    workspaceState.specStudioAvailable = !chatMode && (hasStudioDocument || specStudioRetryable)
     workspaceState.specStudioOpen = showSpecStudio
     workspaceState.specStudioBusy = specBusy
     workspaceState.specStudioFormulating = specFormulating
     workspaceState.specStudioError = specError
+    workspaceState.specStudioRetryable = specStudioRetryable
     if (!showSpecStudio) {
       brainstormStudioHistories.clear()
       specStudioHistories.clear()
@@ -2084,9 +2115,7 @@
         void openSpecStudio()
       } else if (brainstorm) {
         openBrainstormStudio()
-      } else if (busy || brainstormWorkflow?.stage === 'choice_pending') {
-        return
-      } else {
+      } else if (specStudioRetryable) {
         void openSpecStudio()
       }
     }
@@ -2097,6 +2126,7 @@
       workspaceState.specStudioBusy = false
       workspaceState.specStudioFormulating = false
       workspaceState.specStudioError = ''
+      workspaceState.specStudioRetryable = false
       workspaceState.specAgentSidebarOpen = false
       workspaceState.specAgentResponses = []
     }

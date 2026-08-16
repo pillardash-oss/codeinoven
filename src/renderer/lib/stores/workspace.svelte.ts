@@ -94,6 +94,8 @@ class WorkspaceState {
   specStudioBusy = $state(false)
   specStudioFormulating = $state(false)
   specStudioError = $state('')
+  /** True when the header action is an eligible final-response retry. */
+  specStudioRetryable = $state(false)
   specAgentSidebarOpen = $state(false)
   toggleSpecStudio: (() => void) | null = null
   /** Assistant responses shown in the sidebar while reviewing a specification. */
@@ -294,6 +296,7 @@ class WorkspaceState {
     this.specStudioBusy = false
     this.specStudioFormulating = false
     this.specStudioError = ''
+    this.specStudioRetryable = false
     this.specAgentSidebarOpen = false
     this.toggleSpecStudio = null
     this.specAgentResponses = []
