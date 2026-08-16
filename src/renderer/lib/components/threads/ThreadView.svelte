@@ -4608,6 +4608,12 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
+  async function openStartAfterThread(threadId: string): Promise<void> {
+    const linkedThread =
+      threadId === thread.id ? thread : await invoke('thread:get', thread.projectId, threadId)
+    if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
   function harnessDisplayName(harnessId: string): string {
     if (harnessId === 'opencode') return 'OpenCode'
     if (harnessId === 'claude-code') return 'Claude Code'
@@ -7618,6 +7624,10 @@
                     thread.projectId,
                     thread.id
                   )}
+                  initialStartAfterThread={rendererRecovery.startAfterThreadFor(
+                    thread.projectId,
+                    thread.id
+                  )}
                   onValueChange={(value) =>
                     rendererRecovery.setDraft(thread.projectId, thread.id, value)}
                   onAttachmentsChange={(files) =>
@@ -7644,6 +7654,18 @@
                       rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
                       taskReferences
                     )}
+                  onStartAfterThreadChange={(startAfterThread) => {
+                    if (startAfterThread) {
+                      rendererRecovery.setStartAfterThread(
+                        thread.projectId,
+                        thread.id,
+                        startAfterThread
+                      )
+                    } else {
+                      rendererRecovery.clearStartAfterThread(thread.projectId, thread.id)
+                    }
+                  }}
+                  onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
                   references={responseReferences}
                   onRemoveReference={removeResponseReference}
                   onRemoveAllReferences={clearResponseReferences}

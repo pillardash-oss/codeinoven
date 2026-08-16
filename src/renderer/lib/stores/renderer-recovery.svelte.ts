@@ -22,7 +22,8 @@ import {
   type QueuedResponseReference,
   type RecoveryStorage,
   type RendererRecoverySnapshot,
-  type SelectedThreadReference
+  type SelectedThreadReference,
+  type StartAfterThreadReference
 } from './renderer-recovery'
 
 export type {
@@ -32,6 +33,7 @@ export type {
   RecoveryStorage,
   RendererRecoverySnapshot,
   SelectedThreadReference,
+  StartAfterThreadReference,
   SettingsSection
 } from './renderer-recovery'
 export {
@@ -197,6 +199,7 @@ export class RendererRecoveryStore {
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
       entry.promptReferences.length > 0 ||
+      Boolean(entry.startAfterThreadId) ||
       this.queuedMessageFor(projectId, threadId) !== null
     )
   }
@@ -211,6 +214,15 @@ export class RendererRecoveryStore {
 
   taskReferencesFor(projectId: string, threadId: string): PromptAssignmentTaskReference[] {
     return this.entryFor(projectId, threadId).taskReferences
+  }
+
+  startAfterThreadFor(projectId: string, threadId: string): StartAfterThreadReference | null {
+    const entry = this.entryFor(projectId, threadId)
+    if (!entry.startAfterThreadId) return null
+    return {
+      id: entry.startAfterThreadId,
+      title: entry.startAfterThreadTitle ?? 'Thread'
+    }
   }
 
   setDraft(
@@ -259,7 +271,8 @@ export class RendererRecoveryStore {
       nextAttachments.length === 0 &&
       nextProjectReferences.length === 0 &&
       nextTaskReferences.length === 0 &&
-      nextPromptReferences.length === 0
+      nextPromptReferences.length === 0 &&
+      !current.startAfterThreadId
     ) {
       delete next[key]
     } else {
@@ -272,7 +285,9 @@ export class RendererRecoveryStore {
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,
         taskReferences: nextTaskReferences,
-        promptReferences: nextPromptReferences
+        promptReferences: nextPromptReferences,
+        startAfterThreadId: current.startAfterThreadId,
+        startAfterThreadTitle: current.startAfterThreadTitle
       }
     }
     this.composerDrafts = next
@@ -283,7 +298,57 @@ export class RendererRecoveryStore {
   }
 
   clearDraft(projectId: string, threadId: string): void {
+    this.clearStartAfterThread(projectId, threadId)
     this.setDraft(projectId, threadId, '', [], [], [], [])
+  }
+
+  setStartAfterThread(
+    projectId: string,
+    threadId: string,
+    reference: StartAfterThreadReference | null
+  ): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+
+    const key = recoveryDraftKey(projectId, threadId)
+    const current = this.entryFor(projectId, threadId)
+    const next = { ...this.composerDrafts }
+    if (!reference) {
+      if (!(key in next)) return
+      if (
+        current.text.length === 0 &&
+        current.attachments.length === 0 &&
+        current.projectReferences.length === 0 &&
+        current.taskReferences.length === 0 &&
+        current.promptReferences.length === 0
+      ) {
+        delete next[key]
+      } else {
+        next[key] = {
+          ...current,
+          startAfterThreadId: undefined,
+          startAfterThreadTitle: undefined
+        }
+      }
+    } else {
+      if (!isRecoveryIdentifier(reference.id) || reference.title.length === 0) return
+      if (
+        current.startAfterThreadId === reference.id &&
+        current.startAfterThreadTitle === reference.title
+      ) {
+        return
+      }
+      next[key] = {
+        ...current,
+        startAfterThreadId: reference.id,
+        startAfterThreadTitle: reference.title
+      }
+    }
+    this.composerDrafts = next
+    this.persist()
+  }
+
+  clearStartAfterThread(projectId: string, threadId: string): void {
+    this.setStartAfterThread(projectId, threadId, null)
   }
 
   /** The persisted response-selection annotations attached to a thread's composer draft. */
