@@ -410,14 +410,21 @@ class ContextSidebarState {
     if (context) context.visible = false
   }
 
+  /** Opened from the dock rail's Files icon. Reveals whatever file panel was
+   *  last in focus instead of always jumping to the empty "Open file"
+   *  browser tab — hiding the sidebar must not lose the file the user was
+   *  looking at. The browser tab only ever appears when no file has been
+   *  opened yet. */
   openFiles(projectId: string, threadId: string): void {
     const context = this.ensureContext(projectId, threadId)
-    const id = `files:${projectId}:${threadId}:browser`
-    const existing = context.tabs.find((tab) => tab.id === id)
-    if (existing) {
-      this.focusInContext(context, id)
+    const filesTabs = context.tabs.filter((tab) => tab.kind === 'files')
+    if (filesTabs.length > 0) {
+      const activeTab = context.tabs.find((tab) => tab.id === context.sidebarActiveTabId)
+      const target = activeTab?.kind === 'files' ? activeTab.id : filesTabs.at(-1)!.id
+      this.focusInContext(context, target)
       return
     }
+    const id = `files:${projectId}:${threadId}:browser`
     this.open(context, {
       id,
       kind: 'files',
@@ -498,7 +505,13 @@ class ContextSidebarState {
     projectId: string,
     previousFileTabId: string,
     nextFileTabId: string,
-    nextPath: string
+    nextPath: string,
+    preview: boolean,
+    /** False for bulk remaps (e.g. a directory rename touching many open
+     *  tabs at once) — those shouldn't fight over which tab ends up
+     *  focused. True for a remap that represents the user looking at this
+     *  file right now (a preview replacing another preview). */
+    focus: boolean
   ): boolean {
     for (const context of Object.values(this.contexts)) {
       const index = context.tabs.findIndex(
@@ -514,9 +527,16 @@ class ContextSidebarState {
         id: nextId,
         title: nextPath.split('/').at(-1) ?? nextPath,
         fileTabId: nextFileTabId,
-        path: nextPath
+        path: nextPath,
+        preview
       }
-      if (context.activeTabId === previous.id) context.activeTabId = nextId
+      if (focus) {
+        context.activeTabId = nextId
+        this.trackRegionActiveTab(context, nextId)
+        this.revealRegion(context, nextId)
+      } else if (context.activeTabId === previous.id) {
+        context.activeTabId = nextId
+      }
       return true
     }
     return false

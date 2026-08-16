@@ -283,7 +283,11 @@
                   onclick={() => onSelect(tab.id)}
                 >
                   {@render tabIcon(tab)}
-                  <span class="truncate text-[11px] font-medium">{tab.title}</span>
+                  <span
+                    class="truncate text-[11px] font-medium {tab.kind === 'files' && tab.preview
+                      ? 'italic'
+                      : ''}">{tab.title}</span
+                  >
                   {#if tab.kind === 'temporary-chat' && tab.busy}
                     <StatusBadge stage="working" animated title="Working" />
                   {/if}
