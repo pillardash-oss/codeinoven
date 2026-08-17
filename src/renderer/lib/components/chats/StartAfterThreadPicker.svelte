@@ -11,11 +11,13 @@
     open: boolean
     projectId: string | null
     currentThreadId: string
+    /** Threads already selected — hidden/disabled so the user can keep adding. */
+    selectedIds?: string[]
     onSelect: (thread: Thread) => void
     onClose: () => void
   }
 
-  let { open, projectId, currentThreadId, onSelect, onClose }: Props = $props()
+  let { open, projectId, currentThreadId, selectedIds = [], onSelect, onClose }: Props = $props()
 
   let threads = $state<Thread[]>([])
   let loading = $state(false)
@@ -85,7 +87,8 @@
         kind: 'app'
       },
       icon: isLiveWorking(thread) ? MessagesSquare : Clock,
-      keywords: [stageLabel(thread), 'working', 'attention', 'start after']
+      keywords: [stageLabel(thread), 'working', 'attention', 'start after'],
+      disabledReason: selectedIds.includes(thread.id) ? 'Already selected' : undefined
     }))
   )
 
@@ -99,12 +102,13 @@
 <CommandPalette
   {open}
   {actions}
-  title="Start after a thread"
+  title="Start after threads"
   placeholder="Search working or attention threads…"
   emptyLabel={loading ? 'Loading active threads…' : 'No working or attention threads'}
   headerIcon={Clock}
   headerIconBadge
   headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+  closeOnSelect={false}
   onSelect={selectThread}
   {onClose}
   shortcutLabel="ESC"

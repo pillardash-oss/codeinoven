@@ -100,7 +100,10 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import {
+    rendererRecovery,
+    type StartAfterThreadReference
+  } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
@@ -1294,8 +1297,7 @@
     direct?: boolean,
     projectReferences: PromptProjectReference[] = [],
     taskReferences: PromptAssignmentTaskReference[] = [],
-    startAfterThreadId?: string,
-    startAfterThreadTitle?: string
+    startAfterThreads: StartAfterThreadReference[] = []
   ): void {
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
@@ -1332,8 +1334,7 @@
       undefined,
       currentTaskReferences,
       true,
-      startAfterThreadId,
-      startAfterThreadTitle
+      startAfterThreads
     )
   }
 
@@ -2449,7 +2450,7 @@
       }
       if (
         updatedThread.projectId === thread.projectId &&
-        updatedThread.id === queuedStartAfterThreadId
+        queuedStartAfterThreads.some((reference) => reference.id === updatedThread.id)
       ) {
         idleAttentionHandled = false
         scheduleIdleAttention()
@@ -3267,9 +3268,11 @@
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
     if (!pending && !queuedHasContent) return
-    if (queuedStartAfterThreadId) {
-      const dependency = await invoke('thread:get', projectId, queuedStartAfterThreadId)
-      if (dependency && !isTerminalThread(dependency.status)) {
+    if (queuedStartAfterThreads.length > 0) {
+      const dependencies = await Promise.all(
+        queuedStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
+      )
+      if (dependencies.some((dependency) => !dependency || !isTerminalThread(dependency.status))) {
         idleAttentionHandled = false
         return
       }
@@ -3312,8 +3315,7 @@
     queuedProjectReferences = []
     queuedPresentation = undefined
     queuedTaskReferences = []
-    queuedStartAfterThreadId = undefined
-    queuedStartAfterThreadTitle = undefined
+    queuedStartAfterThreads = []
     queuedHasContent = false
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
@@ -3329,8 +3331,7 @@
     queuedProjectReferences = entry.projectReferences
     queuedPresentation = entry.presentation
     queuedTaskReferences = entry.taskReferences
-    queuedStartAfterThreadId = entry.startAfterThreadId
-    queuedStartAfterThreadTitle = entry.startAfterThreadTitle
+    queuedStartAfterThreads = entry.startAfterThreads
     queuedHasContent =
       entry.text !== '' ||
       entry.attachments.length > 0 ||
@@ -3369,8 +3370,7 @@
   let queuedProjectReferences = $state<PromptProjectReference[]>([])
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
-  let queuedStartAfterThreadId = $state<string | undefined>()
-  let queuedStartAfterThreadTitle = $state<string | undefined>()
+  let queuedStartAfterThreads = $state<StartAfterThreadReference[]>([])
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
@@ -3443,8 +3443,7 @@
     presentation?: UserMessagePresentation,
     taskReferences: PromptAssignmentTaskReference[] = [],
     restorable?: boolean,
-    startAfterThreadId?: string,
-    startAfterThreadTitle?: string
+    startAfterThreads: StartAfterThreadReference[] = []
   ): Promise<void> {
     const msg = text.trim()
     const hasAttachments = (attachments?.length ?? 0) > 0
@@ -3465,9 +3464,10 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
-    const dependencyId =
-      startAfterThreadId && startAfterThreadId !== thread.id ? startAfterThreadId : undefined
-    if (dependencyId || (busy && !direct)) {
+    const dependencyThreads = startAfterThreads.filter(
+      (reference) => reference.id !== thread.id && reference.id.length > 0
+    )
+    if (dependencyThreads.length > 0 || (busy && !direct)) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext
@@ -3475,8 +3475,7 @@
       queuedProjectReferences = projectReferences
       queuedPresentation = presentation
       queuedTaskReferences = taskReferences
-      queuedStartAfterThreadId = dependencyId
-      queuedStartAfterThreadTitle = dependencyId ? startAfterThreadTitle : undefined
+      queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
@@ -3486,8 +3485,7 @@
         projectReferences,
         presentation,
         taskReferences,
-        startAfterThreadId: dependencyId,
-        startAfterThreadTitle: dependencyId ? startAfterThreadTitle : undefined
+        startAfterThreads: dependencyThreads
       })
       idleAttentionHandled = false
       void handleIdleAttention()
@@ -3767,7 +3765,8 @@
           promptReferences,
           projectReferences,
           presentation,
-          taskReferences
+          taskReferences,
+          startAfterThreads: []
         })
       }
       errorMessage = error instanceof Error ? error.message : 'Steer message could not be sent.'
@@ -7332,12 +7331,16 @@
                     {/each}
                   </div>
                 {/if}
-                {#if queuedStartAfterThreadId}
-                  <div class="flex items-center gap-1.5 px-3 pb-2 text-[11px] text-info">
-                    <Clock size={12} class="shrink-0" />
-                    <span class="truncate">
-                      Starts after {queuedStartAfterThreadTitle ?? 'the selected thread'} finishes
-                    </span>
+                {#if queuedStartAfterThreads.length > 0}
+                  <div class="flex flex-col gap-0.5 px-3 pb-2 text-[11px] text-info">
+                    {#each queuedStartAfterThreads as dependency (dependency.id)}
+                      <div class="flex items-center gap-1.5">
+                        <Clock size={12} class="shrink-0" />
+                        <span class="truncate">
+                          Starts after {dependency.title} finishes
+                        </span>
+                      </div>
+                    {/each}
                   </div>
                 {/if}
                 {#if queuedPresentation}
@@ -7650,7 +7653,7 @@
                     thread.projectId,
                     thread.id
                   )}
-                  initialStartAfterThread={rendererRecovery.startAfterThreadFor(
+                  initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
                     thread.projectId,
                     thread.id
                   )}
@@ -7680,16 +7683,12 @@
                       rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
                       taskReferences
                     )}
-                  onStartAfterThreadChange={(startAfterThread) => {
-                    if (startAfterThread) {
-                      rendererRecovery.setStartAfterThread(
-                        thread.projectId,
-                        thread.id,
-                        startAfterThread
-                      )
-                    } else {
-                      rendererRecovery.clearStartAfterThread(thread.projectId, thread.id)
-                    }
+                  onStartAfterThreadsChange={(startAfterThreads) => {
+                    rendererRecovery.setStartAfterThreads(
+                      thread.projectId,
+                      thread.id,
+                      startAfterThreads
+                    )
                   }}
                   onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
                   references={responseReferences}

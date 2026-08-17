@@ -95,8 +95,7 @@
       direct?: boolean,
       projectReferences?: PromptProjectReference[],
       taskReferences?: PromptAssignmentTaskReference[],
-      startAfterThreadId?: string,
-      startAfterThreadTitle?: string
+      startAfterThreads?: StartAfterSelection[]
     ) => void
     disabled?: boolean
     /** True while the agent is running — turns the send button into a stop button. */
@@ -146,11 +145,11 @@
     /** Restart-safe Assignment task references tagged for the next prompt. */
     initialTaskReferences?: PromptAssignmentTaskReference[]
     onTaskReferencesChange?: (references: PromptAssignmentTaskReference[]) => void
-    /** Restart-safe thread selected as the dependency for the next prompt. */
-    initialStartAfterThread?: StartAfterSelection | null
-    /** Persists or clears the dependency selected for the next prompt. */
-    onStartAfterThreadChange?: (thread: StartAfterSelection | null) => void
-    /** Opens the selected dependency thread from the composer badge popover. */
+    /** Restart-safe source threads the next prompt waits for before it starts. */
+    initialStartAfterThreads?: StartAfterSelection[]
+    /** Persists or clears the source threads selected for the next prompt. */
+    onStartAfterThreadsChange?: (threads: StartAfterSelection[]) => void
+    /** Opens a selected source thread from the composer badge popover. */
     onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
     /** Assistant-response excerpts referenced by the next message. */
     references?: readonly PromptReference[]
@@ -245,8 +244,8 @@
     onProjectReferencesChange,
     initialTaskReferences = [],
     onTaskReferencesChange,
-    initialStartAfterThread = null,
-    onStartAfterThreadChange,
+    initialStartAfterThreads = [],
+    onStartAfterThreadsChange,
     onOpenStartAfterThread,
     references = [],
     onRemoveReference,
@@ -404,13 +403,13 @@
   let thinkingMenuOpen = $state(false)
   let startAfterPickerOpen = $state(false)
   // The composer is remounted by the parent when a restore is required, so
-  // capture the persisted dependency exactly once at construction.
+  // capture the persisted dependencies exactly once at construction.
   // svelte-ignore state_referenced_locally
-  let startAfterThread = $state<StartAfterSelection | null>(
-    initialStartAfterThread ? { ...initialStartAfterThread } : null
+  let startAfterThreads = $state<StartAfterSelection[]>(
+    initialStartAfterThreads.map((t) => ({ ...t }))
   )
   // svelte-ignore state_referenced_locally
-  let startAfterEnabled = $state(initialStartAfterThread !== null)
+  let startAfterEnabled = $state(initialStartAfterThreads.length > 0)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
@@ -488,9 +487,9 @@
   function toggleStartAfter(enabled: boolean): void {
     if (!enabled) {
       startAfterEnabled = false
-      startAfterThread = null
+      startAfterThreads = []
       closeStartAfterPopover()
-      onStartAfterThreadChange?.(null)
+      onStartAfterThreadsChange?.([])
       return
     }
     if (!projectId || readOnlyMode) return
@@ -500,18 +499,24 @@
 
   function selectStartAfterThread(thread: Thread): void {
     if (thread.id === threadId) return
-    startAfterThread = { id: thread.id, title: thread.title }
+    if (startAfterThreads.some((existing) => existing.id === thread.id)) return
+    startAfterThreads = [...startAfterThreads, { id: thread.id, title: thread.title }]
     startAfterEnabled = true
-    onStartAfterThreadChange?.(startAfterThread)
-    startAfterPickerOpen = false
+    onStartAfterThreadsChange?.(startAfterThreads)
     focusComposerAtEnd()
   }
 
-  function clearStartAfterThread(): void {
+  function removeStartAfterThread(threadId: string): void {
+    startAfterThreads = startAfterThreads.filter((existing) => existing.id !== threadId)
+    if (startAfterThreads.length === 0) startAfterEnabled = false
+    onStartAfterThreadsChange?.(startAfterThreads)
+  }
+
+  function clearStartAfterThreads(): void {
     startAfterEnabled = false
-    startAfterThread = null
+    startAfterThreads = []
     closeStartAfterPopover()
-    onStartAfterThreadChange?.(null)
+    onStartAfterThreadsChange?.([])
   }
 
   function showModelMenu(): void {
@@ -838,17 +843,9 @@
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
-    const selectedStartAfterThread = startAfterEnabled ? startAfterThread : null
-    clearStartAfterThread()
-    onSend(
-      msg,
-      files,
-      direct,
-      taggedPaths,
-      taggedTasks,
-      selectedStartAfterThread?.id,
-      selectedStartAfterThread?.title
-    )
+    const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
+    clearStartAfterThreads()
+    onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
   }
 
   async function updateFileMention(nextValue: string): Promise<void> {
@@ -1618,7 +1615,7 @@
   {/if}
 
   <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThread || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
+  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
         {#if projectContext}
@@ -1736,12 +1733,11 @@
             {/if}
           </div>
         {/if}
-        {#if startAfterThread}
-          {@const selectedStartAfterThread = startAfterThread}
+        {#if startAfterThreads.length > 0}
           <div
             class="relative inline-flex"
             role="group"
-            aria-label="Start after dependency"
+            aria-label="Start after dependencies"
             onmouseenter={openStartAfterPopover}
             onmouseleave={scheduleStartAfterPopoverClose}
           >
@@ -1751,8 +1747,8 @@
               <button
                 type="button"
                 class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
-                title={'Starts after ' + selectedStartAfterThread.title + ' — hover to manage'}
-                aria-label={'Starts after ' + selectedStartAfterThread.title}
+                title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'} — hover to manage`}
+                aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
                 aria-expanded={startAfterPopoverOpen}
                 onclick={() => {
                   if (startAfterPopoverOpen) closeStartAfterPopover()
@@ -1760,21 +1756,25 @@
                 }}
               >
                 <Clock size={10} class="shrink-0" />
-                <span>Start after</span>
+                <span
+                  >Start after{startAfterThreads.length > 1
+                    ? ` · ${startAfterThreads.length}`
+                    : ''}</span
+                >
               </button>
               <button
                 type="button"
                 class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
-                title="Remove Start after"
-                aria-label="Remove Start after"
-                onclick={clearStartAfterThread}
+                title="Remove all Start after threads"
+                aria-label="Remove all Start after threads"
+                onclick={clearStartAfterThreads}
               >
                 <X size={10} />
               </button>
             </div>
             {#if startAfterPopoverOpen}
               <div
-                class="absolute bottom-full left-0 z-50 mb-1.5 w-64 rounded-xl border border-border bg-surface p-2 shadow-lg"
+                class="absolute bottom-full left-0 z-50 mb-1.5 w-72 rounded-xl border border-border bg-surface p-2 shadow-lg"
                 role="dialog"
                 aria-label="Start after details"
                 tabindex="0"
@@ -1784,18 +1784,33 @@
                 <div
                   class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
                 >
-                  Starts after thread
+                  Starts after thread{startAfterThreads.length === 1 ? '' : 's'}
                 </div>
-                <button
-                  type="button"
-                  class="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
-                  title={'Open ' + selectedStartAfterThread.title}
-                  aria-label={'Open ' + selectedStartAfterThread.title}
-                  onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
-                >
-                  <Clock size={12} class="shrink-0 text-info" />
-                  <span class="min-w-0 flex-1 truncate">{selectedStartAfterThread.title}</span>
-                </button>
+                {#each startAfterThreads as selectedStartAfterThread (selectedStartAfterThread.id)}
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                      title={'Open ' + selectedStartAfterThread.title}
+                      aria-label={'Open ' + selectedStartAfterThread.title}
+                      onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
+                    >
+                      <Clock size={12} class="shrink-0 text-info" />
+                      <span class="min-w-0 flex-1 truncate">
+                        {selectedStartAfterThread.title}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                      title={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      onclick={() => removeStartAfterThread(selectedStartAfterThread.id)}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                {/each}
               </div>
             {/if}
           </div>
@@ -2063,10 +2078,10 @@
                 <Switch
                   checked={startAfterEnabled}
                   onchange={toggleStartAfter}
-                  title={startAfterThread
-                    ? `Start after ${startAfterThread.title}`
-                    : 'Start this thread after another active thread finishes'}
-                  aria-label="Start after another thread"
+                  title={startAfterThreads.length > 0
+                    ? `Start after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                    : 'Start this thread after other active threads finish'}
+                  aria-label="Start after other threads"
                   activeClass="bg-info"
                   class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
                 >
@@ -2077,19 +2092,37 @@
                   >
                     <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
                     <span class="min-w-0 truncate">
-                      {startAfterThread ? `Start after · ${startAfterThread.title}` : 'Start after'}
+                      {startAfterEnabled && startAfterThreads.length > 0
+                        ? `Start after · ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                        : 'Start after'}
                     </span>
                   </span>
                 </Switch>
-                {#if startAfterThread}
+                {#if startAfterEnabled}
+                  {#each startAfterThreads as startAfterThread (startAfterThread.id)}
+                    <div class="flex items-center gap-1 px-1">
+                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[11px] text-info">
+                        {startAfterThread.title}
+                      </span>
+                      <button
+                        type="button"
+                        class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                        title={`Remove ${startAfterThread.title} from Start after`}
+                        aria-label={`Remove ${startAfterThread.title} from Start after`}
+                        onclick={() => removeStartAfterThread(startAfterThread.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  {/each}
                   <button
                     type="button"
                     class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                     role="menuitem"
-                    title="Choose a different start-after thread"
+                    title="Add another thread to Start after"
                     onclick={openStartAfterPicker}
                   >
-                    Change thread
+                    Add thread
                   </button>
                 {/if}
               {/if}
@@ -2337,10 +2370,11 @@
   open={startAfterPickerOpen}
   {projectId}
   currentThreadId={threadId}
+  selectedIds={startAfterThreads.map((t) => t.id)}
   onSelect={selectStartAfterThread}
   onClose={() => {
     startAfterPickerOpen = false
-    if (!startAfterThread) startAfterEnabled = false
+    if (startAfterThreads.length === 0) startAfterEnabled = false
   }}
 />
 
