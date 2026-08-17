@@ -155,6 +155,10 @@ function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   return presets.length > 0 ? presets : undefined
 }
 
+function isCodexTextOnlyModel(id: string): boolean {
+  return /^gpt-5\.3-codex-spark(?:-|$)/iu.test(id)
+}
+
 function mapCodexModel(value: unknown): ProviderModel | null {
   const model = record(value)
   const id = stringValue(model?.['id'])
@@ -168,17 +172,21 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
     numberValue(model?.['modelContextWindow'])
-  // Read a structured vision capability when the codex catalog reports one;
-  // unknown state defaults to vision-capable.
+  // Read a structured vision capability when the codex catalog reports one.
+  // Spark is a known text-only model, but some Codex catalog versions omit
+  // capability metadata for it; keep the composer and transport in sync in
+  // that case instead of sending unsupported localImage inputs.
   const capabilities = record(model?.['capabilities'])
   const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  const attachment =
+    typeof explicitVision === 'boolean' ? explicitVision : !isCodexTextOnlyModel(id)
   return {
     id,
     providerId: 'openai',
     name: stringValue(model?.['displayName']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment: explicitVision === undefined ? true : explicitVision !== false,
+    attachment,
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:
