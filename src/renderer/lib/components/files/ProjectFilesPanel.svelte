@@ -9,9 +9,9 @@
     Code2,
     Eye,
     FileDiff,
+    FolderTree,
     FolderOpen,
     Loader2,
-    PanelRight,
     Save,
     X
   } from '@lucide/svelte'
@@ -471,7 +471,7 @@
           title={projectState.explorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
       </div>
 
@@ -755,6 +755,8 @@
           {projectId}
           {projectName}
           {projectState}
+          onWidthChange={(width, persist) =>
+            projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
           selectedPath={activeTab?.path ?? null}
           {lastTurnPaths}
           {activeCheckpointPaths}
@@ -810,7 +812,7 @@
           title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
           onclick={() => (fullscreenExplorerOpen = !fullscreenExplorerOpen)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
         <Dialog.Close
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1024,6 +1026,8 @@
               {projectId}
               {projectName}
               {projectState}
+              onWidthChange={(width, persist) =>
+                projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
               selectedPath={activeTab.path}
               {lastTurnPaths}
               {activeCheckpointPaths}

@@ -21,6 +21,7 @@
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -31,6 +32,7 @@
     projectId: string
     projectName: string
     projectState: ProjectFilesState
+    onWidthChange: (width: number, persist: boolean) => void
     selectedPath: string | null
     lastTurnPaths: string[]
     activeCheckpointId: string | null
@@ -43,6 +45,7 @@
     projectId,
     projectName,
     projectState,
+    onWidthChange,
     selectedPath,
     lastTurnPaths,
     activeCheckpointId,
@@ -84,6 +87,8 @@
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
   let dropHoverPath: string | null = null
   let treeBusy = $state(false)
+  let resizing = $state(false)
+  let stopResize: (() => void) | null = null
   const filterActive = $derived(Boolean(filterQuery.trim()) || lastTurnOnly)
   /** When true, the next reveal scroll is suppressed. Set during a pointer
    *  interaction on the tree so a user clicking a row isn't yanked around;
@@ -181,6 +186,42 @@
     if (collapsedOverrides.size > 0) collapsedOverrides.clear()
   }
 
+  function handleResizeKeydown(event: KeyboardEvent): void {
+    const delta = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+    if (delta === 0) return
+    event.preventDefault()
+    onWidthChange(clampFileExplorerWidth(projectState.explorerWidth + delta), true)
+  }
+
+  function startResize(event: PointerEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopResize) return
+
+    resizing = true
+    const startX = event.clientX
+    const startWidth = projectState.explorerWidth
+    let nextWidth = startWidth
+
+    const finish = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      stopResize = null
+      resizing = false
+      onWidthChange(nextWidth, true)
+    }
+    const onMove = (moveEvent: PointerEvent): void => {
+      nextWidth = clampFileExplorerWidth(startWidth + startX - moveEvent.clientX)
+      onWidthChange(nextWidth, false)
+    }
+
+    stopResize = finish
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
+
   function handleFilterInput(event: Event): void {
     if (!(event.currentTarget instanceof HTMLInputElement)) return
     const nextQuery = event.currentTarget.value
@@ -191,7 +232,10 @@
     filterQuery = nextQuery
   }
 
-  onDestroy(clearSearchExpansions)
+  onDestroy(() => {
+    stopResize?.()
+    clearSearchExpansions()
+  })
 
   async function openFilter(): Promise<void> {
     filterOpen = true
@@ -1085,7 +1129,8 @@
 {/snippet}
 
 <aside
-  class="relative flex h-full min-h-0 w-52 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
+  class="relative flex h-full min-h-0 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
+  style:width={`${projectState.explorerWidth}px`}
   aria-label="Project file explorer"
   data-region="file-tree"
   ondragover={handleDragOver}
@@ -1093,6 +1138,17 @@
   ondrop={handleDrop}
   onpaste={handlePaste}
 >
+  <button
+    type="button"
+    class="absolute inset-y-0 -left-0.5 z-20 w-1.5 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20 {resizing
+      ? 'bg-primary/30'
+      : ''}"
+    tabindex="0"
+    aria-label={`Resize file tree, ${projectState.explorerWidth} pixels wide`}
+    title="Resize file tree"
+    onpointerdown={startResize}
+    onkeydown={handleResizeKeydown}
+  ></button>
   {#if dropActive}
     <div
       class="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center"
