@@ -6744,7 +6744,14 @@ export class ChatEngine {
     this.userAbortedSessions.add(thread.sessionId)
     this.activeCompactions.delete(thread.sessionId)
     this.rejectCompletionWaiter(thread.sessionId, 'Agent run stopped by user')
-    const driverId = thread.settings?.harnessId ?? 'opencode'
+    // Stop targets the session already running in this thread. The picker may
+    // have changed since that session started, so resolve its owning harness
+    // before falling back to the current settings for legacy threads.
+    const driverId =
+      this.sessionRegistry.get(thread.sessionId)?.driverId ??
+      thread.sessionHarnessId ??
+      thread.settings?.harnessId ??
+      'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
