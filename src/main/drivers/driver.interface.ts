@@ -252,6 +252,17 @@ export interface HarnessDriver {
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
 
+  /**
+   * Load only the active turn beginning at a stable user-message id. Drivers
+   * with an in-memory session should implement this so turn finalization never
+   * rescans a conversation whose cost grows with thread age.
+   */
+  loadMessagesSince?(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]>
+
   /** Abort the running turn in a session. */
   abort(projectPath: string, sessionId: string): Promise<void>
 

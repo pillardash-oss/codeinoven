@@ -1252,6 +1252,19 @@ export class CodexDriver extends PersistentCliDriver {
    */
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
     const messages = await super.loadMessages(projectPath, sessionId)
+    return this.normalizeSessionMessages(messages, sessionId)
+  }
+
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const messages = await super.loadMessagesSince(projectPath, sessionId, messageId)
+    return this.normalizeSessionMessages(messages, sessionId)
+  }
+
+  private normalizeSessionMessages(messages: AgentMessage[], sessionId: string): AgentMessage[] {
     const byId = new Map<string, AgentMessage>()
     for (const message of messages) {
       const renamed = namespacedMessage(message, sessionId)

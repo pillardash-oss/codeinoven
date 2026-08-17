@@ -24,6 +24,8 @@
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
 
+  const TRACE_PART_WINDOW_SIZE = 60
+
   interface Props {
     parts: AgentPart[]
     open?: boolean
@@ -87,12 +89,15 @@
   let closeTimer: ReturnType<typeof setTimeout> | null = null
   let imageUrls = new FileBlobUrlManager()
   let elapsed = $state(0)
+  let visiblePartLimit = $state(TRACE_PART_WINDOW_SIZE)
+  let visibleParts = $derived(parts.slice(Math.max(0, parts.length - visiblePartLimit)))
+  let hiddenPartCount = $derived(Math.max(0, parts.length - visibleParts.length))
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
   const effectiveStartTime = $derived.by((): number | undefined => {
     if (startTime && startTime > 0) return startTime
-    for (const part of parts) {
+    for (const part of visibleParts) {
       const start =
         part.type === 'tool'
           ? part.state.time?.start
@@ -132,7 +137,8 @@
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.
   $effect(() => {
-    for (const part of parts) {
+    if (!isOpen) return
+    for (const part of visibleParts) {
       if (part.type === 'file' && isImageMime(part.mime) && part.url.startsWith('file://')) {
         void imageUrls.load(part.url, part.mime)
       }
@@ -191,6 +197,7 @@
     event.preventDefault()
     isOpen = !isOpen
     userOpened = isOpen
+    if (!isOpen) visiblePartLimit = TRACE_PART_WINDOW_SIZE
     if (closeTimer) {
       clearTimeout(closeTimer)
       closeTimer = null
@@ -199,21 +206,21 @@
   }
 
   let lastReasoningId = $derived.by((): string | null => {
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].type === 'reasoning') return parts[i].id
+    for (let i = visibleParts.length - 1; i >= 0; i--) {
+      if (visibleParts[i].type === 'reasoning') return visibleParts[i].id
     }
     return null
   })
   type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
   const subagentParts = $derived(
-    parts.filter((part): part is SubagentPart => part.type === 'subagent')
+    visibleParts.filter((part): part is SubagentPart => part.type === 'subagent')
   )
   const subagentCount = $derived(subagentParts.length)
   const activeSubagentCount = $derived(
     subagentParts.filter((part) => part.activity.status === 'running').length
   )
   const hasCompaction = $derived(
-    parts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
+    visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
   // Live clock for the sub-agent dropdown list — ticks only while any sub-agent is running.
@@ -362,133 +369,148 @@
       </span>
     {/if}
   </summary>
-  <div class="flex flex-col px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2">
-    {#each parts as part (part.id)}
-      {#if part.type === 'reasoning'}
-        <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {onCiteFile} />
-      {:else if part.type === 'tool'}
-        <ToolCard {part} {projectId} {threadId} {checkpointId} {checkpointPaths} />
-      {:else if part.type === 'subagent'}
-        <SubagentCard {part} onOpen={onOpenSubagent} />
-      {:else if part.type === 'text'}
-        <div class="text-sm text-foreground">
-          <MarkdownView text={part.text} {onCiteFile} />
-        </div>
-      {:else if part.type === 'compaction-summary'}
-        <div class="rounded-lg border border-border bg-elevated px-3 py-2">
-          <p class="mb-1 text-[11px] font-medium text-foreground">Compaction summary</p>
-          <div class="text-sm text-muted">
+  {#if isOpen}
+    <div class="flex flex-col px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2">
+      {#if hiddenPartCount > 0}
+        <button
+          type="button"
+          class="rounded-lg px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          onclick={() => (visiblePartLimit += TRACE_PART_WINDOW_SIZE)}
+        >
+          Show {Math.min(TRACE_PART_WINDOW_SIZE, hiddenPartCount)} earlier trace events
+        </button>
+      {/if}
+      {#each visibleParts as part (part.id)}
+        {#if part.type === 'reasoning'}
+          <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {onCiteFile} />
+        {:else if part.type === 'tool'}
+          <ToolCard {part} {projectId} {threadId} {checkpointId} {checkpointPaths} />
+        {:else if part.type === 'subagent'}
+          <SubagentCard {part} onOpen={onOpenSubagent} />
+        {:else if part.type === 'text'}
+          <div class="text-sm text-foreground">
             <MarkdownView text={part.text} {onCiteFile} />
           </div>
-        </div>
-      {:else if part.type === 'step-finish'}
-        {#if part.reason}
-          <span class="text-[10px] text-dimmed">Step complete · {part.reason}</span>
-        {/if}
-      {:else if part.type === 'compaction'}
-        <details class="rounded-lg border border-border bg-elevated">
-          <summary
-            class="flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors hover:bg-overlay"
-          >
-            {#if busy && !part.summary}
-              <Loader2 size={12} class="shrink-0 animate-spin text-info" />
-            {:else}
-              <Archive size={12} class="shrink-0 text-info" />
-            {/if}
-            <div class="min-w-0">
-              <p
-                class="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-foreground"
-              >
-                {part.auto ? 'Automatic compaction' : 'Compact Work'}
-                {#if !part.summary && !busy}
-                  <span
-                    class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[9px] font-normal text-warning"
-                    title="The harness completed compaction without producing a summary."
-                  >
-                    harness returned nothing
-                  </span>
-                {/if}
-              </p>
-              <p class="text-[10px] text-dimmed">
-                {part.summary
-                  ? 'Earlier work summarized'
-                  : part.overflow
-                    ? 'Context limit reached · summarizing earlier work'
-                    : 'Summarizing earlier work to free context'}
-              </p>
+        {:else if part.type === 'compaction-summary'}
+          <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+            <p class="mb-1 text-[11px] font-medium text-foreground">Compaction summary</p>
+            <div class="text-sm text-muted">
+              <MarkdownView text={part.text} {onCiteFile} />
             </div>
-          </summary>
-          {#if part.summary}
-            <div class="border-t border-border px-3 py-2 text-sm text-muted">
-              <MarkdownView text={part.summary} {onCiteFile} />
-            </div>
+          </div>
+        {:else if part.type === 'step-finish'}
+          {#if part.reason}
+            <span class="text-[10px] text-dimmed">Step complete · {part.reason}</span>
           {/if}
-        </details>
-      {:else if part.type === 'file'}
-        <div class="flex items-center gap-1.5 text-[10px] text-dimmed">
-          {#if isImageMime(part.mime)}
-            <img
-              src={imageUrls.getUrl(part.url)}
-              alt={part.filename ?? 'file'}
-              class="h-6 w-6 shrink-0 rounded object-cover"
-              onerror={(e: Event) =>
-                void imageUrls.bindImage(part.url, part.mime, e.currentTarget as HTMLImageElement)}
-            />
-          {:else}
-            <FileText size={10} class="shrink-0" />
-          {/if}
-          {part.filename ?? part.url.split('/').pop() ?? 'file'}
-        </div>
-      {/if}
-    {/each}
-    {#if isOpen && busy}
-      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span class="flex min-w-0 shrink items-center gap-2">
-          <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-          <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
-          {#if effectiveStartTime}
-            <span class="shrink-0 tabular-nums text-[10px] text-info/80">
-              · {formatDuration(elapsed)}
-            </span>
-          {/if}
-        </span>
-        {#if modelLabel}
-          <span
-            class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"
-          >
-            {#if harnessId}
-              <span class="flex shrink-0 items-center gap-1">
-                <AgentIcon agentId={harnessId} size={14} />
-                {#if harnessName}<span class="truncate">{harnessName}</span>{/if}
-              </span>
-              <span>·</span>
+        {:else if part.type === 'compaction'}
+          <details class="rounded-lg border border-border bg-elevated">
+            <summary
+              class="flex cursor-pointer items-center gap-2 px-3 py-2 transition-colors hover:bg-overlay"
+            >
+              {#if busy && !part.summary}
+                <Loader2 size={12} class="shrink-0 animate-spin text-info" />
+              {:else}
+                <Archive size={12} class="shrink-0 text-info" />
+              {/if}
+              <div class="min-w-0">
+                <p
+                  class="flex flex-wrap items-center gap-1.5 text-[11px] font-medium text-foreground"
+                >
+                  {part.auto ? 'Automatic compaction' : 'Compact Work'}
+                  {#if !part.summary && !busy}
+                    <span
+                      class="rounded-md bg-warning/10 px-1.5 py-0.5 text-[9px] font-normal text-warning"
+                      title="The harness completed compaction without producing a summary."
+                    >
+                      harness returned nothing
+                    </span>
+                  {/if}
+                </p>
+                <p class="text-[10px] text-dimmed">
+                  {part.summary
+                    ? 'Earlier work summarized'
+                    : part.overflow
+                      ? 'Context limit reached · summarizing earlier work'
+                      : 'Summarizing earlier work to free context'}
+                </p>
+              </div>
+            </summary>
+            {#if part.summary}
+              <div class="border-t border-border px-3 py-2 text-sm text-muted">
+                <MarkdownView text={part.summary} {onCiteFile} />
+              </div>
             {/if}
-            <span class="flex shrink-0 items-center gap-1">
-              <VendorIcon name={providerName ?? modelLabel} size={11} />
-              <span class="truncate">{modelLabel}</span>
-            </span>
-            {#if isFast}
-              <Zap
-                size={10}
-                class="shrink-0 text-accent"
-                fill="currentColor"
-                aria-label="Fast inference"
-                title="Fast inference"
+          </details>
+        {:else if part.type === 'file'}
+          <div class="flex items-center gap-1.5 text-[10px] text-dimmed">
+            {#if isImageMime(part.mime)}
+              <img
+                src={imageUrls.getUrl(part.url)}
+                alt={part.filename ?? 'file'}
+                class="h-6 w-6 shrink-0 rounded object-cover"
+                onerror={(e: Event) =>
+                  void imageUrls.bindImage(
+                    part.url,
+                    part.mime,
+                    e.currentTarget as HTMLImageElement
+                  )}
               />
+            {:else}
+              <FileText size={10} class="shrink-0" />
             {/if}
-            {#if thinkingLevel}
-              <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
-                title={`Thinking level: ${thinkingLevel}`}
-                aria-label={`Thinking level: ${thinkingLevel}`}
-              >
-                <Brain size={9} />
-                {thinkingLevel}
+            {part.filename ?? part.url.split('/').pop() ?? 'file'}
+          </div>
+        {/if}
+      {/each}
+      {#if busy}
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span class="flex min-w-0 shrink items-center gap-2">
+            <Loader2 size={11} class="shrink-0 animate-spin text-info" />
+            <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
+            {#if effectiveStartTime}
+              <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                · {formatDuration(elapsed)}
               </span>
             {/if}
           </span>
-        {/if}
-      </div>
-    {/if}
-  </div>
+          {#if modelLabel}
+            <span
+              class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"
+            >
+              {#if harnessId}
+                <span class="flex shrink-0 items-center gap-1">
+                  <AgentIcon agentId={harnessId} size={14} />
+                  {#if harnessName}<span class="truncate">{harnessName}</span>{/if}
+                </span>
+                <span>·</span>
+              {/if}
+              <span class="flex shrink-0 items-center gap-1">
+                <VendorIcon name={providerName ?? modelLabel} size={11} />
+                <span class="truncate">{modelLabel}</span>
+              </span>
+              {#if isFast}
+                <Zap
+                  size={10}
+                  class="shrink-0 text-accent"
+                  fill="currentColor"
+                  aria-label="Fast inference"
+                  title="Fast inference"
+                />
+              {/if}
+              {#if thinkingLevel}
+                <span
+                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                  title={`Thinking level: ${thinkingLevel}`}
+                  aria-label={`Thinking level: ${thinkingLevel}`}
+                >
+                  <Brain size={9} />
+                  {thinkingLevel}
+                </span>
+              {/if}
+            </span>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </details>

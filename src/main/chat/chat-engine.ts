@@ -864,6 +864,8 @@ interface SessionInfo {
   permissionLevel: PermissionLevel
   driverId: string
   activeTurnId?: string
+  /** Stable user message that starts the active provider turn. */
+  activeTurnUserMessageId?: string
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
@@ -1175,9 +1177,10 @@ class AssignmentApiRequestError extends Error {
  * - Inject the engineering-mode system prompt when enabled
  *
  * The renderer subscribes to `agent:event` for streaming AgentEvents; this
- * class broadcasts every driver event to all windows unchanged.
+ * class broadcasts driver events to all windows through a bounded stream buffer.
  */
 export class ChatEngine {
+  private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
   private static readonly AUDIT_SESSION_INACTIVITY_MS = 24 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
@@ -1195,6 +1198,9 @@ export class ChatEngine {
   private mermaidRepairAttempts = new Map<string, number>()
   /** One automatic utility-search nudge per active turn, per session. */
   private searchNudgeAttempts = new Map<string, number>()
+  /** Latest high-frequency stream mutations waiting for the next renderer frame. */
+  private pendingStreamBroadcasts = new Map<string, AgentEvent>()
+  private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
@@ -2128,6 +2134,11 @@ export class ChatEngine {
 
   /** Kill all pooled driver resources (called on app quit). */
   async dispose(): Promise<void> {
+    if (this.streamBroadcastTimer) {
+      clearTimeout(this.streamBroadcastTimer)
+      this.streamBroadcastTimer = null
+    }
+    this.pendingStreamBroadcasts.clear()
     if (this.idleReaperTimer) {
       clearInterval(this.idleReaperTimer)
       this.idleReaperTimer = null
@@ -3726,15 +3737,14 @@ export class ChatEngine {
   /** Publish one canonical working state to session and task consumers. */
   private markSessionWorking(sessionId: string): void {
     const changed = this.sessionStatuses.get(sessionId)?.state !== 'working'
-    this.sessionStatuses.set(sessionId, { state: 'working' })
     this.handledIdleSessions.delete(sessionId)
-    if (changed) {
-      this.broadcast({
-        type: 'session.status',
-        sessionId,
-        status: { state: 'working' }
-      })
-    }
+    if (!changed) return
+    this.sessionStatuses.set(sessionId, { state: 'working' })
+    this.broadcast({
+      type: 'session.status',
+      sessionId,
+      status: { state: 'working' }
+    })
     void this.reconcileWorkingThreadStatus(sessionId)
   }
 
@@ -4492,11 +4502,16 @@ export class ChatEngine {
 
     // Decide auto-title against the pre-prompt mirror BEFORE the user message
     // is persisted below, so a fresh thread's first prompt still auto-titles.
-    const mirrorBeforePrompt = await this.threadManager.loadMessages(projectId, threadId)
+    const mirrorBeforePrompt = await this.threadManager.loadMessagePage(
+      projectId,
+      threadId,
+      undefined,
+      1
+    )
     const shouldAutoTitle =
       targetThread?.status === 'created' &&
       targetThread.titleSource !== 'manual' &&
-      mirrorBeforePrompt.length === 0
+      mirrorBeforePrompt.messages.length === 0
 
     // Persist the user message to the mirror immediately — before any slow
     // session, utility, or history work — so a renderer reload, thread switch,
@@ -4991,6 +5006,8 @@ export class ChatEngine {
         driverId,
         checkpointId
       )
+      const activeSession = this.sessionRegistry.get(sessionId)
+      if (activeSession) activeSession.activeTurnUserMessageId = messageId
       this.markSessionWorking(sessionId)
       // Chat threads (standalone Chats-tab conversations) behave like a plain
       // browser chatbot: no file-system tools, internet-first answers. File
@@ -5036,9 +5053,6 @@ export class ChatEngine {
         }
       }
       this.preparedImplementationSessions.delete(sessionId)
-      // Proactively sync the driver's transcript into the mirror so the next
-      // thread load reads it from disk instead of relying on a live sync.
-      this.loadMessages(projectId, threadId).catch(() => {})
     } catch (error) {
       this.pendingMemoryDecisions.delete(sessionId)
       await this.cleanupTurnUtilities(sessionId)
@@ -6535,10 +6549,35 @@ export class ChatEngine {
     driverId: string,
     maxInputTokens?: number
   ): Promise<string> {
-    const [persistedMirror, thread] = await Promise.all([
-      this.threadManager.loadMessageRecords(projectId, threadId),
-      this.threadManager.getThread(projectId, threadId)
-    ])
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
+    const fallbackBudget = this.selectedModelInputBudget(
+      thread?.settings?.providerId,
+      thread?.settings?.modelId,
+      projectId
+    )
+    const budget = maxInputTokens ?? fallbackBudget
+
+    // A native resumed session already owns its history. Check that fact before
+    // reading the mirror so every ordinary follow-up remains O(1) with respect
+    // to thread age.
+    if (thread?.sessionId && sameHarness) {
+      const nativeHistory = this.sessionNativeHistory.get(thread.sessionId)
+      if (nativeHistory === true) return ''
+      if (nativeHistory === undefined) {
+        try {
+          const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+          if (driver.capabilities?.nativeResume !== false) {
+            const held = await driver.loadMessages(projectPath, thread.sessionId)
+            if (held.length > 0) return ''
+          }
+        } catch {
+          // Session unreachable — replay the durable mirror below.
+        }
+      }
+    }
+
+    const persistedMirror = await this.threadManager.loadMessageRecords(projectId, threadId)
     let queuedHandoffIds = new Set<string>()
     if (this.isCoordinatorThread(thread)) {
       try {
@@ -6557,13 +6596,6 @@ export class ChatEngine {
     // the Sr. Engineer becomes idle, never once in history and again as input.
     const mirror = persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
     if (mirror.length === 0) return ''
-    const sameHarness = !thread?.settings?.harnessId || thread.settings.harnessId === driverId
-    const fallbackBudget = this.selectedModelInputBudget(
-      thread?.settings?.providerId,
-      thread?.settings?.modelId,
-      projectId
-    )
-    const budget = maxInputTokens ?? fallbackBudget
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
       // the conversation — skip the redundant provider history load entirely
@@ -6574,15 +6606,13 @@ export class ChatEngine {
         return formatHistoryRecap(mirror, { maxInputTokens: budget })
       }
       try {
-        const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+        const { driver } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
           const priorMessages = mirror.at(-1)?.role === 'user' ? mirror.slice(0, -1) : mirror
           return formatHistoryRecap(priorMessages, { maxInputTokens: budget })
         }
-        const held = await driver.loadMessages(projectPath, thread.sessionId)
-        if (held.length > 0) return ''
       } catch {
-        // Session unreachable — treat it as fresh and replay the mirror.
+        // The durable mirror remains the safe fallback when the driver is unavailable.
       }
     }
     return formatHistoryRecap(mirror, { maxInputTokens: budget })
@@ -6904,7 +6934,6 @@ export class ChatEngine {
         },
         'user'
       )
-      this.loadMessages(pending.session.projectId, pending.session.threadId).catch(() => {})
     }
   }
 
@@ -13525,7 +13554,13 @@ export class ChatEngine {
 
   /** Persist identifiers and state transitions without recording prompt/tool content. */
   private async recordDriverEvent(driverId: string, event: SessionAgentEvent): Promise<void> {
-    if (event.type === 'message.part.updated' || event.type === 'message.part.delta') return
+    if (
+      event.type === 'message.part.updated' ||
+      event.type === 'message.part.delta' ||
+      event.type === 'usage.updated'
+    ) {
+      return
+    }
 
     const session = this.sessionRegistry.get(event.sessionId)
     const childOwner = this.childSessionOwners.get(event.sessionId)
@@ -13560,8 +13595,77 @@ export class ChatEngine {
     }
   }
 
-  /** Broadcast an agent event to every renderer window and the remote peer. */
+  /**
+   * Broadcast an agent event to every renderer window and the remote peer.
+   *
+   * Provider token streams can emit hundreds of snapshots/deltas per second.
+   * Renderers only need the newest part snapshot and the concatenated deltas
+   * for a frame, so collapse those mutations here before Electron serializes
+   * them for every subscriber. Lifecycle events flush buffered mutations first
+   * to preserve stream-before-completion ordering.
+   */
   private broadcast(event: AgentEvent): void {
+    if (
+      event.type === 'message.part.updated' ||
+      event.type === 'message.part.delta' ||
+      event.type === 'usage.updated' ||
+      (event.type === 'session.status' && event.status.state === 'working')
+    ) {
+      this.queueStreamBroadcast(event)
+      return
+    }
+    this.flushStreamBroadcasts()
+    this.deliverBroadcast(event)
+  }
+
+  private queueStreamBroadcast(
+    event: Extract<
+      AgentEvent,
+      {
+        type: 'message.part.updated' | 'message.part.delta' | 'usage.updated' | 'session.status'
+      }
+    >
+  ): void {
+    if (event.type === 'message.part.updated') {
+      const partPrefix = `${event.sessionId}:${event.part.messageID}:${event.part.id}`
+      for (const key of this.pendingStreamBroadcasts.keys()) {
+        if (key.startsWith(`delta:${partPrefix}:`)) this.pendingStreamBroadcasts.delete(key)
+      }
+      this.pendingStreamBroadcasts.set(`part:${partPrefix}`, event)
+    } else if (event.type === 'message.part.delta') {
+      const key = `delta:${event.sessionId}:${event.messageId}:${event.partId}:${event.field}`
+      const pending = this.pendingStreamBroadcasts.get(key)
+      this.pendingStreamBroadcasts.set(
+        key,
+        pending?.type === 'message.part.delta'
+          ? { ...event, delta: `${pending.delta}${event.delta}` }
+          : event
+      )
+    } else if (event.type === 'usage.updated') {
+      this.pendingStreamBroadcasts.set(`usage:${event.sessionId}:${event.messageId}`, event)
+    } else {
+      this.pendingStreamBroadcasts.set(`status:${event.sessionId}`, event)
+    }
+
+    if (this.streamBroadcastTimer) return
+    this.streamBroadcastTimer = setTimeout(() => {
+      this.streamBroadcastTimer = null
+      this.flushStreamBroadcasts()
+    }, ChatEngine.STREAM_BROADCAST_INTERVAL_MS)
+  }
+
+  private flushStreamBroadcasts(): void {
+    if (this.streamBroadcastTimer) {
+      clearTimeout(this.streamBroadcastTimer)
+      this.streamBroadcastTimer = null
+    }
+    if (this.pendingStreamBroadcasts.size === 0) return
+    const events = [...this.pendingStreamBroadcasts.values()]
+    this.pendingStreamBroadcasts.clear()
+    for (const event of events) this.deliverBroadcast(event)
+  }
+
+  private deliverBroadcast(event: AgentEvent): void {
     for (const win of BrowserWindow.getAllWindows()) {
       sendToRenderer(win.webContents, 'agent:event', event)
     }
@@ -14012,10 +14116,21 @@ export class ChatEngine {
       const driver = this.drivers.get(info.driverId)
       if (!driver) return
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      const messages = stampHarnessId(
-        await driver.loadMessages(info.projectPath, sessionId),
+      const loadedMessages = stampHarnessId(
+        info.activeTurnUserMessageId && driver.loadMessagesSince
+          ? await driver.loadMessagesSince(
+              info.projectPath,
+              sessionId,
+              info.activeTurnUserMessageId
+            )
+          : await driver.loadMessages(info.projectPath, sessionId),
         info.driverId
       )
+      const activeTurnStartIndex = info.activeTurnUserMessageId
+        ? loadedMessages.findLastIndex((message) => message.id === info.activeTurnUserMessageId)
+        : -1
+      const messages =
+        activeTurnStartIndex > 0 ? loadedMessages.slice(activeTurnStartIndex) : loadedMessages
 
       // The thread's settings are authoritative for the turn that just
       // completed: stamp only its newest assistant message. Historical
@@ -14032,10 +14147,22 @@ export class ChatEngine {
       this.applyReasoningStamps(sessionId, messages)
       this.applyToolStamps(sessionId, messages)
 
-      const mirror = await this.threadManager.loadMessageRecords(info.projectId, info.threadId)
+      const mirrorAnchorId = info.activeTurnUserMessageId ?? messages[latestUserIndex]?.id
+      const mirror = mirrorAnchorId
+        ? (
+            await this.threadManager.loadMessagePageAround(
+              info.projectId,
+              info.threadId,
+              mirrorAnchorId,
+              40
+            )
+          ).messages
+        : []
       const suppressTerminalAnswer =
         this.planningSessions.has(sessionId) || isDedicatedAssignmentAuditorThread(thread)
-      let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer)
+      let classifiedMessages = classifyProviderMessages(messages, suppressTerminalAnswer).filter(
+        (message) => !(message.role === 'user' && message.visibility === 'hidden')
+      )
       let merged = restoreMirrorThinkingLevel(
         mergeAgentMessages(mirror, classifiedMessages),
         mirror
@@ -14364,6 +14491,7 @@ export class ChatEngine {
       await this.onSessionError(sessionId, issue.message)
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
+      info.activeTurnUserMessageId = undefined
       if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
@@ -15103,6 +15231,7 @@ export class ChatEngine {
         }
       )
       info.activeTurnId = undefined
+      info.activeTurnUserMessageId = undefined
       info.changedPaths = undefined
       info.preciseChangedPaths = undefined
       info.changeFilterReliable = undefined
@@ -15164,6 +15293,7 @@ export class ChatEngine {
       // harness switch) can never clobber which driver owns the session.
       driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
+      activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
