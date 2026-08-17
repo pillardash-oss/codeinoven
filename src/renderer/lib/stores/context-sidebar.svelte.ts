@@ -615,19 +615,28 @@ class ContextSidebarState {
     }
   }
 
+  /** `checkpointId`/`revealPath` are `undefined` (omitted) for a plain
+   *  reopen — the dock rail's toggle calls this with no reveal target and
+   *  must not clobber whatever checkpoint the user already had selected.
+   *  `null` is only meaningful when explicitly passed, e.g. to clear a
+   *  reveal. Without this distinction every dock-icon toggle reset the tab
+   *  back to its defaults, which is what made the panel look like it never
+   *  remembered anything and re-fetched from scratch every time. */
   openDiff(
     projectId: string,
     threadId: string,
-    checkpointId: string | null = null,
-    revealPath: string | null = null
+    checkpointId?: string | null,
+    revealPath?: string | null
   ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `diff:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing?.kind === 'diff') {
-      existing.checkpointId = checkpointId
-      existing.revealPath = revealPath
-      existing.revealNonce += 1
+      if (checkpointId !== undefined) existing.checkpointId = checkpointId
+      if (revealPath !== undefined) {
+        existing.revealPath = revealPath
+        existing.revealNonce += 1
+      }
       this.focusInContext(context, id)
       return
     }
@@ -637,8 +646,8 @@ class ContextSidebarState {
       title: 'Changes',
       projectId,
       threadId,
-      checkpointId,
-      revealPath,
+      checkpointId: checkpointId ?? null,
+      revealPath: revealPath ?? null,
       revealNonce: 1
     })
   }
