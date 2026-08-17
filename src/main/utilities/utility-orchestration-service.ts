@@ -258,14 +258,14 @@ export class UtilityOrchestrationService {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: hasOnDemand
-        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to search for it first. The search result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activate one result with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. Activated utilities exist only for this turn.`
+        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn.`
         : '',
       directInstructions: [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
-        'Search: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
-        'Activate: POST /activate with {"utility_id":"id-from-search"}.',
+        'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
+        'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
         'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
         'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
@@ -286,6 +286,15 @@ export class UtilityOrchestrationService {
   /** Whether the agent has called utility_search at least once this turn. */
   hasSearched(gatewayId: string): boolean {
     return this.turns.get(gatewayId)?.state.searched === true
+  }
+
+  /** Whether the agent directly activated an on-demand utility this turn. */
+  hasActivatedOnDemand(gatewayId: string): boolean {
+    const state = this.turns.get(gatewayId)?.state
+    return (
+      state !== undefined &&
+      [...state.activated.values()].some(({ utility }) => utility.activation === 'on_demand')
+    )
   }
 
   private async cleanupTurn(id: string): Promise<void> {
@@ -453,15 +462,13 @@ export class UtilityOrchestrationService {
       utilityId,
       kind: resolved.utility.kind
     })
-    const nudge = this.searchNudge(state, resolved)
     return {
       utility: {
         id: resolved.utility.id,
         name: resolved.utility.name,
         kind: resolved.utility.kind
       },
-      capability,
-      ...(nudge ? { nudge } : {})
+      capability
     }
   }
 
@@ -529,18 +536,6 @@ export class UtilityOrchestrationService {
       }
     }
     return undefined
-  }
-
-  /**
-   * Feedback (not an error/warning) delivered in an activate result when the
-   * agent uses an on-demand utility without having called utility_search this
-   * turn. Only fires when the gateway exists, so the agent necessarily has the
-   * search tool available to act on the nudge.
-   */
-  private searchNudge(state: TurnState, resolved: ResolvedUtility): string | null {
-    if (state.searched) return null
-    if (resolved.utility.activation !== 'on_demand') return null
-    return `Internal feedback: this on-demand utility was activated without calling ${UTILITY_SEARCH_TOOL_NAME} first in this turn. Continue the current task, search for the needed capability with ${UTILITY_SEARCH_TOOL_NAME} when relevant, and only conclude it is unavailable when that search returns notFound:true.`
   }
 
   private isComputerUseUtility(resolved: ResolvedUtility): boolean {
