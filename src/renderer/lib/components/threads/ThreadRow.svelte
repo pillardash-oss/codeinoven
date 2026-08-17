@@ -26,11 +26,13 @@
   import {
     coordinatorHasActiveDelegates,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadBusy,
     isThreadWorking,
     isOrchestrationChildThread,
     type ScopeBucket
   } from '$shared/types'
   import type { Thread } from '$shared/types'
+  import { threadStatusPolicy } from '$shared/thread-status-policy'
 
   interface Props {
     thread: Thread
@@ -306,16 +308,21 @@
   //   Badge dot conventions: todo = filled gray, done/read = transparent ring.
 
   type ThreadState =
-    'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
+    | 'unread'
+    | 'read'
+    | 'todo'
+    | 'completed'
+    | 'working'
+    | 'working-paused'
+    | 'spec'
+    | 'approval'
+    | 'error'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot). */
   let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
-
-  /** Whether the harness is processing a turn for this thread right now. */
-  let isBusy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
   /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
   let delegatedWorkActive = $derived(
@@ -332,6 +339,10 @@
     (agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
+  )
+  let isRetryPaused = $derived(thread.status === 'working-paused')
+  let isBusyIndicator = $derived(
+    isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
 
   /**
@@ -362,6 +373,7 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
     // Drafting (or the brief post-send grace) shows the todo dot.
@@ -372,7 +384,7 @@
     // flips straight to done/unread instead of lingering on the spinner.
     if (!effectiveRead) return 'unread'
     if (thread.status === 'completed') return 'completed'
-    if (isBusy) return 'working'
+    if (isBusyIndicator) return 'working'
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
@@ -384,6 +396,8 @@
         return 'Planning'
       case 'executing':
         return 'Working'
+      case 'working-paused':
+        return threadStatusPolicy(thread.status).label
       default:
         return delegatedWorkActive ? 'Coordinating delegated work' : ''
     }
@@ -418,6 +432,7 @@
   let badgeProps = $derived.by(
     (): {
       stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
+      tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
       kind?: 'completed' | 'attention' | 'error'
       variant?: 'dot' | 'spinner'
       animated?: boolean
@@ -429,6 +444,8 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'working-paused':
+          return { variant: 'spinner', tone: 'working-paused' }
         case 'spec':
           return { stage: 'spec' }
         case 'approval':
@@ -574,8 +591,10 @@
   <div
     class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
       ? 'border-foreground bg-selected'
-      : isWorking
-        ? 'border-thread-working bg-thread-working/5'
+      : isBusyIndicator
+        ? isRetryPaused
+          ? 'border-warning bg-warning/5'
+          : 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
     title={displayTitle}
   >
@@ -587,11 +606,18 @@
         {#if badgeProps}
           <StatusBadge
             stage={badgeProps.stage}
+            tone={badgeProps.tone}
             kind={badgeProps.kind}
             variant={badgeProps.variant ?? 'dot'}
             animated={badgeProps.animated}
             size="md"
-            title={isWorking ? stageLabel : thread.status === 'spec' ? 'Spec ready' : threadState}
+            title={isRetryPaused
+              ? stageLabel
+              : isWorking
+                ? stageLabel
+                : thread.status === 'spec'
+                  ? 'Spec ready'
+                  : threadState}
           />
         {:else}
           <span
@@ -700,8 +726,10 @@
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
       ? 'border-foreground bg-selected'
-      : isWorking
-        ? 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
+      : isBusyIndicator
+        ? isRetryPaused
+          ? 'border-warning bg-warning/5 hover:bg-elevated'
+          : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
     onclick={() => {
@@ -734,11 +762,18 @@
           {#if badgeProps}
             <StatusBadge
               stage={badgeProps.stage}
+              tone={badgeProps.tone}
               kind={badgeProps.kind}
               variant={badgeProps.variant ?? 'dot'}
               animated={badgeProps.animated}
               size="md"
-              title={isWorking ? stageLabel : thread.status === 'spec' ? 'Spec ready' : threadState}
+              title={isRetryPaused
+                ? stageLabel
+                : isWorking
+                  ? stageLabel
+                  : thread.status === 'spec'
+                    ? 'Spec ready'
+                    : threadState}
             />
           {:else}
             <span
@@ -895,7 +930,7 @@
         class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
         style="left: {popoverPos.x}px; top: {popoverPos.y}px"
       >
-        <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
+        <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
       </div>
     </Portal>
   {/if}

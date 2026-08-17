@@ -23,8 +23,12 @@
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)
   )
+  let isRetryPaused = $derived(thread.status === 'working-paused')
 
   let badgeProps = $derived.by(() => {
+    if (isRetryPaused) {
+      return { tone: 'working-paused' as const, variant: 'spinner' as const }
+    }
     if (isWorking) {
       return { stage: 'working' as const, variant: 'spinner' as const }
     }
@@ -43,7 +47,15 @@
   })
 
   type ThreadState =
-    'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
+    | 'unread'
+    | 'read'
+    | 'todo'
+    | 'completed'
+    | 'working'
+    | 'working-paused'
+    | 'spec'
+    | 'approval'
+    | 'error'
 
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {
@@ -51,6 +63,8 @@
         return 'Planning'
       case 'executing':
         return 'Working'
+      case 'working-paused':
+        return 'Waiting to retry'
       default:
         return ''
     }
@@ -58,6 +72,7 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
     if (thread.status === 'spec') return 'spec'
     if (isWorking) return 'working'
@@ -177,11 +192,16 @@
       {#if badgeProps}
         <StatusBadge
           stage={badgeProps.stage}
+          tone={badgeProps.tone}
           kind={badgeProps.kind}
           variant={badgeProps.variant ?? 'dot'}
           animated={badgeProps.animated}
           size="sm"
-          title={thread.status === 'spec' ? 'Spec ready' : thread.status.replace('_', ' ')}
+          title={isRetryPaused
+            ? 'Waiting to retry'
+            : thread.status === 'spec'
+              ? 'Spec ready'
+              : thread.status.replace('_', ' ')}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
@@ -210,7 +230,7 @@
       class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
       style="left: {popoverPos.x}px; top: {popoverPos.y}px"
     >
-      <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
+      <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
     </div>
   </Portal>
 {/if}

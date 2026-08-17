@@ -82,7 +82,8 @@
           status?.state === 'working' ||
           status?.state === 'waiting' ||
           thread.status === 'planning' ||
-          thread.status === 'executing'
+          thread.status === 'executing' ||
+          thread.status === 'working-paused'
         ) {
           await threadMessages.load(projectId, id)
         }

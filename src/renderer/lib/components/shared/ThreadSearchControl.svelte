@@ -28,6 +28,7 @@
     if (
       thread.status === 'planning' ||
       thread.status === 'executing' ||
+      thread.status === 'working-paused' ||
       thread.status === 'awaiting_approval' ||
       thread.status === 'spec' ||
       thread.status === 'failed' ||

@@ -64,6 +64,7 @@
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
+    isThreadRetryPaused,
     isThreadWorking,
     type ScopeBucket
   } from '$shared/types'
@@ -117,6 +118,10 @@
     return agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)
+  }
+
+  function threadBusyForIndicator(thread: Thread): boolean {
+    return isThreadRetryPaused(thread) || threadWorkingForIndicator(thread)
   }
 
   /** True while any project thread is actively being worked on. */
@@ -855,8 +860,9 @@
         {@const thread = workspaceState.selectedThread}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          threadWorkingForIndicator(thread) ||
+          threadBusyForIndicator(thread) ||
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
+        {@const isRetryPaused = isThreadRetryPaused(thread)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
             {@const headerProject =
@@ -940,11 +946,17 @@
             />
             {#if isWorking}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] text-info"
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] {isRetryPaused
+                  ? 'bg-warning/10 text-warning'
+                  : 'bg-info/10 text-info'}"
               >
                 <Loader2 size={10} class="animate-spin" />
                 <span class="header-status-label">
-                  {workspaceState.specStudioFormulating ? 'Formulating…' : 'Working'}
+                  {workspaceState.specStudioFormulating
+                    ? 'Formulating…'
+                    : isRetryPaused
+                      ? 'Waiting to retry'
+                      : 'Working'}
                 </span>
               </span>
             {/if}

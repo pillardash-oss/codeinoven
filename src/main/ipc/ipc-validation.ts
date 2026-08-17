@@ -25,6 +25,7 @@ const THREAD_STATUSES = new Set<ThreadStatus>([
   'awaiting_approval',
   'spec',
   'executing',
+  'working-paused',
   'interrupted',
   'completed',
   'failed'

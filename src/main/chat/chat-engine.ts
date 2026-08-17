@@ -31,6 +31,7 @@ import {
   clearNotificationAborting,
   notifyTemporaryChat
 } from './thread-events'
+import { updateRetryWakeWindow } from './thread-events'
 import { MemoryService, estimateTokens } from './memory-service'
 import { PromptAssembler } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
@@ -2982,6 +2983,7 @@ export class ChatEngine {
     this.sessionRegistry.delete(sessionId)
     this.sessionStatuses.delete(sessionId)
     this.retryScheduler?.clear(sessionId)
+    updateRetryWakeWindow(sessionId, null)
     this.reasoningTimes.delete(sessionId)
     this.toolTimes.delete(sessionId)
     this.handledIdleSessions.delete(sessionId)
@@ -3733,6 +3735,7 @@ export class ChatEngine {
       this.sessionStatuses.delete(sessionId)
     }
     this.retryScheduler?.clear(sessionId)
+    updateRetryWakeWindow(sessionId, null)
     this.clearSessionWatchdog(sessionId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (thread?.status === 'failed') {
@@ -4723,6 +4726,7 @@ export class ChatEngine {
     // A new turn resolves any pending auto-resume for this session — the user
     // (or a previous scheduled retry) is driving it again.
     this.retryScheduler?.clear(sessionId)
+    updateRetryWakeWindow(sessionId, null)
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
     // running turn still carries its text and referenced selections.
@@ -6755,6 +6759,7 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
+    updateRetryWakeWindow(thread.sessionId, null)
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
@@ -7283,6 +7288,7 @@ export class ChatEngine {
         } finally {
           await this.cleanupTurnUtilities(sessionId)
           this.retryScheduler?.clear(sessionId)
+          updateRetryWakeWindow(sessionId, null)
           this.clearSessionWatchdog(sessionId)
           this.clearPendingQuestionsForSession(sessionId)
           this.clearPendingPermissionsForSession(sessionId)
@@ -7305,7 +7311,9 @@ export class ChatEngine {
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (
         thread &&
-        ['created', 'planning', 'awaiting_approval', 'executing'].includes(thread.status)
+        ['created', 'planning', 'awaiting_approval', 'executing', 'working-paused'].includes(
+          thread.status
+        )
       ) {
         await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
       }
@@ -13111,6 +13119,22 @@ export class ChatEngine {
         this.sessionStatuses.set(event.sessionId, event.status)
       }
       if (
+        event.status.state === 'waiting' &&
+        eventOwner &&
+        !eventOwner.ephemeral &&
+        event.status.issue.retryable &&
+        typeof event.status.issue.retryAt === 'number' &&
+        Number.isFinite(event.status.issue.retryAt)
+      ) {
+        updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
+        void this.threadManager
+          .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
+          .catch((error) => Logger.error('Retry-paused status update failed:', error))
+      }
+      if (event.status.state === 'working' || event.status.state === 'idle') {
+        updateRetryWakeWindow(event.sessionId, null)
+      }
+      if (
         event.status.state === 'waiting' ||
         event.status.state === 'idle' ||
         event.status.state === 'error'
@@ -13262,11 +13286,11 @@ export class ChatEngine {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
+        updateRetryWakeWindow(event.sessionId, null)
         this.clearSessionWatchdog(event.sessionId)
         this.clearPendingQuestionsForSession(event.sessionId)
         this.clearPendingPermissionsForSession(event.sessionId)
-        void this.scheduleAutomaticRetry(event.sessionId, issue)
-        void this.onSessionError(event.sessionId, event.error)
+        void this.handleProviderFailure(event.sessionId, issue, event.error)
       }
     }
     if (event.type === 'message.completed' && event.error) {
@@ -13279,9 +13303,9 @@ export class ChatEngine {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error)
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
+        updateRetryWakeWindow(event.sessionId, null)
         this.clearSessionWatchdog(event.sessionId)
-        void this.scheduleAutomaticRetry(event.sessionId, issue)
-        void this.onSessionError(event.sessionId, event.error)
+        void this.handleProviderFailure(event.sessionId, issue, event.error)
       }
     }
     // Everything else broadcasts directly to renderers.
@@ -13575,7 +13599,7 @@ export class ChatEngine {
         error: issue.message,
         issue
       })
-      void this.scheduleAutomaticRetry(sessionId, issue)
+      await this.scheduleAutomaticRetry(sessionId, issue)
     }
     this.broadcast({
       type: 'thread.error',
@@ -13605,23 +13629,23 @@ export class ChatEngine {
   private async scheduleAutomaticRetry(
     sessionId: string,
     issue: AgentProviderIssue
-  ): Promise<void> {
+  ): Promise<boolean> {
     const scheduler = this.retryScheduler
-    if (!scheduler) return
-    // Only reset-based failures are safe to resume automatically — a session
-    // that needs sign-in, payment, or a network fix must stay on the manual
-    // Retry affordance.
-    if (
-      issue.kind !== 'quota' &&
-      issue.kind !== 'rate_limit' &&
-      issue.kind !== 'provider_unavailable'
-    ) {
-      return
+    if (!scheduler) return false
+    if (!scheduler.isEnabled) return false
+    // A provider with an explicit retry deadline has declared that the issue
+    // is safe to retry later. Known reset-based issues may also derive their
+    // deadline from account telemetry; everything else stays manual unless it
+    // carries both retryable=true and retryAt.
+    const canDeriveReset =
+      issue.kind === 'quota' || issue.kind === 'rate_limit' || issue.kind === 'provider_unavailable'
+    if (!canDeriveReset && !(issue.retryable && issue.retryAt !== undefined)) {
+      return false
     }
     const info = this.sessionRegistry.get(sessionId)
-    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return
+    if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
     const driver = this.drivers.get(info.driverId)
-    if (!driver || driver.capabilities?.scheduledRetry === true) return
+    if (!driver || driver.capabilities?.scheduledRetry === true) return false
     let retryAt = issue.retryAt
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
@@ -13640,8 +13664,11 @@ export class ChatEngine {
         Logger.dev('Auto-resume retry time derivation unavailable:', error)
       }
     }
-    if (typeof retryAt !== 'number' || !Number.isFinite(retryAt)) return
-    scheduler.track({
+    if (typeof retryAt !== 'number' || !Number.isFinite(retryAt)) return false
+    await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
+      read: false
+    })
+    const tracked = scheduler.track({
       sessionId,
       projectId: info.projectId,
       threadId: info.threadId,
@@ -13652,6 +13679,20 @@ export class ChatEngine {
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
+    if (!tracked) {
+      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', { read: false })
+      return false
+    }
+    return true
+  }
+
+  private async handleProviderFailure(
+    sessionId: string,
+    issue: AgentProviderIssue,
+    error?: string
+  ): Promise<void> {
+    const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
+    await this.onSessionError(sessionId, error, retryScheduled)
   }
 
   /**
@@ -14924,7 +14965,11 @@ export class ChatEngine {
     }
   }
 
-  private async onSessionError(sessionId: string, error?: string): Promise<void> {
+  private async onSessionError(
+    sessionId: string,
+    error?: string,
+    retryScheduled = false
+  ): Promise<void> {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
@@ -14936,10 +14981,18 @@ export class ChatEngine {
     this.pendingBrainstormTurns.delete(sessionId)
     try {
       await this.clearPendingSpecRevision(info.projectId, info.threadId)
-      await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', {
-        read: false
-      })
+      const currentThread = await this.threadManager.getThread(info.projectId, info.threadId)
+      const retryPaused = retryScheduled || currentThread?.status === 'working-paused'
+      await this.threadManager.setStatus(
+        info.projectId,
+        info.threadId,
+        retryPaused ? 'working-paused' : 'failed',
+        {
+          read: false
+        }
+      )
       await this.finishCheckpoint(sessionId, info, 'failed', error ?? 'Harness session failed')
+      if (retryPaused) return
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
       if (thread?.assignmentRole === 'worker' && thread.assignmentId && thread.assignmentTaskId) {
         const report: AssignmentTaskReport = {
