@@ -56,10 +56,8 @@ export interface ComposerDraftEntry {
   taskReferences: PromptAssignmentTaskReference[]
   /** Response-selection annotations attached to the composer (agent-output excerpts + comments). */
   promptReferences: QueuedResponseReference[]
-  /** Optional source thread selected for the next message. */
-  startAfterThreadId?: string
-  /** Display title for the selected source thread. */
-  startAfterThreadTitle?: string
+  /** Source threads the next message waits for before it starts. */
+  startAfterThreads: StartAfterThreadReference[]
 }
 
 /** A selected assistant-response excerpt anchored to a message range. */
@@ -82,10 +80,8 @@ export interface QueuedMessageEntry {
   projectReferences: PromptProjectReference[]
   presentation?: UserMessagePresentation
   taskReferences: PromptAssignmentTaskReference[]
-  /** Optional source thread that must reach a terminal state before delivery. */
-  startAfterThreadId?: string
-  /** Display-only source title captured when the dependency was selected. */
-  startAfterThreadTitle?: string
+  /** Source threads that must all reach a terminal state before delivery. */
+  startAfterThreads: StartAfterThreadReference[]
 }
 
 export interface RendererRecoverySnapshot {
@@ -328,6 +324,34 @@ function parseStartAfterThread(value: unknown): StartAfterThreadReference | null
   }
 }
 
+function parseStartAfterThreads(value: unknown): StartAfterThreadReference[] {
+  if (!Array.isArray(value)) return []
+  const references: StartAfterThreadReference[] = []
+  for (const item of value) {
+    const reference = parseStartAfterThread(item)
+    if (reference && !references.some((existing) => existing.id === reference.id)) {
+      references.push(reference)
+    }
+  }
+  return references
+}
+
+/**
+ * Read the persisted start-after dependencies. New records store an array under
+ * `startAfterThreads`; legacy records stored a single thread under
+ * `startAfterThreadId`/`startAfterThreadTitle`. When the array is absent, fall
+ * back to the legacy single reference so an upgrade never loses a selection.
+ */
+function parseDraftStartAfterThreads(raw: Record<string, unknown>): StartAfterThreadReference[] {
+  const references = parseStartAfterThreads(raw.startAfterThreads)
+  if (references.length > 0) return references
+  const legacy = parseStartAfterThread({
+    id: raw.startAfterThreadId,
+    title: raw.startAfterThreadTitle
+  })
+  return legacy ? [legacy] : []
+}
+
 function parseFavoriteModels(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -363,18 +387,14 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const promptReferences = Array.isArray(raw.promptReferences)
       ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
       : []
-    const startAfterThread = parseStartAfterThread({
-      id: raw.startAfterThreadId,
-      title: raw.startAfterThreadTitle
-    })
+    const startAfterThreads = parseDraftStartAfterThreads(raw)
     drafts[key] = {
       text,
       attachments,
       projectReferences,
       taskReferences,
       promptReferences,
-      startAfterThreadId: startAfterThread?.id,
-      startAfterThreadTitle: startAfterThread?.title
+      startAfterThreads
     }
     count += 1
   }
@@ -414,11 +434,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry>
       projectReferences,
       presentation: isUserMessagePresentation(raw.presentation) ? raw.presentation : undefined,
       taskReferences,
-      startAfterThreadId: isRecoveryIdentifier(raw.startAfterThreadId)
-        ? raw.startAfterThreadId
-        : undefined,
-      startAfterThreadTitle:
-        typeof raw.startAfterThreadTitle === 'string' ? raw.startAfterThreadTitle : undefined
+      startAfterThreads: parseDraftStartAfterThreads(raw)
     }
     count += 1
   }

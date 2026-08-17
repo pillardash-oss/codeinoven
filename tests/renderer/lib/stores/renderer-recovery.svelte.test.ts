@@ -89,6 +89,10 @@ describe('RendererRecoveryStore', () => {
               startOffset: 12,
               endOffset: 34
             }
+          ],
+          startAfterThreads: [
+            { id: 'source-1', title: 'Source one' },
+            { id: 'source-2', title: 'Source two' }
           ]
         }
       },
@@ -145,6 +149,10 @@ describe('RendererRecoveryStore', () => {
           startOffset: 12,
           endOffset: 34
         }
+      ],
+      startAfterThreads: [
+        { id: 'source-1', title: 'Source one' },
+        { id: 'source-2', title: 'Source two' }
       ]
     })
     expect(storage.values.has(RENDERER_RECOVERY_STORAGE_KEY)).toBe(true)
@@ -185,7 +193,8 @@ describe('RendererRecoveryStore', () => {
         attachments: [],
         projectReferences: [],
         taskReferences: [],
-        promptReferences: []
+        promptReferences: [],
+        startAfterThreads: []
       }
     })
   })
@@ -215,6 +224,63 @@ describe('RendererRecoveryStore', () => {
     expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
     const cleared = new RendererRecoveryStore(storage)
     expect(cleared.draftPromptReferences('project-1', 'thread-1')).toEqual([])
+  })
+
+  it('persists multiple start-after threads and migrates the legacy single dependency', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+
+    store.setStartAfterThreads('project-1', 'thread-1', [
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+    expect(store.startAfterThreadsFor('project-1', 'thread-1')).toEqual([
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+    // A fresh store (app restart) restores the full dependency list.
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.startAfterThreadsFor('project-1', 'thread-1')).toEqual([
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+
+    // Clearing removes the whole draft entry when nothing else is present.
+    store.clearStartAfterThreads('project-1', 'thread-1')
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+
+    // Legacy records (single thread under startAfterThreadId/Title) upgrade to an array.
+    const legacyStorage = new MemoryStorage()
+    persistRendererRecoveryState(legacyStorage, {
+      version: 1,
+      activeView: 'projects',
+      lastContentView: 'projects',
+      lastViewBeforeSettings: 'projects',
+      selectedProjectId: null,
+      selectedThread: null,
+      composerDrafts: {
+        [recoveryDraftKey('project-1', 'thread-1')]: {
+          text: 'legacy',
+          attachments: [],
+          projectReferences: [],
+          taskReferences: [],
+          promptReferences: [],
+          startAfterThreadId: 'source-legacy',
+          startAfterThreadTitle: 'Legacy source'
+        }
+      },
+      collapsedFolders: [],
+      favoriteModels: [],
+      recentModels: [],
+      chatFavoriteModels: [],
+      chatRecentModels: [],
+      queuedMessages: {}
+    })
+    expect(
+      new RendererRecoveryStore(legacyStorage).startAfterThreadsFor('project-1', 'thread-1')
+    ).toEqual([{ id: 'source-legacy', title: 'Legacy source' }])
   })
 
   it('continues operating when storage access fails', () => {

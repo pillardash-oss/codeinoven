@@ -21,7 +21,11 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
-import { rendererRecovery, type QueuedMessageEntry } from '$lib/stores/renderer-recovery.svelte'
+import {
+  rendererRecovery,
+  type QueuedMessageEntry,
+  type StartAfterThreadReference
+} from '$lib/stores/renderer-recovery.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { INBOX_PROJECT_ID, type AgentEvent, type Thread, type ThreadSettings } from '$shared/types'
@@ -94,8 +98,8 @@ class QueuedMessageDispatcher {
       const entry = rendererRecovery.queuedMessageFor(projectId, threadId)
       if (!entry) return
       if (
-        entry.startAfterThreadId &&
-        !(await this.#isStartAfterSatisfied(projectId, entry.startAfterThreadId))
+        entry.startAfterThreads.length > 0 &&
+        !(await this.#isStartAfterSatisfied(projectId, entry.startAfterThreads))
       ) {
         return
       }
@@ -160,10 +164,15 @@ class QueuedMessageDispatcher {
     }
   }
 
-  async #isStartAfterSatisfied(projectId: string, threadId: string): Promise<boolean> {
+  async #isStartAfterSatisfied(
+    projectId: string,
+    references: StartAfterThreadReference[]
+  ): Promise<boolean> {
     try {
-      const thread = await invoke('thread:get', projectId, threadId)
-      return thread === null || this.#isTerminalThread(thread)
+      const threads = await Promise.all(
+        references.map((reference) => invoke('thread:get', projectId, reference.id))
+      )
+      return threads.every((thread) => thread === null || this.#isTerminalThread(thread))
     } catch {
       return false
     }
