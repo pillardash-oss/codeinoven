@@ -573,9 +573,7 @@
   )
 
   /** True when the selected harness cannot accept any prompt attachments. */
-  let selectedHarnessLacksAttachments = $derived(
-    resolved.harnessId === 'muse' || selectedProvider?.supportsAttachments === false
-  )
+  let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)
   /** True when the catalog reports this model cannot see images. */
   let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
