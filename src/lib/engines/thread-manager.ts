@@ -44,21 +44,29 @@ import {
 
 /**
  * Raised when `createThread` is asked to exceed a project's thread limit while
- * every active thread is pinned. Deliberately explicit: no thread is silently
- * deleted and no thread is silently created past the bound.
+ * every active thread is protected from automatic cleanup. Deliberately
+ * explicit: no thread is silently deleted and no thread is silently created
+ * past the bound.
  */
-export class AllThreadsPinnedError extends Error {
+export class AllThreadsProtectedError extends Error {
   constructor(
     readonly projectId: string,
     readonly limit: number,
     readonly activeCount: number
   ) {
     super(
-      `Cannot create a thread: every active thread is pinned (${activeCount}/${limit}). ` +
-        'Unpin or delete an existing thread first.'
+      `Cannot create a thread: every active thread is pinned or in spec status (${activeCount}/${limit}). ` +
+        'Move a thread out of spec, unpin it, or delete an existing thread first.'
     )
-    this.name = 'AllThreadsPinnedError'
+    this.name = 'AllThreadsProtectedError'
   }
+}
+
+/** @deprecated Use `AllThreadsProtectedError`. */
+export const AllThreadsPinnedError = AllThreadsProtectedError
+
+function isProtectedFromAutomaticCleanup(thread: Pick<Thread, 'pinned' | 'status'>): boolean {
+  return thread.pinned || thread.status === 'spec'
 }
 
 /** Deterministic view of a project's thread capacity for the UI. */
@@ -66,6 +74,7 @@ export interface ThreadCapacity {
   limit: number
   activeCount: number
   pinnedCount: number
+  protectedCount: number
   deletableCount: number
 }
 
@@ -303,14 +312,14 @@ export class ThreadManager {
       input.coordinatorThreadId !== undefined
     let toEvict: Thread | undefined
     if (!creatingOrchestrationChild && active.length >= threadLimit) {
-      const unpinned = active
-        .filter((t) => !t.pinned)
+      const evictable = active
+        .filter((t) => !isProtectedFromAutomaticCleanup(t))
         .sort((a, b) => a.lastActivity - b.lastActivity)
-      toEvict = unpinned[0]
+      toEvict = evictable[0]
       if (!toEvict) {
-        // Every active thread is pinned — refuse deterministically instead of
-        // silently exceeding the limit.
-        throw new AllThreadsPinnedError(input.projectId, threadLimit, active.length)
+        // Every active thread is protected — refuse deterministically instead
+        // of silently exceeding the limit.
+        throw new AllThreadsProtectedError(input.projectId, threadLimit, active.length)
       }
     }
 
@@ -1043,8 +1052,8 @@ export class ThreadManager {
 
   /**
    * Deterministic thread-capacity view for the current project. Exposes the
-   * limit, active/pinned counts, and how many threads could be deleted to make
-   * room — so the UI can explain an all-pinned refusal.
+   * limit, active/protected counts, and how many threads could be deleted to
+   * make room — so the UI can explain a protected-capacity refusal.
    */
   async getThreadCapacity(projectId: string): Promise<ThreadCapacity> {
     const project = this.projectRepo.get(projectId)
@@ -1056,7 +1065,8 @@ export class ThreadManager {
       limit: project.threadLimit,
       activeCount: active.length,
       pinnedCount: active.filter((t) => t.pinned).length,
-      deletableCount: active.filter((t) => !t.pinned).length
+      protectedCount: active.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
+      deletableCount: active.filter((t) => !isProtectedFromAutomaticCleanup(t)).length
     }
   }
 
