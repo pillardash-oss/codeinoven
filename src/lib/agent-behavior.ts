@@ -1,9 +1,9 @@
 /**
  * Default operational behavior for implementation turns.
  *
- * The application writes this default to behavior.md in its config directory
- * and uses that file as the user-editable override. This source value remains
- * the reset-to-default contract.
+ * The application uses this value whenever there is no user override. A custom
+ * override is written to behavior.md in the app config directory; this source
+ * value remains the reset-to-default contract.
  */
 export const AGENT_BEHAVIOR_FILENAME = 'behavior.md'
 
@@ -27,7 +27,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
 
 3. Commits
    - Always commit after completing every work item so the change can be audited and rolled back.
-   - Use this commit-message pattern: \<model-name|model-id> (\<type>): \<title>
+   - Use this commit-message pattern: <model-name|model-id> (<type>): <title>
    - Use a type that matches the work, such as feat, fix, chore, refactor, docs, or test, etc.
    - Model name should be the name of the model working, meaning you, NOT THE USER'S NAME.
    - Commit only the files changed for the current work. Never commit ignored files. Never run \`git -A\` or \`git .\` always commit only the files you worked on, unless explicitly asked to do so.
