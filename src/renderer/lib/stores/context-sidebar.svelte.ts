@@ -1232,7 +1232,7 @@ class ContextSidebarState {
       terminalSequence: 0
     }
     this.contexts[key] = context
-    return context
+    return this.contexts[key]
   }
 
   private focusInContext(context: ThreadSidebarContext, id: string): void {
