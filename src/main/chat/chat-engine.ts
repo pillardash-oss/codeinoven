@@ -3743,13 +3743,14 @@ export class ChatEngine {
   private markSessionWorking(sessionId: string): void {
     const changed = this.sessionStatuses.get(sessionId)?.state !== 'working'
     this.handledIdleSessions.delete(sessionId)
-    if (!changed) return
-    this.sessionStatuses.set(sessionId, { state: 'working' })
-    this.broadcast({
-      type: 'session.status',
-      sessionId,
-      status: { state: 'working' }
-    })
+    if (changed) {
+      this.sessionStatuses.set(sessionId, { state: 'working' })
+      this.broadcast({
+        type: 'session.status',
+        sessionId,
+        status: { state: 'working' }
+      })
+    }
     void this.reconcileWorkingThreadStatus(sessionId)
   }
 
