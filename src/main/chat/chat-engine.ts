@@ -5696,6 +5696,9 @@ export class ChatEngine {
       selection = decision.selection
       await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
     }
+    // The selection is shared with the recovery path so a model chosen while
+    // resolving one image is reused for the remaining images in the same run.
+    const selectionRef: { current: AgentModelSelection } = { current: selection }
     this.clearSessionWatchdog(request.sessionId)
     try {
       const parentTurnId = this.database.get<{ id: string }>(
@@ -5712,13 +5715,13 @@ export class ChatEngine {
           (images, featureCallId) =>
             this.describeImagesOnVisionModelBatch(
               request,
-              selection,
+              selectionRef.current,
               images,
               parentTurnId,
               featureCallId
             ),
           (image) =>
-            this.describeWithImageDescriptorRecovery(request, selection, image, parentTurnId)
+            this.describeWithImageDescriptorRecovery(request, selectionRef, image, parentTurnId)
         )
         return run.results
       } catch (error) {
@@ -5726,7 +5729,12 @@ export class ChatEngine {
         const results: ImageDescriptorResult[] = []
         for (const image of request.images) {
           results.push(
-            await this.describeWithImageDescriptorRecovery(request, selection, image, parentTurnId)
+            await this.describeWithImageDescriptorRecovery(
+              request,
+              selectionRef,
+              image,
+              parentTurnId
+            )
           )
         }
         return results
@@ -5884,11 +5892,10 @@ export class ChatEngine {
    */
   private async describeWithImageDescriptorRecovery(
     request: ImageDescriptorExecutorRequest,
-    initialSelection: AgentModelSelection,
+    selection: { current: AgentModelSelection },
     image: ResolvedImageEntry,
     parentTurnId?: string
   ): Promise<ImageDescriptorResult> {
-    let selection = initialSelection
     for (let attempt = 0; attempt < 2; attempt += 1) {
       // A reply to the error card briefly re-arms the parent watchdog. The
       // descriptor owns its own adaptive inactivity deadline while retrying.
@@ -5898,7 +5905,7 @@ export class ChatEngine {
           request.projectId,
           request.threadId,
           request.projectPath,
-          selection,
+          selection.current,
           image,
           attempt,
           parentTurnId
@@ -5911,29 +5918,29 @@ export class ChatEngine {
             ? 'network'
             : classifyProviderIssue(message)
         Logger.dev('Image description failed', {
-          harnessId: selection.harnessId,
-          providerId: selection.providerId,
-          modelId: selection.modelId,
+          harnessId: selection.current.harnessId,
+          providerId: selection.current.providerId,
+          modelId: selection.current.modelId,
           error: message
         })
         const attributedMessage = `The vision model (${this.visionModelLabel(
           request.projectId,
-          selection
+          selection.current
         )}) failed: ${message}`
         if (attempt === 0) {
           const decision = await this.requestImageDescriptorDecision(
             request,
-            selection,
+            selection.current,
             attributedMessage,
             kind
           )
           if (decision.action === 'retry') {
             if (decision.selection) {
-              selection = decision.selection
+              selection.current = decision.selection
               await this.persistImageDescriptorSelection(
                 request.projectId,
                 request.threadId,
-                selection
+                selection.current
               )
             }
             continue
