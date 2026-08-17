@@ -426,7 +426,7 @@ function patchPaths(patch: string): string[] {
 export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
-): string[] {
+): string[] | null {
   if (!MUTATING_FILE_TOOLS.has(normalizedToolName(part.tool))) return []
   const candidates: string[] = []
   const input = part.state.input
@@ -450,13 +450,17 @@ export function changedPathsFromTool(
   for (const key of ['patch', 'patchText', 'diff']) {
     if (typeof input[key] === 'string') candidates.push(...patchPaths(input[key]))
   }
-  return [
+  const paths = [
     ...new Set(
       candidates
         .map((candidate) => projectRelativePath(projectPath, candidate))
         .filter((candidate): candidate is string => candidate !== null)
     )
   ]
+  // A known file-mutating tool with no usable path cannot safely prove that
+  // the turn touched nothing. Returning null tells the caller to use the
+  // snapshot diff instead of filtering real changes out of the checkpoint.
+  return paths.length > 0 ? paths : null
 }
 
 function historyMirrorFailureMessage(rawError: string): string {
@@ -13193,7 +13197,9 @@ export class ChatEngine {
             this.trackUnboundedToolWindow(session, part.id, part.state.status)
           }
           const precisePaths = changedPathsFromTool(session.projectPath, part)
-          if (precisePaths.length > 0) {
+          if (precisePaths === null) {
+            session.changeFilterReliable = false
+          } else if (precisePaths.length > 0) {
             session.changedPaths ??= new Set()
             session.preciseChangedPaths ??= new Map()
             const claimedAt = Date.now()
@@ -15093,7 +15099,16 @@ export class ChatEngine {
       openTools.add(toolPartId)
       return
     }
-    if (!openTools.delete(toolPartId) || openTools.size > 0) return
+    if (!openTools.delete(toolPartId)) {
+      // Some providers only emit a terminal tool event. There is no reliable
+      // before-snapshot for that event, so preserve visibility by falling back
+      // to the complete turn snapshot at checkpoint completion.
+      if (openTools.size === 0 && session.unboundedWindowStart === undefined) {
+        session.changeFilterReliable = false
+      }
+      return
+    }
+    if (openTools.size > 0) return
     this.closeUnboundedToolWindow(session)
   }
 
