@@ -5,12 +5,14 @@
  * so the menu bar and Dock display "Electron" unless the bundle is patched.
  * This script rewrites CFBundleDisplayName / CFBundleName in Info.plist and
  * swaps the bundle icon, then re-signs the modified bundle so the dev
- * experience matches the packaged app.
+ * experience matches the packaged app. Electron 42+ requires a real Apple
+ * signing identity for reliable UNNotification delivery; an ad-hoc signature
+ * only keeps the modified bundle launchable.
  * Runs via `postinstall` and `predev` hooks; exits instantly when the bundle
  * is already branded and its icon is current.
  */
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { APP_ID, APP_NAME } from '../src/lib/brand'
@@ -37,6 +39,34 @@ const alreadyBranded =
   new RegExp(`<key>CFBundleName</key>\\s*<string>${APP_NAME}</string>`).test(current) &&
   new RegExp(`<key>CFBundleIdentifier</key>\\s*<string>${APP_ID}</string>`).test(current)
 let resourcesChanged = false
+
+function availableAppleSigningIdentity(): string | null {
+  const configuredIdentity = process.env['CSC_NAME']?.trim()
+  if (configuredIdentity) return configuredIdentity
+
+  try {
+    const output = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
+      encoding: 'utf8'
+    })
+    const identities = [...output.matchAll(/"([^"]+)"/g)].flatMap((match) =>
+      match[1] ? [match[1]] : []
+    )
+    return (
+      identities.find((identity) => identity?.startsWith('Developer ID Application:')) ??
+      identities.find((identity) => identity?.startsWith('Apple Development:')) ??
+      null
+    )
+  } catch {
+    return null
+  }
+}
+
+function currentSigningDetails(): string {
+  const result = spawnSync('codesign', ['--display', '--verbose=4', appBundle], {
+    encoding: 'utf8'
+  })
+  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`
+}
 
 if (!alreadyBranded) {
   // Patch the display name and bundle name. CFBundleExecutable must remain
@@ -81,18 +111,39 @@ if (resourcesChanged) {
   }
 }
 
-// Electron 42+ uses macOS UNNotification, which rejects unsigned apps.
-// Re-sign after changing bundle resources so development notifications work.
-try {
-  execFileSync('codesign', ['--verify', '--deep', '--strict', appBundle], { stdio: 'ignore' })
-} catch {
+// Electron 42+ uses macOS UNNotification. A merely valid ad-hoc signature is
+// enough to launch a modified bundle but is not a reliable notification
+// identity. Prefer an installed Apple identity and upgrade an existing ad-hoc
+// signature even when `codesign --verify` succeeds.
+const signingIdentity = availableAppleSigningIdentity()
+const signingDetails = currentSigningDetails()
+const hasRequestedIdentity =
+  signingIdentity !== null && signingDetails.includes(`Authority=${signingIdentity}`)
+
+function hasValidSignature(): boolean {
   try {
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', appBundle], {
+    execFileSync('codesign', ['--verify', '--deep', '--strict', appBundle], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+const signatureValid = hasValidSignature()
+if (resourcesChanged || !signatureValid || (signingIdentity !== null && !hasRequestedIdentity)) {
+  try {
+    execFileSync('codesign', ['--force', '--deep', '--sign', signingIdentity ?? '-', appBundle], {
       stdio: 'ignore'
     })
   } catch (error) {
     Logger.error('[brand-electron] Dev bundle could not be signed:', error)
   }
+}
+
+if (signingIdentity === null) {
+  Logger.dev(
+    '[brand-electron] No Apple signing identity found; macOS development notifications may be rejected.'
+  )
 }
 
 Logger.dev(`[brand-electron] Dev bundle prepared as ${APP_NAME}.`)
