@@ -18,6 +18,7 @@
 
   import {
     AudioLines,
+    ArrowUpRight,
     Brain,
     Check,
     ChevronDown,
@@ -4640,6 +4641,19 @@
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
+  /** Debounces the dependency warmup so a fast mouse pass never fires an IPC call. */
+  let dependencyPreloadTimer: ReturnType<typeof setTimeout> | undefined
+  const DEPENDENCY_PRELOAD_DEBOUNCE_MS = 200
+
+  /** Warm a queued start-after thread's message cache so a click opens instantly. */
+  function preloadStartAfterThread(threadId: string): void {
+    clearTimeout(dependencyPreloadTimer)
+    dependencyPreloadTimer = setTimeout(() => {
+      if (threadMessages.loaded(thread.projectId, threadId)) return
+      void threadMessages.preload(thread.projectId, threadId)
+    }, DEPENDENCY_PRELOAD_DEBOUNCE_MS)
+  }
+
   function harnessDisplayName(harnessId: string): string {
     if (harnessId === 'opencode') return 'OpenCode'
     if (harnessId === 'claude-code') return 'Claude Code'
@@ -7388,14 +7402,25 @@
                   </div>
                 {/if}
                 {#if queuedStartAfterThreads.length > 0}
-                  <div class="flex flex-col gap-0.5 px-3 pb-2 text-[11px] text-info">
+                  <div class="flex flex-col gap-1 px-3 pb-2.5">
+                    <div class="px-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      Starts after thread{queuedStartAfterThreads.length === 1 ? '' : 's'}
+                    </div>
                     {#each queuedStartAfterThreads as dependency (dependency.id)}
-                      <div class="flex items-center gap-1.5">
-                        <Clock size={12} class="shrink-0" />
-                        <span class="truncate">
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-elevated"
+                        title={`Open ${dependency.title}`}
+                        aria-label={`Open ${dependency.title}`}
+                        onmouseenter={() => preloadStartAfterThread(dependency.id)}
+                        onclick={() => void openStartAfterThread(dependency.id)}
+                      >
+                        <Clock size={12} class="shrink-0 text-info" />
+                        <span class="min-w-0 flex-1 truncate text-[11px] text-info">
                           Starts after {dependency.title} finishes
                         </span>
-                      </div>
+                        <ArrowUpRight size={12} class="shrink-0 text-dimmed" />
+                      </button>
                     {/each}
                   </div>
                 {/if}
