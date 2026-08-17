@@ -14,6 +14,7 @@
    *  component remounts (thread switching in the sidebar). */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
+  const HISTORY_RENDER_WINDOW_SIZE = HISTORY_WINDOW_SIZE * 2
   const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
@@ -219,6 +220,7 @@
   const cachedMessages = threadMessages.messages(thread.projectId, thread.id)
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
+  let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   // svelte-ignore state_referenced_locally
   let historyWindowInitialized =
     cachedMessages.length > 0 || threadMessages.loaded(thread.projectId, thread.id)
@@ -228,7 +230,10 @@
       : Math.max(0, cachedMessages.length - HISTORY_WINDOW_SIZE)
   )
   let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
-  let visibleMessages = $derived(messages.slice(visibleStartIndex))
+  let visibleEndIndex = $derived(
+    Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
+  )
+  let visibleMessages = $derived(messages.slice(visibleStartIndex, visibleEndIndex))
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
@@ -2148,7 +2153,6 @@
   // to the bottom.
 
   let scrollEl = $state<HTMLDivElement | undefined>()
-  let userScrolledAway = $state(false)
   /** True once the saved position (or initial bottom) has been applied. */
   let scrollRestored = $state(false)
   /** Whether the thread was working when the view mounted. A busy thread always
@@ -2318,6 +2322,7 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
+    renderedStartIndex = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
     lastScrollTop = scrollEl.scrollHeight
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
@@ -2329,16 +2334,14 @@
     })
   }
 
-  // The render window must always cover the live tail of the conversation.
-  // Message hydration, paging, and reconcile can shrink, grow, or reorder the
-  // list after the window index was computed; if the window ever points past
-  // the newest message the body goes blank. Snap it back to the tail window so
-  // the latest turn (its user message and working trace) is always on screen.
-  // Only adjusts out-of-range windows — an explicit history scroll that lands
-  // inside the list is left untouched.
+  // Keep the mounted transcript bounded. While following live output the
+  // window advances with the tail; while the user reads older history it stays
+  // anchored and new events do not keep adding DOM below their viewport.
   $effect(() => {
     const maxStart = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
-    if (renderedStartIndex > maxStart && messages.length > 0) {
+    if (!userScrolledAway && scrollRestored && renderedStartIndex !== maxStart) {
+      renderedStartIndex = maxStart
+    } else if (renderedStartIndex > maxStart && messages.length > 0) {
       renderedStartIndex = maxStart
     }
   })
@@ -2488,11 +2491,6 @@
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
       window.removeEventListener('resize', onResize)
-      if (refreshMessagesTimer !== undefined) {
-        clearTimeout(refreshMessagesTimer)
-        refreshMessagesTimer = undefined
-      }
-      refreshMessagesPending = false
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
@@ -2900,32 +2898,7 @@
 
   // ─── Agent event handling ────────────────────────────────────────────────
 
-  const MESSAGE_REFRESH_FRAME_MS = 16
-  let refreshMessagesTimer: ReturnType<typeof setTimeout> | undefined
-  let refreshMessagesPending = false
   let refreshMessagesInFlight: Promise<void> | null = null
-
-  function scheduleRefreshMessagesTimer(): void {
-    if (
-      !refreshMessagesPending ||
-      refreshMessagesTimer !== undefined ||
-      refreshMessagesInFlight !== null
-    ) {
-      return
-    }
-    refreshMessagesTimer = setTimeout(() => {
-      refreshMessagesTimer = undefined
-      if (!refreshMessagesPending || refreshMessagesInFlight !== null) return
-      refreshMessagesPending = false
-      void refreshMessages()
-    }, MESSAGE_REFRESH_FRAME_MS)
-  }
-
-  /** Coalesce bursty stream events without ever overlapping transcript loads. */
-  function scheduleRefreshMessages(): void {
-    refreshMessagesPending = true
-    scheduleRefreshMessagesTimer()
-  }
 
   function setProviderError(issue: AgentProviderIssue): void {
     const currentIssue = providerStatus?.state === 'error' ? providerStatus.issue : null
@@ -3021,13 +2994,10 @@
             }
           }
         }
-        scheduleRefreshMessages()
-        void refreshCheckpoints()
         break
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        scheduleRefreshMessages()
         break
       }
       case 'session.idle': {
@@ -3039,7 +3009,6 @@
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
         if (providerStatus?.state !== 'error') providerStatus = null
-        scheduleRefreshMessages()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         setTimeout(() => void reconcileReadySpec(), 100)
@@ -3151,25 +3120,21 @@
   }
 
   async function refreshMessages(): Promise<void> {
-    // A direct refresh supersedes any delayed event refresh. Events arriving
-    // after this point can set the pending flag again while this load runs.
-    if (refreshMessagesTimer !== undefined) {
-      clearTimeout(refreshMessagesTimer)
-      refreshMessagesTimer = undefined
-    }
-    refreshMessagesPending = false
-
-    while (refreshMessagesInFlight !== null) {
-      await refreshMessagesInFlight
-    }
-    refreshMessagesPending = false
+    if (refreshMessagesInFlight) return refreshMessagesInFlight
 
     const { projectId, id } = thread
     const loadPromise = (async (): Promise<void> => {
       try {
-        const synced = await invoke('agent:loadMessages', projectId, id)
+        const page = await invoke(
+          'thread:loadMessages',
+          projectId,
+          id,
+          undefined,
+          HISTORY_WINDOW_SIZE
+        )
         if (!alive) return
-        threadMessages.reconcile(projectId, id, synced)
+        threadMessages.mergePage(projectId, id, page.messages)
+        olderMessagesAvailable ||= page.hasOlder
         syncOpenSubagentTabs()
       } catch {
         // Non-fatal — keep what we have
@@ -3182,7 +3147,6 @@
     } finally {
       if (refreshMessagesInFlight === loadPromise) {
         refreshMessagesInFlight = null
-        scheduleRefreshMessagesTimer()
       }
     }
   }

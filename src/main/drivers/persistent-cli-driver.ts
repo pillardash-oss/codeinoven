@@ -450,6 +450,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return session.messages
   }
 
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const session = await this.requireSession(projectPath, sessionId)
+    const startIndex = session.messages.findLastIndex((message) => message.id === messageId)
+    return startIndex >= 0 ? session.messages.slice(startIndex) : session.messages
+  }
+
   /** Resolve the provider-native session id needed by provider maintenance APIs. */
   protected async nativeSessionId(projectPath: string, sessionId: string): Promise<string> {
     const session = await this.requireSession(projectPath, sessionId)
@@ -764,23 +774,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
     if (event.type === 'message.part.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.part.messageID)
+      const message = session.messages.findLast(
+        (candidate) => candidate.id === event.part.messageID
+      )
       if (!message) return
-      const index = message.parts.findIndex((part) => part.id === event.part.id)
+      const index = message.parts.findLastIndex((part) => part.id === event.part.id)
       if (index === -1) message.parts.push(event.part)
       else message.parts[index] = event.part
       return
     }
     if (event.type === 'message.part.delta') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
-      const part = message?.parts.find((candidate) => candidate.id === event.partId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
       if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
         part.text += event.delta
       }
       return
     }
     if (event.type === 'message.completed') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         message.completedAt = Date.now()
         message.error = event.error
@@ -794,7 +806,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
     if (event.type === 'usage.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
