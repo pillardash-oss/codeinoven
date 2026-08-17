@@ -346,7 +346,9 @@ export class CheckpointManager {
       [projectId, threadId],
       10_000
     )
-    return rows.map((row) => JSON.parse(row.data) as TurnCheckpoint)
+    return rows.map((row) =>
+      this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
+    )
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */
@@ -461,7 +463,26 @@ export class CheckpointManager {
       2
     )
     const row = rows[0]
-    return row ? (JSON.parse(row.data) as TurnCheckpoint) : null
+    return row
+      ? this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
+      : null
+  }
+
+  /**
+   * Older checkpoints can have complete before/after snapshots but no recorded
+   * path filter. Rebuild their diff on read so persisted turns remain visible
+   * and rollback-capable after the checkpoint format evolved.
+   */
+  private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
+    if (
+      checkpoint.changes.length > 0 ||
+      !checkpoint.after ||
+      checkpoint.changeFilterApplied === true
+    ) {
+      return checkpoint
+    }
+    const changes = this.tracker(projectId).calculateChanges(checkpoint.before, checkpoint.after)
+    return changes.length > 0 ? { ...checkpoint, changes } : checkpoint
   }
 
   async rollback(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint> {
