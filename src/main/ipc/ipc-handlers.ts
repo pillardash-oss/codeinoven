@@ -4595,8 +4595,8 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
   if (!options.hydrationHandlersRegistered) {
-    // Bounded hydration query: legacy archived rows never cross IPC and the
-    // payload is capped, with the selected project ordered first so the
+    // Bounded hydration query: archived rows never cross IPC and the payload
+    // is capped, with the selected project ordered first so the
     // visible workspace renders before the rest of the workspace data.
     ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
       const options = isRecord(rawOptions) ? rawOptions : {}

@@ -1933,16 +1933,6 @@ export class ChatEngine {
       })
     )
     void this.recoverInterruptedBrainstormEntries()
-    void this.materializeAuditReportArtifacts()
-  }
-
-  /** Backfill markdown files for audit reports persisted before the file-write path existed. */
-  private async materializeAuditReportArtifacts(): Promise<void> {
-    try {
-      await this.auditEngine.materializeAllReports()
-    } catch (error) {
-      Logger.error('Audit report artifact backfill failed:', error)
-    }
   }
 
   /** Answer a pending question from the agent. */
@@ -2356,7 +2346,7 @@ export class ChatEngine {
     if (!force) {
       // Cold start: reuse the persisted snapshot so the model picker is
       // populated immediately without contacting any harness.
-      const persisted = await this.loadPersistedProviders(projectId)
+      const persisted = await this.loadPersistedProviders()
       if (persisted) {
         this.providerCache.set(projectId, persisted)
         return persisted
@@ -2480,7 +2470,7 @@ export class ChatEngine {
   }
 
   /** Load the last persisted catalog snapshot, if any. */
-  private async loadPersistedProviders(projectId: string): Promise<ProviderCatalog[] | null> {
+  private async loadPersistedProviders(): Promise<ProviderCatalog[] | null> {
     try {
       let stored: ProviderCatalog[] | PersistedProviderCatalog | null
       try {
@@ -2488,10 +2478,7 @@ export class ChatEngine {
           this.providerCatalogPath()
         )
       } catch {
-        // One-time migration from former per-project snapshots.
-        stored = await this.storage.read<ProviderCatalog[] | PersistedProviderCatalog>(
-          `provider-catalog/${projectId}.json`
-        )
+        return null
       }
       if (Array.isArray(stored)) {
         this.sharedProviderCatalog = {
@@ -2499,7 +2486,6 @@ export class ChatEngine {
           discoveredAt: Date.now(),
           catalogs: stored
         }
-        void this.persistProviders(projectId, stored)
         return stored
       }
       if (
@@ -2532,7 +2518,7 @@ export class ChatEngine {
       this.providerCache.set(projectId, this.sharedProviderCatalog.catalogs)
       return this.sharedProviderCatalog.catalogs
     }
-    const persisted = await this.loadPersistedProviders(projectId)
+    const persisted = await this.loadPersistedProviders()
     if (persisted) this.providerCache.set(projectId, persisted)
     return persisted ?? []
   }
@@ -4658,12 +4644,8 @@ export class ChatEngine {
     let activeBrainstormTurn: BrainstormDocument | null = null
     if (planningSpecTurn && !preloadedActiveSpec) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
-      const legacyPendingSpec = await this.readPendingInitialSpec(projectId, threadId)
       if (!brainstormWorkflow) {
         brainstormWorkflow = this.brainstormEngine.ensureWorkflow(projectId, threadId)
-      }
-      if (!brainstormWorkflow.entryChoice && legacyPendingSpec) {
-        brainstormWorkflow = this.brainstormEngine.chooseEntry(projectId, threadId, 'spec')
       }
       if (!brainstormWorkflow.entryChoice) {
         void scheduleAutoTitle()
@@ -11588,22 +11570,6 @@ export class ChatEngine {
     }
   }
 
-  /** Permanently erase legacy deleted-task residue from SQLite and config. */
-  async purgeArchivedThreads(): Promise<{
-    tasks: number
-    rows: number
-    directories: number
-  }> {
-    const tasks = await this.threadManager.purgeArchivedThreads()
-    const rows = this.threadManager.purgeOrphanedThreadRows()
-    const threads = await this.threadManager.listAllThreads({ includeArchived: false })
-    const directories = await this.memoryService.deleteOrphanedThreadDirectories(threads)
-    for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
-      await this.checkpointManager.pruneUnusedBlobs(projectId)
-    }
-    return { tasks, rows, directories }
-  }
-
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */
   private async recoverInterruptedBrainstormEntries(): Promise<void> {
     try {
@@ -12691,7 +12657,7 @@ export class ChatEngine {
     const catalogs =
       this.providerCache.get(projectId) ??
       this.sharedProviderCatalog?.catalogs ??
-      (await this.loadPersistedProviders(projectId))
+      (await this.loadPersistedProviders())
     const provider =
       catalogs?.find(
         (candidate) =>
@@ -15169,7 +15135,7 @@ export class ChatEngine {
       projectPath,
       permissionLevel,
       // A session id is owned by the harness that created it and never
-      // migrates: when the user switches harness, `ensureSession` binds a
+      // moves: when the user switches harness, `ensureSession` binds a
       // fresh session id from the new driver and retires the old one. Preserve
       // the registered owner so a settings-derived re-registration (mid-run
       // harness switch) can never clobber which driver owns the session.

@@ -43,26 +43,6 @@ export {
   settingsViewForSection
 } from './renderer-recovery'
 /**
- * Whether two persisted model keys reference the same underlying model, ignoring
- * how a key was re-serialized. A legacy 2-segment key (`providerId:modelId`) and
- * its harness-scoped reconstruction (`:providerId:modelId`, produced when an
- * empty harness is re-encoded) both identify the same model, so toggling must
- * treat them as equal — otherwise "remove favorite" re-adds instead of removing.
- *
- * Harness is compared too so distinct harnesses stay distinct; only an absent
- * (undefined) harness and an explicitly empty one are considered equivalent,
- * which is the exact mismatch the picker's remove button can produce.
- */
-function sameModelIdentity(left: string, right: string): boolean {
-  const a = parseModelKey(left)
-  const b = parseModelKey(right)
-  if (a.providerId !== b.providerId || a.modelId !== b.modelId) return false
-  const harnessA = a.harnessId ?? ''
-  const harnessB = b.harnessId ?? ''
-  return harnessA === harnessB
-}
-
-/**
  * Restart-safe renderer navigation and composer state.
  *
  * Mutations persist synchronously and tolerate blocked/quota-limited storage.
@@ -469,9 +449,7 @@ export class RendererRecoveryStore {
   }
 
   toggleFavorite(modelKey: string): void {
-    const idx = this.favoriteModels.findIndex(
-      (k) => k === modelKey || sameModelIdentity(k, modelKey)
-    )
+    const idx = this.favoriteModels.indexOf(modelKey)
     if (idx === -1) {
       this.favoriteModels = [...this.favoriteModels, modelKey]
     } else {
@@ -508,9 +486,7 @@ export class RendererRecoveryStore {
   }
 
   toggleChatFavorite(modelKey: string): void {
-    const idx = this.chatFavoriteModels.findIndex(
-      (k) => k === modelKey || sameModelIdentity(k, modelKey)
-    )
+    const idx = this.chatFavoriteModels.indexOf(modelKey)
     if (idx === -1) {
       this.chatFavoriteModels = [...this.chatFavoriteModels, modelKey]
     } else {
@@ -553,8 +529,8 @@ export class RendererRecoveryStore {
 
   setAuditModel(modelKey: string): void {
     this.auditModelKey = modelKey
-    const { providerId, modelId } = parseModelKey(modelKey)
-    if (providerId && modelId && !this.isFavorite(modelKey)) {
+    const parsed = parseModelKey(modelKey)
+    if (parsed && !this.isFavorite(modelKey)) {
       this.addRecentModel(modelKey)
       return
     }

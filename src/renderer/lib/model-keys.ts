@@ -7,8 +7,7 @@
  * model keys (favorites, recently used, audit defaults) must be harness-scoped.
  */
 export interface ParsedModelKey {
-  /** Present on current keys; absent on legacy `providerId:modelId` keys. */
-  harnessId?: string
+  harnessId: string
   providerId: string
   modelId: string
 }
@@ -19,30 +18,21 @@ export function modelKey(harnessId: string, providerId: string, modelId: string)
 }
 
 /**
- * Parse a stored model key. Handles both the current 3-segment format
- * (`harnessId:providerId:modelId`) and the legacy 2-segment format
- * (`providerId:modelId`), so older persisted favorites/recent remain usable.
+ * Parse a current harness-scoped model key.
  */
-export function parseModelKey(key: string): ParsedModelKey {
+export function parseModelKey(key: string): ParsedModelKey | null {
   const segments = key.split(':')
-  if (segments.length >= 3) {
-    return {
-      harnessId: segments[0],
-      providerId: segments[1],
-      modelId: segments.slice(2).join(':')
-    }
+  if (segments.length < 3 || !segments[0] || !segments[1] || !segments.slice(2).join(':')) {
+    return null
   }
-  if (segments.length === 2) {
-    return {
-      harnessId: undefined,
-      providerId: segments[0],
-      modelId: segments[1]
-    }
+  return {
+    harnessId: segments[0],
+    providerId: segments[1],
+    modelId: segments.slice(2).join(':')
   }
-  return { harnessId: undefined, providerId: '', modelId: key }
 }
 
-/** True when a stored key carries an explicit harness (3+ segments). */
+/** True when a stored key uses the current harness-scoped format. */
 export function isHarnessScopedModelKey(key: string): boolean {
-  return key.split(':').length >= 3
+  return parseModelKey(key) !== null
 }

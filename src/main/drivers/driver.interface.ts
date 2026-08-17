@@ -213,11 +213,8 @@ export interface SteerPromptOptions {
 export interface HarnessDriver {
   readonly id: string
   readonly name: string
-  /**
-   * Absent only for legacy drivers during migration. New drivers must expose
-   * capabilities so role validation can select them safely.
-   */
-  readonly capabilities?: HarnessCapabilities
+  /** Capabilities exposed by this harness adapter. */
+  readonly capabilities: HarnessCapabilities
   readonly authCapabilities?: HarnessAuthCapabilities
 
   /** Attach task-level process tracking after driver construction. */

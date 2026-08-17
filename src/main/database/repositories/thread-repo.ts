@@ -60,7 +60,7 @@ function parseStoredJson(raw: string): unknown {
 
 /**
  * Validate a raw context-usage snapshot with integrity checks so a corrupt or
- * legacy blob can never crash a thread list or render a bogus meter. Returns
+ * corrupt blob can never crash a thread list or render a bogus meter. Returns
  * null when the shape is unusable.
  */
 export function parseThreadContextUsage(value: unknown): ThreadContextUsage | null {
@@ -209,7 +209,7 @@ export interface ThreadListOptions {
   limit?: number
   /** Rows to skip before returning (offset paging). */
   offset?: number
-  /** Exclude legacy rows pending startup deletion when false. */
+  /** Exclude archived rows when false. */
   includeArchived?: boolean
   /**
    * Ordering for the returned rows.

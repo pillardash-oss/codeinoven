@@ -2,10 +2,8 @@
  * WebSocket peer transport over the local network.
  *
  * Connects to a discovered LAN peer at `ws://<peer-host>:<LAN_PORT>` and runs a
- * `PEER_SECRET_AUTH` handshake: the client sends a nonce plus an HMAC-SHA256
- * token derived from the shared secret — the raw secret never leaves the
- * device. On success a data channel is open; handshake rejection and
- * disconnection are reported as transport events.
+ * device proof-of-possession handshake. On success a data channel is open;
+ * handshake rejection and disconnection are reported as transport events.
  *
  * The socket is created through an injectable factory so the module is
  * unit-testable without a real network.
@@ -13,7 +11,7 @@
 
 import type { PeerRef } from './routes'
 import { remoteLog } from './logger'
-import { createHandshakeToken, decryptPayload, encryptPayload } from './session-security'
+import { decryptPayload, encryptPayload } from './session-security'
 import { handshakeTranscript, signTranscript } from './device-identity'
 
 export type TransportEvent =
@@ -36,9 +34,7 @@ export interface TransportSocket {
 export type SocketFactory = (url: string) => TransportSocket
 
 /**
- * Proof-of-possession credentials for a phone device. When present the
- * handshake signs the challenge with the device's private key instead of
- * deriving an HMAC token from a shared secret.
+ * Proof-of-possession credentials for a phone device.
  */
 export interface LanDeviceCredentials {
   deviceId: string | null
@@ -57,10 +53,6 @@ export interface LanTransportOptions {
   socketFactory?: SocketFactory
   handshakeTimeoutMs?: number
   onEvent: (event: TransportEvent) => void
-  /** Stable device identity announced during the handshake. */
-  deviceId?: string
-  /** Human-readable device name announced during the handshake. */
-  deviceName?: string
   /** Proof-of-possession device keys (PWA phones). */
   device?: LanDeviceCredentials
   /** Single-use pairing bootstrap from the QR code for first enrollment. */
@@ -83,7 +75,6 @@ interface HelloMessage {
   type: 'remote:hello'
   version: number
   nonce: string
-  token?: string
   signature?: string
   transcript?: string
   bootstrap?: string
@@ -203,10 +194,19 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
         const reply = parseReply(event.data)
         if (reply) {
           if (reply.type === 'remote:challenge' && reply.nonce) {
-            void buildHello(reply.nonce).then((hello) => {
-              if (settled) return
-              socket.send(JSON.stringify(hello))
-            })
+            void buildHello(reply.nonce)
+              .then((hello) => {
+                if (settled) return
+                socket.send(JSON.stringify(hello))
+              })
+              .catch(() => {
+                finish('rejected', {
+                  kind: 'handshake:rejected',
+                  peer,
+                  reason: 'device-credentials-required'
+                })
+                socket.close()
+              })
             return
           }
           if (reply.type === 'remote:hello:ok') {
@@ -280,50 +280,39 @@ export function createLanTransport(options: LanTransportOptions): LanTransport {
     }
   }
 
-  /** Build the handshake hello: proof-of-possession signature or legacy HMAC. */
+  /** Build the proof-of-possession handshake hello. */
   async function buildHello(nonce: string): Promise<HelloMessage> {
     const device = options.device
-    if (device) {
-      const transcript = handshakeTranscript({
-        nonce,
-        deviceId: device.deviceId,
-        authVersion: device.authVersion,
-        bootstrap: options.pairingBootstrap
-      })
-      const signature = await signTranscript(device.signingKey, transcript)
-      if (!device.deviceId) {
-        return {
-          type: 'remote:hello',
-          version: 3,
-          nonce,
-          signature,
-          transcript,
-          bootstrap: options.pairingBootstrap ?? undefined,
-          signingPublicJwk: device.signingPublicJwk,
-          agreementPublicJwk: device.agreementPublicJwk,
-          deviceName: device.deviceName
-        }
-      }
+    if (!device) throw new Error('device-credentials-required')
+    const transcript = handshakeTranscript({
+      nonce,
+      deviceId: device.deviceId,
+      authVersion: device.authVersion,
+      bootstrap: options.pairingBootstrap
+    })
+    const signature = await signTranscript(device.signingKey, transcript)
+    if (!device.deviceId) {
       return {
         type: 'remote:hello',
         version: 3,
         nonce,
         signature,
         transcript,
-        authVersion: device.authVersion,
-        deviceId: device.deviceId,
+        bootstrap: options.pairingBootstrap ?? undefined,
+        signingPublicJwk: device.signingPublicJwk,
+        agreementPublicJwk: device.agreementPublicJwk,
         deviceName: device.deviceName
       }
     }
-    const secret = options.authSecret ?? ''
-    const token = await createHandshakeToken(secret, nonce)
     return {
       type: 'remote:hello',
-      version: 2,
+      version: 3,
       nonce,
-      token,
-      ...(options.deviceId ? { deviceId: options.deviceId } : {}),
-      ...(options.deviceName ? { deviceName: options.deviceName } : {})
+      signature,
+      transcript,
+      authVersion: device.authVersion,
+      deviceId: device.deviceId,
+      deviceName: device.deviceName
     }
   }
 }

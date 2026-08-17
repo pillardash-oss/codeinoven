@@ -33,14 +33,14 @@ export interface RemoteDeviceInfo {
   transport: 'lan' | 'relay'
   /** Whether the device currently holds a live session. */
   connected: boolean
-  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  /** Granted scope identifiers. */
   scopes: string[]
   /** SHA-256 fingerprint prefix of the device signing key. */
   fingerprint: string | null
   lastUsedAt: number | null
-  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  /** Device authorization expiry (epoch ms). */
   expiresAt: number | null
-  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  /** Signed credential lifetime expiry (epoch ms). */
   credentialExpiresAt: number | null
   revokedAt: number | null
   authVersion: number

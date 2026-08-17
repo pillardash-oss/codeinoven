@@ -16,7 +16,7 @@ import type {
   SpecValidationResult
 } from '../types'
 import { generateId } from '../utils'
-import { ensureFeatureSlug, featureSlugFromTitle, requireLocalProject } from '../project-artifacts'
+import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
 import { exportEngineeringSpecMarkdown } from '../spec/spec-markdown'
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
@@ -153,10 +153,7 @@ export class SpecEngine {
       const spec = JSON.parse(row.data) as EngineeringSpec
       return this.withDecisionComments(spec)
     }
-    const legacy = await this.storage.read<EngineeringSpec>(
-      await this.legacyBrainstormVersionPath(projectId, threadId, specId, version)
-    )
-    return legacy ? this.withDecisionComments(legacy) : null
+    return null
   }
 
   async getLatest(
@@ -182,20 +179,8 @@ export class SpecEngine {
       )
       .map((r) => r.version)
 
-    const legacyEntries = await this.storage.list(
-      await this.legacyBrainstormVersionsDir(projectId, threadId, specId)
-    )
-    const legacyVersionNumbers = legacyEntries
-      .map((entry) => /^v([1-9]\d*)\.json$/u.exec(entry))
-      .filter((match): match is RegExpExecArray => match !== null)
-      .map((match) => Number(match[1]))
-
-    const allVersions = [...new Set([...dbVersionNumbers, ...legacyVersionNumbers])].sort(
-      (left, right) => left - right
-    )
-
     const specs: EngineeringSpec[] = []
-    for (const version of allVersions) {
+    for (const version of dbVersionNumbers) {
       const spec = await this.getVersion(projectId, threadId, specId, version)
       if (spec) specs.push(spec)
     }
@@ -709,62 +694,5 @@ export class SpecEngine {
         )
       }
     }
-  }
-
-  private legacyThreadSpecsDir(projectId: string, threadId: string): string {
-    return join('projects', projectId, 'threads', threadId, 'specs')
-  }
-
-  private async legacyBrainstormDirectory(projectId: string, threadId: string): Promise<string> {
-    const brainstormDirectory = join('projects', projectId, '.cio', 'brainstorm')
-    const threadSuffix = `--${threadId}`
-    const existingDirectory = (await this.storage.list(brainstormDirectory)).find((entry) =>
-      entry.endsWith(threadSuffix)
-    )
-    if (existingDirectory) return join(brainstormDirectory, existingDirectory)
-
-    const thread = await this.storage.read<{ title?: unknown }>(
-      join('projects', projectId, 'threads', threadId, 'thread.json')
-    )
-    const title = typeof thread?.title === 'string' ? thread.title : 'feature'
-    const slug = featureSlugFromTitle(title)
-    return join(brainstormDirectory, `${slug}${threadSuffix}`)
-  }
-
-  private versionsDir(projectId: string, threadId: string, specId: string): string {
-    return join(this.legacyThreadSpecsDir(projectId, threadId), specId, 'versions')
-  }
-
-  private async legacyBrainstormVersionsDir(
-    projectId: string,
-    threadId: string,
-    specId: string
-  ): Promise<string> {
-    return join(await this.legacyBrainstormDirectory(projectId, threadId), specId, 'versions')
-  }
-
-  private versionPath(
-    projectId: string,
-    threadId: string,
-    specId: string,
-    version: number
-  ): string {
-    return join(this.versionsDir(projectId, threadId, specId), `v${version}.json`)
-  }
-
-  private workflowPath(projectId: string, threadId: string): string {
-    return join(this.legacyThreadSpecsDir(projectId, threadId), 'workflow.json')
-  }
-
-  private async legacyBrainstormVersionPath(
-    projectId: string,
-    threadId: string,
-    specId: string,
-    version: number
-  ): Promise<string> {
-    return join(
-      await this.legacyBrainstormVersionsDir(projectId, threadId, specId),
-      `v${version}.json`
-    )
   }
 }

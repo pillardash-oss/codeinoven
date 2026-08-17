@@ -357,7 +357,7 @@ export class GitHubProvider implements GitProvider {
   /**
    * CI state for the PR head.
    *
-   * GitHub exposes two independent systems — modern check runs and legacy commit
+   * GitHub exposes two independent systems — modern check runs and classic commit
    * statuses — and a repository can use either, so both are merged here.
    */
   async getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks> {

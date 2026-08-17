@@ -34,7 +34,6 @@ import type {
   SyncedDeviceUsage
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
-import { verifyHandshakeToken } from '../../renderer/lib/remote/session-security'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
 import {
   isPairingExpired,
@@ -46,12 +45,7 @@ import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
 import { setRemoteEventForwarder } from './remote-event-forwarder'
-import {
-  readRemoteDeviceNames,
-  readRemoteModeState,
-  writeRemoteDeviceName,
-  writeRemoteModeState
-} from './remote-state'
+import { readRemoteModeState, writeRemoteModeState } from './remote-state'
 import {
   mergeTombstones,
   readMemorySyncState,
@@ -69,7 +63,6 @@ declare global {
 /** Gateway device-authentication callback shape (see RemoteGateway options). */
 type GatewayAuthHandler = (input: {
   nonce: string
-  token?: string
   signature?: string
   transcript?: string
   bootstrap?: string
@@ -78,7 +71,6 @@ type GatewayAuthHandler = (input: {
   authVersion?: number
   deviceId: string
   deviceName: string
-  originPolicy: 'strict' | 'local'
   transport: 'lan' | 'relay'
 }) => Promise<{ accepted: boolean; device?: RemoteDeviceInfo }>
 
@@ -525,8 +517,6 @@ export class RemoteModeController {
   private cloudStatus: RemoteCloudStatus
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
-  /** Persisted device-name overrides, keyed by device id. */
-  private deviceNames: Record<string, string> = {}
 
   constructor(options: RemoteModeOptions) {
     this.lanPort = options.lanPort
@@ -553,16 +543,6 @@ export class RemoteModeController {
     }
   }
 
-  /** Load persisted device names so renames survive restarts. */
-  private async loadDeviceNames(): Promise<void> {
-    if (!this.storage) return
-    try {
-      this.deviceNames = await readRemoteDeviceNames(this.storage)
-    } catch (error) {
-      Logger.error('Could not load remote device names:', error)
-    }
-  }
-
   /**
    * Restore remote mode at startup if it was enabled before the app quit, so a
    * desktop restart never silently breaks the phone connection. Only starts the
@@ -572,7 +552,6 @@ export class RemoteModeController {
     if (this.remoteModeActive) return
     const enabled = await this.readPersistedEnabled()
     if (!enabled) return
-    await this.loadDeviceNames()
     const restoreLan = this.hasRestorableLanEnrollment()
     const restoreCloud = await this.hasRestorableCloudEnrollment()
     if (!restoreLan && !restoreCloud) {
@@ -768,34 +747,15 @@ export class RemoteModeController {
     this.broadcast()
   }
 
-  /**
-   * Rebuild the device list from the enrolled device records, marking which
-   * hold a live session. Falls back to the gateway's connected set when no
-   * credential service is wired (legacy path).
-   */
+  /** Rebuild the device list from the enrolled device records. */
   private refreshDevices(connectedIds: Set<string>): void {
     if (!this.credentials) {
-      const live = this.gateway?.listDevices() ?? []
-      this.devices = live.map((device) => ({
-        ...device,
-        name: this.deviceNames[device.id] ?? device.name,
-        connected: true,
-        scopes: [],
-        fingerprint: null,
-        lastUsedAt: null,
-        expiresAt: null,
-        credentialExpiresAt: null,
-        revokedAt: null,
-        authVersion: 0,
-        allProjects: true,
-        projectIds: []
-      }))
+      this.devices = []
       return
     }
-    this.devices = this.credentials.listDevices().map((device) => ({
-      ...this.toDeviceInfo(device, connectedIds.has(device.deviceId)),
-      name: this.deviceNames[device.deviceId] ?? device.name
-    }))
+    this.devices = this.credentials
+      .listDevices()
+      .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
   }
 
   /** Enrolled-device record → display-facing `RemoteDeviceInfo`. */
@@ -818,17 +778,11 @@ export class RemoteModeController {
     }
   }
 
-  /** Rename an enrolled device; the record and legacy override are updated. */
+  /** Rename an enrolled device. */
   async renameDevice(deviceId: string, name: string): Promise<RemoteModeStatus> {
     const trimmed = name.trim().slice(0, 100)
     if (trimmed.length === 0) throw new TypeError('Device name cannot be empty')
-    if (this.credentials) {
-      this.credentials.renameDevice(deviceId, trimmed)
-    }
-    this.deviceNames = { ...this.deviceNames, [deviceId]: trimmed }
-    if (this.storage) {
-      await writeRemoteDeviceName(this.storage, deviceId, trimmed)
-    }
+    if (!this.credentials?.renameDevice(deviceId, trimmed)) throw new Error('Device not found')
     this.devices = this.devices.map((device) =>
       device.id === deviceId ? { ...device, name: trimmed } : device
     )
@@ -868,10 +822,9 @@ export class RemoteModeController {
   listEnrolledDevices(): RemoteDeviceInfo[] {
     if (!this.credentials) return []
     const connectedIds = new Set(this.gateway?.listDevices().map((d) => d.id) ?? [])
-    return this.credentials.listDevices().map((device) => ({
-      ...this.toDeviceInfo(device, connectedIds.has(device.deviceId)),
-      name: this.deviceNames[device.deviceId] ?? device.name
-    }))
+    return this.credentials
+      .listDevices()
+      .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
   }
 
   /** Trusted desktop step-up disposition for a pending high-risk request. */
@@ -895,21 +848,18 @@ export class RemoteModeController {
    * first-time enrollment additionally presents a single-use pairing
    * bootstrap and the device's public keys. The shared secret is never a
    * durable authority: on the LAN-exposed listener it only authorizes the
-   * one-shot enrollment, and the legacy HMAC path is accepted solely for the
-   * desktop renderer's own loopback session.
+   * one-shot enrollment; every session still requires device proof.
    */
   private makeAuthenticateDevice(): GatewayAuthHandler {
     return async ({
       nonce,
-      token,
       signature,
       bootstrap,
       signingPublicJwk,
       agreementPublicJwk,
       authVersion,
       deviceId,
-      deviceName,
-      originPolicy
+      deviceName
     }) => {
       const credentials = this.credentials
       if (signature && credentials) {
@@ -957,21 +907,6 @@ export class RemoteModeController {
           transport: 'lan'
         })
         return { accepted: false }
-      }
-      // Legacy shared-secret handshake: only the desktop renderer's own
-      // loopback session, never a phone on the LAN-exposed listener.
-      if (token && originPolicy === 'local' && credentials) {
-        const secret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
-        const verified = secret ? await verifyHandshakeToken(secret, nonce, token) : false
-        if (!verified) {
-          credentials.audit({
-            decision: 'auth_failed',
-            reasonCode: 'signature_invalid',
-            deviceId: null,
-            transport: 'lan'
-          })
-        }
-        return { accepted: verified }
       }
       credentials?.audit({
         decision: 'auth_failed',
@@ -1987,7 +1922,6 @@ export class RemoteModeController {
       Logger.error('Remote gateway not started: renderer static root is not set')
       return
     }
-    await this.loadDeviceNames()
     await this.resolvePeerSecret()
     if (prepareEnrollment) await this.syncPairingState()
     // Explicit enrollment may rotate an expired persisted secret. Restoration

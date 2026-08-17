@@ -116,7 +116,7 @@
     isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
-  import { APP_NAME, APP_SLUG } from '$shared/brand'
+  import { APP_NAME } from '$shared/brand'
   import type {
     AgentPart,
     AppConfig,
@@ -1199,32 +1199,6 @@
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
 
-  async function migrateTimelinePins(): Promise<void> {
-    const key = `${APP_SLUG}.timelinePins.v1`
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!Array.isArray(parsed)) {
-        window.localStorage.removeItem(key)
-        return
-      }
-      const ids = new Set(parsed.filter((id): id is string => typeof id === 'string'))
-      const persistedThreads = await invoke('thread:listAll')
-      for (const thread of persistedThreads) {
-        if (!ids.has(thread.id) || thread.pinned || thread.archived) continue
-        const updated = await invoke('thread:setPinned', thread.projectId, thread.id, true)
-        upsertThreadInList(updated)
-        scopeState.updateThread(updated)
-        if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
-      }
-      window.localStorage.removeItem(key)
-    } catch {
-      // Keep the legacy IDs so a transient IPC/storage failure cannot remove
-      // cleanup protection before the persisted-pin migration succeeds.
-    }
-  }
-
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
     if (!project) return null
@@ -1516,7 +1490,6 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      await migrateTimelinePins()
       notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {

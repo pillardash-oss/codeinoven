@@ -9,7 +9,6 @@ import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
 } from '../agents/native-provider-config-service'
-import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 
 const STORE_PATH = 'accounts/base-url-providers.json'
@@ -54,15 +53,10 @@ export class BaseUrlProviderService {
     undefined as unknown as BaseUrlProvider
   )
   private readonly nativeProviders = new NativeProviderConfigService()
-  private readonly vault: SecretVault
-  private migration: Promise<void> | null = null
 
-  constructor(private readonly storage: StorageEngine) {
-    this.vault = new SecretVault(storage)
-  }
+  constructor(private readonly storage: StorageEngine) {}
 
   async listProviders(): Promise<BaseUrlProvider[]> {
-    await this.ensureNativeMigration()
     const [store, native] = await Promise.all([this.load(), this.nativeProviders.listProviders()])
     return structuredClone([
       ...store.providers.filter((provider) => !hasNativeProviderCatalog(provider.harnessId)),
@@ -91,7 +85,6 @@ export class BaseUrlProviderService {
   async createProvider(
     input: BaseUrlProviderCreateRequest & { apiKeyRef?: string }
   ): Promise<BaseUrlProvider> {
-    await this.ensureNativeMigration()
     return this.enqueue(async () => {
       const store = await this.load()
       const now = Date.now()
@@ -131,7 +124,6 @@ export class BaseUrlProviderService {
   ): Promise<BaseUrlProvider> {
     assertId(harnessId, 'Base URL provider harness ID')
     assertId(id, 'Base URL provider ID')
-    await this.ensureNativeMigration()
     return this.enqueue(async () => {
       const current = await this.getProvider(harnessId, id)
       if (!current) throw new Error(`Base URL provider not found: ${harnessId}:${id}`)
@@ -186,7 +178,6 @@ export class BaseUrlProviderService {
   async deleteProvider(harnessId: string, id: string): Promise<boolean> {
     assertId(harnessId, 'Base URL provider harness ID')
     assertId(id, 'Base URL provider ID')
-    await this.ensureNativeMigration()
     return this.enqueue(async () => {
       const store = await this.load()
       const index = store.providers.findIndex(
@@ -212,31 +203,6 @@ export class BaseUrlProviderService {
     const raw = await this.storage.read<BaseUrlProviderStore>(STORE_PATH)
     if (raw === null) return { version: STORE_VERSION, providers: [] }
     return parseStore(raw)
-  }
-
-  /** Move legacy app-owned OpenCode/Pi entries into their native catalogs once. */
-  private ensureNativeMigration(): Promise<void> {
-    this.migration ??= this.migrateNativeProviders()
-    return this.migration
-  }
-
-  private async migrateNativeProviders(): Promise<void> {
-    const raw = await this.storage.read<BaseUrlProviderStore>(STORE_PATH)
-    if (raw === null) return
-    const store = parseStore(raw)
-    const native = store.providers.filter((provider) =>
-      hasNativeProviderCatalog(provider.harnessId)
-    )
-    if (native.length === 0) return
-    for (const provider of native) {
-      const apiKey = provider.apiKeyRef ? await this.vault.resolve(provider.apiKeyRef) : undefined
-      await this.nativeProviders.upsertProvider(provider, apiKey)
-      if (provider.apiKeyRef) await this.vault.remove(provider.apiKeyRef)
-    }
-    store.providers = store.providers.filter(
-      (provider) => !hasNativeProviderCatalog(provider.harnessId)
-    )
-    await this.save(store)
   }
 
   private async save(store: BaseUrlProviderStore): Promise<void> {

@@ -159,7 +159,9 @@ describe('GitHubAuthService', () => {
     process.env['CODEINOVEN_GITHUB_CLIENT_ID'] = 'Iv1.someClientId'
     const vault = mockVault()
     vi.mocked(vault.exists).mockResolvedValue(true)
-    vi.mocked(vault.resolve).mockResolvedValue('gho_secret')
+    vi.mocked(vault.resolve).mockResolvedValue(
+      JSON.stringify({ version: 1, accessToken: 'gho_secret' })
+    )
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         login: 'octocat',

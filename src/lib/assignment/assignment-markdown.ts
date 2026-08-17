@@ -16,7 +16,7 @@ function taskDetails(task: AssignmentTask): string[] {
     '',
     `- Status: ${task.status}`,
     `- Work pass: ${task.workKind === 'rework' ? `Rework ${task.reworkCycle ?? 1}` : 'Initial'}`,
-    `- Assignment version: ${task.workAssignmentVersion ?? 'Legacy'}`,
+    `- Assignment version: ${task.workAssignmentVersion ?? 'Not recorded'}`,
     `- Owner: ${task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}`,
     `- Depends on: ${task.dependsOn.join(', ') || 'None'}`,
     `- Model: ${model}`,

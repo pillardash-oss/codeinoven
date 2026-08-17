@@ -6102,7 +6102,8 @@
     // generic level was stamped onto its rows.
     if (model && presets.length === 0) return null
     // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the thread's current level for legacy/live messages.
+    // falling back to the thread's current level when a message has no
+    // persisted thinking level.
     if (msg.thinkingLevel) return msg.thinkingLevel
     if (presets.length === 0) return null
     return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null

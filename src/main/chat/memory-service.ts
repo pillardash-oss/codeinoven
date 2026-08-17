@@ -12,8 +12,7 @@ import type {
   MemoryProposal,
   MemoryScope,
   MemorySource,
-  SpecContextReference,
-  Thread
+  SpecContextReference
 } from '../../lib/types'
 import { INBOX_PROJECT_ID } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -242,12 +241,10 @@ const SECRET_PATTERNS = [
   /\b(?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*["']?[^\s"']{8,}/iu
 ]
 
-/** Parse memory entries from a Markdown file with ## headings. Backward compatible. */
+/** Parse memory entries from the current marked Markdown format. */
 function parseMemoryMd(content: string): MemoryEntry[] {
   const entries: MemoryEntry[] = []
-  const blocks = content.includes(ENTRY_MARKER)
-    ? content.split(ENTRY_MARKER).slice(1)
-    : content.split(/(?=^## )/mu)
+  const blocks = content.split(ENTRY_MARKER).slice(1)
   for (const [index, block] of blocks.entries()) {
     const match = block.match(/^\s*##\s+(.+?)\s*$/mu)
     if (!match) continue
@@ -410,60 +407,13 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
   return { enabled: value.enabled, chatEnabled, entries }
 }
 
-/** Migrate old config.json memory entries to memory.md — called on first read. */
-async function migrateMemoryEntries(storage: StorageEngine): Promise<void> {
-  const config = await storage.read<AppConfig>('config.json')
-  const oldEntries = config?.memory?.entries
-  if (!oldEntries || oldEntries.length === 0) return
-
-  const existingMd = (await storage.readRaw(MEMORY_FILENAME)) ?? ''
-  const existingEntries = parseMemoryMd(existingMd)
-  const existingLabels = new Set(existingEntries.map((e) => e.label))
-  const newEntries = oldEntries.filter((entry) => !existingLabels.has(entry.label))
-
-  if (newEntries.length > 0) {
-    await storage.writeRaw(MEMORY_FILENAME, serializeMemoryMd([...existingEntries, ...newEntries]))
-  }
-
-  // Clear entries from config.json
-  config.memory = {
-    enabled: config.memory.enabled,
-    chatEnabled: config.memory.chatEnabled ?? true,
-    entries: []
-  }
-  await storage.write('config.json', config)
-}
-
-/**
- * Migrate legacy `global`-scoped entries to the `projects` scope.
- *
- * The `global` scope previously meant "everywhere". With chat memory the
- * `global` scope now applies to both projects and chats, so one-time migrate
- * existing global entries to `projects` (all projects only) so pre-existing
- * preferences never leak into the newly introduced chats.
- */
-async function migrateLegacyGlobalScope(storage: StorageEngine): Promise<void> {
-  const existingMd = (await storage.readRaw(MEMORY_FILENAME)) ?? ''
-  const entries = parseMemoryMd(existingMd)
-  if (!entries.some((entry) => entry.scope === 'global')) return
-  const migrated = entries.map((entry) =>
-    entry.scope === 'global' ? { ...entry, scope: 'projects' as const } : entry
-  )
-  await storage.writeRaw(MEMORY_FILENAME, serializeMemoryMd(migrated))
-}
-
 /** Formats only explicit enabled preferences and snapshots them for approved specs. */
 export class MemoryService {
-  private readonly migration: Promise<void>
   private readonly lastExtractionAt = new Map<string, number>()
   private readonly extractionWindows = new Map<string, { start: number; count: number }>()
   private readonly auxiliaryUsage: AuxiliaryUsageEntry[] = []
 
-  constructor(private readonly storage = new StorageEngine()) {
-    this.migration = migrateMemoryEntries(storage)
-      .then(() => migrateLegacyGlobalScope(storage))
-      .catch(() => undefined)
-  }
+  constructor(private readonly storage = new StorageEngine()) {}
 
   private memoryFilePath(projectId?: string, threadId?: string): string {
     return join(this.memoryDirectory(projectId, threadId), MEMORY_FILENAME)
@@ -486,17 +436,14 @@ export class MemoryService {
   }
 
   private async readMemoryMd(projectId?: string, threadId?: string): Promise<string> {
-    await this.migration
     return (await this.storage.readRaw(this.memoryFilePath(projectId, threadId))) ?? ''
   }
 
   private async writeMemoryMd(text: string, projectId?: string, threadId?: string): Promise<void> {
-    await this.migration
     await this.storage.writeRaw(this.memoryFilePath(projectId, threadId), text)
   }
 
   async current(projectId?: string, threadId?: string): Promise<MemoryConfig> {
-    await this.migration
     const config = await this.storage.read<AppConfig>('config.json')
     const isChat = projectId === 'inbox'
 
@@ -1024,32 +971,6 @@ export class MemoryService {
     } catch {
       // Directory may not exist
     }
-  }
-
-  /** Delete config task directories whose SQLite task row no longer exists. */
-  async deleteOrphanedThreadDirectories(threads: Thread[]): Promise<number> {
-    const validByProject = new Map<string, Set<string>>()
-    for (const thread of threads) {
-      const ids = validByProject.get(thread.projectId) ?? new Set<string>()
-      ids.add(thread.id)
-      validByProject.set(thread.projectId, ids)
-    }
-
-    let deleted = 0
-    const removeUnknown = async (projectId: string, base: string): Promise<void> => {
-      const valid = validByProject.get(projectId) ?? new Set<string>()
-      for (const threadId of await this.storage.listDirectories(base)) {
-        if (valid.has(threadId)) continue
-        await this.storage.remove(join(base, threadId))
-        deleted++
-      }
-    }
-
-    for (const projectId of await this.storage.listDirectories(PROJECTS_DIR)) {
-      await removeUnknown(projectId, join(PROJECTS_DIR, projectId, THREADS_DIR))
-    }
-    await removeUnknown('inbox', join(CHATS_CWD_DIR, THREADS_DIR))
-    return deleted
   }
 
   /** Generate a verification checklist from critical and high priority entries. */
