@@ -371,6 +371,25 @@ export class Database {
     return runProviderDeltaSync(this, threadId, sessionId, messages)
   }
 
+  /**
+   * Serialize a thread's mirrored conversation into a Markdown transcript on
+   * the maintenance worker's thread and write it atomically. Returns the
+   * written path, or a typed error when the worker is unavailable or fails.
+   */
+  async exportTranscriptViaWorker(
+    threadId: string,
+    includeTrace: boolean,
+    destinationPath: string
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (!worker?.isRunning()) {
+      return { ok: false, error: 'no maintenance worker' }
+    }
+    const response = await worker.exportTranscript(threadId, includeTrace, destinationPath)
+    if (response.ok) return { ok: true, path: response.path }
+    return { ok: false, error: response.error ?? 'transcript export failed' }
+  }
+
   // ── Serialized worker CRUD (bounded/paged reads, batched writes) ────────
 
   /**
