@@ -195,7 +195,7 @@
   }
 
   let {
-    thread,
+    thread: threadProp,
     chatMode = false,
     onForked,
     projects = [],
@@ -203,6 +203,13 @@
     onContinueInProject,
     onProjectCreated
   }: Props = $props()
+
+  // Workspace clears its selected-thread state before this keyed view's
+  // teardown runs. Keep using the mounted identity during that short window;
+  // normal thread replacements remain reactive through the derived value.
+  // svelte-ignore state_referenced_locally
+  const mountedThread = threadProp
+  let thread = $derived(threadProp ?? mountedThread)
 
   let alive = true
 
