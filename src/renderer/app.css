@@ -44,6 +44,7 @@
      Todo=light grey | Working=blue | Spec=purple | Issue=amber | Unread=green | Done=dark grey | Pinned=yellow */
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
+  --color-thread-working-paused: var(--color-warning);
   /* Quiet but unmistakable purple for reviewable engineering artifacts. */
   --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);
@@ -104,6 +105,7 @@
 
   --color-info: #7ba3d4;
   --color-chat-success: #34d399;
+  --color-thread-working-paused: var(--color-warning);
   --color-thread-spec: #a78bfa;
 }
 

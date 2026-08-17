@@ -10,6 +10,7 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import { isOrchestrationChildThread, type Thread, type ThreadStatus } from '../../lib/types'
+import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
@@ -18,12 +19,9 @@ import type {
   ThreadClickedPayload
 } from '../../lib/ipc-contract'
 
-const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
-  'completed',
-  'awaiting_approval',
-  'spec',
-  'failed'
-])
+const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set(
+  THREAD_STATUSES.filter((status) => threadStatusPolicy(status).notificationKind !== undefined)
+)
 const MAX_RETAINED_NOTIFICATIONS = 200
 const BADGE_STATE_PATH = 'state/notification-badge.json'
 const PERMISSION_STATE_PATH = 'state/notification-permission.json'
@@ -691,13 +689,7 @@ export class NotificationService {
 
   private notificationPayload(thread: Thread, projectName: string): AgentNotificationPayload {
     const kind: AgentNotificationKind =
-      thread.status === 'completed'
-        ? 'completed'
-        : thread.status === 'awaiting_approval'
-          ? 'attention'
-          : thread.status === 'spec'
-            ? 'spec'
-            : 'error'
+      threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const title =
       kind === 'completed'
         ? 'Agent turn complete'

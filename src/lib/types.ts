@@ -129,27 +129,20 @@ export type ThreadStatus =
   | 'awaiting_approval'
   | 'spec'
   | 'executing'
+  | 'working-paused'
   | 'interrupted'
   | 'completed'
   | 'failed'
 
+import {
+  isThreadBusyStatus,
+  isThreadExecutionActiveStatus,
+  isThreadRetryPausedStatus,
+  threadStatusPolicy
+} from './thread-status-policy'
+
 export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
-  switch (status) {
-    case 'created':
-      return 'todo'
-    case 'planning':
-    case 'executing':
-    case 'awaiting_approval':
-      return 'working'
-    case 'spec':
-      return 'spec'
-    case 'interrupted':
-      return 'done'
-    case 'failed':
-      return 'issue'
-    case 'completed':
-      return 'done'
-  }
+  return threadStatusPolicy(status).scopeSlice
 }
 
 export type ThreadTitleSource = 'default' | 'auto' | 'manual'
@@ -258,7 +251,17 @@ export function isOrchestrationChildThread(thread: Thread): boolean {
 
 /** A harness is actively producing work for this persisted thread. */
 export function isThreadWorking(thread: Thread): boolean {
-  return thread.status === 'planning' || thread.status === 'executing'
+  return isThreadExecutionActiveStatus(thread.status)
+}
+
+/** True while the row should continue presenting an in-progress indicator. */
+export function isThreadBusy(thread: Thread): boolean {
+  return isThreadBusyStatus(thread.status)
+}
+
+/** True when the provider is paused until an automatic retry deadline. */
+export function isThreadRetryPaused(thread: Thread): boolean {
+  return isThreadRetryPausedStatus(thread.status)
 }
 
 /**

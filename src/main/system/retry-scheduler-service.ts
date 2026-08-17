@@ -100,8 +100,8 @@ export class RetrySchedulerService {
   }
 
   /** Record (or refresh) a pending reset retry for a session. */
-  track(record: PendingRetryRecord): void {
-    if (!this.enabled) return
+  track(record: PendingRetryRecord): boolean {
+    if (!this.enabled) return false
     this.pending.set(record.sessionId, record)
     void this.persist()
     Logger.info('Auto-resume scheduled after usage reset', {
@@ -114,6 +114,7 @@ export class RetrySchedulerService {
     // The reset may already have passed — fire without waiting.
     this.tick()
     this.notifyChange()
+    return true
   }
 
   /** Drop a session from the pending set once it resolves or retires. */
@@ -133,6 +134,11 @@ export class RetrySchedulerService {
   /** Number of pending reset retries (tests/logging). */
   get size(): number {
     return this.pending.size
+  }
+
+  /** Whether automatic retry tracking is enabled in General settings. */
+  get isEnabled(): boolean {
+    return this.enabled
   }
 
   stop(): void {

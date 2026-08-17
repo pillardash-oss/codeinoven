@@ -24,6 +24,11 @@ export function clearNotificationAborting(projectId: string, threadId: string): 
   _notificationService?.clearAborting(projectId, threadId)
 }
 
+/** Keep provider-owned retry windows aligned with the power-wake policy. */
+export function updateRetryWakeWindow(sessionId: string, retryAt: number | null): void {
+  _powerWakeService?.onRetryWindowChanged(sessionId, retryAt)
+}
+
 /** Dismiss delivered OS notifications + badge entry for a thread. */
 export function dismissThreadNotifications(projectId: string, threadId: string): void {
   _notificationService?.dismissForThread(projectId, threadId)

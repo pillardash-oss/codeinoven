@@ -12,6 +12,7 @@ import {
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
+import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
 export type ThreadStage = ScopeSlice
 
@@ -63,6 +64,16 @@ export const STAGE_COLORS: Record<ThreadStage, string> = {
   issue: 'var(--color-warning)',
   unread: 'var(--color-thread-unread)',
   done: 'var(--color-thread-done)'
+}
+
+export const STATUS_TONE_COLORS: Record<ThreadStatusTone, string> = {
+  todo: 'var(--color-dimmed)',
+  working: 'var(--color-thread-working)',
+  'working-paused': 'var(--color-thread-working-paused)',
+  attention: 'var(--color-warning)',
+  spec: 'var(--color-thread-spec)',
+  done: 'var(--color-thread-done)',
+  error: 'var(--color-thread-error)'
 }
 
 export const STAGE_ORDER: ThreadStage[] = [

@@ -15,12 +15,28 @@
     isWorking?: boolean
     /** Human-readable current-stage label shown next to the working badge. */
     stageLabel?: string
+    /** Whether the provider is waiting for an automatic retry. */
+    isRetryPaused?: boolean
     /** Overall thread state used to render the approval stage row. */
     threadState?:
-      'unread' | 'read' | 'todo' | 'completed' | 'working' | 'spec' | 'approval' | 'error'
+      | 'unread'
+      | 'read'
+      | 'todo'
+      | 'completed'
+      | 'working'
+      | 'working-paused'
+      | 'spec'
+      | 'approval'
+      | 'error'
   }
 
-  let { thread, isWorking = false, stageLabel = '', threadState = 'read' }: Props = $props()
+  let {
+    thread,
+    isWorking = false,
+    isRetryPaused = false,
+    stageLabel = '',
+    threadState = 'read'
+  }: Props = $props()
 
   /** Project (repo) that owns this thread, resolved for the hover popover. */
   let project = $derived(
@@ -108,6 +124,15 @@
       <dd class="flex items-center gap-1 text-muted">
         <StatusBadge stage="working" animated size="sm" title={stageLabel} />
         {stageLabel}
+      </dd>
+    </div>
+  {/if}
+  {#if isRetryPaused}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-warning">
+        <StatusBadge tone="working-paused" variant="spinner" size="sm" title="Waiting to retry" />
+        Waiting to retry
       </dd>
     </div>
   {/if}

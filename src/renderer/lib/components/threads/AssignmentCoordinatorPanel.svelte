@@ -2,7 +2,13 @@
   import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { AssignmentPlan, AssignmentTask, AssignmentTaskStatus, Thread } from '$shared/types'
+  import {
+    isThreadRetryPaused,
+    type AssignmentPlan,
+    type AssignmentTask,
+    type AssignmentTaskStatus,
+    type Thread
+  } from '$shared/types'
 
   interface Props {
     assignment: AssignmentPlan
@@ -75,11 +81,13 @@
   const workersWorking = $derived(
     threads.some((worker) => worker.status === 'planning' || worker.status === 'executing')
   )
+  const workersRetryPaused = $derived(threads.some((worker) => isThreadRetryPaused(worker)))
   const stalled = $derived(
     assignment.status !== 'stopped' &&
       completed < assignment.content.tasks.length &&
       !coordinatorWorking &&
-      !workersWorking
+      !workersWorking &&
+      !workersRetryPaused
   )
   const auditWorkAvailable = $derived(
     (auditState === 'offered' || auditState === 'failed') && !finalComplete

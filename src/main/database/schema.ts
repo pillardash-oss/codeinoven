@@ -85,7 +85,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   provider_id          TEXT NOT NULL DEFAULT '',
   title                TEXT NOT NULL DEFAULT 'New Thread',
   title_source         TEXT NOT NULL DEFAULT 'default' CHECK(title_source IN ('default','auto','manual')),
-  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','interrupted','completed','failed')),
+  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','working-paused','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
   sort_order           INTEGER,

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Clock, MessagesSquare } from '@lucide/svelte'
   import type { Thread } from '$shared/types'
-  import { isOrchestrationChildThread, isThreadWorking } from '$shared/types'
+  import { isOrchestrationChildThread, isThreadBusy } from '$shared/types'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import CommandPalette from '../actions/CommandPalette.svelte'
@@ -24,7 +24,7 @@
   function isLiveWorking(thread: Thread): boolean {
     return agentRuns.hasSettled(thread.projectId, thread.id)
       ? agentRuns.isBusy(thread.projectId, thread.id)
-      : Boolean(thread.sessionId) && isThreadWorking(thread)
+      : Boolean(thread.sessionId) && isThreadBusy(thread)
   }
 
   function isCandidate(thread: Thread): boolean {
@@ -44,6 +44,7 @@
       return 'Working'
     }
     if (thread.status === 'spec') return 'Spec ready'
+    if (thread.status === 'working-paused') return 'Working paused · retry scheduled'
     if (thread.status === 'awaiting_approval') return 'Needs attention · approval'
     if (thread.status === 'failed') return 'Needs attention · error'
     if (thread.status === 'interrupted') return 'Needs attention · interrupted'
