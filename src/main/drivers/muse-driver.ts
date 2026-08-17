@@ -10,6 +10,7 @@ import type {
   ProviderModel,
   SessionAgentEvent
 } from '../../lib/types'
+import { attachmentReference, attachmentTarget } from './attachment-reference'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
   CliLineParseContext,
@@ -33,8 +34,8 @@ import type { StorageEngine } from '../storage/storage-engine'
  * JSON on stdout and exits when the turn is done. A prior session is resumed
  * with `--session-id <uuid>`.
  *
- * Wire schema (confirmed against Muse Code 0.1.0-R708.1): every line is an
- * envelope `{ record_type, payload_type, payload }`. Meaningful payloads:
+ * Wire schema: every line is an envelope `{ record_type, payload_type, payload }`.
+ * Meaningful payloads:
  *   - `run.output.delta`  → `payload.text` (incremental assistant text)
  *   - `run.terminal.completed` → `payload.terminal` (`completed`|`error`),
  *     `payload.text` (final), `payload.reason`
@@ -49,6 +50,10 @@ import type { StorageEngine } from '../storage/storage-engine'
  * is never surfaced in the JSONL), so multi-turn context is replayed into the
  * prompt instead of relying on native resume.
  * There is no per-record token/usage telemetry.
+ *
+ * Meta's Muse Code launch documentation also demonstrates a local video file
+ * being supplied directly in the terminal and interpreted by Muse Code:
+ * https://research.meta.ai/blog/introducing-muse-code-and-muse-spark-1-2
  */
 
 const MUSE_PROBE_TIMEOUT_MS = 15_000
@@ -58,10 +63,9 @@ const MUSE_PROVIDER_ID = 'meta'
 
 /**
  * Static fallback catalog for the Meta provider. Muse exposes no documented
- * model-list subcommand, so the account's observed default model is advertised
- * directly. The contributor-tier id (`-contributor`) matches what `muse exec`
- * reports via `run.model.configured` on a contributor account; a standard-tier
- * account will need this updated to its own model id.
+ * model-list subcommand, so use the CLI's documented default selection rather
+ * than fabricating an account-tier model id. A successful run can replace this
+ * placeholder with the account's local model catalog.
  */
 const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
@@ -70,11 +74,11 @@ const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
     harnessId: 'muse',
     models: [
       {
-        id: 'muse-spark-1.2-contributor',
+        id: 'default',
         providerId: MUSE_PROVIDER_ID,
         name: 'Muse Spark 1.2',
         reasoning: false,
-        attachment: false,
+        attachment: true,
         toolcall: true
       }
     ]
@@ -133,7 +137,7 @@ async function readMuseModelCatalog(): Promise<ProviderCatalog[]> {
           providerId,
           name: stringValue(row['display_label']) ?? modelId,
           reasoning: false,
-          attachment: false,
+          attachment: true,
           toolcall: true,
           ...(contextLimit === undefined ? {} : { contextWindow: contextLimit })
         },
@@ -538,7 +542,7 @@ export class MuseDriver extends PersistentCliDriver {
     nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
@@ -603,9 +607,26 @@ export class MuseDriver extends PersistentCliDriver {
       args.push('--disable-approval')
     }
 
+    const attachmentReferences: string[] = []
+    for (const attachment of options.attachments) {
+      if (attachment.mime.toLocaleLowerCase().startsWith('image/')) {
+        const target = await attachmentTarget(attachment)
+        if (/^(?:data:|https?:\/\/)/u.test(target)) {
+          throw new Error(
+            `Muse Code requires a local image file for prompt attachments: ${attachment.filename ?? 'image'}`
+          )
+        }
+        // `muse exec` exposes a repeatable --image input for local image files.
+        args.push('--image', target)
+      } else {
+        attachmentReferences.push(await attachmentReference(attachment))
+      }
+    }
+
     const prompt = [
       options.systemPrompt,
       this.buildHistoryBlock(session),
+      attachmentReferences.join('\n\n'),
       escapeMuseMentions(options.text)
     ]
       .filter(Boolean)

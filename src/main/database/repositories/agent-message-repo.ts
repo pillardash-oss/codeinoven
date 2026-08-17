@@ -174,7 +174,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
-    ...(row.origin !== 'legacy' ? { origin: row.origin as AgentMessageOrigin } : {}),
+    origin: row.origin as AgentMessageOrigin,
     ...(row.visibility !== 'conversation'
       ? { visibility: row.visibility as AgentMessageVisibility }
       : {}),
@@ -260,7 +260,7 @@ export function encodeAgentMessage(
   sessionId?: string
 ): EncodedAgentMessage {
   const targetSessionId = sessionId ?? null
-  const origin = message.origin ?? (sessionId ? 'subagent' : 'legacy')
+  const origin = message.origin ?? (sessionId ? 'subagent' : 'provider')
   const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
   const partsJson = JSON.stringify(message.parts)
   const searchText = partsToSearchText(message.parts)

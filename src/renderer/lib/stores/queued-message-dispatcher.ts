@@ -21,10 +21,14 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
-import { rendererRecovery, type QueuedMessageEntry } from '$lib/stores/renderer-recovery.svelte'
+import {
+  rendererRecovery,
+  type QueuedMessageEntry,
+  type StartAfterThreadReference
+} from '$lib/stores/renderer-recovery.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { messageId as createMessageId } from '$shared/id'
-import { INBOX_PROJECT_ID, type AgentEvent, type ThreadSettings } from '$shared/types'
+import { INBOX_PROJECT_ID, type AgentEvent, type Thread, type ThreadSettings } from '$shared/types'
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -44,6 +48,10 @@ class QueuedMessageDispatcher {
         event.type === 'session.idle' ||
         (event.type === 'session.status' && event.status.state === 'idle')
       if (idle) this.#sweep()
+    })
+    subscribe('thread:updated', (...args: unknown[]) => {
+      const thread = args[0] as Thread | undefined
+      if (thread) this.#sweep()
     })
   }
 
@@ -89,6 +97,12 @@ class QueuedMessageDispatcher {
       if (this.#mounted.has(key)) return
       const entry = rendererRecovery.queuedMessageFor(projectId, threadId)
       if (!entry) return
+      if (
+        entry.startAfterThreads.length > 0 &&
+        !(await this.#isStartAfterSatisfied(projectId, entry.startAfterThreads))
+      ) {
+        return
+      }
       if (!(await this.#isIdle(projectId, threadId))) return
       dispatched = entry
       userMessageId = createMessageId()
@@ -140,12 +154,34 @@ class QueuedMessageDispatcher {
   async #isIdle(projectId: string, threadId: string): Promise<boolean> {
     try {
       const status = await invoke('agent:getSessionStatus', projectId, threadId)
-      return status?.state === 'idle'
+      if (status) return status.state === 'idle'
+      const thread = await invoke('thread:get', projectId, threadId)
+      return thread !== null && !['planning', 'executing'].includes(thread.status)
     } catch {
       // Be conservative when state cannot be read: keep the queue parked and
       // let the next idle transition (or opening the thread) retry.
       return false
     }
+  }
+
+  async #isStartAfterSatisfied(
+    projectId: string,
+    references: StartAfterThreadReference[]
+  ): Promise<boolean> {
+    try {
+      const threads = await Promise.all(
+        references.map((reference) => invoke('thread:get', projectId, reference.id))
+      )
+      return threads.every((thread) => thread === null || this.#isTerminalThread(thread))
+    } catch {
+      return false
+    }
+  }
+
+  #isTerminalThread(thread: Thread): boolean {
+    return (
+      thread.status === 'completed' || thread.status === 'failed' || thread.status === 'interrupted'
+    )
   }
 
   /** A user decision gate keeps the queue parked until the user resolves it. */

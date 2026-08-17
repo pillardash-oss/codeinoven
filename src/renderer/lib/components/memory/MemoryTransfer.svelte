@@ -109,18 +109,15 @@
 </script>
 
 {#if variant === 'settings'}
-  <section class="rounded-xl border bg-surface p-4" aria-labelledby="memory-transfer-title">
-    <div class="mb-3">
-      <h2 id="memory-transfer-title" class="text-sm font-semibold text-foreground">
+  <div aria-labelledby="memory-transfer-title">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h2 id="memory-transfer-title" class="text-xs font-semibold text-foreground">
         Transfer memory
       </h2>
-      <p class="mt-0.5 text-xs text-muted">
-        Export a backup, or import one to merge in memories. Importing never deletes existing
-        entries — duplicates are skipped.
-      </p>
+      <span class="text-[11px] text-dimmed">Merges on import — duplicates are skipped</span>
     </div>
 
-    <div class="mb-3 flex items-center gap-2">
+    <div class="flex flex-wrap items-center gap-2">
       <div
         class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
         role="tablist"
@@ -134,57 +131,53 @@
               : 'text-muted hover:text-foreground'}"
             role="tab"
             aria-selected={transferScope === option.value}
-            title="Transfer {option.label.toLowerCase()} memory"
+            title="Export or import {option.label.toLowerCase()} memory"
             onclick={() => (userScope = option.value)}
           >
             {option.label}
           </button>
         {/each}
       </div>
-      <span class="text-xs text-dimmed">
-        Exports <strong class="text-foreground">{kindLabel}</strong> memory
-      </span>
+      <div class="flex items-center gap-2">
+        <button
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          type="button"
+          disabled={busy}
+          title="Export the selected memory scope to a JSON file"
+          onclick={() => void exportMemory()}
+        >
+          {#if busy}
+            <Loader2 size={13} class="animate-spin" />
+          {:else}
+            <Download size={13} />
+          {/if}
+          Export
+        </button>
+        <button
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          type="button"
+          disabled={busy}
+          title="Import a memory export file and merge its entries"
+          onclick={() => void pickImport()}
+        >
+          <Upload size={13} />
+          Import
+        </button>
+      </div>
     </div>
 
     {#if error}
-      <p class="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+      <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
     {/if}
     {#if message}
       <p
-        class="mb-2 break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary"
+        class="mt-2 break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary"
         role="status"
       >
         {message}
       </p>
     {/if}
-
-    <div class="flex items-center gap-2">
-      <button
-        class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-        type="button"
-        disabled={busy}
-        title="Export the selected memory scope to a JSON file"
-        onclick={() => void exportMemory()}
-      >
-        {#if busy}
-          <Loader2 size={13} class="animate-spin" />
-        {:else}
-          <Download size={13} />
-        {/if}
-        Export
-      </button>
-      <button
-        class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-        type="button"
-        disabled={busy}
-        title="Import a memory export file and merge its entries"
-        onclick={() => void pickImport()}
-      >
-        <Upload size={13} />
-        Import
-      </button>
-    </div>
-  </section>
+  </div>
 {:else}
   <ThreadDropdown
     items={[

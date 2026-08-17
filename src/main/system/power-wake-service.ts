@@ -1,13 +1,10 @@
 import { powerSaveBlocker } from 'electron'
-import type { Thread, ThreadStatus } from '../../lib/types'
+import type { Thread } from '../../lib/types'
 import { Logger } from './logger'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { RetrySchedulerService } from './retry-scheduler-service'
-
-/** Thread states that count as "work in progress". */
-const ACTIVE_STATUSES = new Set<ThreadStatus>(['planning', 'executing'])
 
 /**
  * Coordinated work can briefly have no active persisted thread while control
@@ -40,6 +37,7 @@ export class PowerWakeService {
   private enabled = false
   private remoteSessionActive = false
   private retryScheduler: RetrySchedulerService | null = null
+  private readonly retryWakeWindows = new Map<string, number>()
 
   constructor(
     private storage: StorageEngine,
@@ -69,6 +67,16 @@ export class PowerWakeService {
     if (this.enabled) this.refresh()
   }
 
+  /** Track a provider-owned retry window without taking ownership of resume. */
+  onRetryWindowChanged(sessionId: string, retryAt: number | null): void {
+    if (retryAt === null || !Number.isFinite(retryAt)) {
+      this.retryWakeWindows.delete(sessionId)
+    } else {
+      this.retryWakeWindows.set(sessionId, retryAt)
+    }
+    if (this.enabled) this.refresh()
+  }
+
   /** Let the service consider scheduled auto-retries when keeping the device awake. */
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
@@ -83,6 +91,7 @@ export class PowerWakeService {
   /** Release the blocker on shutdown. */
   stop(): void {
     this.cancelScheduledRelease()
+    this.retryWakeWindows.clear()
     this.release()
   }
 
@@ -114,10 +123,15 @@ export class PowerWakeService {
    * the app can retry it unattended, so the device must not sleep through it.
    */
   private hasScheduledRetry(): boolean {
-    return (
-      this.retryScheduler?.hasPendingRetryBefore(Date.now() + SCHEDULED_RETRY_WAKE_WINDOW_MS) ??
-      false
-    )
+    const deadline = Date.now() + SCHEDULED_RETRY_WAKE_WINDOW_MS
+    for (const [sessionId, retryAt] of this.retryWakeWindows) {
+      if (retryAt <= Date.now() - IDLE_RELEASE_DELAY_MS) {
+        this.retryWakeWindows.delete(sessionId)
+        continue
+      }
+      if (retryAt <= deadline) return true
+    }
+    return this.retryScheduler?.hasPendingRetryBefore(deadline) ?? false
   }
 
   private acquire(): void {
@@ -152,9 +166,7 @@ export class PowerWakeService {
   private hasActiveThread(): boolean {
     if (!this.database.isOpen()) return false
     try {
-      return new ThreadRepo(this.database)
-        .listAll()
-        .some((thread) => !thread.archived && ACTIVE_STATUSES.has(thread.status))
+      return new ThreadRepo(this.database).hasActive()
     } catch (error) {
       Logger.error('Power wake: could not query active threads', error)
       return false

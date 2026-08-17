@@ -157,6 +157,8 @@
   function threadDot(thread: Thread): string {
     if (thread.status === 'failed') return 'bg-thread-error'
     if (thread.status === 'awaiting_approval') return 'bg-thread-pinned'
+    if (thread.status === 'working-paused') return 'bg-warning'
+    if (thread.status === 'spec') return 'bg-thread-spec'
     if (mobileState.isWorking(thread)) return 'bg-thread-working'
     if (!thread.read) return 'bg-thread-unread'
     if (thread.status === 'completed') return 'bg-thread-done'

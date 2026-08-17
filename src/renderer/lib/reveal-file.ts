@@ -5,6 +5,7 @@ import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { toast } from 'svelte-sonner'
 import type { ProjectFileEntry } from '$shared/types'
+import { fileUrlToPath } from '$lib/mime'
 
 async function ensureProjectFilesReady(projectId: string): Promise<void> {
   const activeThreadId = contextSidebarState.threadIdForProject(projectId)
@@ -60,6 +61,30 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
   const relativePath = relativeProjectPath(projectPath, path)
   const entry = await exactEntry(projectId, relativePath)
   if (entry) await revealEntry(projectId, entry)
+}
+
+/** Route an explicit local file URL to the in-app tree or the OS file manager. */
+export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
+  if (!projectId || !url.startsWith('file://')) return
+
+  const projectPath = workspaceState.activeProject?.path
+  if (!projectPath) return
+
+  const absolutePath = fileUrlToPath(url)
+  const normalizedProjectPath = normalizeCitationPath(projectPath)
+  const normalizedFilePath = normalizeCitationPath(absolutePath)
+  if (
+    normalizedFilePath === normalizedProjectPath ||
+    normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
+  ) {
+    await revealFileInAppTree(projectId, absolutePath)
+    return
+  }
+
+  const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
+  if (!revealed) {
+    toast.error('This local file is outside the active project or no longer exists.')
+  }
 }
 
 /**

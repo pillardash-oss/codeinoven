@@ -7,6 +7,7 @@ import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { modelKey } from '../../lib/model-keys'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -32,11 +33,11 @@ import {
   validateMemoryConfig,
   validateMemoryExportKind
 } from '../chat/memory-service'
-import { harnessLoadsAgentsMd } from '../agents/harness-registry'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
+import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../lib/agent-behavior'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
@@ -293,6 +294,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'preferredEditor',
   'memory',
   'agentDefaults',
+  'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
   'updateChannel',
@@ -1043,6 +1045,15 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.agentDefaults = validateAgentDefaults(value.agentDefaults)
   }
 
+  if ('agentBehaviorPrompt' in value) {
+    patch.agentBehaviorPrompt = validateBoundedString(
+      value.agentBehaviorPrompt,
+      'Agent behavior prompt',
+      1,
+      AGENT_BEHAVIOR_PROMPT_MAX_LENGTH
+    )
+  }
+
   if ('autoDownloadUpdates' in value) {
     if (typeof value.autoDownloadUpdates !== 'boolean') {
       throw new TypeError('autoDownloadUpdates must be a boolean')
@@ -1409,6 +1420,7 @@ export function registerIpcHandlers(
         const projects = await projectManager.listProjects()
         return [
           join(getConfigRoot(), 'chats'),
+          join(getConfigRoot(), 'chat-artifacts'),
           ...projects.flatMap((project) => [
             join(getConfigRoot(), 'projects', project.id, 'spec-context', 'attachments'),
             join(getConfigRoot(), 'projects', project.id, 'threads')
@@ -1533,14 +1545,9 @@ export function registerIpcHandlers(
                   ? 'Muse Code'
                   : 'OpenCode'
     const harnessId = thread?.settings?.harnessId ?? 'opencode'
-    const loadsAgentsMd =
-      options.harnessManifestService === undefined
-        ? harnessLoadsAgentsMd(harnessId)
-        : await options.harnessManifestService.resolveLoadsAgentsMd(harnessId)
     const driverInfo = {
       id: harnessId,
-      name: driverName,
-      loadsAgentsMd
+      name: driverName
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
@@ -1556,7 +1563,11 @@ export function registerIpcHandlers(
         SPEC_IMPLEMENT_SYSTEM_PROMPT,
         MERMAID_OUTPUT_INSTRUCTION
       },
-      mode
+      mode,
+      (await storage.getConfig()).agentBehaviorPrompt,
+      thread?.settings?.providerId && thread.settings.modelId
+        ? modelKey(harnessId, thread.settings.providerId, thread.settings.modelId)
+        : undefined
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -1613,6 +1624,7 @@ export function registerIpcHandlers(
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
         source:
           typeof opts.source === 'string' ? (opts.source as MemoryEntry['source']) : undefined,
+        modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
       })
@@ -1669,6 +1681,7 @@ export function registerIpcHandlers(
             ? (opts.priority as MemoryEntry['priority'])
             : undefined,
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
+        modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
       })
@@ -2349,7 +2362,7 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     const assignment = await assignmentEngine.makeAuditAvailable(validProjectId, validThreadId)
-    await threadManager.setStatus(validProjectId, validThreadId, 'awaiting_approval')
+    await threadManager.setStatus(validProjectId, validThreadId, 'spec')
     await threadManager.setAuditState(validProjectId, validThreadId, 'offered')
     return assignment
   })
@@ -2791,6 +2804,70 @@ export function registerIpcHandlers(
     }
   })
 
+  ipcMain.handle('dialog:pickFiles', async (_event, rawScope: unknown) => {
+    try {
+      const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+
+      const config = await storage.getConfig()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Attach Files',
+        defaultPath: config.lastAttachmentDialogPath,
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'All Files', extensions: ['*'] },
+          {
+            name: 'Images',
+            extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp']
+          },
+          {
+            name: 'Documents',
+            extensions: [
+              'pdf',
+              'doc',
+              'docx',
+              'xls',
+              'xlsx',
+              'ppt',
+              'pptx',
+              'txt',
+              'csv',
+              'md',
+              'json',
+              'xml',
+              'yaml',
+              'yml'
+            ]
+          },
+          { name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'avi', 'mkv'] },
+          { name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac'] },
+          { name: 'Archives', extensions: ['zip', 'tar', 'gz', '7z', 'rar'] }
+        ]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return []
+
+      config.lastAttachmentDialogPath = dirname(result.filePaths[0])
+      const attachmentDirectory = scope ? await attachmentStorageDirectory(scope) : null
+      const retainedPaths: string[] = []
+      for (const selectedPath of result.filePaths) {
+        const retainedPath = attachmentDirectory
+          ? await retainTemporaryAttachment(selectedPath, attachmentDirectory)
+          : selectedPath
+        await privilegedIpc.registerUserSelectedFile(retainedPath)
+        retainedPaths.push(retainedPath)
+      }
+      await storage.saveConfig(config)
+      return retainedPaths
+    } catch (error) {
+      Logger.error('dialog:pickFiles failed:', error)
+      return []
+    }
+  })
+
   ipcMain.handle('dialog:pickImage', async () => {
     try {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
@@ -2947,7 +3024,17 @@ export function registerIpcHandlers(
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-    ipcMain.handle('project:list', () => projectManager.listProjects())
+    ipcMain.handle('project:list', async () => {
+      const projects = await projectManager.listProjects()
+      // Index every local project's files in the background so the first
+      // search is instant instead of building the whole index on demand.
+      for (const project of projects) {
+        if (project.source === 'local' && project.path.trim()) {
+          void projectFilesService.prewarmProject(project.id)
+        }
+      }
+      return projects
+    })
     ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
     ipcMain.handle('scope:get', (_, projectId: unknown) =>
       scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
@@ -2961,6 +3048,8 @@ export function registerIpcHandlers(
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
       const project = await projectManager.updateProject(projectId, input)
       projectFilesService.invalidateProject(projectId)
+      // The root may have changed; warm the index and re-point the watcher.
+      void projectFilesService.prewarmProject(projectId)
       return project
     }
   )
@@ -2977,7 +3066,7 @@ export function registerIpcHandlers(
       }
     }
     await projectManager.deleteProject(projectId)
-    projectFilesService.invalidateProject(projectId)
+    projectFilesService.disposeProject(projectId)
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
@@ -3003,12 +3092,14 @@ export function registerIpcHandlers(
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
     projectManager.reorderProjects(validateStringArray(orderedIds, 'Ordered IDs'))
   )
-  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) =>
-    projectFilesService.listDirectory(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativeDirectory, 'Project directory', true)
-    )
-  )
+  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) => {
+    const validatedProjectId = validateEntityId(projectId, 'Project ID')
+    const directory = requireString(relativeDirectory, 'Project directory', true)
+    if (directory === '') {
+      void projectFilesService.prewarmProject(validatedProjectId)
+    }
+    return projectFilesService.listDirectory(validatedProjectId, directory)
+  })
   ipcMain.handle(
     'projectFiles:search',
     (_, projectId: unknown, query: unknown, category: unknown) => {
@@ -4574,8 +4665,8 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
   if (!options.hydrationHandlersRegistered) {
-    // Bounded hydration query: legacy archived rows never cross IPC and the
-    // payload is capped, with the selected project ordered first so the
+    // Bounded hydration query: archived rows never cross IPC and the payload
+    // is capped, with the selected project ordered first so the
     // visible workspace renders before the rest of the workspace data.
     ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
       const options = isRecord(rawOptions) ? rawOptions : {}
@@ -4700,13 +4791,6 @@ export function registerIpcHandlers(
     }
   }
 
-  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
-    const validProjectId = validateEntityId(projectId, 'Project ID')
-    const validThreadId = validateEntityId(threadId, 'Thread ID')
-    const thread = await threadManager.getThread(validProjectId, validThreadId)
-    if (!thread) return null
-    return noteRepo.get(validThreadId)
-  })
   ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')

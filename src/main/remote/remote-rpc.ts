@@ -132,7 +132,7 @@ export interface RemoteRpcServices {
   /**
    * Device credential service used to enforce per-device scopes and local
    * step-up approval for remote invocations. Optional so the desktop-reuse
-   * dispatcher and legacy tests can construct it without device state.
+   * dispatcher and isolated tests can construct it without device state.
    */
   credentials?: DeviceCredentialService
 }
@@ -1107,7 +1107,7 @@ export class RemoteRpcDispatcher {
         const projectId = this.string(args[0])
         const threadId = this.string(args[1])
         const assignment = await this.assignmentEngine.makeAuditAvailable(projectId, threadId)
-        await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval')
+        await this.threadManager.setStatus(projectId, threadId, 'spec')
         return assignment
       }
 
@@ -1446,6 +1446,8 @@ export class RemoteRpcDispatcher {
       case 'dialog:pickFile':
       case 'clipboard:saveImage':
         return null
+      case 'dialog:pickFiles':
+        return []
       case 'shell:revealPath':
       case 'shell:openExternal':
         return undefined

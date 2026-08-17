@@ -22,7 +22,8 @@ import {
   type QueuedResponseReference,
   type RecoveryStorage,
   type RendererRecoverySnapshot,
-  type SelectedThreadReference
+  type SelectedThreadReference,
+  type StartAfterThreadReference
 } from './renderer-recovery'
 
 export type {
@@ -32,6 +33,7 @@ export type {
   RecoveryStorage,
   RendererRecoverySnapshot,
   SelectedThreadReference,
+  StartAfterThreadReference,
   SettingsSection
 } from './renderer-recovery'
 export {
@@ -40,26 +42,6 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
-/**
- * Whether two persisted model keys reference the same underlying model, ignoring
- * how a key was re-serialized. A legacy 2-segment key (`providerId:modelId`) and
- * its harness-scoped reconstruction (`:providerId:modelId`, produced when an
- * empty harness is re-encoded) both identify the same model, so toggling must
- * treat them as equal — otherwise "remove favorite" re-adds instead of removing.
- *
- * Harness is compared too so distinct harnesses stay distinct; only an absent
- * (undefined) harness and an explicitly empty one are considered equivalent,
- * which is the exact mismatch the picker's remove button can produce.
- */
-function sameModelIdentity(left: string, right: string): boolean {
-  const a = parseModelKey(left)
-  const b = parseModelKey(right)
-  if (a.providerId !== b.providerId || a.modelId !== b.modelId) return false
-  const harnessA = a.harnessId ?? ''
-  const harnessB = b.harnessId ?? ''
-  return harnessA === harnessB
-}
-
 /**
  * Restart-safe renderer navigation and composer state.
  *
@@ -105,7 +87,8 @@ export class RendererRecoveryStore {
         attachments: [],
         projectReferences: [],
         taskReferences: [],
-        promptReferences: []
+        promptReferences: [],
+        startAfterThreads: []
       }
     return (
       this.composerDrafts[recoveryDraftKey(projectId, threadId)] ?? {
@@ -113,7 +96,8 @@ export class RendererRecoveryStore {
         attachments: [],
         projectReferences: [],
         taskReferences: [],
-        promptReferences: []
+        promptReferences: [],
+        startAfterThreads: []
       }
     )
   }
@@ -197,6 +181,7 @@ export class RendererRecoveryStore {
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
       entry.promptReferences.length > 0 ||
+      entry.startAfterThreads.length > 0 ||
       this.queuedMessageFor(projectId, threadId) !== null
     )
   }
@@ -211,6 +196,10 @@ export class RendererRecoveryStore {
 
   taskReferencesFor(projectId: string, threadId: string): PromptAssignmentTaskReference[] {
     return this.entryFor(projectId, threadId).taskReferences
+  }
+
+  startAfterThreadsFor(projectId: string, threadId: string): StartAfterThreadReference[] {
+    return this.entryFor(projectId, threadId).startAfterThreads
   }
 
   setDraft(
@@ -237,7 +226,8 @@ export class RendererRecoveryStore {
       attachments: [],
       projectReferences: [],
       taskReferences: [],
-      promptReferences: []
+      promptReferences: [],
+      startAfterThreads: []
     }
     const nextAttachments = attachments ?? current.attachments
     const nextProjectReferences = projectReferences ?? current.projectReferences
@@ -259,7 +249,8 @@ export class RendererRecoveryStore {
       nextAttachments.length === 0 &&
       nextProjectReferences.length === 0 &&
       nextTaskReferences.length === 0 &&
-      nextPromptReferences.length === 0
+      nextPromptReferences.length === 0 &&
+      current.startAfterThreads.length === 0
     ) {
       delete next[key]
     } else {
@@ -272,7 +263,8 @@ export class RendererRecoveryStore {
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,
         taskReferences: nextTaskReferences,
-        promptReferences: nextPromptReferences
+        promptReferences: nextPromptReferences,
+        startAfterThreads: current.startAfterThreads
       }
     }
     this.composerDrafts = next
@@ -283,7 +275,66 @@ export class RendererRecoveryStore {
   }
 
   clearDraft(projectId: string, threadId: string): void {
+    this.clearStartAfterThreads(projectId, threadId)
     this.setDraft(projectId, threadId, '', [], [], [], [])
+  }
+
+  /** Persist the source threads the next message waits for before it starts. */
+  setStartAfterThreads(
+    projectId: string,
+    threadId: string,
+    references: StartAfterThreadReference[]
+  ): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+
+    const unique = references.filter(
+      (reference, index) =>
+        isRecoveryIdentifier(reference.id) &&
+        reference.title.length > 0 &&
+        references.findIndex((existing) => existing.id === reference.id) === index
+    )
+    if (unique.length !== references.length) return
+
+    const key = recoveryDraftKey(projectId, threadId)
+    const current = this.entryFor(projectId, threadId)
+    if (current.startAfterThreads.length === unique.length) {
+      const same =
+        current.startAfterThreads.length === unique.length &&
+        current.startAfterThreads.every(
+          (reference, index) =>
+            reference.id === unique[index]?.id && reference.title === unique[index]?.title
+        )
+      if (same) return
+    }
+    const next = { ...this.composerDrafts }
+    if (unique.length === 0) {
+      if (!(key in next)) return
+      if (
+        current.text.length === 0 &&
+        current.attachments.length === 0 &&
+        current.projectReferences.length === 0 &&
+        current.taskReferences.length === 0 &&
+        current.promptReferences.length === 0
+      ) {
+        delete next[key]
+      } else {
+        next[key] = {
+          ...current,
+          startAfterThreads: []
+        }
+      }
+    } else {
+      next[key] = {
+        ...current,
+        startAfterThreads: unique
+      }
+    }
+    this.composerDrafts = next
+    this.persist()
+  }
+
+  clearStartAfterThreads(projectId: string, threadId: string): void {
+    this.setStartAfterThreads(projectId, threadId, [])
   }
 
   /** The persisted response-selection annotations attached to a thread's composer draft. */
@@ -372,7 +423,8 @@ export class RendererRecoveryStore {
       promptReferences: entry.promptReferences,
       projectReferences: entry.projectReferences,
       presentation: entry.presentation,
-      taskReferences: entry.taskReferences
+      taskReferences: entry.taskReferences,
+      startAfterThreads: entry.startAfterThreads
     }
     this.queuedMessages = next
     this.persist()
@@ -402,9 +454,7 @@ export class RendererRecoveryStore {
   }
 
   toggleFavorite(modelKey: string): void {
-    const idx = this.favoriteModels.findIndex(
-      (k) => k === modelKey || sameModelIdentity(k, modelKey)
-    )
+    const idx = this.favoriteModels.indexOf(modelKey)
     if (idx === -1) {
       this.favoriteModels = [...this.favoriteModels, modelKey]
     } else {
@@ -441,9 +491,7 @@ export class RendererRecoveryStore {
   }
 
   toggleChatFavorite(modelKey: string): void {
-    const idx = this.chatFavoriteModels.findIndex(
-      (k) => k === modelKey || sameModelIdentity(k, modelKey)
-    )
+    const idx = this.chatFavoriteModels.indexOf(modelKey)
     if (idx === -1) {
       this.chatFavoriteModels = [...this.chatFavoriteModels, modelKey]
     } else {
@@ -486,8 +534,8 @@ export class RendererRecoveryStore {
 
   setAuditModel(modelKey: string): void {
     this.auditModelKey = modelKey
-    const { providerId, modelId } = parseModelKey(modelKey)
-    if (providerId && modelId && !this.isFavorite(modelKey)) {
+    const parsed = parseModelKey(modelKey)
+    if (parsed && !this.isFavorite(modelKey)) {
       this.addRecentModel(modelKey)
       return
     }

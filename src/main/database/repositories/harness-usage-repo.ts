@@ -795,24 +795,40 @@ export class HarnessUsageRepo {
    * added to whatever the thread's harness row already holds — never double
    * counted across retries, compaction, or restart.
    *
-   * The ledger is read once up front and every write is batched into a single
-   * worker transaction (primary-connection fallback), so the accumulation never
-   * blocks the Electron main thread and issues O(messages) statements in one
-   * atomic batch instead of a per-message read + writes.
+   * Only candidate ids from this turn are checked against the ledger, on the
+   * worker connection, and every write is batched into one transaction. Work is
+   * therefore bounded by the current turn rather than the thread's lifetime.
    */
   async accumulateTurn(
     projectId: string,
     threadId: string,
     messages: AgentMessage[]
   ): Promise<{ ok: boolean; error?: string }> {
-    const counted = new Set(
-      this.db
-        .all<{ message_id: string }>(
-          'SELECT message_id FROM harness_usage_messages WHERE thread_id = ?',
-          threadId
-        )
-        .map((row) => row.message_id)
-    )
+    const candidateIds = [
+      ...new Set(
+        messages
+          .filter((message) => message.role === 'assistant' && Boolean(message.harnessId))
+          .map((message) => message.id)
+      )
+    ]
+    if (candidateIds.length === 0) return { ok: true }
+
+    const counted = new Set<string>()
+    const LEDGER_QUERY_CHUNK_SIZE = 400
+    for (let index = 0; index < candidateIds.length; index += LEDGER_QUERY_CHUNK_SIZE) {
+      const chunk = candidateIds.slice(index, index + LEDGER_QUERY_CHUNK_SIZE)
+      const placeholders = chunk.map(() => '?').join(',')
+      const result = await this.db.queryViaWorker(
+        `SELECT message_id FROM harness_usage_messages
+         WHERE thread_id = ? AND message_id IN (${placeholders})`,
+        [threadId, ...chunk],
+        chunk.length
+      )
+      if (!result.ok) return { ok: false, error: result.error }
+      for (const row of result.rows) {
+        if (typeof row['message_id'] === 'string') counted.add(row['message_id'])
+      }
+    }
 
     const statements: Array<{ sql: string; params: unknown[] }> = []
     for (const message of messages) {

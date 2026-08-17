@@ -27,6 +27,7 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'project:get',
   'project:getIcon',
   'project:list',
+  'note:get',
   'scope:get',
   'thread:get',
   'thread:listRecent'

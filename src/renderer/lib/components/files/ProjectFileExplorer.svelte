@@ -1,5 +1,8 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import { motionDuration } from '$lib/motion'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -18,6 +21,7 @@
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
@@ -28,6 +32,7 @@
     projectId: string
     projectName: string
     projectState: ProjectFilesState
+    onWidthChange: (width: number, persist: boolean) => void
     selectedPath: string | null
     lastTurnPaths: string[]
     activeCheckpointId: string | null
@@ -40,6 +45,7 @@
     projectId,
     projectName,
     projectState,
+    onWidthChange,
     selectedPath,
     lastTurnPaths,
     activeCheckpointId,
@@ -52,6 +58,16 @@
   let lastTurnOnly = $state(false)
   let autoFiltered = $state(false)
   let searchRequestId = 0
+  /** Directories the user explicitly collapsed while a filter (search query or
+   *  last-turn mode) is active. Filtered trees force-render matching folders
+   *  regardless of expansion state, so a deliberate fold must be remembered
+   *  here to actually hide the subtree again. Cleared whenever a new filter
+   *  session starts (query change, filter close, last-turn toggle). */
+  let collapsedOverrides = new SvelteSet<string>()
+  /** Directories expanded by the current search, so closing the filter can
+   *  revert them. Search expansions are transient view state: persisting them
+   *  would leave huge subtrees (e.g. `.cio`) marked expanded across sessions. */
+  let searchExpandedDirectories = new SvelteSet<string>()
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
@@ -71,6 +87,9 @@
   let dropExpandTimer: ReturnType<typeof setTimeout> | undefined
   let dropHoverPath: string | null = null
   let treeBusy = $state(false)
+  let resizing = $state(false)
+  let stopResize: (() => void) | null = null
+  const filterActive = $derived(Boolean(filterQuery.trim()) || lastTurnOnly)
   /** When true, the next reveal scroll is suppressed. Set during a pointer
    *  interaction on the tree so a user clicking a row isn't yanked around;
    *  cleared on a macrotask so external reveals still auto-scroll. */
@@ -113,9 +132,9 @@
 
   $effect(() => {
     const query = filterQuery.trim()
-    if (!query) return
-
     const requestId = ++searchRequestId
+
+    if (!query) return
 
     const timer = setTimeout(async () => {
       try {
@@ -130,11 +149,19 @@
           }
         }
 
-        const sorted = [...dirsToLoad].sort((a, b) => a.split('/').length - b.split('/').length)
-        for (const dir of sorted) {
-          projectFilesWorkspace.markDirectoryExpanded(projectId, dir)
-          await projectFilesWorkspace.loadDirectory(projectId, dir)
+        const directories = [...dirsToLoad]
+        for (const directory of directories) {
+          if (!projectState.expandedDirectories[directory]) {
+            searchExpandedDirectories.add(directory)
+          }
         }
+
+        // Expand + load every matching folder in one batch. Marking each
+        // directory expanded and persisting the explorer snapshot per folder
+        // serialized the whole snapshot to localStorage once per expansion and
+        // froze the renderer on large trees. Search-driven expansions are
+        // transient, so they do not pollute the persisted explorer state.
+        await projectFilesWorkspace.expandAndLoadDirectories(projectId, directories, false)
       } catch {
         // search failed silently
       }
@@ -146,7 +173,69 @@
   function toggleLastTurnFilter(): void {
     lastTurnOnly = !lastTurnOnly
     autoFiltered = false
+    clearCollapsedOverrides()
   }
+
+  function clearSearchExpansions(): void {
+    if (searchExpandedDirectories.size === 0) return
+    projectFilesWorkspace.collapseDirectories(projectId, [...searchExpandedDirectories])
+    searchExpandedDirectories.clear()
+  }
+
+  function clearCollapsedOverrides(): void {
+    if (collapsedOverrides.size > 0) collapsedOverrides.clear()
+  }
+
+  function handleResizeKeydown(event: KeyboardEvent): void {
+    const delta = event.key === 'ArrowLeft' ? -16 : event.key === 'ArrowRight' ? 16 : 0
+    if (delta === 0) return
+    event.preventDefault()
+    onWidthChange(clampFileExplorerWidth(projectState.explorerWidth + delta), true)
+  }
+
+  function startResize(event: PointerEvent): void {
+    event.preventDefault()
+    event.stopPropagation()
+    if (stopResize) return
+
+    resizing = true
+    const startX = event.clientX
+    const startWidth = projectState.explorerWidth
+    let nextWidth = startWidth
+
+    const finish = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      stopResize = null
+      resizing = false
+      onWidthChange(nextWidth, true)
+    }
+    const onMove = (moveEvent: PointerEvent): void => {
+      nextWidth = clampFileExplorerWidth(startWidth + startX - moveEvent.clientX)
+      onWidthChange(nextWidth, false)
+    }
+
+    stopResize = finish
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+  }
+
+  function handleFilterInput(event: Event): void {
+    if (!(event.currentTarget instanceof HTMLInputElement)) return
+    const nextQuery = event.currentTarget.value
+    if (nextQuery === filterQuery) return
+    searchRequestId += 1
+    clearSearchExpansions()
+    clearCollapsedOverrides()
+    filterQuery = nextQuery
+  }
+
+  onDestroy(() => {
+    stopResize?.()
+    clearSearchExpansions()
+  })
 
   async function openFilter(): Promise<void> {
     filterOpen = true
@@ -157,8 +246,10 @@
 
   function closeFilter(clearReveal = true): void {
     searchRequestId += 1
+    clearSearchExpansions()
     filterQuery = ''
     filterOpen = false
+    clearCollapsedOverrides()
     if (clearReveal) revealedSearchPath = null
   }
 
@@ -201,6 +292,40 @@
     }, 0)
   }
 
+  /** Toggle a directory row, tracking the collapse while a filter is active so
+   *  folding during search actually hides the subtree (the filter's force-render
+   *  would otherwise keep it visible). Only one of `expandedDirectories` and
+   *  `collapsedOverrides` is true for a path at a time. */
+  async function toggleDirectoryRow(entry: ProjectFileEntry): Promise<void> {
+    const filterActive = Boolean(filterQuery.trim()) || lastTurnOnly
+    const wasExpanded = Boolean(projectState.expandedDirectories[entry.path])
+    if (!filterActive) {
+      searchExpandedDirectories.delete(entry.path)
+      collapsedOverrides.delete(entry.path)
+    } else {
+      // Once the user touches a search-expanded directory, it is no longer
+      // owned by the search session. This preserves an explicit user expansion
+      // when the filter closes and prevents a later cleanup from undoing it.
+      searchExpandedDirectories.delete(entry.path)
+      if (wasExpanded) {
+        // Record the override before the store call so the chevron and subtree
+        // change in the same render, rather than leaving a one-tick mismatch.
+        collapsedOverrides.add(entry.path)
+        const prefix = `${entry.path}/`
+        const transientDescendants = [...searchExpandedDirectories].filter((path) =>
+          path.startsWith(prefix)
+        )
+        if (transientDescendants.length > 0) {
+          projectFilesWorkspace.collapseDirectories(projectId, transientDescendants, false)
+          for (const path of transientDescendants) searchExpandedDirectories.delete(path)
+        }
+      } else {
+        collapsedOverrides.delete(entry.path)
+      }
+    }
+    await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+  }
+
   async function selectEntry(
     entry: ProjectFileEntry,
     mode: 'normal' | 'preview' = 'preview'
@@ -209,17 +334,15 @@
     projectFilesWorkspace.setRevealedPath(projectId, entry.path)
     projectFilesWorkspace.setSelection(projectId, [entry.path])
     projectFilesWorkspace.setSelectionAnchor(projectId, entry.path)
-    const selectedFromSearch = filterOpen && Boolean(filterQuery.trim())
+    // Selecting a file result keeps the filter active so the user can preview
+    // multiple matches. Folder rows in the filtered tree are ordinary tree
+    // rows: clicking one must toggle it, or the user can never fold/unfold
+    // folders while searching.
+    const selectedFromSearch = filterOpen && Boolean(filterQuery.trim()) && entry.kind === 'file'
     if (selectedFromSearch) {
       revealedSearchPath = entry.path
-      closeFilter(false)
-      if (entry.kind === 'directory') {
-        await projectFilesWorkspace.revealDirectory(projectId, entry.path)
-      } else {
-        await projectFilesWorkspace.revealFile(projectId, entry.path)
-      }
     } else if (entry.kind === 'directory') {
-      await projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+      await toggleDirectoryRow(entry)
     }
 
     if (entry.kind === 'file') {
@@ -232,7 +355,7 @@
           entry.path,
           'diff'
         )
-      } else if (mode === 'normal' || selectedFromSearch) {
+      } else if (mode === 'normal') {
         await projectFilesWorkspace.openFile(projectId, entry.path)
       } else {
         await projectFilesWorkspace.openFilePreview(projectId, entry.path)
@@ -363,7 +486,7 @@
       event.preventDefault()
       if (entry.kind === 'directory') {
         if (!projectState.expandedDirectories[entry.path]) {
-          void projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+          void toggleDirectoryRow(entry)
         } else {
           const child = visibleRows[currentIndex + 1]
           if (child) {
@@ -378,7 +501,7 @@
     if (key === 'ArrowLeft') {
       event.preventDefault()
       if (entry.kind === 'directory' && projectState.expandedDirectories[entry.path]) {
-        void projectFilesWorkspace.toggleDirectory(projectId, entry.path)
+        void toggleDirectoryRow(entry)
       } else {
         const parent = parentDirectory(entry.path)
         const parentIndex = parent ? rowIndexByPath.get(parent) : undefined
@@ -557,7 +680,17 @@
     try {
       if (anyDirExpanded) {
         projectFilesWorkspace.collapseAllDirectories(projectId)
+        searchExpandedDirectories.clear()
+        // With a filter active the matching directories would force-render
+        // again; remember them as collapsed so the whole tree actually folds.
+        if (filterQuery.trim() || lastTurnOnly) {
+          collapsedOverrides.clear()
+          for (const directory of Object.keys(projectState.entriesByDirectory)) {
+            if (directory) collapsedOverrides.add(directory)
+          }
+        }
       } else {
+        collapsedOverrides.clear()
         await projectFilesWorkspace.expandAllDirectories(projectId)
       }
     } finally {
@@ -759,25 +892,41 @@
     return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
   }
 
-  function directoryMatchesQuery(path: string): boolean {
+  /** For every loaded directory, whether any entry in its subtree matches the
+   *  active filter. Computed once bottom-up (deepest folders first, so a
+   *  parent's result reuses its children's) per filter change instead of being
+   *  re-derived recursively on every tree render — the recursion ran per row
+   *  per render and made each directory expansion quadratic. */
+  let filterMatchesByDirectory = $derived.by((): Record<string, boolean> => {
+    const matches: Record<string, boolean> = {}
     const query = filterQuery.trim().toLocaleLowerCase()
-    if (!query) return true
+    const loaded = projectState.entriesByDirectory
+    if (!query) return matches
 
-    const children = projectState.entriesByDirectory[path]
-    if (!children) return false
+    const directories = Object.keys(loaded).sort(
+      (left, right) => right.split('/').length - left.split('/').length
+    )
+    for (const directory of directories) {
+      const children = loaded[directory] ?? []
+      const anyMatch = children.some((entry) => {
+        const matchesTurn =
+          !lastTurnOnly ||
+          (entry.kind === 'file'
+            ? lastTurnPathSet.has(entry.path)
+            : directoryContainsLastTurnFile(entry.path))
+        if (!matchesTurn) return false
+        return (
+          entry.name.toLocaleLowerCase().includes(query) ||
+          (entry.kind === 'directory' && (matches[entry.path] ?? false))
+        )
+      })
+      matches[directory] = anyMatch
+    }
+    return matches
+  })
 
-    return children.some((entry) => {
-      const matchesTurn =
-        !lastTurnOnly ||
-        (entry.kind === 'file'
-          ? lastTurnPathSet.has(entry.path)
-          : directoryContainsLastTurnFile(entry.path))
-      return (
-        matchesTurn &&
-        (entry.name.toLocaleLowerCase().includes(query) ||
-          (entry.kind === 'directory' && directoryMatchesQuery(entry.path)))
-      )
-    })
+  function directoryMatchesQuery(path: string): boolean {
+    return filterMatchesByDirectory[path] ?? false
   }
 
   function visibleEntries(directory: string): ProjectFileEntry[] {
@@ -799,10 +948,15 @@
   }
 
   function shouldRenderDirectory(path: string): boolean {
-    if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
+    // A deliberate fold during a filter session hides the subtree even when
+    // the filter would otherwise force-render it as a matching ancestor.
+    if (collapsedOverrides.has(path)) return false
     if (projectState.expandedDirectories[path]) return true
-    if (!filterQuery.trim() || !projectState.entriesByDirectory[path]) return false
-    return directoryMatchesQuery(path)
+    if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
+    // Search matching controls which directory rows are visible. The search
+    // effect already expands and loads every ancestor of each result, so a
+    // matching but collapsed directory must not render its descendants.
+    return false
   }
 
   async function loadLastTurnDirectories(paths: string[]): Promise<void> {
@@ -963,13 +1117,20 @@
         </button>
       </div>
     {:else if entry.kind === 'directory' && shouldRenderDirectory(entry.path)}
-      {@render directoryRows(entry.path, depth + 1)}
+      {#if filterActive}
+        {@render directoryRows(entry.path, depth + 1)}
+      {:else}
+        <div transition:slide={{ duration: motionDuration(140), easing: cubicOut }}>
+          {@render directoryRows(entry.path, depth + 1)}
+        </div>
+      {/if}
     {/if}
   {/each}
 {/snippet}
 
 <aside
-  class="relative flex h-full min-h-0 w-52 min-w-44 max-w-[45%] shrink-0 flex-col border-l border-border bg-surface"
+  class="relative flex h-full min-h-0 min-w-44 shrink-0 flex-col border-l border-border bg-surface"
+  style:width={`${projectState.explorerWidth}px`}
   aria-label="Project file explorer"
   data-region="file-tree"
   ondragover={handleDragOver}
@@ -977,6 +1138,17 @@
   ondrop={handleDrop}
   onpaste={handlePaste}
 >
+  <button
+    type="button"
+    class="absolute inset-y-0 -left-0.5 z-20 w-1.5 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20 {resizing
+      ? 'bg-primary/30'
+      : ''}"
+    tabindex="0"
+    aria-label={`Resize file tree, ${projectState.explorerWidth} pixels wide`}
+    title="Resize file tree"
+    onpointerdown={startResize}
+    onkeydown={handleResizeKeydown}
+  ></button>
   {#if dropActive}
     <div
       class="pointer-events-none absolute inset-x-0 top-0 z-30 flex justify-center"
@@ -1044,7 +1216,8 @@
         type="search"
         class="h-7 min-w-0 flex-1 rounded-lg bg-app px-2 text-[11px] text-foreground outline-none placeholder:text-dimmed"
         placeholder="Search files and folders…"
-        bind:value={filterQuery}
+        value={filterQuery}
+        oninput={handleFilterInput}
         onkeydown={(event: KeyboardEvent) => event.key === 'Escape' && closeFilter()}
       />
       <button
@@ -1095,7 +1268,8 @@
   >
     <div
       bind:this={treeScroll}
-      class="min-h-0 flex-1 overflow-auto py-1"
+      class="min-h-0 flex-1 overflow-auto py-1 [&::-webkit-scrollbar]:hidden"
+      style:scrollbar-width="none"
       role="tree"
       tabindex="0"
       onclick={handleTreeContainerClick}

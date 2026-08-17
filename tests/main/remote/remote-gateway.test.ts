@@ -7,10 +7,15 @@ import { connect as tlsConnect, type TLSSocket } from 'node:tls'
 import { request as httpsRequest } from 'node:https'
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 import { RemoteGateway, type GatewayHandlers } from '../../../src/main/remote/remote-gateway'
-import { createLanTransport, type TransportEvent } from '../../../src/renderer/lib/remote/transport'
+import {
+  createLanTransport,
+  type LanDeviceCredentials,
+  type TransportEvent
+} from '../../../src/renderer/lib/remote/transport'
 import {
   createMemoryDeviceKeyStore,
-  loadOrCreateDeviceKeyMaterial
+  loadOrCreateDeviceKeyMaterial,
+  type DeviceKeyMaterial
 } from '../../../src/renderer/lib/remote/device-identity'
 import {
   DeviceCredentialService,
@@ -22,6 +27,21 @@ import { REMOTE_DEVICE_SQL } from '../../../src/main/database/schema'
 import type { RemoteDeviceInfo } from '../../../src/main/remote/remote-types'
 
 const SECRET = 'shared-peer-secret'
+
+function testDevice(
+  material: DeviceKeyMaterial,
+  deviceId: string,
+  deviceName: string
+): LanDeviceCredentials {
+  return {
+    deviceId,
+    deviceName,
+    authVersion: material.authVersion,
+    signingKey: material.signingKey,
+    signingPublicJwk: material.signingPublicJwk,
+    agreementPublicJwk: material.agreementPublicJwk
+  }
+}
 
 function makeRawDatabase(): Database {
   const raw = new DatabaseConstructor(':memory:')
@@ -69,6 +89,7 @@ async function makeGateway(
   port: number
   localPort: number
   devices: RemoteDeviceInfo[][]
+  deviceMaterial: DeviceKeyMaterial
   staticRoot: string
   certificateDir: string
 }> {
@@ -80,9 +101,13 @@ async function makeGateway(
   await writeFile(join(staticRoot, 'remote.html'), '<h1>phone client</h1>', 'utf8')
   await writeFile(join(staticRoot, 'manifest.webmanifest'), '{"name":"test"}', 'utf8')
   await writeFile(join(staticRoot, 'service-worker.js'), 'self.onfetch=()=>{}', 'utf8')
+  const deviceMaterial = await loadOrCreateDeviceKeyMaterial({
+    store: createMemoryDeviceKeyStore()
+  })
   const devices: RemoteDeviceInfo[][] = []
   const handlers: GatewayHandlers = {
-    onDevicesChange: (next) => devices.push(next)
+    onDevicesChange: (next) => devices.push(next),
+    authenticateDevice: async () => ({ accepted: true })
   }
   const gateway = new RemoteGateway({
     port: 0,
@@ -95,7 +120,7 @@ async function makeGateway(
   })
   if (beforeStart) await beforeStart(staticRoot, certificateDir)
   const { port, localPort } = await gateway.start()
-  return { gateway, port, localPort, devices, staticRoot, certificateDir }
+  return { gateway, port, localPort, devices, staticRoot, certificateDir, deviceMaterial }
 }
 
 function waitForMessage(events: TransportEvent[], data: string, timeoutMs = 3_000): Promise<void> {
@@ -461,16 +486,15 @@ describe('RemoteGateway', () => {
     }
   })
 
-  it('accepts a loopback WebSocket session with the correct PEER_SECRET_AUTH', async () => {
-    const { gateway, localPort, devices } = await makeGateway()
+  it('accepts a loopback WebSocket session after device authentication', async () => {
+    const { gateway, localPort, devices, deviceMaterial } = await makeGateway()
     try {
       const events: TransportEvent[] = []
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: (event) => events.push(event)
       })
       const result = await transport.connect()
@@ -488,15 +512,19 @@ describe('RemoteGateway', () => {
     }
   })
 
-  it('rejects a WebSocket session with a wrong PEER_SECRET_AUTH', async () => {
-    const { gateway, localPort, devices } = await makeGateway()
+  it('rejects a WebSocket session when device authentication fails', async () => {
+    const { gateway, localPort, devices, deviceMaterial } = await makeGateway(SECRET, {
+      handlers: {
+        onDevicesChange: () => undefined,
+        authenticateDevice: async () => ({ accepted: false })
+      }
+    })
     try {
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
-        authSecret: 'wrong-secret',
+        authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       const result = await transport.connect()
@@ -508,14 +536,13 @@ describe('RemoteGateway', () => {
   })
 
   it('allows multiple simultaneous phone devices', async () => {
-    const { gateway, localPort, devices } = await makeGateway()
+    const { gateway, localPort, devices, deviceMaterial } = await makeGateway()
     try {
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       await expect(first.connect()).resolves.toBe('open')
@@ -524,8 +551,7 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-2',
-        deviceName: 'Android phone',
+        device: testDevice(deviceMaterial, 'phone-2', 'Android phone'),
         onEvent: () => undefined
       })
       await expect(second.connect()).resolves.toBe('open')
@@ -549,14 +575,13 @@ describe('RemoteGateway', () => {
   })
 
   it('takes over a reconnect from the same device id', async () => {
-    const { gateway, localPort } = await makeGateway()
+    const { gateway, localPort, deviceMaterial } = await makeGateway()
     try {
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       await expect(first.connect()).resolves.toBe('open')
@@ -565,8 +590,7 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       await expect(second.connect()).resolves.toBe('open')
@@ -587,14 +611,13 @@ describe('RemoteGateway', () => {
   })
 
   it('disconnects a specific device on request', async () => {
-    const { gateway, localPort } = await makeGateway()
+    const { gateway, localPort, deviceMaterial } = await makeGateway()
     try {
       const first = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       await expect(first.connect()).resolves.toBe('open')
@@ -603,8 +626,7 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-2',
-        deviceName: 'Android phone',
+        device: testDevice(deviceMaterial, 'phone-2', 'Android phone'),
         onEvent: () => undefined
       })
       await expect(second.connect()).resolves.toBe('open')
@@ -651,14 +673,13 @@ describe('RemoteGateway', () => {
   })
 
   it('accepts a null-origin (desktop renderer) upgrade', async () => {
-    const { gateway, localPort, devices } = await makeGateway()
+    const { gateway, localPort, devices, deviceMaterial } = await makeGateway()
     try {
       const transport = createLanTransport({
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
-        deviceId: 'phone-1',
-        deviceName: 'iPhone',
+        device: testDevice(deviceMaterial, 'phone-1', 'iPhone'),
         onEvent: () => undefined
       })
       await expect(transport.connect()).resolves.toBe('open')
@@ -688,7 +709,7 @@ describe('RemoteGateway', () => {
     }
   })
 
-  it('stops cleanly after a rejected handshake (no double-end)', async () => {
+  it('stops cleanly after a handshake without device credentials', async () => {
     const { gateway, localPort } = await makeGateway()
     const transport = createLanTransport({
       peer: { host: '127.0.0.1', port: localPort },
@@ -788,9 +809,10 @@ describe('RemoteGateway', () => {
 
   it('routes RPC invokes to the handler and delivers results back to the peer', async () => {
     const received: string[] = []
-    const { gateway, localPort } = await makeGateway(SECRET, {
+    const { gateway, localPort, deviceMaterial } = await makeGateway(SECRET, {
       handlers: {
         onDevicesChange: () => undefined,
+        authenticateDevice: async () => ({ accepted: true }),
         onRpc: async (channel, args) => {
           received.push(`${channel}:${args.join(',')}`)
           return { ok: true, result: { echo: channel } }
@@ -803,6 +825,7 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        device: testDevice(deviceMaterial, 'phone-1', 'Test phone'),
         onEvent: (event) => events.push(event)
       })
       await expect(transport.connect()).resolves.toBe('open')
@@ -844,8 +867,11 @@ describe('RemoteGateway', () => {
   })
 
   it('delivers forwarded events to the live peer via sendToPeer', async () => {
-    const { gateway, localPort } = await makeGateway(SECRET, {
-      handlers: { onDevicesChange: () => undefined }
+    const { gateway, localPort, deviceMaterial } = await makeGateway(SECRET, {
+      handlers: {
+        onDevicesChange: () => undefined,
+        authenticateDevice: async () => ({ accepted: true })
+      }
     })
     try {
       const events: TransportEvent[] = []
@@ -853,6 +879,7 @@ describe('RemoteGateway', () => {
         peer: { host: '127.0.0.1', port: localPort },
         authSecret: SECRET,
         scheme: 'ws',
+        device: testDevice(deviceMaterial, 'phone-1', 'Test phone'),
         onEvent: (event) => events.push(event)
       })
       await expect(transport.connect()).resolves.toBe('open')

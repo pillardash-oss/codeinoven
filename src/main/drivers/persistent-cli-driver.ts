@@ -32,6 +32,12 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  isPermissionToolName,
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 
 export interface TitleModelCandidate {
   providerId: string
@@ -146,6 +152,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
+  /** Provider-neutral interaction cards already surfaced for this driver instance. */
+  private interactionRequests = new Set<string>()
 
   constructor(protected readonly storage: StorageEngine) {}
 
@@ -442,6 +450,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return session.messages
   }
 
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const session = await this.requireSession(projectPath, sessionId)
+    const startIndex = session.messages.findLastIndex((message) => message.id === messageId)
+    return startIndex >= 0 ? session.messages.slice(startIndex) : session.messages
+  }
+
   /** Resolve the provider-native session id needed by provider maintenance APIs. */
   protected async nativeSessionId(projectPath: string, sessionId: string): Promise<string> {
     const session = await this.requireSession(projectPath, sessionId)
@@ -544,6 +562,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
     this.titleTurnWaiters.clear()
     this.titleSessions.clear()
+    this.interactionRequests.clear()
     this.eventCallback = null
   }
 
@@ -700,7 +719,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (!result) return
     if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
     if (result.messages) this.mergeMessages(session, result.messages)
-    for (const event of result.events ?? []) {
+    for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
       if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
         this.structuredProcessIssues.add(session.id)
       } else if (event.type === 'session.status') {
@@ -755,23 +774,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
     if (event.type === 'message.part.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.part.messageID)
+      const message = session.messages.findLast(
+        (candidate) => candidate.id === event.part.messageID
+      )
       if (!message) return
-      const index = message.parts.findIndex((part) => part.id === event.part.id)
+      const index = message.parts.findLastIndex((part) => part.id === event.part.id)
       if (index === -1) message.parts.push(event.part)
       else message.parts[index] = event.part
       return
     }
     if (event.type === 'message.part.delta') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
-      const part = message?.parts.find((candidate) => candidate.id === event.partId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
       if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
         part.text += event.delta
       }
       return
     }
     if (event.type === 'message.completed') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         message.completedAt = Date.now()
         message.error = event.error
@@ -785,7 +806,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
     if (event.type === 'usage.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
@@ -797,6 +818,80 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         this.estimateMissingCost(message)
       }
     }
+  }
+
+  /** Promote JSONL question/approval tool parts into the shared interaction stream. */
+  protected normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized: SessionAgentEvent[] = []
+    for (const event of events) {
+      normalized.push(event)
+      if (event.type === 'question.asked') {
+        this.interactionRequests.add(this.interactionKey('question', sessionId, event.requestId))
+        continue
+      }
+      if (event.type !== 'message.part.updated') continue
+      const part = event.part
+      if (part.type === 'question') {
+        const requestId = this.interactionRequestId('question', sessionId, part.callID ?? part.id)
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: [{ ...part.question, requestId }],
+          tool: { messageID: part.messageID, callID: part.callID ?? part.id }
+        })
+        continue
+      }
+      if (part.type !== 'tool') continue
+      const active = part.state.status === 'pending' || part.state.status === 'running'
+      if (!active) continue
+      const requestId = this.interactionRequestId('interaction', sessionId, part.callID || part.id)
+      if (isQuestionToolName(part.tool)) {
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: normalizeAgentQuestions(part.state.input),
+          tool: { messageID: part.messageID, callID: part.callID }
+        })
+        continue
+      }
+      if (!isPermissionToolName(part.tool)) continue
+      const key = this.interactionKey('permission', sessionId, requestId)
+      if (this.interactionRequests.has(key)) continue
+      this.interactionRequests.add(key)
+      normalized.push({
+        type: 'permission.asked',
+        sessionId,
+        permission: {
+          id: requestId,
+          sessionId,
+          permission: part.tool,
+          patterns: permissionPatterns(part.state.input),
+          metadata: { tool: part.tool, input: part.state.input }
+        }
+      })
+    }
+    return normalized
+  }
+
+  private interactionRequestId(kind: string, sessionId: string, providerId: string): string {
+    return `${this.id}-${kind}-${sessionId}-${providerId}`
+      .replace(/[^a-zA-Z0-9._-]/gu, '-')
+      .slice(0, 256)
+  }
+
+  private interactionKey(kind: string, sessionId: string, requestId: string): string {
+    return `${kind}:${sessionId}:${requestId}`
   }
 
   /**

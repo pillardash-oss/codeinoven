@@ -4,6 +4,7 @@ import { StorageEngine } from '../storage/storage-engine'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { NoteRepo } from '../database/repositories/note-repo'
 import { validateBoundedInteger, validateEntityId } from './ipc-validation'
 import type { Thread } from '../../lib/types'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
@@ -25,6 +26,7 @@ export function registerHydrationIpcHandlers(
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)
+  const noteRepo = new NoteRepo(database)
 
   ipcMain.handle('config:get', () => storage.getConfig())
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
@@ -41,6 +43,14 @@ export function registerHydrationIpcHandlers(
     // its row before answering so the renderer never reads a phantom thread.
     await threadCreation?.awaitReady(threadId)
     return threadManager.getThread(projectId, threadId)
+  })
+  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    await threadCreation?.awaitReady(validThreadId)
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (!thread) return null
+    return noteRepo.get(validThreadId)
   })
   ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
     const options = isRecord(rawOptions) ? rawOptions : {}

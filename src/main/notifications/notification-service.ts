@@ -10,6 +10,7 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
 import { isOrchestrationChildThread, type Thread, type ThreadStatus } from '../../lib/types'
+import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
@@ -18,11 +19,9 @@ import type {
   ThreadClickedPayload
 } from '../../lib/ipc-contract'
 
-const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set([
-  'completed',
-  'awaiting_approval',
-  'failed'
-])
+const NOTIFIABLE_STATUSES: ReadonlySet<ThreadStatus> = new Set(
+  THREAD_STATUSES.filter((status) => threadStatusPolicy(status).notificationKind !== undefined)
+)
 const MAX_RETAINED_NOTIFICATIONS = 200
 const BADGE_STATE_PATH = 'state/notification-badge.json'
 const PERMISSION_STATE_PATH = 'state/notification-permission.json'
@@ -202,7 +201,7 @@ export class NotificationService {
       id: `${APP_SLUG}-permission-verify`,
       groupId: `${APP_SLUG}-system`,
       title: `${APP_NAME} notifications`,
-      body: 'You will be notified when an agent finishes, needs attention, or encounters an error.',
+      body: 'You will be notified when an agent finishes, has a specification ready, needs attention, or encounters an error.',
       silent: true
     })
     this.permissionVerifyInFlight = true
@@ -375,7 +374,7 @@ export class NotificationService {
     await this.restoreBadgeState()
 
     try {
-      const threads = this.threadRepo.listAll()
+      const threads = await this.threadRepo.listAllViaWorker()
       const validKeys = new Set<string>()
       for (const thread of threads) {
         if (
@@ -690,23 +689,23 @@ export class NotificationService {
 
   private notificationPayload(thread: Thread, projectName: string): AgentNotificationPayload {
     const kind: AgentNotificationKind =
-      thread.status === 'completed'
-        ? 'completed'
-        : thread.status === 'awaiting_approval'
-          ? 'attention'
-          : 'error'
+      threadStatusPolicy(thread.status).notificationKind ?? 'error'
     const title =
       kind === 'completed'
         ? 'Agent turn complete'
         : kind === 'attention'
           ? 'Agent needs your attention'
-          : 'Agent encountered an error'
+          : kind === 'spec'
+            ? 'Specification ready for review'
+            : 'Agent encountered an error'
     const body =
       kind === 'completed'
         ? `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? `${thread.title} is waiting for your input in ${projectName}.`
-          : `${thread.title} stopped with an error in ${projectName}.`
+          : kind === 'spec'
+            ? `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+            : `${thread.title} stopped with an error in ${projectName}.`
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
@@ -724,14 +723,16 @@ export class NotificationService {
     kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
     projectName: string
   ): AgentNotificationPayload {
-    const title = kind === 'completed' ? 'Side chat complete' : 'Side chat failed'
+    const notificationKind: AgentNotificationKind =
+      kind === 'completed' ? 'chat-completed' : 'error'
+    const title = kind === 'completed' ? 'Chat response available' : 'Chat response failed'
     const body =
       kind === 'completed'
-        ? `${thread.title} — your side chat is ready in ${projectName}.`
-        : `${thread.title} — your side chat stopped with an error in ${projectName}.`
+        ? `${thread.title} — your chat response is ready in ${projectName}.`
+        : `${thread.title} — your chat response stopped with an error in ${projectName}.`
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-temp-${temporaryChatId}-${Date.now()}`,
-      kind,
+      kind: notificationKind,
       title,
       body,
       projectId: thread.projectId,

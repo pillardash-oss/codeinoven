@@ -12,10 +12,10 @@ import type {
   MemoryProposal,
   MemoryScope,
   MemorySource,
-  SpecContextReference,
-  Thread
+  SpecContextReference
 } from '../../lib/types'
 import { INBOX_PROJECT_ID } from '../../lib/types'
+import { isHarnessScopedModelKey } from '../../lib/model-keys'
 import { StorageEngine } from '../storage/storage-engine'
 
 const MEMORY_FILENAME = 'memory.md'
@@ -230,10 +230,18 @@ export interface AuxiliaryUsageMeasurement {
   costStatus: 'known' | 'estimated' | 'unavailable'
 }
 
-const VALID_CATEGORIES: MemoryCategory[] = ['behavioral', 'project-rule', 'identity', 'preference']
+const VALID_CATEGORIES: MemoryCategory[] = [
+  'behavioral',
+  'project-rule',
+  'identity',
+  'preference',
+  'models'
+]
 const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
 const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
 const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
+const MAX_MODEL_KEYS = 50
+const MODEL_KEY_MAX_CHARACTERS = 512
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
 const SECRET_PATTERNS = [
@@ -242,12 +250,10 @@ const SECRET_PATTERNS = [
   /\b(?:api[_-]?key|access[_-]?token|secret|password)\s*[:=]\s*["']?[^\s"']{8,}/iu
 ]
 
-/** Parse memory entries from a Markdown file with ## headings. Backward compatible. */
+/** Parse memory entries from the current marked Markdown format. */
 function parseMemoryMd(content: string): MemoryEntry[] {
   const entries: MemoryEntry[] = []
-  const blocks = content.includes(ENTRY_MARKER)
-    ? content.split(ENTRY_MARKER).slice(1)
-    : content.split(/(?=^## )/mu)
+  const blocks = content.split(ENTRY_MARKER).slice(1)
   for (const [index, block] of blocks.entries()) {
     const match = block.match(/^\s*##\s+(.+?)\s*$/mu)
     if (!match) continue
@@ -276,6 +282,7 @@ function parseMemoryMd(content: string): MemoryEntry[] {
     const priority = metadata.get('priority')
     const scope = metadata.get('scope')
     const source = metadata.get('source')
+    const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
 
     entries.push({
       id: SAFE_ID.test(metadata.get('id') ?? '') ? metadata.get('id')! : fallbackId,
@@ -294,7 +301,8 @@ function parseMemoryMd(content: string): MemoryEntry[] {
       frequency: safeInteger(metadata.get('frequency'), 1),
       lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
       projectId: metadata.get('projectid') || undefined,
-      threadId: metadata.get('threadid') || undefined
+      threadId: metadata.get('threadid') || undefined,
+      ...(modelKeys.length > 0 ? { modelKeys } : {})
     })
   }
   return entries
@@ -317,6 +325,7 @@ function serializeMemoryMd(entries: MemoryEntry[]): string {
       ]
       if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
       if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
+      if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)
       return `${ENTRY_MARKER}\n## ${entry.label}\n\n${meta.join('\n')}\n\n${entry.content}`
     })
     .join('\n\n')
@@ -375,6 +384,10 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
     )
     const scope = enumValue(entry.scope, VALID_SCOPES, 'global', `Memory entry ${index} scope`)
     const source = enumValue(entry.source, VALID_SOURCES, 'manual', `Memory entry ${index} source`)
+    const modelKeys = validateModelKeys(entry.modelKeys, `Memory entry ${index} model keys`)
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError(`Memory entry ${index} requires at least one model`)
+    }
     const frequency = optionalSafeInteger(entry.frequency, 1, `Memory entry ${index} frequency`, 1)
     const lastReinforced = optionalSafeInteger(
       entry.lastReinforced,
@@ -397,7 +410,8 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       frequency,
       lastReinforced,
       projectId,
-      threadId
+      threadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
   })
   const aggregate = entries.reduce((total, entry) => total + entry.content.length, 0)
@@ -410,60 +424,13 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
   return { enabled: value.enabled, chatEnabled, entries }
 }
 
-/** Migrate old config.json memory entries to memory.md — called on first read. */
-async function migrateMemoryEntries(storage: StorageEngine): Promise<void> {
-  const config = await storage.read<AppConfig>('config.json')
-  const oldEntries = config?.memory?.entries
-  if (!oldEntries || oldEntries.length === 0) return
-
-  const existingMd = (await storage.readRaw(MEMORY_FILENAME)) ?? ''
-  const existingEntries = parseMemoryMd(existingMd)
-  const existingLabels = new Set(existingEntries.map((e) => e.label))
-  const newEntries = oldEntries.filter((entry) => !existingLabels.has(entry.label))
-
-  if (newEntries.length > 0) {
-    await storage.writeRaw(MEMORY_FILENAME, serializeMemoryMd([...existingEntries, ...newEntries]))
-  }
-
-  // Clear entries from config.json
-  config.memory = {
-    enabled: config.memory.enabled,
-    chatEnabled: config.memory.chatEnabled ?? true,
-    entries: []
-  }
-  await storage.write('config.json', config)
-}
-
-/**
- * Migrate legacy `global`-scoped entries to the `projects` scope.
- *
- * The `global` scope previously meant "everywhere". With chat memory the
- * `global` scope now applies to both projects and chats, so one-time migrate
- * existing global entries to `projects` (all projects only) so pre-existing
- * preferences never leak into the newly introduced chats.
- */
-async function migrateLegacyGlobalScope(storage: StorageEngine): Promise<void> {
-  const existingMd = (await storage.readRaw(MEMORY_FILENAME)) ?? ''
-  const entries = parseMemoryMd(existingMd)
-  if (!entries.some((entry) => entry.scope === 'global')) return
-  const migrated = entries.map((entry) =>
-    entry.scope === 'global' ? { ...entry, scope: 'projects' as const } : entry
-  )
-  await storage.writeRaw(MEMORY_FILENAME, serializeMemoryMd(migrated))
-}
-
 /** Formats only explicit enabled preferences and snapshots them for approved specs. */
 export class MemoryService {
-  private readonly migration: Promise<void>
   private readonly lastExtractionAt = new Map<string, number>()
   private readonly extractionWindows = new Map<string, { start: number; count: number }>()
   private readonly auxiliaryUsage: AuxiliaryUsageEntry[] = []
 
-  constructor(private readonly storage = new StorageEngine()) {
-    this.migration = migrateMemoryEntries(storage)
-      .then(() => migrateLegacyGlobalScope(storage))
-      .catch(() => undefined)
-  }
+  constructor(private readonly storage = new StorageEngine()) {}
 
   private memoryFilePath(projectId?: string, threadId?: string): string {
     return join(this.memoryDirectory(projectId, threadId), MEMORY_FILENAME)
@@ -486,17 +453,14 @@ export class MemoryService {
   }
 
   private async readMemoryMd(projectId?: string, threadId?: string): Promise<string> {
-    await this.migration
     return (await this.storage.readRaw(this.memoryFilePath(projectId, threadId))) ?? ''
   }
 
   private async writeMemoryMd(text: string, projectId?: string, threadId?: string): Promise<void> {
-    await this.migration
     await this.storage.writeRaw(this.memoryFilePath(projectId, threadId), text)
   }
 
   async current(projectId?: string, threadId?: string): Promise<MemoryConfig> {
-    await this.migration
     const config = await this.storage.read<AppConfig>('config.json')
     const isChat = projectId === 'inbox'
 
@@ -715,14 +679,14 @@ export class MemoryService {
     return { added, skipped }
   }
 
-  async formatCurrent(projectId?: string, threadId?: string): Promise<string> {
-    return this.format(await this.current(projectId, threadId), projectId, threadId)
+  async formatCurrent(projectId?: string, threadId?: string, modelKey?: string): Promise<string> {
+    return this.format(await this.current(projectId, threadId), projectId, threadId, modelKey)
   }
 
-  format(config: MemoryConfig, projectId?: string, threadId?: string): string {
+  format(config: MemoryConfig, projectId?: string, threadId?: string, modelKey?: string): string {
     if (!config.enabled) return ''
     const entries = config.entries.filter((entry) =>
-      entry.enabled ? entryAppliesToContext(entry, projectId, threadId) : false
+      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey) : false
     )
     if (entries.length === 0) return ''
 
@@ -761,11 +725,18 @@ export class MemoryService {
     ].join('\n')
   }
 
-  async snapshotCurrent(projectId?: string, threadId?: string): Promise<SpecContextReference[]> {
+  async snapshotCurrent(
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string
+  ): Promise<SpecContextReference[]> {
     const config = await this.current(projectId, threadId)
     if (!config.enabled) return []
     return config.entries
-      .filter((entry) => entry.enabled && entryAppliesToContext(entry, projectId, threadId))
+      .filter(
+        (entry) =>
+          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
+      )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
         type: 'memory',
@@ -795,6 +766,7 @@ export class MemoryService {
       priority?: MemoryPriority
       scope?: MemoryScope
       source?: MemorySource
+      modelKeys?: string[]
       projectId?: string
       threadId?: string
     } = {}
@@ -808,6 +780,10 @@ export class MemoryService {
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Memory priority')
     const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Memory scope')
     const source = enumValue(options.source, VALID_SOURCES, 'manual', 'Memory source')
+    const modelKeys = validateModelKeys(options.modelKeys, 'Memory model keys')
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError('Model memories require at least one model')
+    }
     const location = locationForScope(scope, options.projectId, options.threadId)
     const now = Date.now()
     const entry: MemoryEntry = {
@@ -823,7 +799,8 @@ export class MemoryService {
       frequency: 1,
       lastReinforced: now,
       projectId: location.entryProjectId,
-      threadId: location.entryThreadId
+      threadId: location.entryThreadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
 
     const entries = await this.getEntries(location.projectId, location.threadId)
@@ -911,6 +888,7 @@ export class MemoryService {
       category?: MemoryCategory
       priority?: MemoryPriority
       scope?: MemoryScope
+      modelKeys?: string[]
       projectId?: string
       threadId?: string
     } = {}
@@ -928,6 +906,10 @@ export class MemoryService {
     )
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
     const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Proposal scope')
+    const modelKeys = validateModelKeys(options.modelKeys, 'Proposal model keys')
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError('Model proposals require at least one model')
+    }
     const location = locationForScope(scope, options.projectId, options.threadId)
     const queueProjectId = location.projectId
     const proposals = await this.readProposals(queueProjectId)
@@ -954,6 +936,7 @@ export class MemoryService {
       scope,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
       createdAt: now,
       expiresAt: now + MEMORY_LIMITS.proposalExpiryMs,
       status: 'pending'
@@ -975,6 +958,7 @@ export class MemoryService {
       priority: proposal.priority,
       scope: proposal.scope,
       source: 'auto-detected',
+      modelKeys: proposal.modelKeys,
       projectId: proposal.projectId,
       threadId: proposal.threadId
     })
@@ -1024,32 +1008,6 @@ export class MemoryService {
     } catch {
       // Directory may not exist
     }
-  }
-
-  /** Delete config task directories whose SQLite task row no longer exists. */
-  async deleteOrphanedThreadDirectories(threads: Thread[]): Promise<number> {
-    const validByProject = new Map<string, Set<string>>()
-    for (const thread of threads) {
-      const ids = validByProject.get(thread.projectId) ?? new Set<string>()
-      ids.add(thread.id)
-      validByProject.set(thread.projectId, ids)
-    }
-
-    let deleted = 0
-    const removeUnknown = async (projectId: string, base: string): Promise<void> => {
-      const valid = validByProject.get(projectId) ?? new Set<string>()
-      for (const threadId of await this.storage.listDirectories(base)) {
-        if (valid.has(threadId)) continue
-        await this.storage.remove(join(base, threadId))
-        deleted++
-      }
-    }
-
-    for (const projectId of await this.storage.listDirectories(PROJECTS_DIR)) {
-      await removeUnknown(projectId, join(PROJECTS_DIR, projectId, THREADS_DIR))
-    }
-    await removeUnknown('inbox', join(CHATS_CWD_DIR, THREADS_DIR))
-    return deleted
   }
 
   /** Generate a verification checklist from critical and high priority entries. */
@@ -1483,22 +1441,61 @@ function assertEntryLocation(entry: MemoryEntry, projectId?: string, threadId?: 
   }
 }
 
-function entryAppliesToContext(entry: MemoryEntry, projectId?: string, threadId?: string): boolean {
-  switch (entry.scope) {
-    case 'global':
-      return true
-    case 'projects':
-      return Boolean(projectId && projectId !== 'inbox')
-    case 'project':
-      return Boolean(entry.projectId && entry.projectId === projectId)
-    case 'thread':
-      return Boolean(
-        entry.projectId &&
-        entry.threadId &&
-        entry.projectId === projectId &&
-        entry.threadId === threadId
-      )
-    case 'chat':
-      return projectId === 'inbox'
+function entryAppliesToContext(
+  entry: MemoryEntry,
+  projectId?: string,
+  threadId?: string,
+  modelKey?: string
+): boolean {
+  const scopeMatches = (() => {
+    switch (entry.scope) {
+      case 'global':
+        return true
+      case 'projects':
+        return Boolean(projectId && projectId !== 'inbox')
+      case 'project':
+        return Boolean(entry.projectId && entry.projectId === projectId)
+      case 'thread':
+        return Boolean(
+          entry.projectId &&
+          entry.threadId &&
+          entry.projectId === projectId &&
+          entry.threadId === threadId
+        )
+      case 'chat':
+        return projectId === 'inbox'
+    }
+  })()
+  if (!scopeMatches) return false
+  return entry.category !== 'models' || Boolean(modelKey && entry.modelKeys?.includes(modelKey))
+}
+
+function parseModelKeysMetadata(value: string | undefined): string[] {
+  if (!value) return []
+  try {
+    return validateModelKeys(JSON.parse(value) as unknown, 'Memory model keys')
+  } catch {
+    return []
   }
+}
+
+function validateModelKeys(value: unknown, label: string): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
+  if (value.length > MAX_MODEL_KEYS) {
+    throw new TypeError(`${label} supports at most ${MAX_MODEL_KEYS} models`)
+  }
+  const keys = value.map((candidate, index) => {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.includes('\0') ||
+      candidate.trim().length === 0 ||
+      candidate.length > MODEL_KEY_MAX_CHARACTERS ||
+      !isHarnessScopedModelKey(candidate.trim())
+    ) {
+      throw new TypeError(`${label} item ${index} is invalid`)
+    }
+    return candidate.trim()
+  })
+  return [...new Set(keys)]
 }

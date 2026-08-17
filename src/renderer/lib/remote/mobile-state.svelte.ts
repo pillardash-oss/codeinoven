@@ -21,6 +21,7 @@ import {
   coordinatorHasActiveDelegates,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
+  isThreadWorking,
   type Project,
   type Thread
 } from '$shared/types'
@@ -34,7 +35,9 @@ function threadSortKey(thread: Thread): number {
   if (
     thread.status === 'planning' ||
     thread.status === 'executing' ||
+    thread.status === 'working-paused' ||
     thread.status === 'awaiting_approval' ||
+    thread.status === 'spec' ||
     thread.status === 'failed' ||
     thread.status === 'interrupted'
   ) {
@@ -313,9 +316,7 @@ class MobileState {
 
   isWorking(thread: Thread): boolean {
     return (
-      thread.status === 'planning' ||
-      thread.status === 'executing' ||
-      coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
+      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
     )
   }
 }

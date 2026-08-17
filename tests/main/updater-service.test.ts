@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppConfig } from '../../src/lib/types'
 import type { StorageEngine } from '../../src/main/storage/storage-engine'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -58,6 +59,7 @@ function defaultConfig(): AppConfig {
     preferredEditor: 'system',
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
     updateChannel: 'stable',

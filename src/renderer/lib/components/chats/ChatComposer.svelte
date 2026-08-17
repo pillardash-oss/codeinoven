@@ -50,6 +50,7 @@
   import { placeCaretAtEnd } from '../shared/rich-markdown'
   import AttachmentPreview from './AttachmentPreview.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
+  import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
@@ -78,8 +79,11 @@
     AssignmentTask,
     AgentModelSelection,
     AttachmentStorageScope,
-    UsageEfficiencyKpis
+    UsageEfficiencyKpis,
+    Thread
   } from '$shared/types'
+
+  type StartAfterSelection = Pick<Thread, 'id' | 'title'>
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -90,7 +94,8 @@
       attachments: PromptAttachment[],
       direct?: boolean,
       projectReferences?: PromptProjectReference[],
-      taskReferences?: PromptAssignmentTaskReference[]
+      taskReferences?: PromptAssignmentTaskReference[],
+      startAfterThreads?: StartAfterSelection[]
     ) => void
     disabled?: boolean
     /** True while the agent is running — turns the send button into a stop button. */
@@ -117,6 +122,8 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
+    /** Active thread ID used to prevent selecting the current thread as a dependency. */
+    threadId?: string
     /** Project or app scratch destination for pasted/ephemeral attachment files. */
     attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
@@ -138,6 +145,12 @@
     /** Restart-safe Assignment task references tagged for the next prompt. */
     initialTaskReferences?: PromptAssignmentTaskReference[]
     onTaskReferencesChange?: (references: PromptAssignmentTaskReference[]) => void
+    /** Restart-safe source threads the next prompt waits for before it starts. */
+    initialStartAfterThreads?: StartAfterSelection[]
+    /** Persists or clears the source threads selected for the next prompt. */
+    onStartAfterThreadsChange?: (threads: StartAfterSelection[]) => void
+    /** Opens a selected source thread from the composer badge popover. */
+    onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
     /** Assistant-response excerpts referenced by the next message. */
     references?: readonly PromptReference[]
     onRemoveReference?: (id: string) => void
@@ -217,6 +230,7 @@
     harnessId = 'opencode',
     projectContext,
     projectId = null,
+    threadId = '',
     attachmentStorage,
     onSwitchProject,
     fileTagProjectId,
@@ -230,6 +244,9 @@
     onProjectReferencesChange,
     initialTaskReferences = [],
     onTaskReferencesChange,
+    initialStartAfterThreads = [],
+    onStartAfterThreadsChange,
+    onOpenStartAfterThread,
     references = [],
     onRemoveReference,
     onRemoveAllReferences,
@@ -384,11 +401,22 @@
   let permissionMenuOpen = $state(false)
   /** Open state of the thinking-level dropdown inside the shared model picker. */
   let thinkingMenuOpen = $state(false)
+  let startAfterPickerOpen = $state(false)
+  // The composer is remounted by the parent when a restore is required, so
+  // capture the persisted dependencies exactly once at construction.
+  // svelte-ignore state_referenced_locally
+  let startAfterThreads = $state<StartAfterSelection[]>(
+    initialStartAfterThreads.map((t) => ({ ...t }))
+  )
+  // svelte-ignore state_referenced_locally
+  let startAfterEnabled = $state(initialStartAfterThreads.length > 0)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
   let selectionPopoverOpen = $state(false)
   let selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined
+  let startAfterPopoverOpen = $state(false)
+  let startAfterPopoverTimer: ReturnType<typeof setTimeout> | undefined
 
   function openSelectionPopover(): void {
     clearTimeout(selectionPopoverTimer)
@@ -413,6 +441,23 @@
     selectionPopoverOpen = false
   }
 
+  function openStartAfterPopover(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverOpen = true
+  }
+
+  function scheduleStartAfterPopoverClose(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverTimer = setTimeout(() => {
+      startAfterPopoverOpen = false
+    }, 220)
+  }
+
+  function closeStartAfterPopover(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverOpen = false
+  }
+
   const permissionLabels: Record<PermissionLevel, string> = {
     auto_review: 'Auto Review',
     full_access: 'Full Access'
@@ -431,6 +476,47 @@
     inferenceMenuOpen = false
     permissionMenuOpen = false
     thinkingMenuOpen = false
+  }
+
+  function openStartAfterPicker(): void {
+    if (!projectId || readOnlyMode) return
+    closeAllMenus()
+    startAfterPickerOpen = true
+  }
+
+  function toggleStartAfter(enabled: boolean): void {
+    if (!enabled) {
+      startAfterEnabled = false
+      startAfterThreads = []
+      closeStartAfterPopover()
+      onStartAfterThreadsChange?.([])
+      return
+    }
+    if (!projectId || readOnlyMode) return
+    startAfterEnabled = true
+    openStartAfterPicker()
+  }
+
+  function selectStartAfterThread(thread: Thread): void {
+    if (thread.id === threadId) return
+    if (startAfterThreads.some((existing) => existing.id === thread.id)) return
+    startAfterThreads = [...startAfterThreads, { id: thread.id, title: thread.title }]
+    startAfterEnabled = true
+    onStartAfterThreadsChange?.(startAfterThreads)
+    focusComposerAtEnd()
+  }
+
+  function removeStartAfterThread(threadId: string): void {
+    startAfterThreads = startAfterThreads.filter((existing) => existing.id !== threadId)
+    if (startAfterThreads.length === 0) startAfterEnabled = false
+    onStartAfterThreadsChange?.(startAfterThreads)
+  }
+
+  function clearStartAfterThreads(): void {
+    startAfterEnabled = false
+    startAfterThreads = []
+    closeStartAfterPopover()
+    onStartAfterThreadsChange?.([])
   }
 
   function showModelMenu(): void {
@@ -491,9 +577,12 @@
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
 
+  /** True when the selected harness cannot accept any prompt attachments. */
+  let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)
   /** True when the catalog reports this model cannot see images. */
   let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
+  let attachmentBlockedNotice = $state(false)
 
   function isImageAttachment(file: PromptAttachment): boolean {
     if (file.mime.startsWith('image/')) return true
@@ -719,6 +808,10 @@
         return
       }
     }
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
     if (shouldInterceptImageGate()) {
@@ -729,6 +822,10 @@
   }
 
   function performSend(direct?: boolean): void {
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
     const msg = value.trim()
     value = ''
     onValueChange?.('')
@@ -746,7 +843,9 @@
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
-    onSend(msg, files, direct, taggedPaths, taggedTasks)
+    const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
+    clearStartAfterThreads()
+    onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
   }
 
   async function updateFileMention(nextValue: string): Promise<void> {
@@ -1035,17 +1134,29 @@
     void loadAttachmentPreviews(attachments)
   })
 
-  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+  async function addFileAttachments(
+    selections: ReadonlyArray<{ path: string; file?: File }>
+  ): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const filename =
-      file?.name ??
-      (filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'file').split('?')[0]
-    const mime = file?.type || mimeFromPath(filePath)
-    const url = pathToFileUrl(filePath)
-    const attachment = { mime, url, filename }
-    attachments = [...attachments, attachment]
-    onAttachmentsChange?.(attachments)
-    void loadAttachmentPreview(attachment)
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
+    const addedAttachments = selections.map(({ path, file }) => {
+      const filename =
+        file?.name ?? (path.split('/').pop() ?? path.split('\\').pop() ?? 'file').split('?')[0]
+      const mime = file?.type || mimeFromPath(path)
+      return { mime, url: pathToFileUrl(path), filename }
+    })
+    if (addedAttachments.length === 0) return
+
+    attachments = [...attachments, ...addedAttachments]
+    onAttachmentsChange?.([...attachments])
+    await Promise.all(addedAttachments.map((attachment) => loadAttachmentPreview(attachment)))
+  }
+
+  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+    await addFileAttachments([{ path: filePath, file }])
   }
 
   function removeAttachment(index: number): void {
@@ -1069,6 +1180,7 @@
   onDestroy(() => {
     clearTimeout(mentionSearchTimer)
     clearTimeout(selectionPopoverTimer)
+    clearTimeout(startAfterPopoverTimer)
     for (const objectUrl of Object.values(previewUrls)) {
       URL.revokeObjectURL(objectUrl)
     }
@@ -1076,9 +1188,12 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const path = await invoke('dialog:pickFile', attachmentStorage)
-    if (!path) return
-    await addFileAttachment(path)
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
+    const paths = await invoke('dialog:pickFiles', attachmentStorage)
+    await addFileAttachments(paths.map((path) => ({ path })))
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -1112,6 +1227,10 @@
 
   async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
     if (!dt) return
     const files = dt.files
     if (!files || files.length === 0) return
@@ -1133,6 +1252,7 @@
   onMount(() => {
     function onDragOver(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (overFileTree(e)) {
         // The file tree owns the drop in its region; hide the composer overlay.
         if (isDragging) isDragging = false
@@ -1146,6 +1266,7 @@
 
     function onDragLeave(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (
         e.clientX <= 0 ||
         e.clientY <= 0 ||
@@ -1158,6 +1279,13 @@
 
     function onDrop(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) {
+        if (hasFiles(e.dataTransfer)) {
+          e.preventDefault()
+          attachmentBlockedNotice = true
+        }
+        return
+      }
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false
@@ -1179,6 +1307,16 @@
     if (readOnlyMode && !allowAttachments) return
     const items = e.clipboardData?.items
     if (!items) return
+    if (selectedHarnessLacksAttachments) {
+      const hasFile = Array.from(items).some(
+        (item) => item.kind === 'file' || item.type.startsWith('image/')
+      )
+      if (hasFile) {
+        e.preventDefault()
+        attachmentBlockedNotice = true
+      }
+      return
+    }
     let hasFileAttachment = false
 
     for (const item of Array.from(items)) {
@@ -1281,6 +1419,11 @@
     if (selectionPopoverOpen && e.key === 'Escape') {
       e.preventDefault()
       selectionPopoverOpen = false
+      return
+    }
+    if (startAfterPopoverOpen && e.key === 'Escape') {
+      e.preventDefault()
+      closeStartAfterPopover()
       return
     }
     const editorEl = document.getElementById(composerEditorId)
@@ -1462,8 +1605,17 @@
     </div>
   {/if}
 
+  {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      This model cannot accept file attachments. Choose another model before sending this file.
+    </div>
+  {/if}
+
   <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
+  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
         {#if projectContext}
@@ -1578,6 +1730,88 @@
                   <X size={9} />
                 </button>
               </span>
+            {/if}
+          </div>
+        {/if}
+        {#if startAfterThreads.length > 0}
+          <div
+            class="relative inline-flex"
+            role="group"
+            aria-label="Start after dependencies"
+            onmouseenter={openStartAfterPopover}
+            onmouseleave={scheduleStartAfterPopoverClose}
+          >
+            <div
+              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[10px] font-medium text-info transition-colors hover:bg-info/15"
+            >
+              <button
+                type="button"
+                class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
+                title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'} — hover to manage`}
+                aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
+                aria-expanded={startAfterPopoverOpen}
+                onclick={() => {
+                  if (startAfterPopoverOpen) closeStartAfterPopover()
+                  else openStartAfterPopover()
+                }}
+              >
+                <Clock size={10} class="shrink-0" />
+                <span
+                  >Start after{startAfterThreads.length > 1
+                    ? ` · ${startAfterThreads.length}`
+                    : ''}</span
+                >
+              </button>
+              <button
+                type="button"
+                class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
+                title="Remove all Start after threads"
+                aria-label="Remove all Start after threads"
+                onclick={clearStartAfterThreads}
+              >
+                <X size={10} />
+              </button>
+            </div>
+            {#if startAfterPopoverOpen}
+              <div
+                class="absolute bottom-full left-0 z-50 mb-1.5 w-72 rounded-xl border border-border bg-surface p-2 shadow-lg"
+                role="dialog"
+                aria-label="Start after details"
+                tabindex="0"
+                onmouseenter={openStartAfterPopover}
+                onmouseleave={scheduleStartAfterPopoverClose}
+              >
+                <div
+                  class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                >
+                  Starts after thread{startAfterThreads.length === 1 ? '' : 's'}
+                </div>
+                {#each startAfterThreads as selectedStartAfterThread (selectedStartAfterThread.id)}
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                      title={'Open ' + selectedStartAfterThread.title}
+                      aria-label={'Open ' + selectedStartAfterThread.title}
+                      onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
+                    >
+                      <Clock size={12} class="shrink-0 text-info" />
+                      <span class="min-w-0 flex-1 truncate">
+                        {selectedStartAfterThread.title}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                      title={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      onclick={() => removeStartAfterThread(selectedStartAfterThread.id)}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
             {/if}
           </div>
         {/if}
@@ -1839,6 +2073,60 @@
                 </Switch>
               {/if}
 
+              {#if showEngineeringMode && projectId && !readOnlyMode}
+                <!-- Start-after dependency -->
+                <Switch
+                  checked={startAfterEnabled}
+                  onchange={toggleStartAfter}
+                  title={startAfterThreads.length > 0
+                    ? `Start after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                    : 'Start this thread after other active threads finish'}
+                  aria-label="Start after other threads"
+                  activeClass="bg-info"
+                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+                >
+                  <span
+                    class="flex min-w-0 items-center gap-2 {startAfterEnabled
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                  >
+                    <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
+                    <span class="min-w-0 truncate">
+                      {startAfterEnabled && startAfterThreads.length > 0
+                        ? `Start after · ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                        : 'Start after'}
+                    </span>
+                  </span>
+                </Switch>
+                {#if startAfterEnabled}
+                  {#each startAfterThreads as startAfterThread (startAfterThread.id)}
+                    <div class="flex items-center gap-1 px-1">
+                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[11px] text-info">
+                        {startAfterThread.title}
+                      </span>
+                      <button
+                        type="button"
+                        class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                        title={`Remove ${startAfterThread.title} from Start after`}
+                        aria-label={`Remove ${startAfterThread.title} from Start after`}
+                        onclick={() => removeStartAfterThread(startAfterThread.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  {/each}
+                  <button
+                    type="button"
+                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    role="menuitem"
+                    title="Add another thread to Start after"
+                    onclick={openStartAfterPicker}
+                  >
+                    Add thread
+                  </button>
+                {/if}
+              {/if}
+
               <div class="mx-2 my-1 border-t"></div>
             {/if}
 
@@ -1846,16 +2134,19 @@
               <!-- Attach file -->
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
                 role="menuitem"
-                title="Attach a file to this message"
+                title={selectedHarnessLacksAttachments
+                  ? 'Attachments are unavailable for this model'
+                  : 'Attach files to this message'}
+                disabled={selectedHarnessLacksAttachments}
                 onclick={() => {
                   plusMenuOpen = false
                   void pickAttachment()
                 }}
               >
                 <Paperclip size={13} class="text-dimmed" />
-                Attach File
+                Attach Files
               </button>
             {/if}
           </div>
@@ -2074,6 +2365,18 @@
     </button>
   </div>
 </div>
+
+<StartAfterThreadPicker
+  open={startAfterPickerOpen}
+  {projectId}
+  currentThreadId={threadId}
+  selectedIds={startAfterThreads.map((t) => t.id)}
+  onSelect={selectStartAfterThread}
+  onClose={() => {
+    startAfterPickerOpen = false
+    if (startAfterThreads.length === 0) startAfterEnabled = false
+  }}
+/>
 
 <style>
   .chat-composer {

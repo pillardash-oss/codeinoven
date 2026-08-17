@@ -10,7 +10,7 @@ interface LogRecord {
 
 /**
  * Structured main-process logger.
- * AGENTS.md forbids `console.*` — all logging goes through this class.
+ * The application Agent behavior contract forbids `console.*` — all logging goes through this class.
  * `Logger.dev` is for development-only diagnostics.
  */
 export class Logger {

@@ -350,9 +350,9 @@ function mapOpenCodeQuestion(raw: unknown): AgentQuestion | null {
   }
 }
 
-/** Normalize the current ordered `questions` array and legacy single input. */
+/** Normalize the current ordered `questions` array. */
 function mapOpenCodeQuestions(input: Record<string, unknown>): AgentQuestion[] {
-  const values = Array.isArray(input['questions']) ? input['questions'] : [input]
+  const values = Array.isArray(input['questions']) ? input['questions'] : []
   return values
     .map((value) => mapOpenCodeQuestion(value))
     .filter((value): value is AgentQuestion => value !== null)

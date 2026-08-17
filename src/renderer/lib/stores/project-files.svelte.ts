@@ -9,7 +9,7 @@ import type {
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
@@ -53,6 +53,7 @@ export interface ProjectFilesState {
   tabs: ProjectFileTab[]
   activeTabId: string | null
   explorerVisible: boolean
+  explorerWidth: number
   revealedPath: string | null
   selectedPaths: string[]
   selectionAnchor: string | null
@@ -81,6 +82,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     tabs: [],
     activeTabId: null,
     explorerVisible: explorer.explorerVisible,
+    explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
@@ -184,7 +186,8 @@ class ProjectFilesWorkspace {
       expandedDirectories: { ...state.expandedDirectories },
       revealedPath: state.revealedPath,
       selectedPaths: [...state.selectedPaths],
-      explorerVisible: state.explorerVisible
+      explorerVisible: state.explorerVisible,
+      width: state.explorerWidth
     })
   }
 
@@ -205,6 +208,38 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     state.expandedDirectories = {}
     this.persistExplorer(projectId)
+  }
+
+  /** Expand a batch of directories (e.g. every ancestor of search results) and
+   *  load their contents in parallel. The explorer snapshot is persisted once
+   *  after the whole batch instead of once per directory — persisting per
+   *  expansion serialized the full snapshot to localStorage on every folder and
+   *  froze the renderer during searches on large trees.
+   *
+   *  `persist` is false for search-driven expansions: they are transient view
+   *  state, and persisting them would leave huge subtrees (e.g. `.cio`) marked
+   *  expanded across sessions, which slows every later tree render. */
+  async expandAndLoadDirectories(
+    projectId: string,
+    directories: string[],
+    persist = true
+  ): Promise<void> {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      state.expandedDirectories[directory] = true
+    }
+    if (persist) this.persistExplorer(projectId)
+    await Promise.all(directories.map((directory) => this.loadDirectory(projectId, directory)))
+  }
+
+  /** Collapse a batch of directories without loading anything (used to revert
+   *  transient search-driven expansions when the filter closes). */
+  collapseDirectories(projectId: string, directories: string[], persist = true): void {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      delete state.expandedDirectories[directory]
+    }
+    if (persist) this.persistExplorer(projectId)
   }
 
   /** Expand every folder in the tree, loading their contents recursively. */
@@ -574,6 +609,12 @@ class ProjectFilesWorkspace {
     this.persistExplorer(projectId)
   }
 
+  setExplorerWidth(projectId: string, width: number, persist = true): void {
+    const state = this.ensureState(projectId)
+    state.explorerWidth = clampFileExplorerWidth(width)
+    if (persist) this.persistExplorer(projectId)
+  }
+
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
     state.explorerVisible = true
@@ -837,7 +878,9 @@ class ProjectFilesWorkspace {
       projectId,
       previousTabId,
       nextTabId,
-      nextPath
+      nextPath,
+      preview,
+      true
     )
     if (remapped) return
     const threadId = contextSidebarState.threadIdForProject(projectId)
@@ -978,7 +1021,15 @@ class ProjectFilesWorkspace {
     }
     for (const previousId of Object.keys(remapped)) {
       const next = remapped[previousId]
-      contextSidebarState.remapProjectFile(projectId, previousId, next.id, next.path)
+      const tab = state.tabs.find((candidate) => candidate.id === next.id)
+      contextSidebarState.remapProjectFile(
+        projectId,
+        previousId,
+        next.id,
+        next.path,
+        tab?.preview ?? false,
+        false
+      )
     }
 
     for (const path of Object.keys(state.expandedDirectories).filter(isWithin)) {

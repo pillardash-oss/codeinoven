@@ -1,3 +1,41 @@
+<script module lang="ts">
+  import { SvelteMap } from 'svelte/reactivity'
+  import type { TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+
+  /** The panel unmounts every time the sidebar is hidden (same as every
+   *  other context-sidebar tab), which used to reset all local state —
+   *  checkpoint list, selected turn, loaded diffs — back to empty, forcing
+   *  a full refetch and a spinner flash on every single toggle. Module-level
+   *  state survives that remount, so reopening seeds instantly from the last
+   *  known data while `refresh()` still quietly re-validates in the
+   *  background. */
+  interface DiffPanelCache {
+    checkpoints: TurnCheckpointSummary[]
+    selectedCheckpointId: string | null
+    fileDiffsByCheckpoint: SvelteMap<string, TurnCheckpointFileDiff[]>
+  }
+
+  const panelCache = new SvelteMap<string, DiffPanelCache>()
+
+  function cacheKeyFor(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
+  }
+
+  function getOrCreateCache(projectId: string, threadId: string): DiffPanelCache {
+    const key = cacheKeyFor(projectId, threadId)
+    let entry = panelCache.get(key)
+    if (!entry) {
+      entry = {
+        checkpoints: [],
+        selectedCheckpointId: null,
+        fileDiffsByCheckpoint: new SvelteMap()
+      }
+      panelCache.set(key, entry)
+    }
+    return entry
+  }
+</script>
+
 <script lang="ts">
   import {
     ChevronDown,
@@ -17,9 +55,10 @@
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { diffDetails } from './file-diff'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { AgentEvent, TurnCheckpointFileDiff, TurnCheckpointSummary } from '$shared/types'
+  import type { AgentEvent } from '$shared/types'
 
   type ChangesMode = 'diffs' | 'files'
 
@@ -35,19 +74,26 @@
 
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
-  let checkpoints = $state<TurnCheckpointSummary[]>([])
-  let selectedCheckpointId = $state<string | null>(null)
+  const checkpointRefreshGuard = new LatestRequestGuard()
+  const initialCache = getOrCreateCache(projectId, threadId)
+  const initialCheckpointId = initialCache.selectedCheckpointId
+  const initialFileDiffs = initialCheckpointId
+    ? (initialCache.fileDiffsByCheckpoint.get(initialCheckpointId) ?? null)
+    : null
+
+  let checkpoints = $state<TurnCheckpointSummary[]>(initialCache.checkpoints)
+  let selectedCheckpointId = $state<string | null>(initialCheckpointId)
   let loading = $state(false)
   let error = $state('')
   let restoringId = $state<string | null>(null)
   let selections = $state<Record<string, string[]>>({})
   let mode = $state<ChangesMode>('diffs')
-  let fileDiffs = $state<TurnCheckpointFileDiff[]>([])
+  let fileDiffs = $state<TurnCheckpointFileDiff[]>(initialFileDiffs ?? [])
   let loadingDiffs = $state(false)
   let expandedDiffs = $state<Record<string, boolean>>({})
   let flashPath = $state<string | null>(null)
   let scrollContainer = $state<HTMLElement | null>(null)
-  let loadedDiffKey: string | null = null
+  let loadedDiffKey: string | null = initialFileDiffs ? initialCheckpointId : null
   const turns = $derived(checkpoints.filter((checkpoint) => checkpoint.status !== 'active'))
   const selectedIndex = $derived(
     Math.max(
@@ -75,18 +121,23 @@
   }
 
   async function refresh(preferredCheckpointId = selectedCheckpointId): Promise<void> {
+    const request = checkpointRefreshGuard.begin()
     loading = true
     error = ''
     try {
-      checkpoints = await invoke('checkpoint:list', projectId, threadId)
+      const nextCheckpoints = await invoke('checkpoint:list', projectId, threadId)
+      if (!checkpointRefreshGuard.isCurrent(request)) return
+      checkpoints = nextCheckpoints
+      const nextTurns = nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
       selectedCheckpointId =
-        turns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
-        turns[0]?.id ??
+        nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
+        nextTurns[0]?.id ??
         null
     } catch (reason) {
+      if (!checkpointRefreshGuard.isCurrent(request)) return
       error = reason instanceof Error ? reason.message : 'Change history could not be loaded.'
     } finally {
-      loading = false
+      if (checkpointRefreshGuard.isCurrent(request)) loading = false
     }
   }
 
@@ -180,6 +231,7 @@
         { ...expandedDiffs }
       )
       loadingDiffs = false
+      getOrCreateCache(projectId, threadId).fileDiffsByCheckpoint.set(key, fileDiffs)
     })
     return () => {
       cancelled = true
@@ -190,6 +242,15 @@
   $effect(() => {
     const preferredCheckpointId = checkpointId
     void refresh(preferredCheckpointId)
+  })
+
+  // Keeps the module-level cache current so the next remount (e.g. toggling
+  // the sidebar closed and back open) seeds from here instead of starting
+  // empty.
+  $effect(() => {
+    const entry = getOrCreateCache(projectId, threadId)
+    entry.checkpoints = checkpoints
+    entry.selectedCheckpointId = selectedCheckpointId
   })
 
   $effect(() => {

@@ -95,7 +95,7 @@ function content(problem = 'Build a reliable specification workflow'): Engineeri
     successCriteria: ['Approved versions cannot be edited'],
     testStrategy: 'Run focused lifecycle and restart tests.',
     documentationRequirements: ['Document the version layout.'],
-    additionalInfo: 'Keep migration notes with the reviewed specification.',
+    additionalInfo: 'Keep review notes with the reviewed specification.',
     commitPattern: 'feat(spec): <scope>',
     constraints: ['Keep project data local'],
     risks: ['Concurrent edits']

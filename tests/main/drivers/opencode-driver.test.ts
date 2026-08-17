@@ -112,12 +112,13 @@ describe('mapOpenCodePart', () => {
   })
 
   it('maps a question tool from the prompt field', () => {
-    const input = {
+    const question = {
       prompt: 'What is your favorite color?',
       description: 'Choose wisely.',
       options: ['Red', 'Green', 'Blue'],
       multiple: false
     }
+    const input = { questions: [question] }
     expect(
       mapOpenCodePart({
         type: 'tool',
@@ -150,8 +151,7 @@ describe('mapOpenCodePart', () => {
 
   it('maps a question tool from stringified JSON input', () => {
     const rawInput = JSON.stringify({
-      prompt: 'Stringified prompt',
-      options: ['A', 'B']
+      questions: [{ prompt: 'Stringified prompt', options: ['A', 'B'] }]
     })
     expect(
       mapOpenCodePart({
@@ -211,10 +211,14 @@ describe('mapOpenCodePart', () => {
 
   it('extracts richOptions from the richOptions field', () => {
     const input = {
-      prompt: 'Pick a flavor',
-      richOptions: [
-        { label: 'Vanilla', description: 'Classic' },
-        { label: 'Chocolate', description: 'Rich' }
+      questions: [
+        {
+          prompt: 'Pick a flavor',
+          richOptions: [
+            { label: 'Vanilla', description: 'Classic' },
+            { label: 'Chocolate', description: 'Rich' }
+          ]
+        }
       ]
     }
     expect(

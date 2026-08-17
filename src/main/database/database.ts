@@ -615,14 +615,6 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
-    // Additive migration for installs created before session-ownership tracking:
-    // the `session_harness_id` column keeps a session bound to the harness that
-    // created it even when thread settings switch harnesses mid-run. Guarded so
-    // fresh installs (which already carry the column) are never altered.
-    const columns = this.all<{ name: string }>('PRAGMA table_info(threads)')
-    if (!columns.some((column) => column.name === 'session_harness_id')) {
-      this.run('ALTER TABLE threads ADD COLUMN session_harness_id TEXT')
-    }
   }
 }
 

@@ -157,7 +157,7 @@ The whole thread — agent messages, tools, permission requests, diffs, checkpoi
 - **All CodeInOven state lives in one place:** `~/.config/pillardash/codeinoven` (macOS/Linux) or the equivalent per-OS config directory (Windows).
 - The app **never writes into your repository** unless you explicitly approve a change through the normal agent lifecycle.
 - Persistent writes are **atomic** (`.tmp` then rename) so a crash never corrupts state.
-- History is **chunked** (capped) and **checkpointed**; pinned threads survive cleanup, and per-thread branches keep everything inspectable, diffable, and rollback-able.
+- History is **chunked** (capped) and **checkpointed**; pinned and spec-status threads survive cleanup, and per-thread branches keep everything inspectable, diffable, and rollback-able.
 - **Memory** is yours: entries are categorized, scoped, verifiable, and searchable, and agents record them explicitly through slash commands rather than silently.
 - Project and thread limits (e.g. 70 threads per project by default) keep growth deliberate.
 - **Provider credentials are encrypted at rest** with the OS keychain-backed `safeStorage` and never cross the IPC boundary in plaintext.

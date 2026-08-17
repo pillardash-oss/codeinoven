@@ -121,11 +121,10 @@
   })
 </script>
 
-<section class="mt-6 space-y-4 border-t pt-6">
+<section class="space-y-4">
   <div class="flex items-start justify-between">
     <div>
-      <h2 class="text-base font-semibold">Base URL providers</h2>
-      <p class="mt-0.5 text-xs text-muted">
+      <p class="text-xs text-muted">
         Add custom OpenAI-compatible providers by base URL. Models appear in the picker after the
         next agent turn.
       </p>

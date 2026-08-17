@@ -60,6 +60,7 @@ import { createTestDb, destroyTestDb } from './database/test-helper'
 import type { Database } from '../../src/main/database/database'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
 import { ThreadRepo } from '../../src/main/database/repositories/thread-repo'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
 
 let database: Database
 
@@ -87,6 +88,7 @@ const defaultConfig: AppConfig = {
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
@@ -150,6 +152,7 @@ describe('validateAppConfigPatch', () => {
         resumeWorkOnRestart: false,
         defaultMergeMethod: 'rebase',
         maxDiffLines: 250,
+        agentBehaviorPrompt: 'Custom agent behavior.',
         memory
       })
     ).toMatchObject({
@@ -175,6 +178,7 @@ describe('validateAppConfigPatch', () => {
       resumeWorkOnRestart: false,
       defaultMergeMethod: 'rebase',
       maxDiffLines: 250,
+      agentBehaviorPrompt: 'Custom agent behavior.',
       memory: {
         enabled: true,
         entries: [

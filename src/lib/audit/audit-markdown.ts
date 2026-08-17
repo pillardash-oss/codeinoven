@@ -30,7 +30,7 @@ export function exportAuditReportMarkdown(
 
   const auditedFiles = report.content.auditedFiles?.length
     ? report.content.auditedFiles.map((file) => `- \`${file.path}\` — ${file.reason}`).join('\n')
-    : 'Not recorded for this legacy report.'
+    : 'Not recorded.'
   const checks = report.content.verification?.checks.length
     ? report.content.verification.checks
         .map((check) => {
@@ -46,12 +46,12 @@ export function exportAuditReportMarkdown(
           return `### ${check.kind}: ${check.status}\n\n${check.evidence}${command}${exitCode}${files}${findingIds}${evidencePath}`
         })
         .join('\n\n')
-    : 'Not recorded for this legacy report.'
+    : 'Not recorded.'
   const utilities = report.content.verification?.utilities.length
     ? report.content.verification.utilities
         .map((utility) => `- **${utility.name} (${utility.status})** — ${utility.evidence}`)
         .join('\n')
-    : 'Not recorded for this legacy report.'
+    : 'Not recorded.'
   const limitations = report.content.verification?.limitations.length
     ? report.content.verification.limitations.map((limitation) => `- ${limitation}`).join('\n')
     : 'None recorded.'

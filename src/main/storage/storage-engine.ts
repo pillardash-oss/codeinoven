@@ -1,6 +1,6 @@
 import { join } from 'path'
 import { randomInt } from 'crypto'
-import { readFile, appendFile } from 'fs/promises'
+import { readFile, appendFile, unlink } from 'fs/promises'
 import {
   getConfigRoot,
   ensureDir,
@@ -13,6 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig } from '../../lib/types'
+import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../../lib/project-artifacts'
@@ -35,6 +36,7 @@ const DEFAULT_CONFIG: AppConfig = {
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
+  agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,
   updateChannel: 'stable',
@@ -103,13 +105,26 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
-      }
+      },
+      agentBehaviorPrompt: await this.readBehaviorPrompt()
     }
   }
 
   /** Write the global config */
   async saveConfig(config: AppConfig): Promise<void> {
-    await writeJson(this.resolve('config.json'), config)
+    const { agentBehaviorPrompt, ...persistedConfig } = config
+    await writeJson(this.resolve('config.json'), persistedConfig)
+    if (agentBehaviorPrompt === DEFAULT_AGENT_BEHAVIOR_PROMPT) {
+      await this.removeRaw(AGENT_BEHAVIOR_FILENAME)
+    } else {
+      await this.writeRaw(AGENT_BEHAVIOR_FILENAME, agentBehaviorPrompt)
+    }
+  }
+
+  private async readBehaviorPrompt(): Promise<string> {
+    const behaviorFile = await this.readRaw(AGENT_BEHAVIOR_FILENAME)
+    if (behaviorFile?.trim()) return behaviorFile
+    return DEFAULT_AGENT_BEHAVIOR_PROMPT
   }
 
   /**
@@ -189,6 +204,16 @@ export class StorageEngine {
     const fullPath = this.resolve(relativePath)
     await ensureDir(join(fullPath, '..'))
     await atomicWrite(fullPath, content)
+  }
+
+  /** Remove a raw text file relative to config root, if it exists. */
+  async removeRaw(relativePath: string): Promise<void> {
+    try {
+      await unlink(this.resolve(relativePath))
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return
+      throw error
+    }
   }
 
   /** Append raw text to a file (creates it if missing). Used for append-only logs like history. */

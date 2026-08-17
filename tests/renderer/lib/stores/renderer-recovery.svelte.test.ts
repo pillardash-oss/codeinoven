@@ -7,7 +7,6 @@ import {
   persistRendererRecoveryState,
   recoveryDraftKey,
   removeRendererRecoveryState,
-  type ComposerDraftEntry,
   type RecoveryStorage
 } from '$lib/stores/renderer-recovery'
 import { RendererRecoveryStore } from '$lib/stores/renderer-recovery.svelte'
@@ -90,6 +89,10 @@ describe('RendererRecoveryStore', () => {
               startOffset: 12,
               endOffset: 34
             }
+          ],
+          startAfterThreads: [
+            { id: 'source-1', title: 'Source one' },
+            { id: 'source-2', title: 'Source two' }
           ]
         }
       },
@@ -146,38 +149,13 @@ describe('RendererRecoveryStore', () => {
           startOffset: 12,
           endOffset: 34
         }
+      ],
+      startAfterThreads: [
+        { id: 'source-1', title: 'Source one' },
+        { id: 'source-2', title: 'Source two' }
       ]
     })
     expect(storage.values.has(RENDERER_RECOVERY_STORAGE_KEY)).toBe(true)
-  })
-
-  it('migrates legacy string-only drafts to the new entry format', () => {
-    const storage = new MemoryStorage()
-    const draftKey = recoveryDraftKey('project-1', 'thread-1')
-    persistRendererRecoveryState(storage, {
-      version: 1,
-      activeView: 'projects',
-      lastContentView: 'projects',
-      lastViewBeforeSettings: 'projects',
-      selectedProjectId: null,
-      selectedThread: null,
-      composerDrafts: { [draftKey]: 'Legacy draft' as unknown as ComposerDraftEntry },
-      collapsedFolders: [],
-      favoriteModels: [],
-      recentModels: [],
-      chatFavoriteModels: [],
-      chatRecentModels: [],
-      queuedMessages: {}
-    })
-
-    const restored = loadRendererRecoveryState(storage)
-    expect(restored.composerDrafts[draftKey]).toEqual({
-      text: 'Legacy draft',
-      attachments: [],
-      projectReferences: [],
-      taskReferences: [],
-      promptReferences: []
-    })
   })
 
   it('validates untrusted stored values field by field', () => {
@@ -191,7 +169,13 @@ describe('RendererRecoveryStore', () => {
         selectedProjectId: 42,
         selectedThread: { projectId: 'project-1', threadId: '' },
         composerDrafts: {
-          [validDraftKey]: 'kept',
+          [validDraftKey]: {
+            text: 'kept',
+            attachments: [],
+            projectReferences: [],
+            taskReferences: [],
+            promptReferences: []
+          },
           invalid: 'discarded',
           [JSON.stringify(['project-2', 'thread-2'])]: 42
         }
@@ -209,7 +193,8 @@ describe('RendererRecoveryStore', () => {
         attachments: [],
         projectReferences: [],
         taskReferences: [],
-        promptReferences: []
+        promptReferences: [],
+        startAfterThreads: []
       }
     })
   })
@@ -241,45 +226,38 @@ describe('RendererRecoveryStore', () => {
     expect(cleared.draftPromptReferences('project-1', 'thread-1')).toEqual([])
   })
 
+  it('persists multiple start-after threads', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+
+    store.setStartAfterThreads('project-1', 'thread-1', [
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+    expect(store.startAfterThreadsFor('project-1', 'thread-1')).toEqual([
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+    // A fresh store (app restart) restores the full dependency list.
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.startAfterThreadsFor('project-1', 'thread-1')).toEqual([
+      { id: 'source-1', title: 'Source one' },
+      { id: 'source-2', title: 'Source two' }
+    ])
+
+    // Clearing removes the whole draft entry when nothing else is present.
+    store.clearStartAfterThreads('project-1', 'thread-1')
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+  })
+
   it('continues operating when storage access fails', () => {
     expect(() => {
       loadRendererRecoveryState(new UnavailableStorage())
       persistRendererRecoveryState(new UnavailableStorage(), emptyRendererRecoverySnapshot())
       removeRendererRecoveryState(new UnavailableStorage())
     }).not.toThrow()
-  })
-
-  it('removes a legacy favorite even when the toggle key is re-serialized', () => {
-    const storage = new MemoryStorage()
-    const store = new RendererRecoveryStore(storage)
-    // A legacy 2-segment key (no harness) persisted before harness-scoping.
-    store.favoriteModels = ['openai:gpt-5.6']
-
-    // The unavailable-favorite remove button reconstructs the key with an empty
-    // harness, producing ":openai:gpt-5.6". This must still remove the favorite.
-    store.toggleFavorite(':openai:gpt-5.6')
-
-    expect(store.favoriteModels).toEqual([])
-    expect(store.isFavorite('openai:gpt-5.6')).toBe(false)
-  })
-
-  it('adds a legacy favorite when toggling a re-serialized key that is absent', () => {
-    const storage = new MemoryStorage()
-    const store = new RendererRecoveryStore(storage)
-
-    store.toggleFavorite(':openai:gpt-5.6')
-
-    expect(store.favoriteModels).toContain(':openai:gpt-5.6')
-  })
-
-  it('removes a chat legacy favorite when the toggle key is re-serialized', () => {
-    const storage = new MemoryStorage()
-    const store = new RendererRecoveryStore(storage)
-    store.chatFavoriteModels = ['anthropic:claude-3']
-
-    store.toggleChatFavorite(':anthropic:claude-3')
-
-    expect(store.chatFavoriteModels).toEqual([])
   })
 
   it('treats distinct harness-scoped favorites as separate', () => {

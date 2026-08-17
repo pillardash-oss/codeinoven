@@ -70,7 +70,8 @@
     behavioral: 'Behavioral',
     'project-rule': 'Project Rule',
     identity: 'Identity',
-    preference: 'Preference'
+    preference: 'Preference',
+    models: 'Models'
   }
 
   const priorityLabels: Record<MemoryPriority, string> = {
@@ -413,10 +414,17 @@
   function updateEntry(
     index: number,
     field: keyof MemoryEntry,
-    value: string | boolean | number
+    value: string | boolean | number | string[] | undefined
   ): void {
     entries = entries.map((entry, i) =>
-      i === index ? { ...entry, [field]: value, updatedAt: Date.now() } : entry
+      i === index
+        ? {
+            ...entry,
+            ...(field === 'category' && value !== 'models' ? { modelKeys: undefined } : {}),
+            [field]: value,
+            updatedAt: Date.now()
+          }
+        : entry
     )
   }
 
@@ -446,7 +454,7 @@
 >
   <!-- Fixed header: title, Projects/Chats tabs, enable toggle, section tabs -->
   <div class="shrink-0">
-    <div class="mb-5 flex items-start justify-between gap-4">
+    <div class="mb-4 flex items-start justify-between gap-4">
       <div>
         <h1 class="text-xl font-bold tracking-tight">Memory</h1>
         <p class="mt-0.5 text-sm text-muted">{headerDescription}</p>
@@ -487,33 +495,40 @@
     </div>
 
     {#if variant === 'settings'}
-      <div class="mb-5 flex items-center justify-between gap-4 rounded-xl border bg-surface p-4">
-        <div>
-          <p class="text-sm font-medium text-foreground">
-            Use persistent memory in {contextKind === 'chats' ? 'chats' : 'projects'}
-          </p>
-          <p class="mt-0.5 text-xs text-muted">
-            When disabled, saved entries remain available here but are not sent to agents.
-          </p>
+      <div class="mb-4 rounded-xl border bg-surface p-4">
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium text-foreground">
+              Use persistent memory in {contextKind === 'chats' ? 'chats' : 'projects'}
+            </p>
+            <p class="mt-0.5 text-xs text-muted">
+              When disabled, saved entries remain available here but are not sent to agents.
+            </p>
+          </div>
+          <Switch
+            checked={effectiveMemoryEnabled}
+            onchange={() => void setMemoryEnabled(!effectiveMemoryEnabled)}
+            aria-label={contextKind === 'chats'
+              ? effectiveMemoryEnabled
+                ? 'Disable persistent memory for chats'
+                : 'Enable persistent memory for chats'
+              : effectiveMemoryEnabled
+                ? 'Disable persistent memory for projects'
+                : 'Enable persistent memory for projects'}
+            title={contextKind === 'chats'
+              ? effectiveMemoryEnabled
+                ? 'Disable persistent memory for chats'
+                : 'Enable persistent memory for chats'
+              : effectiveMemoryEnabled
+                ? 'Disable persistent memory for projects'
+                : 'Enable persistent memory for projects'}
+          />
         </div>
-        <Switch
-          checked={effectiveMemoryEnabled}
-          onchange={() => void setMemoryEnabled(!effectiveMemoryEnabled)}
-          aria-label={contextKind === 'chats'
-            ? effectiveMemoryEnabled
-              ? 'Disable persistent memory for chats'
-              : 'Enable persistent memory for chats'
-            : effectiveMemoryEnabled
-              ? 'Disable persistent memory for projects'
-              : 'Enable persistent memory for projects'}
-          title={contextKind === 'chats'
-            ? effectiveMemoryEnabled
-              ? 'Disable persistent memory for chats'
-              : 'Enable persistent memory for chats'
-            : effectiveMemoryEnabled
-              ? 'Disable persistent memory for projects'
-              : 'Enable persistent memory for projects'}
-        />
+        {#if allowTransfer}
+          <div class="mt-4 border-t pt-4">
+            <MemoryTransfer {variant} {scope} onImported={load} />
+          </div>
+        {/if}
       </div>
     {:else if !effectiveMemoryEnabled}
       <p class="mb-4 rounded-lg bg-raised px-3 py-2 text-xs text-muted" role="status">
@@ -522,81 +537,78 @@
       </p>
     {/if}
 
-    {#if variant === 'settings' && allowTransfer}
-      <div class="mb-5">
-        <MemoryTransfer {variant} {scope} onImported={load} />
-      </div>
-    {/if}
-
     {#if error}
       <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
         {error}
       </p>
     {/if}
 
-    {#if saved}
-      <p class="mb-4 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary" role="status">
-        Saved
-      </p>
-    {/if}
-
-    <div
-      class="mb-4 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
-      role="tablist"
-      aria-label="Memory sections"
-    >
-      <button
-        class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
-        'active'
-          ? 'bg-surface text-foreground shadow-sm'
-          : 'text-muted hover:text-foreground'}"
-        role="tab"
-        aria-selected={currentSection === 'active'}
-        title="View active memory entries"
-        onclick={showActive}
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <div
+        class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Memory sections"
       >
-        Active
-      </button>
+        <button
+          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+          'active'
+            ? 'bg-surface text-foreground shadow-sm'
+            : 'text-muted hover:text-foreground'}"
+          role="tab"
+          aria-selected={currentSection === 'active'}
+          title="View active memory entries"
+          onclick={showActive}
+        >
+          Active
+        </button>
+        {#if variant === 'settings'}
+          <button
+            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+            'inactive'
+              ? 'bg-surface text-foreground shadow-sm'
+              : 'text-muted hover:text-foreground'}"
+            role="tab"
+            aria-selected={currentSection === 'inactive'}
+            title="View inactive memory entries"
+            onclick={showInactive}
+          >
+            Inactive
+            {#if inactiveCount > 0}
+              <span
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+              >
+                {inactiveCount}
+              </span>
+            {/if}
+          </button>
+        {:else}
+          <button
+            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
+            'proposed'
+              ? 'bg-surface text-foreground shadow-sm'
+              : 'text-muted hover:text-foreground'}"
+            role="tab"
+            aria-selected={currentSection === 'proposed'}
+            title="Review proposed memory entries"
+            onclick={showProposed}
+          >
+            Proposed
+            {#if proposals.length > 0}
+              <span
+                class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
+              >
+                {proposals.length}
+              </span>
+            {/if}
+          </button>
+        {/if}
+      </div>
       {#if variant === 'settings'}
-        <button
-          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
-          'inactive'
-            ? 'bg-surface text-foreground shadow-sm'
-            : 'text-muted hover:text-foreground'}"
-          role="tab"
-          aria-selected={currentSection === 'inactive'}
-          title="View inactive memory entries"
-          onclick={showInactive}
-        >
-          Inactive
-          {#if inactiveCount > 0}
-            <span
-              class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
-            >
-              {inactiveCount}
-            </span>
-          {/if}
-        </button>
-      {:else}
-        <button
-          class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {currentSection ===
-          'proposed'
-            ? 'bg-surface text-foreground shadow-sm'
-            : 'text-muted hover:text-foreground'}"
-          role="tab"
-          aria-selected={currentSection === 'proposed'}
-          title="Review proposed memory entries"
-          onclick={showProposed}
-        >
-          Proposed
-          {#if proposals.length > 0}
-            <span
-              class="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
-            >
-              {proposals.length}
-            </span>
-          {/if}
-        </button>
+        <span class="text-xs text-dimmed">
+          {stats.total}
+          {stats.total === 1 ? 'entry' : 'entries'}{#if stats.autoDetected > 0},
+            {stats.autoDetected} auto-detected{/if}
+        </span>
       {/if}
     </div>
   </div>
@@ -622,7 +634,7 @@
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
                     <p class="mt-1.5 text-[11px] capitalize text-dimmed">
-                      {row.proposal.scope} · {row.proposal.category} · {row.proposal.priority}
+                      {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal.priority}
                     </p>
                   </div>
                   <div class="flex shrink-0 items-center gap-1">
@@ -664,18 +676,18 @@
   {:else}
     <!-- Fixed filters and actions -->
     <div class="shrink-0">
-      <div class="mb-3 flex items-center gap-3 text-xs text-dimmed">
-        <span>{stats.total} {stats.total === 1 ? 'entry' : 'entries'}</span>
-        {#if variant === 'sidebar'}
+      {#if variant === 'sidebar'}
+        <div class="mb-3 flex items-center gap-3 text-xs text-dimmed">
+          <span>{stats.total} {stats.total === 1 ? 'entry' : 'entries'}</span>
           <span>{stats.enabled} enabled</span>
-        {/if}
-        {#if stats.autoDetected > 0}
-          <span>{stats.autoDetected} auto-detected</span>
-        {/if}
-      </div>
+          {#if stats.autoDetected > 0}
+            <span>{stats.autoDetected} auto-detected</span>
+          {/if}
+        </div>
+      {/if}
 
-      <div class="mb-3 {variant === 'sidebar' ? 'space-y-2' : 'flex flex-wrap items-center gap-2'}">
-        <div class="relative {variant === 'sidebar' ? '' : 'min-w-[200px] flex-1'}">
+      <div class="mb-4 {variant === 'sidebar' ? 'space-y-2' : 'flex flex-wrap items-center gap-2'}">
+        <div class="relative {variant === 'sidebar' ? '' : 'min-w-[160px] flex-1'}">
           <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
             class="w-full rounded-lg border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
@@ -683,9 +695,15 @@
             bind:value={searchQuery}
           />
         </div>
-        <div class={variant === 'sidebar' ? 'grid grid-cols-2 gap-2' : 'contents'}>
+        <div
+          class={variant === 'sidebar'
+            ? 'grid grid-cols-2 gap-2'
+            : 'flex shrink-0 items-center gap-2'}
+        >
           <select
-            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            class="{variant === 'sidebar'
+              ? 'w-full'
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             bind:value={filterCategory}
           >
             <option value="">All categories</option>
@@ -694,7 +712,9 @@
             {/each}
           </select>
           <select
-            class="w-full rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+            class="{variant === 'sidebar'
+              ? 'w-full'
+              : 'w-36'} rounded-lg border bg-elevated px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
             bind:value={filterPriority}
           >
             <option value="">All priorities</option>
@@ -703,41 +723,74 @@
             {/each}
           </select>
         </div>
-      </div>
 
-      <div class="mb-4 flex items-center gap-3">
-        <button
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay"
-          title="Add a new memory entry"
-          type="button"
-          onclick={addEntry}
-        >
-          <Plus size={14} />
-          Add Memory
-        </button>
-        <button
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          disabled={saving || loading}
-          title="Save all memory entries"
-          type="button"
-          onclick={() => void save()}
-        >
-          {#if saving}
-            <Loader2 size={14} class="animate-spin" />
-          {:else}
-            <Save size={14} />
-          {/if}
-          Save
-        </button>
-        {#if saved}
-          <span class="text-xs text-primary">Saved</span>
-        {/if}
-        {#if variant === 'sidebar' && allowTransfer && projectId}
-          <div class="ml-auto">
-            <MemoryTransfer {variant} {projectId} onImported={load} />
+        {#if variant === 'settings'}
+          <div class="ml-auto flex shrink-0 items-center gap-2">
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
+              title="Add a new memory entry"
+              type="button"
+              onclick={addEntry}
+            >
+              <Plus size={14} />
+              Add Memory
+            </button>
+            <button
+              class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+              disabled={saving || loading}
+              title="Save all memory entries"
+              type="button"
+              onclick={() => void save()}
+            >
+              {#if saving}
+                <Loader2 size={14} class="animate-spin" />
+              {:else}
+                <Save size={14} />
+              {/if}
+              Save
+            </button>
+            {#if saved}
+              <span class="text-xs text-primary">Saved</span>
+            {/if}
           </div>
         {/if}
       </div>
+
+      {#if variant === 'sidebar'}
+        <div class="mb-4 flex items-center gap-3">
+          <button
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay"
+            title="Add a new memory entry"
+            type="button"
+            onclick={addEntry}
+          >
+            <Plus size={14} />
+            Add Memory
+          </button>
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={saving || loading}
+            title="Save all memory entries"
+            type="button"
+            onclick={() => void save()}
+          >
+            {#if saving}
+              <Loader2 size={14} class="animate-spin" />
+            {:else}
+              <Save size={14} />
+            {/if}
+            Save
+          </button>
+          {#if saved}
+            <span class="text-xs text-primary">Saved</span>
+          {/if}
+          {#if allowTransfer && projectId}
+            <div class="ml-auto">
+              <MemoryTransfer {variant} {projectId} onImported={load} />
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
 
     <!-- Entries list (scrollable) -->
@@ -747,6 +800,7 @@
           <MemoryEntryComponent
             {entry}
             index={entries.indexOf(entry)}
+            {projectId}
             scopeOptions={availableScopes}
             onUpdate={updateEntry}
             onRemove={removeEntry}

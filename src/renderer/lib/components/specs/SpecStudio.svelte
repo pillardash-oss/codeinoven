@@ -1322,6 +1322,16 @@
       {/each}
       <div class="mx-auto max-w-4xl px-4 py-6 md:px-8 md:py-8">
         <article class="space-y-12 text-sm leading-7">
+          <section id="spec-section-tldr" class="scroll-mt-5">
+            <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
+            <EditableMarkdown
+              class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
+              text={draft.content.resolutionSummary}
+              ariaLabel="Specification TL;DR"
+              onChange={(value) => setString('resolutionSummary', value)}
+            />
+          </section>
+
           <section id="spec-section-problem" data-spec-section="problem" class="scroll-mt-5">
             <button
               class="group flex items-center gap-2 text-left"
@@ -1368,12 +1378,6 @@
                 Phase
               </button>
             </div>
-            <EditableMarkdown
-              class="mt-3 whitespace-pre-wrap rounded-lg px-2 py-1 text-muted outline-none focus:bg-surface focus:text-foreground"
-              text={draft.content.resolutionSummary}
-              ariaLabel="Resolution summary"
-              onChange={(value) => setString('resolutionSummary', value)}
-            />
             <ol class="mt-5 space-y-4">
               {#each draft.content.phases as phase, phaseIndex (phase.id)}
                 <li class="rounded-xl border bg-surface p-4">
