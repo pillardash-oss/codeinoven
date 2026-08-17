@@ -5,7 +5,7 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import { DATABASE_SCHEMA_SQL, THREAD_INDEXES_SQL, threadsTableSql } from './schema'
+import { DATABASE_SCHEMA_SQL } from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -615,47 +615,6 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
-    // Additive migration for installs created before session-ownership tracking:
-    // the `session_harness_id` column keeps a session bound to the harness that
-    // created it even when thread settings switch harnesses mid-run. Guarded so
-    // fresh installs (which already carry the column) are never altered.
-    const columns = this.all<{ name: string }>('PRAGMA table_info(threads)')
-    if (!columns.some((column) => column.name === 'session_harness_id')) {
-      this.run('ALTER TABLE threads ADD COLUMN session_harness_id TEXT')
-    }
-    this.migrateThreadStatusConstraint(connection)
-  }
-
-  /** Rebuild legacy thread tables whose status CHECK predates the `spec` state. */
-  private migrateThreadStatusConstraint(connection: DatabaseType): void {
-    const table = connection
-      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='threads'")
-      .get() as { sql?: string } | undefined
-    if (
-      !table?.sql ||
-      table.sql.includes("status IN ('created','planning','awaiting_approval','spec','executing'")
-    ) {
-      return
-    }
-
-    const columns = connection.prepare('PRAGMA table_info(threads)').all() as Array<{
-      name: string
-    }>
-    const columnList = columns.map(({ name }) => `"${name.replace(/"/gu, '""')}"`).join(', ')
-    const foreignKeysEnabled = Number(connection.pragma('foreign_keys', { simple: true })) === 1
-
-    connection.pragma('foreign_keys = OFF')
-    try {
-      connection.transaction(() => {
-        connection.exec(threadsTableSql('threads_new'))
-        connection.exec(`INSERT INTO threads_new (${columnList}) SELECT ${columnList} FROM threads`)
-        connection.exec('DROP TABLE threads')
-        connection.exec('ALTER TABLE threads_new RENAME TO threads')
-        connection.exec(THREAD_INDEXES_SQL)
-      })()
-    } finally {
-      connection.pragma(`foreign_keys = ${foreignKeysEnabled ? 'ON' : 'OFF'}`)
-    }
   }
 }
 
