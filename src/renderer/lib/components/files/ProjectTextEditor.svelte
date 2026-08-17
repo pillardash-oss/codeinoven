@@ -43,6 +43,11 @@
   let findHighlightLayer = $state<HTMLPreElement | null>(null)
   let handledFocusLineRequest = 0
   let pendingScrollFrame: number | null = null
+  // While the user drags to select text, the textarea scrolls natively (drag
+  // autoscroll) and Chromium tracks the selection extents. Rewriting the scroll
+  // offsets of the overlay/gutter layers during that gesture can disturb the
+  // in-flight drag selection, so overlay sync is deferred until the drag ends.
+  let selectionDragging = false
   let highlighted = $derived(highlightFileContent(value, path))
   let lineMetrics = $derived.by(() => {
     let count = 1
@@ -130,7 +135,7 @@
 
   function synchronizeScrollLayers(): void {
     pendingScrollFrame = null
-    if (!editor) return
+    if (!editor || selectionDragging) return
     if (gutter) gutter.scrollTop = editor.scrollTop
     if (highlightLayer) {
       highlightLayer.scrollTop = editor.scrollTop
@@ -154,11 +159,31 @@
     pendingScrollFrame = requestAnimationFrame(synchronizeScrollLayers)
   }
 
+  function handlePointerDown(event: PointerEvent): void {
+    if (event.button !== 0 || event.isPrimary === false) return
+    selectionDragging = true
+    // Listen for the drag end on the window so releasing outside the textarea
+    // (drag autoscroll can carry the pointer past the editor) still resumes
+    // overlay synchronization.
+    window.addEventListener('pointerup', handlePointerUp, true)
+    window.addEventListener('pointercancel', handlePointerUp, true)
+  }
+
+  function handlePointerUp(): void {
+    if (!selectionDragging) return
+    selectionDragging = false
+    window.removeEventListener('pointerup', handlePointerUp, true)
+    window.removeEventListener('pointercancel', handlePointerUp, true)
+    flushScrollSynchronization()
+  }
+
   onDestroy(() => {
     if (pendingScrollFrame !== null) {
       cancelAnimationFrame(pendingScrollFrame)
       pendingScrollFrame = null
     }
+    window.removeEventListener('pointerup', handlePointerUp, true)
+    window.removeEventListener('pointercancel', handlePointerUp, true)
   })
 </script>
 
@@ -204,6 +229,7 @@
       autocapitalize="off"
       {spellcheck}
       wrap={wrap ? 'soft' : 'off'}
+      onpointerdown={handlePointerDown}
       oninput={onInput}
       onkeydown={onKeydown}
       onscroll={handleScroll}></textarea>
