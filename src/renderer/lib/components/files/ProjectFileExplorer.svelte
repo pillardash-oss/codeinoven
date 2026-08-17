@@ -1,8 +1,5 @@
 <script lang="ts">
   import { onDestroy, tick } from 'svelte'
-  import { slide } from 'svelte/transition'
-  import { cubicOut } from 'svelte/easing'
-  import { motionDuration } from '$lib/motion'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -40,6 +37,39 @@
     activeCheckpointPaths?: string[]
     onFileSelect?: (path: string) => void
   }
+
+  interface EntryTreeRow {
+    kind: 'entry'
+    key: string
+    entry: ProjectFileEntry
+    depth: number
+  }
+
+  interface CreateTreeRow {
+    kind: 'create'
+    key: string
+    directory: string
+    depth: number
+  }
+
+  interface ErrorTreeRow {
+    kind: 'error'
+    key: string
+    entry: ProjectFileEntry
+    depth: number
+    message: string
+  }
+
+  type TreeRow = EntryTreeRow | CreateTreeRow | ErrorTreeRow
+
+  interface VirtualTreeRow {
+    row: TreeRow
+    offset: number
+  }
+
+  const TREE_ROW_HEIGHT = 28
+  const TREE_VERTICAL_PADDING = 4
+  const TREE_OVERSCAN = 8
 
   let {
     projectId,
@@ -79,6 +109,8 @@
   let deleteTarget = $state<{ paths: string[]; label: string } | null>(null)
   let info = $state<ProjectFileInfo | null>(null)
   let treeScroll = $state<HTMLDivElement | null>(null)
+  let treeScrollTop = $state(0)
+  let treeViewportHeight = $state(0)
   let filterInput = $state<HTMLInputElement | null>(null)
   let dropActive = $state(false)
   let dropTargetPath = $state<string | null>(null)
@@ -89,32 +121,93 @@
   let treeBusy = $state(false)
   let resizing = $state(false)
   let stopResize: (() => void) | null = null
-  const filterActive = $derived(Boolean(filterQuery.trim()) || lastTurnOnly)
   /** When true, the next reveal scroll is suppressed. Set during a pointer
    *  interaction on the tree so a user clicking a row isn't yanked around;
    *  cleared on a macrotask so external reveals still auto-scroll. */
   let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
 
-  /** Flattened, depth-first list of the tree rows currently visible, matching the
-   *  render order of `directoryRows`. Used for range selection and keyboard nav. */
-  let visibleRows = $derived.by((): ProjectFileEntry[] => {
-    const rows: ProjectFileEntry[] = []
-    const walk = (directory: string): void => {
+  /** Flatten the expanded tree into fixed-height display rows. Keeping the full
+   *  model in memory is cheap; the virtual slice below limits component and DOM
+   *  creation to the viewport plus overscan. */
+  let treeRows = $derived.by((): TreeRow[] => {
+    const rows: TreeRow[] = []
+    const walk = (directory: string, depth: number): void => {
+      if (inlineEdit?.kind === 'create' && inlineEdit.directory === directory) {
+        rows.push({
+          kind: 'create',
+          key: `create:${directory}`,
+          directory,
+          depth
+        })
+      }
       for (const entry of visibleEntries(directory)) {
-        rows.push(entry)
-        if (entry.kind === 'directory' && shouldRenderDirectory(entry.path)) {
-          walk(entry.path)
+        rows.push({ kind: 'entry', key: `entry:${entry.path}`, entry, depth })
+        if (entry.kind !== 'directory') continue
+        const error = projectState.directoryErrors[entry.path]
+        if (projectState.expandedDirectories[entry.path] && error) {
+          rows.push({
+            kind: 'error',
+            key: `error:${entry.path}`,
+            entry,
+            depth,
+            message: error
+          })
+        } else if (shouldRenderDirectory(entry.path)) {
+          walk(entry.path, depth + 1)
         }
       }
     }
-    walk('')
+    walk('', 0)
     return rows
   })
+
+  /** Entry-only view preserves the existing keyboard and range-selection model. */
+  let visibleRows = $derived.by((): ProjectFileEntry[] => {
+    const entries: ProjectFileEntry[] = []
+    for (const row of treeRows) {
+      if (row.kind === 'entry') entries.push(row.entry)
+    }
+    return entries
+  })
+
   let rowIndexByPath = $derived.by((): Map<string, number> => {
     const indexByPath = new SvelteMap<string, number>()
     visibleRows.forEach((entry, index) => indexByPath.set(entry.path, index))
     return indexByPath
+  })
+
+  let treeRowIndexByPath = $derived.by((): Map<string, number> => {
+    const indexByPath = new SvelteMap<string, number>()
+    treeRows.forEach((row, index) => {
+      if (row.kind === 'entry') indexByPath.set(row.entry.path, index)
+    })
+    return indexByPath
+  })
+
+  let treeRowIndexByKey = $derived.by((): Map<string, number> => {
+    const indexByKey = new SvelteMap<string, number>()
+    treeRows.forEach((row, index) => indexByKey.set(row.key, index))
+    return indexByKey
+  })
+
+  let virtualTree = $derived.by((): { rows: VirtualTreeRow[]; total: number } => {
+    const total = treeRows.length * TREE_ROW_HEIGHT
+    if (treeRows.length === 0) return { rows: [], total }
+    const viewport = Math.max(treeViewportHeight, TREE_ROW_HEIGHT)
+    const maxScrollTop = Math.max(0, total + TREE_VERTICAL_PADDING * 2 - viewport)
+    const effectiveTop = Math.min(treeScrollTop, maxScrollTop)
+    const contentTop = Math.max(0, effectiveTop - TREE_VERTICAL_PADDING)
+    const start = Math.max(0, Math.floor(contentTop / TREE_ROW_HEIGHT) - TREE_OVERSCAN)
+    const end = Math.min(
+      treeRows.length,
+      Math.ceil((contentTop + viewport) / TREE_ROW_HEIGHT) + TREE_OVERSCAN
+    )
+    const rows: VirtualTreeRow[] = []
+    for (let index = start; index < end; index += 1) {
+      rows.push({ row: treeRows[index], offset: index * TREE_ROW_HEIGHT })
+    }
+    return { rows, total }
   })
 
   $effect(() => {
@@ -268,16 +361,56 @@
     return projectFilesWorkspace.clipboard !== null
   }
 
+  /** Track the scroll viewport without making every tree row reactive. */
+  function attachTreeScroll(node: HTMLDivElement): () => void {
+    treeScroll = node
+    treeScrollTop = node.scrollTop
+    treeViewportHeight = node.clientHeight
+    const onScroll = (): void => {
+      treeScrollTop = node.scrollTop
+    }
+    const resizeObserver = new ResizeObserver(() => {
+      treeViewportHeight = node.clientHeight
+    })
+    node.addEventListener('scroll', onScroll, { passive: true })
+    resizeObserver.observe(node)
+    return () => {
+      node.removeEventListener('scroll', onScroll)
+      resizeObserver.disconnect()
+      if (treeScroll === node) treeScroll = null
+    }
+  }
+
+  function scrollTreeIndexIntoView(index: number): void {
+    const scroll = treeScroll
+    if (!scroll || index < 0) return
+    const top = TREE_VERTICAL_PADDING + index * TREE_ROW_HEIGHT
+    const bottom = top + TREE_ROW_HEIGHT
+    const viewportTop = scroll.scrollTop
+    const viewportBottom = viewportTop + scroll.clientHeight
+    let nextTop = viewportTop
+    if (top < viewportTop) nextTop = top
+    else if (bottom > viewportBottom) nextTop = bottom - scroll.clientHeight
+    if (nextTop === viewportTop) return
+    scroll.scrollTop = nextTop
+    treeScrollTop = nextTop
+  }
+
+  function scrollTreePathIntoView(path: string): void {
+    const index = treeRowIndexByPath.get(path)
+    if (index !== undefined) scrollTreeIndexIntoView(index)
+  }
+
+  function scrollTreeKeyIntoView(key: string): void {
+    const index = treeRowIndexByKey.get(key)
+    if (index !== undefined) scrollTreeIndexIntoView(index)
+  }
+
   $effect(() => {
     const path = revealedSearchPath ?? projectState.revealedPath ?? selectedPath
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
     if (suppressRevealScroll) return
-    void tick().then(() => {
-      const selected = [
-        ...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])
-      ].find((element) => element.dataset.treePath === path)
-      selected?.scrollIntoView({ block: 'nearest' })
-    })
+    void tick().then(() => scrollTreePathIntoView(path))
   })
 
   /** Suppress the auto-reveal scroll for the rest of the current pointer
@@ -416,6 +549,7 @@
   }
 
   function focusRow(path: string): void {
+    scrollTreePathIntoView(path)
     void tick().then(() => {
       const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
         (element) => element.dataset.treePath === path
@@ -558,6 +692,8 @@
       await projectFilesWorkspace.loadDirectory(projectId, directory)
     }
     inlineEdit = { kind: 'create', directory, value }
+    await tick()
+    scrollTreeKeyIntoView(`create:${directory}`)
     await tick()
     inlineInput?.focus()
     inlineInput?.select()
@@ -988,11 +1124,11 @@
   })
 </script>
 
-{#snippet directoryRows(directory: string, depth: number)}
-  {#if inlineEdit?.kind === 'create' && inlineEdit.directory === directory}
+{#snippet createTreeRow(row: CreateTreeRow)}
+  {#if inlineEdit?.kind === 'create'}
     <div
       class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
-      style:padding-left={`${22 + depth * 14}px`}
+      style:padding-left={`${22 + row.depth * 14}px`}
     >
       <FileTypeIcon path={inlineEdit.value} />
       <input
@@ -1007,125 +1143,119 @@
       />
     </div>
   {/if}
-  {#each visibleEntries(directory) as entry (entry.path)}
-    <ProjectFileContextMenu
-      {entry}
-      selectedPaths={projectState.selectedPaths}
-      canPaste={canPaste()}
-      onCreateFile={() => void startCreate(entry.path)}
-      onCopy={() => void copyForPaste(selectionPathsFor(entry), 'copy')}
-      onCopyPath={() => void copyPaths(selectionPathsFor(entry))}
-      onCut={() => void copyForPaste(selectionPathsFor(entry), 'move')}
-      onPaste={() => void pasteInto(pasteDirectory(entry))}
-      onRename={() => void startRename(entry)}
-      onDelete={() => {
-        const paths = selectionPathsFor(entry)
-        deleteTarget = {
-          paths,
-          label: paths.length === 1 ? entry.name : `${paths.length} items`
-        }
-      }}
-      onInfo={() => void showInfo(entry)}
+{/snippet}
+
+{#snippet errorTreeRow(row: ErrorTreeRow)}
+  <div
+    class="flex h-7 items-center gap-2 pr-2 text-[10px] text-danger"
+    style:padding-left={`${22 + row.depth * 14}px`}
+  >
+    <span class="min-w-0 flex-1 truncate">{row.message}</span>
+    <button
+      type="button"
+      class="shrink-0 font-medium text-foreground hover:underline"
+      onclick={() => void projectFilesWorkspace.loadDirectory(projectId, row.entry.path, true)}
     >
-      {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
-        <div
-          class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
-          style:padding-left={`${22 + depth * 14}px`}
-        >
-          {#if inlineEdit.entry.kind === 'directory'}
-            <FolderTypeIcon name={inlineEdit.value} size={13} />
-          {:else}
-            <FileTypeIcon path={inlineEdit.value} />
-          {/if}
-          <input
-            bind:this={inlineInput}
-            bind:value={inlineEdit.value}
-            class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
-            aria-label={`Rename ${entry.name}`}
-            disabled={operationPending}
-            onkeydown={handleInlineKeydown}
-            onblur={() => void commitInlineEdit()}
-          />
-        </div>
-      {:else}
-        <button
-          type="button"
-          data-tree-path={entry.path}
-          draggable="true"
-          class={[
-            'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
-            isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
-            dropFolder === entry.path ? 'bg-primary/10' : ''
-          ]}
-          style:padding-left={`${8 + depth * 14}px`}
-          title={entry.path}
-          onclick={(event: MouseEvent) => handleRowClick(entry, event)}
-          ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
-          oncontextmenu={() => handleRowContextMenu(entry)}
-          onpointerdown={() => handleFilePointerDown(entry)}
-          ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
-        >
-          <div
-            class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
-              entry.path && dropIndicator.position === 'before'
-              ? 'bg-primary opacity-100'
-              : 'opacity-0'}"
-          ></div>
-          <div
-            class="pointer-events-none absolute bottom-0 left-0 right-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
-              entry.path && dropIndicator.position === 'after'
-              ? 'bg-primary opacity-100'
-              : 'opacity-0'}"
-          ></div>
-          {#if entry.kind === 'directory'}
-            {#if projectState.loadingDirectories[entry.path]}
-              <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
-            {:else if projectState.expandedDirectories[entry.path]}
-              <ChevronDown size={12} class="shrink-0 text-dimmed" />
-            {:else}
-              <ChevronRight size={12} class="shrink-0 text-dimmed" />
-            {/if}
-            {#if projectState.expandedDirectories[entry.path]}
-              <FolderTypeIcon name={entry.name} open size={13} />
-            {:else}
-              <FolderTypeIcon name={entry.name} size={13} />
-            {/if}
-          {:else}
-            <span class="w-3 shrink-0"></span>
-            <FileTypeIcon path={entry.path} />
-          {/if}
-          <span class="min-w-0 flex-1 truncate">{entry.name}</span>
-          {#if entry.kind === 'file' && projectState.sessions[entry.path] && projectState.sessions[entry.path].draft !== projectState.sessions[entry.path].source.content}
-            <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"
-            ></span>
-          {/if}
-        </button>
-      {/if}
-    </ProjectFileContextMenu>
-    {#if entry.kind === 'directory' && projectState.expandedDirectories[entry.path] && projectState.directoryErrors[entry.path]}
+      Retry
+    </button>
+  </div>
+{/snippet}
+
+{#snippet entryTreeRow(row: EntryTreeRow)}
+  {@const entry = row.entry}
+  <ProjectFileContextMenu
+    {entry}
+    selectedPaths={projectState.selectedPaths}
+    canPaste={canPaste()}
+    onCreateFile={() => void startCreate(entry.path)}
+    onCopy={() => void copyForPaste(selectionPathsFor(entry), 'copy')}
+    onCopyPath={() => void copyPaths(selectionPathsFor(entry))}
+    onCut={() => void copyForPaste(selectionPathsFor(entry), 'move')}
+    onPaste={() => void pasteInto(pasteDirectory(entry))}
+    onRename={() => void startRename(entry)}
+    onDelete={() => {
+      const paths = selectionPathsFor(entry)
+      deleteTarget = {
+        paths,
+        label: paths.length === 1 ? entry.name : `${paths.length} items`
+      }
+    }}
+    onInfo={() => void showInfo(entry)}
+  >
+    {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div
-        class="flex items-center gap-2 py-1 pr-2 text-[10px] text-danger"
-        style:padding-left={`${22 + depth * 14}px`}
+        class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
+        style:padding-left={`${22 + row.depth * 14}px`}
       >
-        <span class="min-w-0 flex-1 truncate">{projectState.directoryErrors[entry.path]}</span>
-        <button
-          type="button"
-          class="shrink-0 font-medium text-foreground hover:underline"
-          onclick={() => void projectFilesWorkspace.loadDirectory(projectId, entry.path, true)}
-        >
-          Retry
-        </button>
+        {#if inlineEdit.entry.kind === 'directory'}
+          <FolderTypeIcon name={inlineEdit.value} size={13} />
+        {:else}
+          <FileTypeIcon path={inlineEdit.value} />
+        {/if}
+        <input
+          bind:this={inlineInput}
+          bind:value={inlineEdit.value}
+          class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
+          aria-label={`Rename ${entry.name}`}
+          disabled={operationPending}
+          onkeydown={handleInlineKeydown}
+          onblur={() => void commitInlineEdit()}
+        />
       </div>
-    {:else if entry.kind === 'directory' && shouldRenderDirectory(entry.path)}
-      {#if filterActive}
-        {@render directoryRows(entry.path, depth + 1)}
-      {:else}
-        <div transition:slide={{ duration: motionDuration(140), easing: cubicOut }}>
-          {@render directoryRows(entry.path, depth + 1)}
-        </div>
-      {/if}
+    {:else}
+      <button
+        type="button"
+        data-tree-path={entry.path}
+        draggable="true"
+        class={[
+          'relative flex h-7 w-full items-center gap-1.5 pr-2 text-left text-[11px] transition-colors hover:bg-elevated',
+          isRowActive(entry.path) ? 'bg-overlay text-foreground' : 'text-muted',
+          dropFolder === entry.path ? 'bg-primary/10' : ''
+        ]}
+        style:padding-left={`${8 + row.depth * 14}px`}
+        title={entry.path}
+        onclick={(event: MouseEvent) => handleRowClick(entry, event)}
+        ondblclick={(event: MouseEvent) => handleRowDoubleClick(entry, event)}
+        oncontextmenu={() => handleRowContextMenu(entry)}
+        onpointerdown={() => handleFilePointerDown(entry)}
+        ondragstart={(event: DragEvent) => handleFileDragStart(entry, event)}
+      >
+        <div
+          class="pointer-events-none absolute left-0 right-0 top-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
+            entry.path && dropIndicator.position === 'before'
+            ? 'bg-primary opacity-100'
+            : 'opacity-0'}"
+        ></div>
+        <div
+          class="pointer-events-none absolute bottom-0 left-0 right-0 h-[2px] transition-opacity duration-100 {dropIndicator?.path ===
+            entry.path && dropIndicator.position === 'after'
+            ? 'bg-primary opacity-100'
+            : 'opacity-0'}"
+        ></div>
+        {#if entry.kind === 'directory'}
+          {#if projectState.loadingDirectories[entry.path]}
+            <Loader2 size={12} class="shrink-0 animate-spin text-dimmed" />
+          {:else if projectState.expandedDirectories[entry.path]}
+            <ChevronDown size={12} class="shrink-0 text-dimmed" />
+          {:else}
+            <ChevronRight size={12} class="shrink-0 text-dimmed" />
+          {/if}
+          {#if projectState.expandedDirectories[entry.path]}
+            <FolderTypeIcon name={entry.name} open size={13} />
+          {:else}
+            <FolderTypeIcon name={entry.name} size={13} />
+          {/if}
+        {:else}
+          <span class="w-3 shrink-0"></span>
+          <FileTypeIcon path={entry.path} />
+        {/if}
+        <span class="min-w-0 flex-1 truncate">{entry.name}</span>
+        {#if entry.kind === 'file' && projectState.sessions[entry.path] && projectState.sessions[entry.path].draft !== projectState.sessions[entry.path].source.content}
+          <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" title="Unsaved changes"></span>
+        {/if}
+      </button>
     {/if}
-  {/each}
+  </ProjectFileContextMenu>
 {/snippet}
 
 <aside
@@ -1267,7 +1397,7 @@
     onInfo={() => undefined}
   >
     <div
-      bind:this={treeScroll}
+      {@attach attachTreeScroll}
       class="min-h-0 flex-1 overflow-auto py-1 [&::-webkit-scrollbar]:hidden"
       style:scrollbar-width="none"
       role="tree"
@@ -1294,7 +1424,22 @@
           {lastTurnOnly ? 'No changed files match this filter.' : 'No files match this filter.'}
         </p>
       {:else}
-        {@render directoryRows('', 0)}
+        <div class="relative w-full" style:height={`${virtualTree.total}px`}>
+          {#each virtualTree.rows as virtualRow (virtualRow.row.key)}
+            <div
+              class="absolute inset-x-0 top-0 h-7"
+              style:transform={`translateY(${virtualRow.offset}px)`}
+            >
+              {#if virtualRow.row.kind === 'entry'}
+                {@render entryTreeRow(virtualRow.row)}
+              {:else if virtualRow.row.kind === 'create'}
+                {@render createTreeRow(virtualRow.row)}
+              {:else}
+                {@render errorTreeRow(virtualRow.row)}
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
   </ProjectFileContextMenu>
