@@ -34,7 +34,6 @@ interface HarnessRoot {
 interface TrackedProcess extends AgentRunningProcess {
   sessionId: string
 }
-
 export interface ReapOrphansResult {
   killed: number[]
   skipped: number[]
@@ -167,13 +166,29 @@ export class AgentProcessService implements AgentProcessObserver {
     for (const [sessionId, owner] of this.owners) {
       if (owner.projectId !== projectId || owner.threadId !== threadId) continue
       for (const process of this.tracked.get(sessionId)?.values() ?? []) {
-        unique.set(process.pid, {
-          pid: process.pid,
-          parentPid: process.parentPid,
-          command: process.command,
-          startedAt: process.startedAt
-        })
+        if (!unique.has(process.pid)) {
+          unique.set(process.pid, {
+            pid: process.pid,
+            parentPid: process.parentPid,
+            command: process.command,
+            startedAt: process.startedAt,
+            scope: 'thread'
+          })
+        }
       }
+    }
+    // App-scoped processes (descendants of a shared/pooled harness like the
+    // opencode server) are surfaced alongside the thread's own processes so the
+    // user can see and kill them, but always labeled `app` so it is clear they
+    // are NOT tied to this thread alone.
+    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
+      unique.set(process.pid, {
+        pid: process.pid,
+        parentPid: process.parentPid,
+        command: process.command,
+        startedAt: process.startedAt,
+        scope: 'app'
+      })
     }
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
   }
@@ -182,7 +197,8 @@ export class AgentProcessService implements AgentProcessObserver {
     const owned = this.sessionsForThread(projectId, threadId).some((sessionId) =>
       this.tracked.get(sessionId)?.has(pid)
     )
-    if (!owned) throw new Error(`Process ${pid} is not owned by this task`)
+    const appScoped = this.tracked.get(APP_SCOPE)?.has(pid) ?? false
+    if (!owned && !appScoped) throw new Error(`Process ${pid} is not tracked by this task`)
     await this.killTree(pid)
     await this.scan()
   }
@@ -372,8 +388,10 @@ export class AgentProcessService implements AgentProcessObserver {
       }
 
       const changedOwners = new Map<string, ProcessOwner>()
+      let appScopeChanged = false
       const sessionIds = new Set([...this.roots.keys(), ...this.tracked.keys()])
       for (const sessionId of sessionIds) {
+        const isAppScope = sessionId === APP_SCOPE
         const sessionRoots = this.roots.get(sessionId) ?? new Map<number, HarnessRoot>()
         let sessionProcesses = this.tracked.get(sessionId)
         if (!sessionProcesses) {
@@ -385,9 +403,12 @@ export class AgentProcessService implements AgentProcessObserver {
           for (const descendant of descendantsOf(root.pid, childrenByParent)) {
             if (sessionProcesses.has(descendant.pid)) continue
             sessionProcesses.set(descendant.pid, {
-              ...descendant,
-              sessionId,
-              startedAt: Date.now()
+              pid: descendant.pid,
+              parentPid: descendant.parentPid,
+              command: descendant.command,
+              startedAt: Date.now(),
+              scope: isAppScope ? 'app' : 'thread',
+              sessionId
             })
             changed = true
           }
@@ -410,6 +431,18 @@ export class AgentProcessService implements AgentProcessObserver {
         if (sessionProcesses.size === 0) this.tracked.delete(sessionId)
         const owner = this.owners.get(sessionId)
         if (changed && owner) changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
+        if (changed && isAppScope) appScopeChanged = true
+      }
+      if (appScopeChanged) {
+        // App-scoped processes are shared across every thread, so refresh every
+        // thread's Processes tab whenever the shared server's descendants change.
+        const allOwners = new Map<string, ProcessOwner>()
+        for (const owner of this.owners.values()) {
+          allOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
+        }
+        for (const owner of allOwners.values()) {
+          broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
+        }
       }
       for (const owner of changedOwners.values()) {
         broadcastAgentProcessesChanged(owner.projectId, owner.threadId)

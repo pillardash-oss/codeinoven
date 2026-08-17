@@ -19,7 +19,7 @@
 import { parentPort, workerData } from 'worker_threads'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType } from 'better-sqlite3'
-import { mkdirSync, renameSync, rmSync, statSync } from 'fs'
+import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import type {
   DatabaseWorkerConfig,
@@ -32,7 +32,9 @@ import {
   runProviderDeltaSync,
   type ProviderDeltaSyncExecutor
 } from './repositories/agent-message-repo'
+import { mapMessageRows } from './repositories/agent-message-repo'
 import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history-repo'
+import { buildTranscriptMarkdown } from '../../lib/transcript'
 
 /** Executor adapter over this worker's own connection. */
 function executor(): ProviderDeltaSyncExecutor {
@@ -77,11 +79,7 @@ function connection(): DatabaseType {
   return db
 }
 
-function emit(message: {
-  type: 'log'
-  level?: 'info' | 'warn' | 'error'
-  message?: string
-}): void {
+function emit(message: { type: 'log'; level?: 'info' | 'warn' | 'error'; message?: string }): void {
   if (!port) return
   port.postMessage({ type: 'log', level: message.level ?? 'info', message: message.message ?? '' })
 }
@@ -533,6 +531,44 @@ function stats(): DatabaseWorkerResult {
   }
 }
 
+/**
+ * Serialize one thread's mirrored conversation (parent-session rows) into a
+ * Markdown transcript and write it atomically to `request.destinationPath`.
+ * Runs entirely on the worker thread so the read/build/write never blocks the
+ * main process.
+ */
+function exportTranscript(
+  request: Extract<DatabaseWorkerRequest, { kind: 'export-transcript' }>
+): DatabaseWorkerResult {
+  const tmpPath = `${request.destinationPath}.${process.pid}.tmp`
+  try {
+    const result = buildTranscriptMarkdown(
+      mapMessageRows(
+        connection()
+          .prepare(
+            `SELECT * FROM agent_messages
+             WHERE thread_id = ? AND session_id IS NULL
+               AND visibility IN ('conversation', 'working_trace')
+             ORDER BY created_at ASC, id ASC`
+          )
+          .all(request.threadId)
+      ),
+      { includeTrace: request.includeTrace }
+    )
+    if (result.trim().length === 0) {
+      return { kind: 'export-transcript', ok: false, error: 'no conversation to export' }
+    }
+    mkdirSync(dirname(request.destinationPath), { recursive: true })
+    rmSync(tmpPath, { force: true })
+    writeFileSync(tmpPath, result, { encoding: 'utf-8', mode: 0o600 })
+    renameSync(tmpPath, request.destinationPath)
+    return { kind: 'export-transcript', ok: true, path: request.destinationPath }
+  } catch (error) {
+    rmSync(tmpPath, { force: true })
+    return { kind: 'export-transcript', ok: false, error: String(error) }
+  }
+}
+
 // ─── Request dispatch ─────────────────────────────────────────────────────
 
 function handle(
@@ -599,6 +635,8 @@ function handle(
         return { kind: 'sync-provider-deltas', ok: false, error: String(error) }
       }
     }
+    case 'export-transcript':
+      return exportTranscript(request)
     case 'shutdown': {
       shuttingDown = true
       clearMaintenanceTimer()

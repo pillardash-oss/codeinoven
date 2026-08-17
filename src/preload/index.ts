@@ -375,6 +375,7 @@ const INVOKE_CHANNELS = [
   'threads:search',
   'thread:loadMessages',
   'thread:loadMessagesAround',
+  'thread:exportTranscript',
   'thread:loadUserMessages',
   'thread:reorder',
   'thread:setSortOrder',

@@ -71,6 +71,12 @@ export type DatabaseWorkerRequest =
     }
   | { kind: 'stats' }
   | { kind: 'sync-provider-deltas'; threadId: string; sessionId: string; messages: AgentMessage[] }
+  | {
+      kind: 'export-transcript'
+      threadId: string
+      includeTrace: boolean
+      destinationPath: string
+    }
   | { kind: 'shutdown' }
   | { kind: 'ping' }
 
@@ -184,6 +190,12 @@ export type DatabaseWorkerResult =
       error?: string
     }
   | { kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string }
+  | {
+      kind: 'export-transcript'
+      ok: boolean
+      path?: string
+      error?: string
+    }
   | ({ kind: 'shutdown' } & { ok: boolean })
   | ({ kind: 'ping' } & { ok: boolean })
 
@@ -417,6 +429,19 @@ export class DatabaseWorker {
     messages: AgentMessage[]
   ): Promise<ResultForRequest<'sync-provider-deltas'>> {
     return this.request({ kind: 'sync-provider-deltas', threadId, sessionId, messages })
+  }
+
+  /**
+   * Serialize a thread's conversation into a Markdown transcript on the worker
+   * thread and write it atomically to `destinationPath` — the heavy read/build
+   * never touches the main process. Returns the written path on success.
+   */
+  async exportTranscript(
+    threadId: string,
+    includeTrace: boolean,
+    destinationPath: string
+  ): Promise<ResultForRequest<'export-transcript'>> {
+    return this.request({ kind: 'export-transcript', threadId, includeTrace, destinationPath })
   }
 
   async ping(): Promise<ResultForRequest<'ping'>> {
