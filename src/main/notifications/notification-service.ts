@@ -124,20 +124,17 @@ export class NotificationService {
    * Record the outcome of a native notification delivery. Electron has no
    * notification-permission query API on macOS, so the OS delivery events are
    * the authoritative signal: a shown notification implies permission, a
-   * refused one from a packaged app implies the app is blocked. Development
-   * builds can produce the same error because of an ad-hoc signature, so their
-   * failures never overwrite the packaged app's persisted permission state.
+   * refused one implies the app is blocked (permission denied or unsigned).
+   * Only a refusal error (`UNErrorNotAllowed` — "not allowed") marks the state
+   * as denied: other failures are logged but never flip the state, so a
+   * transient error can never permanently lock the app into "blocked".
    */
   private recordNotificationOutcome(outcome: 'shown' | 'failed', error?: unknown): void {
     if (process.platform !== 'darwin') return
     const previous = this.macosNotificationPermission
     if (outcome === 'shown') {
       this.macosNotificationPermission = 'granted'
-    } else if (
-      app.isPackaged &&
-      this.macosNotificationPermission !== 'granted' &&
-      isPermissionRefusal(error)
-    ) {
+    } else if (this.macosNotificationPermission !== 'granted' && isPermissionRefusal(error)) {
       this.macosNotificationPermission = 'denied'
     }
     if (this.macosNotificationPermission !== previous) {
@@ -147,7 +144,6 @@ export class NotificationService {
   }
 
   private async hydratePermissionStatus(): Promise<void> {
-    if (!app.isPackaged) return
     try {
       const state = await this.storage.read<PermissionStateRecord>(PERMISSION_STATE_PATH)
       if (
@@ -162,7 +158,6 @@ export class NotificationService {
   }
 
   private persistPermissionStatus(): void {
-    if (!app.isPackaged) return
     void (async (): Promise<void> => {
       try {
         await this.storage.write(PERMISSION_STATE_PATH, {
@@ -674,9 +669,8 @@ export class NotificationService {
         Logger.error('System notification test failed:', error)
         finish({
           status: 'failed',
-          message: app.isPackaged
-            ? 'macOS rejected the notification. Allow CodeInOven in System Settings > Notifications.'
-            : 'macOS rejected this development build. Restart it after signing Electron.app with an Apple Development or Developer ID certificate.'
+          message:
+            'macOS rejected the notification. Allow notifications in System Settings > Notifications.'
         })
       })
 
