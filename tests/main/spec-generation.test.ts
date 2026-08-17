@@ -285,7 +285,7 @@ describe('prompt assembly owns planning and implementation layers', () => {
     SPEC_IMPLEMENT_SYSTEM_PROMPT
   }
   const assembler = new PromptAssembler(new MemoryService())
-  // A path with no AGENTS.md keeps the assembled layers deterministic.
+  // A stable project path keeps the assembled layers deterministic.
   const projectPath = '/nonexistent-prompt-assembler-test-project'
 
   it('normalizes content so structurally identical layers hash equally', () => {

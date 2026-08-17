@@ -21,6 +21,7 @@
     Brain,
     Check,
     ChevronDown,
+    Clock,
     Copy,
     Ellipsis,
     FileText,
@@ -99,7 +100,10 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import {
+    rendererRecovery,
+    type StartAfterThreadReference
+  } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
@@ -112,7 +116,7 @@
   import { isTodoToolPart, latestAgentTodo } from '$lib/agent-todos'
   import { collectAgentSources, type AgentSource } from '$lib/agent-sources'
   import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
-  import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
+  import { revealCitationFile, revealFileInAppTree, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { toast } from 'svelte-sonner'
@@ -175,6 +179,7 @@
     UsageEfficiencyKpis
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
+  import { LatestRequestGuard } from '$lib/refresh-guard'
 
   interface Props {
     thread: Thread
@@ -193,7 +198,7 @@
   }
 
   let {
-    thread,
+    thread: threadProp,
     chatMode = false,
     onForked,
     projects = [],
@@ -201,6 +206,13 @@
     onContinueInProject,
     onProjectCreated
   }: Props = $props()
+
+  // Workspace clears its selected-thread state before this keyed view's
+  // teardown runs. Keep using the mounted identity during that short window;
+  // normal thread replacements remain reactive through the derived value.
+  // svelte-ignore state_referenced_locally
+  const mountedThread = threadProp
+  let thread = $derived(threadProp ?? mountedThread)
 
   let alive = true
 
@@ -255,10 +267,8 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
-  /** Whether the current run is confirmed by live session activity (vs an
-   *  optimistic restore off a persisted in-flight status). Only a live-confirmed
-   *  run may expand the working trace, so a stale `planning`/`executing` DB
-   *  status can't flash the trace open before the live session settles idle. */
+  /** Whether the current run is confirmed by live session activity. Persisted
+   *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
@@ -278,28 +288,13 @@
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
   })
-  // A persisted in-flight status normally means this thread's harness turn is
-  // still running. Coordinator status also represents delegated workflow work,
-  // though, so only restore non-coordinators synchronously; the coordinator's
-  // live session status below determines whether its own trace is actually busy.
+  // A persisted in-flight status is only a recovery hint. Start every mount in
+  // a settled idle state unless this thread is already receiving live activity;
+  // `connectSession` will promote it to busy when the live session confirms it.
+  // This removes the false working flash on refresh and on view remounts.
   // svelte-ignore state_referenced_locally
-  if (
-    (thread.status === 'planning' || thread.status === 'executing') &&
-    thread.assignmentRole !== 'coordinator' &&
-    thread.achievementRole !== 'coordinator'
-  ) {
-    // Optimistic restore off the persisted in-flight status: it keeps the
-    // composer/placeholder working, but it is not live-confirmed and must not
-    // expand the working trace (the live session settles the truth on connect).
-    agentRuns.setBusy(
-      thread.projectId,
-      thread.id,
-      true,
-      undefined,
-      thread.lastActivity,
-      false,
-      false
-    )
+  if (!agentRuns.isLiveBusy(thread.projectId, thread.id)) {
+    agentRuns.setIdle(thread.projectId, thread.id)
   }
   /** When the current busy run started; authoritative source for the live timer. */
   const activeTurnStartTime = $derived.by(() => {
@@ -350,8 +345,8 @@
   /** Synthetic authentication issue raised by the thread-open auth probe, so
    *  the sign-in card can tell proactive (no retry) from failure-driven. */
   let proactiveAuthIssue: AgentProviderIssue | null = null
-  /** True once the live session status is established on mount; makes the
-   *  DB-status fallback in loadLocal defer to it instead of racing it. */
+  /** True once the live session probe has completed; prevents persisted
+   *  database status from racing or resurrecting stale busy state. */
   let liveStatusKnown = false
   let compacting = $state(false)
   let commandExecuting = $state(false)
@@ -360,6 +355,8 @@
   let turnSawAnswer = $state(false)
   /** Suppresses the "message not processed" notice after an intentional stop. */
   let userRequestedStop = $state(false)
+  /** Prevents duplicate manual retries while the paused provider turn is being replaced. */
+  let providerRetrying = $state(false)
   /** Gentle inline notice when an interrupted compaction ate the user's turn. */
   let compactionInterruptedNotice = $state('')
   const visibleProviderStatus = $derived.by<Extract<
@@ -1002,6 +999,7 @@
     }
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
+  const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
@@ -1298,7 +1296,8 @@
     attachments: PromptAttachment[],
     direct?: boolean,
     projectReferences: PromptProjectReference[] = [],
-    taskReferences: PromptAssignmentTaskReference[] = []
+    taskReferences: PromptAssignmentTaskReference[] = [],
+    startAfterThreads: StartAfterThreadReference[] = []
   ): void {
     const currentTaskReferences = taskReferences.map((reference) => {
       const task = assignment?.content.tasks.find((candidate) => candidate.id === reference.taskId)
@@ -1334,7 +1333,8 @@
       projectReferences,
       undefined,
       currentTaskReferences,
-      true
+      true,
+      startAfterThreads
     )
   }
 
@@ -1503,6 +1503,36 @@
   let assignmentWorkerRetryingId = $state<string | null>(null)
   let auditReport = $state<AuditReport | null>(null)
   let auditVersions = $state<AuditReport[]>([])
+  /** A retry may only follow a completed, non-error assistant response for the
+   * current user turn. Older responses must not unlock a new spec request. */
+  let hasFinalAgentResponse = $derived.by(() => {
+    let latestUserIndex = -1
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'user') {
+        latestUserIndex = index
+        break
+      }
+    }
+    if (latestUserIndex === -1) return false
+    return messages
+      .slice(latestUserIndex + 1)
+      .some(
+        (message) =>
+          message.role === 'assistant' &&
+          message.completedAt !== undefined &&
+          message.error === undefined &&
+          message.parts.some((part) => part.type === 'text' && part.text.trim().length > 0)
+      )
+  })
+  let specStudioRetryable = $derived(
+    !spec &&
+      !brainstorm &&
+      !assignment &&
+      !auditReport &&
+      !busy &&
+      specError.trim().length > 0 &&
+      hasFinalAgentResponse
+  )
   // Intentional mounted-thread snapshot; live changes are reconciled from persisted thread state.
   // svelte-ignore state_referenced_locally
   let auditState = $state<Thread['auditState']>(thread.auditState)
@@ -1606,11 +1636,13 @@
   let assignmentAuditStartedAt = $derived(assignment?.auditCycle?.startedAt)
   let assignmentAuditFinishedAt = $derived(assignment?.auditCycle?.failedAt)
   function delegatedThreadWorking(candidate: Thread | undefined): boolean {
+    if (!candidate) return false
+    if (agentRuns.hasSettled(candidate.projectId, candidate.id)) {
+      return agentRuns.isBusy(candidate.projectId, candidate.id)
+    }
     return (
-      candidate !== undefined &&
-      (candidate.status === 'planning' ||
-        candidate.status === 'executing' ||
-        agentRuns.isBusy(candidate.projectId, candidate.id))
+      Boolean(candidate.sessionId) &&
+      (candidate.status === 'planning' || candidate.status === 'executing')
     )
   }
   let activeAssignmentWorkerCount = $derived(
@@ -1628,13 +1660,9 @@
     }
     return achievementOnly && thread.achievementRole !== 'auditor' && achievementAuditorWorking
   })
-  /** Whether this thread is working in any form: its own live harness turn, a
-   *  persisted in-flight status, or delegated work (workers/auditor) it owns.
-   *  The coordinator's own session is intentionally idle between handoffs, so
-   *  delegated activity is the source of truth that its row must stay alive. */
-  let threadWorking = $derived(
-    busy || delegatedWorkBusy || thread.status === 'planning' || thread.status === 'executing'
-  )
+  /** Whether this thread is working in any form. Live run state owns the
+   *  thread's session; delegated activity owns the coordinator row. */
+  let threadWorking = $derived(busy || delegatedWorkBusy)
   let delegatedActivityLabel = $derived.by((): string => {
     const assignmentCoordinator = assignment?.coordinatorThreadId === thread.id
     const workerCount = assignmentCoordinator ? activeAssignmentWorkerCount : 0
@@ -2061,17 +2089,18 @@
     })
   })
 
-  // Engineering can request a spec; a persisted spec remains available
-  // from the header after planning has ended.
+  // A persisted studio document remains available from the header. A missing
+  // specification is only retryable after the current agent turn has produced
+  // a final response and the generation path has reported an error.
   $effect(() => {
     const hasStudioDocument =
       brainstorm !== null || spec !== null || assignment !== null || auditReport !== null
-    workspaceState.specStudioAvailable =
-      !chatMode && (settings.engineeringMode || hasStudioDocument)
+    workspaceState.specStudioAvailable = !chatMode && (hasStudioDocument || specStudioRetryable)
     workspaceState.specStudioOpen = showSpecStudio
     workspaceState.specStudioBusy = specBusy
     workspaceState.specStudioFormulating = specFormulating
     workspaceState.specStudioError = specError
+    workspaceState.specStudioRetryable = specStudioRetryable
     if (!showSpecStudio) {
       brainstormStudioHistories.clear()
       specStudioHistories.clear()
@@ -2096,9 +2125,7 @@
         void openSpecStudio()
       } else if (brainstorm) {
         openBrainstormStudio()
-      } else if (busy || brainstormWorkflow?.stage === 'choice_pending') {
-        return
-      } else {
+      } else if (specStudioRetryable) {
         void openSpecStudio()
       }
     }
@@ -2109,6 +2136,7 @@
       workspaceState.specStudioBusy = false
       workspaceState.specStudioFormulating = false
       workspaceState.specStudioError = ''
+      workspaceState.specStudioRetryable = false
       workspaceState.specAgentSidebarOpen = false
       workspaceState.specAgentResponses = []
     }
@@ -2302,13 +2330,9 @@
     })
   }
 
-  // The render window must always cover the live tail of the conversation.
-  // Message hydration, paging, and reconcile can shrink, grow, or reorder the
-  // list after the window index was computed; if the window ever points past
-  // the newest message the body goes blank. Snap it back to the tail window so
-  // the latest turn (its user message and working trace) is always on screen.
-  // Only adjusts out-of-range windows — an explicit history scroll that lands
-  // inside the list is left untouched.
+  // Message hydration, paging, and reconciliation can shrink or reorder the
+  // list. Only repair a window that points past the tail; a valid older-history
+  // window belongs to the user and must never be snapped forward.
   $effect(() => {
     const maxStart = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
     if (renderedStartIndex > maxStart && messages.length > 0) {
@@ -2392,12 +2416,17 @@
   let locallySubmittedTurnAcknowledged = false
 
   onMount(() => {
+    // The parent clears its selected thread before Svelte runs this cleanup.
+    // Keep the mounted identity stable so teardown never crosses the chat /
+    // project boundary through the now-null live prop.
+    const mountedProjectId = thread.projectId
+    const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     void refreshEfficiencyKpis()
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
-    queuedMessageDispatcher.markMounted(thread.projectId, thread.id)
+    queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
@@ -2411,17 +2440,20 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
-        restoreWorkingState(
-          updatedThread.status,
-          updatedThread.lastActivity,
-          updatedThread.auditState === 'running'
-        )
+        restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
       if (
         updatedThread.projectId === thread.projectId &&
         (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id)
       ) {
         void reconcileReadySpec()
+      }
+      if (
+        updatedThread.projectId === thread.projectId &&
+        queuedStartAfterThreads.some((reference) => reference.id === updatedThread.id)
+      ) {
+        idleAttentionHandled = false
+        scheduleIdleAttention()
       }
     })
     // Task mount restores app-owned state only. Native harness transport stays
@@ -2441,10 +2473,10 @@
 
     return () => {
       alive = false
-      queuedMessageDispatcher.markUnmounted(thread.projectId, thread.id)
+      queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
       // Save scroll position so switching back snaps to the right place
       if (scrollEl) {
-        threadScrollPositions.set(thread.id, {
+        threadScrollPositions.set(mountedThreadId, {
           top: scrollEl.scrollTop,
           renderedStartIndex: visibleStartIndex,
           awayFromBottom: userScrolledAway
@@ -2523,12 +2555,11 @@
     )
   }
 
-  /** Restore the run's busy state from the persisted thread status. Only the
-   *  genuinely in-flight statuses keep the trace/live timer working across a
-   *  thread switch; an awaiting-approval thread has finished its turn and is
-   *  waiting on the user, so it must read as idle (Needs attention), never as
-   *  still working. Live session activity for pending permission/question gates
-   *  is re-established by connectSession's live status instead.
+  /** Reconcile persisted thread updates without inferring a live turn. The
+   *  live session probe owns session busy state; an awaiting-approval thread
+   *  has finished its turn and is waiting on the user, so it must read as idle
+   *  (Needs attention), never as still working. Live session activity for
+   *  pending permission/question gates is re-established by connectSession.
    *
    *  Coordinator status is broader: it remains executing while workers or an
    *  auditor run. That delegated state keeps the coordination trace visible via
@@ -2536,9 +2567,12 @@
    *  idle Sr. Engineer session. */
   function restoreWorkingState(
     status: Thread['status'],
-    startedAt = thread.lastActivity,
     auditRunning = thread.auditState === 'running'
   ): void {
+    // Once the session probe has completed, persisted thread status must never
+    // resurrect a stale busy flag. New live work enters through agent events or
+    // the send path and establishes the run explicitly.
+    if (liveStatusKnown) return
     // Delegated activity contributes to the aggregate working display, but it
     // says nothing about the Sr. Engineer's own live session. Preserve the raw
     // session state here: live working keeps Steer available, while live idle
@@ -2547,15 +2581,8 @@
       return
     }
     if (status === 'planning' || status === 'executing') {
-      agentRuns.setBusy(
-        thread.projectId,
-        thread.id,
-        true,
-        latestUserMessageId(),
-        startedAt,
-        false,
-        false
-      )
+      // Do not infer active work from the database row. The provider status
+      // probe below is the only source that can restore a live turn.
       return
     }
     setIdleFromRestore()
@@ -2596,7 +2623,6 @@
       if (!liveStatusKnown) {
         restoreWorkingState(
           threadData?.status ?? thread.status,
-          threadData?.lastActivity ?? thread.lastActivity,
           (threadData?.auditState ?? thread.auditState) === 'running'
         )
       }
@@ -2652,7 +2678,11 @@
       // it. In particular, a coordinator can be persisted as executing while
       // only its workers or auditor are active; live idle must clear that fake
       // raw-busy state so messages go to the Sr. Engineer normally.
-      liveStatusKnown = providerStatus !== null
+      // A null result is also a completed, authoritative answer: there is no
+      // live session state to restore. The previous implementation left this
+      // false for null, allowing later `thread:updated` events to re-apply the
+      // stale persisted `planning`/`executing` status after we had cleared it.
+      liveStatusKnown = true
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
         agentRuns.setBusy(
           projectId,
@@ -2676,6 +2706,15 @@
       // mirror + restore to finish so the queue is populated before deciding.
       await localReady
       if (!alive) return
+      // No live session record means the persisted in-flight status is stale: a
+      // genuinely running turn always registers its session status (or a pending
+      // spec/retry surfaces it). loadLocal may have optimistically restored busy
+      // off a leftover `planning`/`executing` DB row — clear it so a finished or
+      // never-started thread never keeps the composer/rows looking busy after a
+      // view switch or refresh.
+      if (providerStatus === null) {
+        setIdleFromRestore()
+      }
       // A thread opened while its turn is still running has its accumulated
       // working trace only in the live harness session: the mirror persists
       // assistant parts only when the turn idles/completes, and parts that
@@ -2778,11 +2817,26 @@
       .catch(() => {})
   }
 
-  /** Retry after an error — sends a continue message to resume the agent on the same session. */
-  function retryConnection(): void {
-    void sendMessage('Continue', [], undefined, true, undefined, [], [], {
-      action: 'Retry connection'
-    })
+  /** Retry after an error or a paused provider retry — replace the live turn first. */
+  async function retryConnection(): Promise<void> {
+    if (providerRetrying) return
+    providerRetrying = true
+    try {
+      if (busy) {
+        userRequestedStop = true
+        await invoke('agent:abort', thread.projectId, thread.id)
+        clearLocalTurn()
+        agentRuns.setIdle(thread.projectId, thread.id)
+        providerStatus = null
+      }
+      await sendMessage('Continue', [], undefined, true, undefined, [], [], {
+        action: 'Retry connection'
+      })
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The connection could not be retried.'
+    } finally {
+      providerRetrying = false
+    }
   }
   /** Detect an expired Claude Code session at thread open so the user can sign
    *  in before their first message fails mid-turn. */
@@ -2837,6 +2891,8 @@
   }
 
   // ─── Agent event handling ────────────────────────────────────────────────
+
+  let refreshMessagesInFlight: Promise<void> | null = null
 
   function setProviderError(issue: AgentProviderIssue): void {
     const currentIssue = providerStatus?.state === 'error' ? providerStatus.issue : null
@@ -2932,13 +2988,10 @@
             }
           }
         }
-        void refreshMessages()
-        void refreshCheckpoints()
         break
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        void refreshMessages()
         break
       }
       case 'session.idle': {
@@ -2950,7 +3003,6 @@
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
         if (providerStatus?.state !== 'error') providerStatus = null
-        void refreshMessages()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         setTimeout(() => void reconcileReadySpec(), 100)
@@ -3062,21 +3114,44 @@
   }
 
   async function refreshMessages(): Promise<void> {
+    if (refreshMessagesInFlight) return refreshMessagesInFlight
+
     const { projectId, id } = thread
+    const loadPromise = (async (): Promise<void> => {
+      try {
+        const page = await invoke(
+          'thread:loadMessages',
+          projectId,
+          id,
+          undefined,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        threadMessages.mergePage(projectId, id, page.messages)
+        olderMessagesAvailable ||= page.hasOlder
+        syncOpenSubagentTabs()
+      } catch {
+        // Non-fatal — keep what we have
+      }
+    })()
+    refreshMessagesInFlight = loadPromise
+
     try {
-      const synced = await invoke('agent:loadMessages', projectId, id)
-      if (!alive) return
-      threadMessages.reconcile(projectId, id, synced)
-      syncOpenSubagentTabs()
-    } catch {
-      // Non-fatal — keep what we have
+      await loadPromise
+    } finally {
+      if (refreshMessagesInFlight === loadPromise) {
+        refreshMessagesInFlight = null
+      }
     }
   }
 
   async function refreshCheckpoints(): Promise<void> {
+    const request = checkpointRefreshGuard.begin()
     const { projectId, id } = thread
     try {
-      checkpoints = await invoke('checkpoint:list', projectId, id)
+      const nextCheckpoints = await invoke('checkpoint:list', projectId, id)
+      if (!alive || !checkpointRefreshGuard.isCurrent(request)) return
+      checkpoints = nextCheckpoints
     } catch {
       // Checkpoint history is supplementary; session recovery remains available.
     }
@@ -3145,6 +3220,10 @@
     }
   }
 
+  function isTerminalThread(status: Thread['status']): boolean {
+    return status === 'completed' || status === 'failed' || status === 'interrupted'
+  }
+
   async function handleIdleAttention(): Promise<void> {
     const { projectId, id } = thread
     try {
@@ -3189,6 +3268,15 @@
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
     if (!pending && !queuedHasContent) return
+    if (queuedStartAfterThreads.length > 0) {
+      const dependencies = await Promise.all(
+        queuedStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
+      )
+      if (dependencies.some((dependency) => !dependency || !isTerminalThread(dependency.status))) {
+        idleAttentionHandled = false
+        return
+      }
+    }
     // Claim synchronously before sending so the background dispatcher (or any
     // concurrent path) cannot also deliver this same queued message. If we lose
     // the race, whoever claimed it will send it — never send here.
@@ -3227,6 +3315,7 @@
     queuedProjectReferences = []
     queuedPresentation = undefined
     queuedTaskReferences = []
+    queuedStartAfterThreads = []
     queuedHasContent = false
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
@@ -3242,6 +3331,7 @@
     queuedProjectReferences = entry.projectReferences
     queuedPresentation = entry.presentation
     queuedTaskReferences = entry.taskReferences
+    queuedStartAfterThreads = entry.startAfterThreads
     queuedHasContent =
       entry.text !== '' ||
       entry.attachments.length > 0 ||
@@ -3280,6 +3370,7 @@
   let queuedProjectReferences = $state<PromptProjectReference[]>([])
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
+  let queuedStartAfterThreads = $state<StartAfterThreadReference[]>([])
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
@@ -3351,7 +3442,8 @@
     projectReferences: PromptProjectReference[] = [],
     presentation?: UserMessagePresentation,
     taskReferences: PromptAssignmentTaskReference[] = [],
-    restorable?: boolean
+    restorable?: boolean,
+    startAfterThreads: StartAfterThreadReference[] = []
   ): Promise<void> {
     const msg = text.trim()
     const hasAttachments = (attachments?.length ?? 0) > 0
@@ -3372,7 +3464,10 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
-    if (busy && !direct) {
+    const dependencyThreads = startAfterThreads.filter(
+      (reference) => reference.id !== thread.id && reference.id.length > 0
+    )
+    if (dependencyThreads.length > 0 || (busy && !direct)) {
       queuedMessage = msg
       queuedAttachments = attachments
       queuedPromptContext = promptContext
@@ -3380,6 +3475,7 @@
       queuedProjectReferences = projectReferences
       queuedPresentation = presentation
       queuedTaskReferences = taskReferences
+      queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
@@ -3388,8 +3484,11 @@
         promptReferences,
         projectReferences,
         presentation,
-        taskReferences
+        taskReferences,
+        startAfterThreads: dependencyThreads
       })
+      idleAttentionHandled = false
+      void handleIdleAttention()
       return
     }
 
@@ -3666,7 +3765,8 @@
           promptReferences,
           projectReferences,
           presentation,
-          taskReferences
+          taskReferences,
+          startAfterThreads: []
         })
       }
       errorMessage = error instanceof Error ? error.message : 'Steer message could not be sent.'
@@ -3792,25 +3892,8 @@
     void revealCitationFile(thread.projectId, path)
   }
 
-  async function openFilePart(url: string): Promise<void> {
-    const projectPath = workspaceState.activeProject?.path
-    if (!projectPath || !url.startsWith('file://')) return
-
-    const absolutePath = fileUrlToPath(url)
-    const normalizedProjectPath = projectPath.replace(/\\/gu, '/').replace(/\/$/u, '')
-    const normalizedFilePath = absolutePath.replace(/\\/gu, '/')
-    if (
-      normalizedFilePath === normalizedProjectPath ||
-      normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
-    ) {
-      await revealFileInAppTree(thread.projectId, absolutePath)
-      return
-    }
-
-    const revealed = await invoke('shell:revealPath', absolutePath)
-    if (!revealed) {
-      toast.error('This local file is outside the active project or no longer exists.')
-    }
+  function openFilePart(url: string): void {
+    void revealLocalFile(thread.projectId, url)
   }
 
   function citationForFilePart(
@@ -4546,6 +4629,12 @@
         ? thread
         : (assignmentThreads.find((candidate) => candidate.id === threadId) ??
           (await invoke('thread:get', thread.projectId, threadId)))
+    if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  async function openStartAfterThread(threadId: string): Promise<void> {
+    const linkedThread =
+      threadId === thread.id ? thread : await invoke('thread:get', thread.projectId, threadId)
     if (linkedThread) workspaceState.openThread(linkedThread, project)
   }
 
@@ -6043,7 +6132,8 @@
     // generic level was stamped onto its rows.
     if (model && presets.length === 0) return null
     // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the thread's current level for legacy/live messages.
+    // falling back to the thread's current level when a message has no
+    // persisted thinking level.
     if (msg.thinkingLevel) return msg.thinkingLevel
     if (presets.length === 0) return null
     return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
@@ -6523,7 +6613,7 @@
       data-region="conversation"
     >
       <div class="mx-auto flex min-h-full w-full min-w-0 max-w-3xl flex-col justify-end gap-4 pt-6">
-        {#if !loaded}
+        {#if !loaded && visibleMessages.length === 0}
           <div class="flex items-center gap-2 py-8 text-sm text-dimmed">
             <Loader2 size={16} class="animate-spin" />
             Loading conversation...
@@ -7027,7 +7117,7 @@
             />
           {/if}
 
-          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && threadWorking && latestTurnRenderableParts.length === 0)}
+          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>
@@ -7116,6 +7206,7 @@
                     : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onStop={abortRun}
                 onRetry={retryConnection}
+                retrying={providerRetrying}
                 onSignedIn={proactiveAuthVisible
                   ? () => void refreshAfterProactiveSignIn()
                   : undefined}
@@ -7237,6 +7328,18 @@
                           </span>
                         {/if}
                       </span>
+                    {/each}
+                  </div>
+                {/if}
+                {#if queuedStartAfterThreads.length > 0}
+                  <div class="flex flex-col gap-0.5 px-3 pb-2 text-[11px] text-info">
+                    {#each queuedStartAfterThreads as dependency (dependency.id)}
+                      <div class="flex items-center gap-1.5">
+                        <Clock size={12} class="shrink-0" />
+                        <span class="truncate">
+                          Starts after {dependency.title} finishes
+                        </span>
+                      </div>
                     {/each}
                   </div>
                 {/if}
@@ -7528,6 +7631,7 @@
                   onCompact={() => void compactWork()}
                   projectContext={composerProject}
                   projectId={thread.projectId}
+                  threadId={thread.id}
                   attachmentStorage={{
                     kind: chatMode ? 'chat' : 'project',
                     projectId: thread.projectId,
@@ -7546,6 +7650,10 @@
                     thread.id
                   )}
                   initialTaskReferences={rendererRecovery.taskReferencesFor(
+                    thread.projectId,
+                    thread.id
+                  )}
+                  initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
                     thread.projectId,
                     thread.id
                   )}
@@ -7575,6 +7683,14 @@
                       rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
                       taskReferences
                     )}
+                  onStartAfterThreadsChange={(startAfterThreads) => {
+                    rendererRecovery.setStartAfterThreads(
+                      thread.projectId,
+                      thread.id,
+                      startAfterThreads
+                    )
+                  }}
+                  onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
                   references={responseReferences}
                   onRemoveReference={removeResponseReference}
                   onRemoveAllReferences={clearResponseReferences}

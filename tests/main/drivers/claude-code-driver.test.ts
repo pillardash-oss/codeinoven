@@ -24,7 +24,21 @@ execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
   stderr = new EventEmitter()
-  stdin = { write: vi.fn(), end: vi.fn() }
+  authConfirmed = false
+  stdin = {
+    write: vi.fn((_input: unknown) => {
+      // Model the real CLI: the first stream record (message_start) proves
+      // authentication, releasing the credential-refresh gate immediately.
+      if (!this.authConfirmed) {
+        this.authConfirmed = true
+        this.stdout.emit(
+          'data',
+          Buffer.from('{"type":"stream_event","event":{"type":"message_start"}}\n')
+        )
+      }
+    }),
+    end: vi.fn()
+  }
   killed = false
 
   kill(): boolean {
@@ -84,7 +98,7 @@ describe('ClaudeCodeDriver', () => {
         '--model',
         'sonnet',
         '--permission-mode',
-        'dontAsk'
+        'default'
       ]),
       expect.any(Object)
     )
@@ -135,7 +149,7 @@ describe('ClaudeCodeDriver', () => {
     })
     expect(spawnMock).toHaveBeenLastCalledWith(
       'claude',
-      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'dontAsk']),
+      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'default']),
       expect.any(Object)
     )
     next.emit('exit', 0, null)
@@ -457,7 +471,7 @@ describe('ClaudeCodeDriver readAccountUsage', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'claude',
         ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
-        expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+        expect.objectContaining({ stdio: ['pipe', 'pipe', 'ignore'] })
       )
     )
     const written = child.stdin.write.mock.calls.map(([value]) => JSON.parse(value as string))

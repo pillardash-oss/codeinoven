@@ -1,9 +1,10 @@
-import { execFile, spawn } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  AgentQuestion,
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
@@ -14,8 +15,11 @@ import type {
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
+  PermissionReply,
+  SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -64,16 +68,61 @@ const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
 /** Bounded wait for the `claude auth status` pre-flight probe. */
 const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
 /**
+ * How long a proven authentication keeps the shared credential trusted for
+ * concurrent spawns. The bypass must expire with the access token itself;
+ * otherwise an idle "authenticated" session would let fresh spawns skip the
+ * gate while the token is already expired, reopening the refresh race
+ * (anthropics/claude-code#76905). Conservative vs the ~5h access-token TTL.
+ */
+const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
+/**
  * How long a first-party session spawn may hold the credential-refresh gate
  * while it resolves authentication. The gate exists because Claude Code's
  * macOS keychain OAuth store races when two processes refresh a single-use
- * token concurrently (anthropics/claude-code#76905); it is released early as
- * soon as the session proves authentication, and this bound keeps unrelated
- * threads/projects from ever stalling indefinitely.
+ * token concurrently (anthropics/claude-code#76905); the loser wipes the
+ * shared credential. The gate must stay held until authentication is PROVEN
+ * (message_start), not a short timer: a fast cap re-opens the race window
+ * whenever the first refresh takes longer than the cap (the CLI retries a
+ * failing refresh for ~45s, so a 1.5s cap let concurrent spawns through).
+ * This bound is only a safety valve so a pathological CLI cannot stall other
+ * threads/projects indefinitely; normal auth confirms in ~1-3s and releases
+ * the gate immediately.
  */
-const AUTH_CONFIRM_TIMEOUT_MS = 1_500
+const AUTH_CONFIRM_TIMEOUT_MS = 60_000
 /** Poll interval while waiting for a spawned session to prove authentication. */
 const AUTH_CONFIRM_POLL_MS = 200
+/**
+ * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
+ * refresh, version probe, model discovery). Every one-shot spawn holds several
+ * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
+ * projects refreshing simultaneously can exhaust the process fd table and
+ * fail later spawns with `EBADF`. Bounding the one-shots keeps the fd table
+ * stable without touching long-lived session processes, which are gated
+ * separately by the credential-refresh slot.
+ */
+const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
+class OneShotSpawnGate {
+  private readonly queue: (() => void)[] = []
+  private active = 0
+
+  constructor(private readonly limit: number) {}
+
+  async acquire(): Promise<() => void> {
+    while (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve))
+    }
+    this.active += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.active -= 1
+      this.queue.shift()?.()
+    }
+  }
+}
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -110,6 +159,12 @@ interface ClaudeAuthenticationReadiness {
   promise: Promise<boolean>
   resolve: (authenticated: boolean) => void
   settled: boolean
+}
+
+interface ClaudeQuestionRequest {
+  sessionId: string
+  callId: string
+  questions: AgentQuestion[]
 }
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
@@ -156,7 +211,7 @@ function claudeAuthenticationResult(value: unknown): boolean | undefined {
 function claudeModelName(model: ModelInfo): string {
   const resolvedName = model.description.split(' · ', 1)[0]?.trim()
   if (!resolvedName) return model.displayName
-  if (model.value === 'default') return `${model.displayName} · ${resolvedName}`
+  if (model.value === 'default') return model.displayName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
@@ -732,6 +787,32 @@ export function mapClaudeCodeRecord(
   const nativeSessionId = string(entry['session_id'])
   if (type === 'system' && entry['subtype'] === 'init') return { nativeSessionId }
 
+  if (type === 'control_request') {
+    const request = record(entry['request'])
+    const requestId = string(entry['request_id'])
+    if (request?.['subtype'] !== 'can_use_tool' || !requestId) {
+      return nativeSessionId ? { nativeSessionId } : null
+    }
+    const input = record(request['input']) ?? {}
+    const toolName = string(request['tool_name']) ?? 'tool'
+    return {
+      nativeSessionId,
+      events: [
+        {
+          type: 'permission.asked',
+          sessionId: context.sessionId,
+          permission: {
+            id: requestId,
+            sessionId: context.sessionId,
+            permission: toolName,
+            patterns: permissionPatterns(input),
+            metadata: { subtype: 'can_use_tool', toolName, input, request }
+          }
+        }
+      ]
+    }
+  }
+
   if (type === 'system' && entry['subtype'] === 'api_retry') {
     const delayMs = numberProperty(entry, 'retry_delay_ms', 'retryDelayMs') ?? 0
     const rawError =
@@ -1046,7 +1127,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -1063,15 +1144,19 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Cached `claude auth status` verdict per project, so a fresh thread never
    *  re-spawns the CLI for auth on every message. */
   private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
+  /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
+  private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
   /**
-   * Sessions whose live process has already proven authentication this run.
-   * Once any live session authenticates, the shared keychain credential is
-   * fresh, so concurrent spawns are safe and the credential-refresh gate is
-   * skipped for every other thread and project.
+   * Sessions whose live process proved authentication this run, with the time
+   * it was proven. A session only counts while its proof is fresh (within
+   * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
+   * may have expired, so concurrent spawns must go through the gate again.
    */
-  private readonly authenticatedSessions = new Set<string>()
+  private readonly authenticatedSessions = new Map<string, number>()
   /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
   private readonly firstPartySessions = new Set<string>()
+  private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
+  private readonly pendingClaudePermissions = new Map<string, string>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -1166,6 +1251,117 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     await this.persistSession(session)
   }
 
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    sessionId?: string
+  ): Promise<void> {
+    const targetSessionId = sessionId ?? this.pendingClaudePermissions.get(requestId)
+    if (!targetSessionId)
+      throw new Error(`Claude permission request is no longer pending: ${requestId}`)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    this.writeActiveInput(targetSessionId, `${JSON.stringify(response)}\n`)
+    this.pendingClaudePermissions.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    const answerMap = Object.fromEntries(
+      request.questions.map((question, index) => [
+        question.prompt,
+        (answers[index] ?? []).join(', ')
+      ])
+    )
+    this.writeClaudeToolResult(
+      request.sessionId,
+      request.callId,
+      JSON.stringify({ answers: answerMap })
+    )
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    this.writeClaudeToolResult(
+      request.sessionId,
+      request.callId,
+      'The user dismissed this question.',
+      true
+    )
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeClaudeToolResult(
+    sessionId: string,
+    callId: string,
+    content: string,
+    isError = false
+  ): void {
+    const message = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: callId,
+            content,
+            ...(isError ? { is_error: true } : {})
+          }
+        ]
+      },
+      parent_tool_use_id: null
+    }
+    this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
+  }
+
+  protected override normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized = super.normalizeInteractionEvents(sessionId, events)
+    for (const event of normalized) {
+      if (event.type === 'permission.asked' && event.permission.id) {
+        this.pendingClaudePermissions.set(event.permission.id, sessionId)
+      }
+      if (event.type === 'question.asked' && event.tool) {
+        this.pendingClaudeQuestions.set(event.requestId, {
+          sessionId,
+          callId: event.tool.callID,
+          questions: event.questions
+        })
+      }
+    }
+    return normalized
+  }
+
   async prepareUtilityRuntime(
     request: UtilityRuntimePreparationRequest
   ): Promise<UtilityRuntimeOverlay> {
@@ -1214,27 +1410,44 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('claude', ['--version'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) =>
-        reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-      )
-      child.on('exit', (code) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(`Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`)
+    const release = await this.oneShotSpawnGate.acquire()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let child: ChildProcess
+        try {
+          child = spawn('claude', ['--version'], {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            stdio: ['ignore', 'ignore', 'pipe']
+          })
+        } catch (error) {
+          reject(
+            new Error(
+              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
             )
-      )
-    })
+          )
+          return
+        }
+        let stderr = ''
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString()
+        })
+        child.on('error', (error) =>
+          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
+        )
+        child.on('exit', (code) =>
+          code === 0
+            ? resolve()
+            : reject(
+                new Error(
+                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
+                )
+              )
+        )
+      })
+    } finally {
+      release()
+    }
   }
 
   /** Claude Code accepts ephemeral settings JSON, avoiding global or project config writes. */
@@ -1250,9 +1463,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     // authentication issue instead of a confusing mid-turn authentication_failed.
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (firstParty && !this.isTitleSession(session.id)) {
-      const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
-      if (!authenticated) {
-        throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
+        if (!authenticated) {
+          throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+        }
+      } finally {
+        releaseSpawn()
       }
     }
     const args = [
@@ -1285,9 +1503,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
     if (options.settings.permissionLevel === 'full_access')
       args.push('--permission-mode', 'bypassPermissions')
-    else if (options.settings.permissionLevel === 'auto_review')
-      args.push('--permission-mode', 'dontAsk')
-    else args.push('--permission-mode', 'dontAsk')
+    else args.push('--permission-mode', 'default')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
     const trackAuthentication =
@@ -1377,11 +1593,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * credential is considered fresh in that case, so no serialization is needed.
    */
   private hasLiveAuthenticatedSession(): boolean {
+    const now = Date.now()
     const live = this.activeSessionIds()
-    return live.some(
-      (sessionId) =>
-        this.firstPartySessions.has(sessionId) && this.authenticatedSessions.has(sessionId)
-    )
+    return live.some((sessionId) => {
+      if (!this.firstPartySessions.has(sessionId)) return false
+      const authenticatedAt = this.authenticatedSessions.get(sessionId)
+      return authenticatedAt !== undefined && now - authenticatedAt < ACCESS_TOKEN_FRESH_MS
+    })
   }
 
   /**
@@ -1409,15 +1627,26 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /**
    * Run an auth-touching CLI operation under the credential-refresh gate. The
    * gate is engaged only while no live session has authenticated; once one has,
-   * the credential is fresh and the operation runs with full concurrency.
+   * the credential is fresh and the operation runs with full concurrency. The
+   * one-shot spawn gate then bounds concurrent short-lived claude spawns (auth
+   * probe, usage refresh, model discovery) so they cannot exhaust the process
+   * file-descriptor table and fail later spawns with `EBADF`.
+   *
+   * Lock ordering: the auth slot is always acquired before the spawn gate
+   * (sendPrompt → buildTurnCommand probe follows the same order), so no path
+   * ever holds the gate while waiting for the auth slot.
    */
   private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.hasLiveAuthenticatedSession()) return operation()
-    const release = await this.acquireAuthSlot()
+    const releaseAuth = this.hasLiveAuthenticatedSession() ? null : await this.acquireAuthSlot()
     try {
-      return await operation()
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        return await operation()
+      } finally {
+        releaseSpawn()
+      }
     } finally {
-      release()
+      releaseAuth?.()
     }
   }
 
@@ -1451,28 +1680,34 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const cached = this.authProbeCache.get(projectPath)
     if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
     const authenticated = await new Promise<boolean>((resolve) => {
-      execFile(
-        'claude',
-        ['auth', 'status', '--json'],
-        {
-          cwd: projectPath,
-          env: buildHarnessEnvironment(),
-          timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024
-        },
-        (error, stdout) => {
-          if (error) {
-            resolve(true)
-            return
+      try {
+        execFile(
+          'claude',
+          ['auth', 'status', '--json'],
+          {
+            cwd: projectPath,
+            env: buildHarnessEnvironment(),
+            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024
+          },
+          (error, stdout) => {
+            if (error) {
+              resolve(true)
+              return
+            }
+            try {
+              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+              resolve(parsed['loggedIn'] === true)
+            } catch {
+              resolve(true)
+            }
           }
-          try {
-            const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
-            resolve(parsed['loggedIn'] === true)
-          } catch {
-            resolve(true)
-          }
-        }
-      )
+        )
+      } catch {
+        // Spawn itself threw synchronously (e.g. EBADF when the process is low
+        // on file descriptors). Fail open so the turn still has a chance.
+        resolve(true)
+      }
     })
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
@@ -1645,22 +1880,32 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       const telemetry = await this.runAuthSerialized(
         () =>
           new Promise<Record<string, unknown> | null>((resolve) => {
-            const child = spawn(
-              'claude',
-              [
-                '--print',
-                '--output-format',
-                'stream-json',
-                '--input-format',
-                'stream-json',
-                '--verbose'
-              ],
-              {
-                cwd: projectPath,
-                env: buildHarnessEnvironment(),
-                stdio: ['pipe', 'pipe', 'pipe']
-              }
-            )
+            let child: ChildProcess
+            try {
+              child = spawn(
+                'claude',
+                [
+                  '--print',
+                  '--output-format',
+                  'stream-json',
+                  '--input-format',
+                  'stream-json',
+                  '--verbose'
+                ],
+                {
+                  cwd: projectPath,
+                  env: buildHarnessEnvironment(),
+                  // Usage telemetry is a side channel; do not leave a piped
+                  // stderr buffer undrained while the probe waits for JSON.
+                  stdio: ['pipe', 'pipe', 'ignore']
+                }
+              )
+            } catch {
+              // Spawn itself threw synchronously (e.g. EBADF when the process is
+              // low on file descriptors). Report no usage rather than rejecting.
+              resolve(null)
+              return
+            }
             let buffer = ''
             let settled = false
             const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
@@ -1758,13 +2003,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       if (!readiness.settled) readiness.resolve(false)
       this.authenticationReadiness.delete(sessionId)
     }
+    this.pendingClaudeQuestions.clear()
+    this.pendingClaudePermissions.clear()
     super.dispose()
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     if (claudeAuthenticationResult(entry) === true) {
-      this.authenticatedSessions.add(context.sessionId)
+      this.authenticatedSessions.set(context.sessionId, Date.now())
     }
     this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])

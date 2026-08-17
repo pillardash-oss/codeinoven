@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { CheckpointManager } from '../../src/main/storage/checkpoint-manager'
+import { CheckpointManager, type TurnCheckpoint } from '../../src/main/storage/checkpoint-manager'
 import type { Database } from '../../src/main/database/database'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
@@ -104,6 +104,52 @@ describe('CheckpointManager', () => {
     expect(diff.before).toContain('MARKER_BEFORE')
     expect(diff.after).toContain('MARKER_AFTER')
     expect(diff.before).not.toBe(diff.after)
+  })
+
+  it('recovers changes from legacy completed checkpoints with empty change arrays', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    await writeFile(join(projectRoot, 'existing.txt'), 'before', 'utf-8')
+
+    const checkpoint = await manager.beginTurn(
+      'project1',
+      'thread1',
+      projectRoot,
+      'Legacy checkpoint',
+      false
+    )
+    await writeFile(join(projectRoot, 'existing.txt'), 'after', 'utf-8')
+    await manager.completeTurn('project1', 'thread1', checkpoint.id, projectRoot, 'completed')
+
+    const row = database.get<{ data: string }>(
+      'SELECT data FROM turn_checkpoints WHERE turn_id = ?',
+      checkpoint.id
+    )
+    if (!row) throw new Error('Expected persisted checkpoint row')
+    const legacy = JSON.parse(row.data) as TurnCheckpoint
+    legacy.changes = []
+    delete legacy.changeFilterApplied
+    database.run(
+      'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+      JSON.stringify(legacy),
+      checkpoint.id
+    )
+
+    const recovered = await manager.get('project1', 'thread1', checkpoint.id)
+    expect(recovered?.changes.map((change) => `${change.kind}:${change.path}`)).toEqual([
+      'modified:existing.txt'
+    ])
+    expect((await manager.list('project1', 'thread1'))[0]?.changes).toHaveLength(1)
+    await expect(
+      manager.getFileDiff('project1', 'thread1', checkpoint.id, 'existing.txt')
+    ).resolves.toMatchObject({
+      path: 'existing.txt',
+      kind: 'modified',
+      before: 'before',
+      after: 'after'
+    })
   })
 
   it('returns the head of a newly created file and marks it truncated when large', async () => {

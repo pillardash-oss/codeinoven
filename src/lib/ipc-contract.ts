@@ -1,4 +1,5 @@
 import type {
+  AgentArtifact,
   AgentMessage,
   AgentModelSelection,
   AgentRole,
@@ -393,6 +394,7 @@ export interface IpcInvokeContract {
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
         source?: import('./types').MemorySource
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }
@@ -425,6 +427,7 @@ export interface IpcInvokeContract {
         category?: import('./types').MemoryCategory
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }
@@ -575,6 +578,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentContextCapabilities
   >
+  'agent:listArtifacts': Contract<[projectId: string, threadId: string], AgentArtifact[]>
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
@@ -747,6 +751,7 @@ export interface IpcInvokeContract {
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
+  'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
@@ -1184,6 +1189,8 @@ export interface IpcInvokeContract {
     void
   >
   'harnessManifest:reset': Contract<[input: { harnessId: string; behavior: string }], void>
+  'harnessAutoUpdate:list': Contract<[], Record<string, boolean>>
+  'harnessAutoUpdate:set': Contract<[input: { harnessId: string; value: boolean }], void>
   'providerAccounts:getAuthStatus': Contract<
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
@@ -1460,8 +1467,8 @@ export interface IpcInvokeContract {
   'thread:list': Contract<[projectId: string], Thread[]>
   'thread:listAll': Contract<[], Thread[]>
   /**
-   * Bounded task listing for startup hydration. Never returns legacy rows
-   * pending deletion and never crosses the full task history over IPC.
+   * Bounded task listing for startup hydration. Never crosses the full task
+   * history over IPC.
    * `projectId` (when given) is ordered first so the selected project's recent
    * active threads render before anything else.
    */
@@ -1596,7 +1603,7 @@ export interface CloseConfirmationPayload {
   files: CloseConfirmationFile[]
 }
 
-export type AgentNotificationKind = 'completed' | 'attention' | 'error'
+export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string
@@ -1647,14 +1654,14 @@ export interface RemoteDeviceInfo {
   transport: 'lan' | 'relay'
   /** Whether the device currently holds a live session. */
   connected: boolean
-  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  /** Granted scope identifiers. */
   scopes: string[]
   /** SHA-256 fingerprint prefix of the device signing key. */
   fingerprint: string | null
   lastUsedAt: number | null
-  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  /** Device authorization expiry (epoch ms). */
   expiresAt: number | null
-  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  /** Signed credential lifetime expiry (epoch ms). */
   credentialExpiresAt: number | null
   revokedAt: number | null
   authVersion: number

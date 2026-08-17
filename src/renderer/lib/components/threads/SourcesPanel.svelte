@@ -2,7 +2,9 @@
   import { onDestroy, onMount } from 'svelte'
   import {
     BookOpen,
+    Brain,
     FileText,
+    FolderOpen,
     Globe2,
     Hash,
     Image as ImageIcon,
@@ -24,6 +26,7 @@
   import MediaPreview from '../chats/MediaPreview.svelte'
   import { revealFileInAppTree, revealCitationFile } from '$lib/reveal-file'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { faviconState } from '$lib/stores/favicons.svelte'
@@ -32,8 +35,11 @@
     AgentCapabilityEntry,
     AgentCapabilityOrigin,
     AgentContextCapabilities,
-    AgentRunningProcess
+    AgentRunningProcess,
+    AgentArtifact,
+    MemoryEntry
   } from '$shared/types'
+  import { INBOX_PROJECT_ID } from '$shared/types'
   import UtilityEditorModal, {
     type UtilityEditorTarget
   } from '../settings/UtilityEditorModal.svelte'
@@ -45,7 +51,7 @@
     threadId?: string
   }
 
-  type SourcesSection = 'sources' | 'mcps' | 'skills' | 'processes'
+  type SourcesSection = 'sources' | 'mcps' | 'skills' | 'processes' | 'artifacts' | 'facts'
   type OriginFilter = 'all' | AgentCapabilityOrigin
   type SourceFilter = 'all' | AgentSource['kind']
 
@@ -69,9 +75,16 @@
   let processesError = $state('')
   let stoppingPids = $state(new Set<number>())
   let stoppingAll = $state(false)
+  let artifacts = $state<AgentArtifact[]>([])
+  let artifactsLoading = $state(false)
+  let artifactsError = $state('')
+  let previewArtifact = $state<AgentArtifact | null>(null)
+  let facts = $state<MemoryEntry[]>([])
+  let factsLoading = $state(false)
+  let factsError = $state('')
 
-  $effect(() => {
-    for (const source of sources) {
+  function preloadMedia(nextSources: AgentSource[], nextArtifacts: AgentArtifact[]): void {
+    for (const source of nextSources) {
       if (
         (source.kind === 'attachment' || source.kind === 'generated-image') &&
         isImageMime(source.mime) &&
@@ -80,18 +93,39 @@
         void imageUrls.load(source.url, source.mime)
       }
     }
-    const webUrls = sources
+    for (const artifact of nextArtifacts) {
+      if (isImageMime(artifact.mime) && artifact.url.startsWith('file://')) {
+        void imageUrls.load(artifact.url, artifact.mime)
+      }
+    }
+    const webUrls = nextSources
       .filter((source): source is Extract<AgentSource, { kind: 'web' }> => source.kind === 'web')
       .map((source) => source.url as string)
     faviconState.ensureResolved(webUrls)
-  })
+  }
 
   onMount(() => {
+    preloadMedia(sources, artifacts)
     void loadCapabilities()
     void loadProcesses()
-    return subscribe('agent:processesChanged', (changedProjectId, changedThreadId) => {
-      if (changedProjectId === projectId && changedThreadId === threadId) void loadProcesses()
+    void loadArtifacts()
+    void loadFacts()
+    const unsubscribeProcesses = subscribe(
+      'agent:processesChanged',
+      (changedProjectId, changedThreadId) => {
+        if (changedProjectId === projectId && changedThreadId === threadId) void loadProcesses()
+      }
+    )
+    const unsubscribeAgent = subscribe('agent:event', (...args: unknown[]) => {
+      const event = args[0] as { type?: unknown } | undefined
+      if (event?.type === 'message.completed' || event?.type === 'session.idle') {
+        void loadArtifacts()
+      }
     })
+    return () => {
+      unsubscribeProcesses()
+      unsubscribeAgent()
+    }
   })
 
   onDestroy(() => imageUrls.destroy())
@@ -101,6 +135,8 @@
   const imageCount = $derived(sources.filter((source) => source.kind === 'generated-image').length)
   const citationCount = $derived(sources.filter((source) => source.kind === 'file-citation').length)
   const sectionCount = $derived(sources.filter((source) => source.kind === 'section').length)
+  const artifactCount = $derived(artifacts.length)
+  const factCount = $derived(facts.length)
 
   const filteredSources = $derived(
     sourceFilter === 'all' ? sources : sources.filter((source) => source.kind === sourceFilter)
@@ -158,6 +194,85 @@
     } finally {
       processesLoading = false
     }
+  }
+
+  async function loadArtifacts(): Promise<void> {
+    if (!projectId || !threadId) {
+      artifacts = []
+      return
+    }
+    artifactsLoading = true
+    artifactsError = ''
+    try {
+      artifacts = await invoke('agent:listArtifacts', projectId, threadId)
+      preloadMedia(sources, artifacts)
+    } catch (loadError) {
+      artifactsError =
+        loadError instanceof Error ? loadError.message : 'Generated artifacts could not be loaded.'
+    } finally {
+      artifactsLoading = false
+    }
+  }
+
+  async function loadFacts(): Promise<void> {
+    if (!projectId || !threadId) {
+      facts = []
+      return
+    }
+    factsLoading = true
+    factsError = ''
+    try {
+      const entries =
+        projectId === INBOX_PROJECT_ID
+          ? await Promise.all([
+              invoke('memory:getEntries'),
+              invoke('memory:getEntries', INBOX_PROJECT_ID),
+              invoke('memory:getEntries', INBOX_PROJECT_ID, threadId)
+            ]).then(([globalEntries, chatEntries, threadEntries]) => [
+              ...globalEntries.filter((entry) => entry.scope === 'global'),
+              ...chatEntries,
+              ...threadEntries
+            ])
+          : await Promise.all([
+              invoke('memory:getEntries'),
+              invoke('memory:getEntries', projectId),
+              invoke('memory:getEntries', projectId, threadId)
+            ]).then(([globalEntries, projectEntries, threadEntries]) => [
+              ...globalEntries,
+              ...projectEntries,
+              ...threadEntries
+            ])
+      facts = [
+        ...new Map(
+          entries.filter((entry) => entry.enabled).map((entry) => [entry.id, entry])
+        ).values()
+      ]
+    } catch (loadError) {
+      factsError =
+        loadError instanceof Error ? loadError.message : 'Active facts could not be loaded.'
+    } finally {
+      factsLoading = false
+    }
+  }
+
+  function openArtifact(artifact: AgentArtifact): void {
+    previewArtifact = artifact
+  }
+
+  function revealArtifact(artifact: AgentArtifact): void {
+    void invoke('shell:revealPath', artifact.path)
+  }
+
+  function factScopeLabel(fact: MemoryEntry): string {
+    if (fact.scope === 'global') return 'Global'
+    if (fact.scope === 'thread') return 'Thread'
+    if (fact.scope === 'chat') return 'Chat'
+    if (fact.scope === 'project') return 'Project'
+    return 'Projects'
+  }
+
+  function openActiveFacts(): void {
+    if (projectId && threadId) contextSidebarState.openMemory(projectId, threadId, 'active')
   }
 
   async function stopProcess(pid: number): Promise<void> {
@@ -320,6 +435,10 @@
             MCP servers available to this conversation.
           {:else if section === 'skills'}
             Reusable skills available to this conversation.
+          {:else if section === 'artifacts'}
+            Generated images captured from this conversation.
+          {:else if section === 'facts'}
+            Active memory facts applied to this conversation.
           {:else}
             Commands still running for this task.
           {/if}
@@ -334,6 +453,10 @@
           {filteredMcps.length}
         {:else if section === 'skills'}
           {filteredSkills.length}
+        {:else if section === 'artifacts'}
+          {artifactCount}
+        {:else if section === 'facts'}
+          {factCount}
         {:else}
           {processes.length}
         {/if}
@@ -396,6 +519,36 @@
         onclick={() => (section = 'processes')}
       >
         Processes
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        'artifacts'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={section === 'artifacts'}
+        title="View generated image artifacts"
+        onclick={() => (section = 'artifacts')}
+      >
+        <ImageIcon size={12} />
+        Artifacts
+        {#if artifactCount > 0}<span class="text-[10px] tabular-nums">{artifactCount}</span>{/if}
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        'facts'
+          ? 'bg-surface text-foreground shadow-sm'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={section === 'facts'}
+        title="View active memory facts"
+        onclick={() => (section = 'facts')}
+      >
+        <Brain size={12} />
+        Active facts
+        {#if factCount > 0}<span class="text-[10px] tabular-nums">{factCount}</span>{/if}
       </button>
     </div>
 
@@ -924,6 +1077,164 @@
           </div>
         {/each}
       {/if}
+    {:else if section === 'artifacts'}
+      {#if artifactsLoading && artifacts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="text-xs text-dimmed">Loading generated artifacts…</p>
+        </div>
+      {:else if artifactsError && artifacts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="max-w-64 text-xs leading-relaxed text-danger" role="alert">
+            {artifactsError}
+          </p>
+        </div>
+      {:else if artifacts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <span
+              class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-raised text-dimmed"
+            >
+              <ImageIcon size={18} />
+            </span>
+            <h2 class="mt-3 text-sm font-semibold text-foreground">No generated artifacts</h2>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              Images produced during this conversation will appear here, even when the agent does
+              not mention their saved path.
+            </p>
+          </div>
+        </div>
+      {:else}
+        {#if artifactsError}
+          <p class="border-b border-border px-4 py-2 text-xs text-danger" role="alert">
+            {artifactsError}
+          </p>
+        {/if}
+        {#each artifacts as artifact (artifact.id)}
+          <article class="border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
+            <div class="flex items-start gap-3">
+              <button
+                type="button"
+                class="group relative h-16 w-24 shrink-0 overflow-hidden rounded-lg border border-border bg-raised transition-shadow hover:shadow-md"
+                title={`Preview ${artifact.filename}`}
+                aria-label={`Preview ${artifact.filename}`}
+                onclick={() => openArtifact(artifact)}
+              >
+                <img
+                  src={imageUrls.getUrl(artifact.url)}
+                  alt={artifact.filename}
+                  class="h-full w-full object-cover"
+                  onerror={(event: Event) =>
+                    void imageUrls.bindImage(
+                      artifact.url,
+                      artifact.mime,
+                      event.currentTarget as HTMLImageElement
+                    )}
+                />
+                <span
+                  class="absolute inset-0 flex items-center justify-center bg-black/0 text-[10px] font-medium text-white opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100"
+                >
+                  Preview
+                </span>
+              </button>
+              <div class="min-w-0 flex-1">
+                <p class="text-[10px] font-semibold uppercase tracking-[0.12em] text-dimmed">
+                  Generated image
+                </p>
+                <p
+                  class="mt-0.5 truncate text-xs font-medium text-foreground"
+                  title={artifact.path}
+                >
+                  {artifact.filename}
+                </p>
+                <p
+                  class="mt-1 break-all text-[10px] leading-relaxed text-dimmed"
+                  title={artifact.path}
+                >
+                  {artifact.relativePath ?? artifact.path}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-dimmed hover:bg-overlay hover:text-foreground"
+                title={`Reveal ${artifact.filename} in its folder`}
+                aria-label={`Reveal ${artifact.filename} in its folder`}
+                onclick={() => revealArtifact(artifact)}
+              >
+                <FolderOpen size={14} />
+              </button>
+            </div>
+          </article>
+        {/each}
+      {/if}
+    {:else if section === 'facts'}
+      {#if factsLoading && facts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="text-xs text-dimmed">Loading active facts…</p>
+        </div>
+      {:else if factsError && facts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <p class="max-w-64 text-xs leading-relaxed text-danger" role="alert">{factsError}</p>
+        </div>
+      {:else if facts.length === 0}
+        <div class="flex h-full items-center justify-center px-8 text-center">
+          <div class="max-w-64">
+            <span
+              class="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-raised text-dimmed"
+            >
+              <Brain size={18} />
+            </span>
+            <h2 class="mt-3 text-sm font-semibold text-foreground">No active facts</h2>
+            <p class="mt-1 text-xs leading-relaxed text-dimmed">
+              Enabled memory entries for this conversation will appear here.
+            </p>
+            {#if projectId && threadId}
+              <button
+                type="button"
+                class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+                title="Open active memory facts"
+                onclick={openActiveFacts}
+              >
+                Open Memory
+              </button>
+            {/if}
+          </div>
+        </div>
+      {:else}
+        {#if factsError}
+          <p class="border-b border-border px-4 py-2 text-xs text-danger" role="alert">
+            {factsError}
+          </p>
+        {/if}
+        <div class="border-b border-border px-4 py-2">
+          <button
+            type="button"
+            class="rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
+            title="Manage active memory facts"
+            onclick={openActiveFacts}
+          >
+            Manage Memory
+          </button>
+        </div>
+        {#each facts as fact (fact.id)}
+          <article class="border-b border-border px-4 py-3">
+            <div class="flex items-center gap-2">
+              <Brain size={13} class="shrink-0 text-primary" />
+              <p
+                class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground"
+                title={fact.label}
+              >
+                {fact.label}
+              </p>
+              <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                {factScopeLabel(fact)}
+              </span>
+            </div>
+            <p class="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
+              {fact.content}
+            </p>
+          </article>
+        {/each}
+      {/if}
     {:else}
       {#if processesLoading && processes.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
@@ -1050,5 +1361,14 @@
     filename={previewSource.title}
     mime={previewSource.mime}
     onClose={() => (previewSource = null)}
+  />
+{/if}
+
+{#if previewArtifact}
+  <MediaPreview
+    src={imageUrls.getUrl(previewArtifact.url)}
+    filename={previewArtifact.filename}
+    mime={previewArtifact.mime}
+    onClose={() => (previewArtifact = null)}
   />
 {/if}

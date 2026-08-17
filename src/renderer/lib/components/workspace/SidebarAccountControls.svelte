@@ -11,6 +11,7 @@
     Smartphone
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { preloadSettingsChunk } from '$lib/page-preload'
   import { updaterState } from '$lib/stores/updater.svelte'
   import type { MainView } from '$lib/stores/renderer-recovery.svelte'
   import type { AccountProfileState } from '$shared/types'
@@ -90,6 +91,7 @@
       class="flex h-8 min-w-0 flex-1 shrink-0 items-center gap-2 overflow-hidden rounded-lg pr-2 transition-colors hover:bg-elevated"
       title="Open {profile.displayName || profile.email}'s profile"
       aria-label="Open {profile.displayName || profile.email}'s profile"
+      onmouseenter={preloadSettingsChunk}
       onclick={() => navigate('settings-profile')}
     >
       <span
@@ -112,6 +114,7 @@
         class="relative flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title={remoteTitle}
         aria-label={`${remoteTitle}. Open remote connection`}
+        onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings-remote')}
       >
         <Smartphone size={15} />
@@ -130,6 +133,7 @@
       type="button"
       class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
       title="Open settings (⌘,)"
+      onmouseenter={preloadSettingsChunk}
       onclick={() => navigate('settings')}
     >
       <Settings size={14} />
@@ -144,6 +148,7 @@
         class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
         title="Open settings (⌘,)"
         aria-label="Open settings"
+        onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings')}
       >
         <Settings size={15} />
@@ -155,6 +160,7 @@
         class="flex h-8 w-8 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Application and update information"
         aria-label="Open application and update information"
+        onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings-about')}
       >
         <Info size={14} />
@@ -219,6 +225,7 @@
         class="flex h-8 w-8 items-center justify-center rounded-lg text-danger transition-colors hover:bg-elevated"
         title="Update error: {updaterState.status.errorMessage}"
         aria-label="Open update error details"
+        onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings-about')}
       >
         <AlertCircle size={14} />
@@ -229,6 +236,7 @@
         class="flex h-8 w-8 items-center justify-center rounded-lg text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         title="Application is up to date"
         aria-label="Open application and update information"
+        onmouseenter={preloadSettingsChunk}
         onclick={() => navigate('settings-about')}
       >
         <CheckCircle2 size={14} />

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { MemoryConfig, MemoryEntry } from '../../src/lib/types'
+import { modelKey } from '../../src/lib/model-keys'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import {
   MEMORY_EXTRACTION_LIMITS,
@@ -65,7 +66,7 @@ describe('MemoryService', () => {
     // Write memory entries as Markdown to memory.md
     await storage.writeRaw(
       'memory.md',
-      '## Formatting\n\nUse the project formatter only on touched files.\n\n## Another\n\nA second entry.'
+      '<!-- codeinoven-memory-entry -->\n## Formatting\n\nUse the project formatter only on touched files.\n\n<!-- codeinoven-memory-entry -->\n## Another\n\nA second entry.'
     )
     const service = new MemoryService(storage)
     const projectId = 'project-1'
@@ -111,6 +112,36 @@ describe('MemoryService', () => {
         }))
       })
     ).toThrow('at most')
+  })
+
+  it('injects model memories only for a selected harness-scoped model', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'codeinoven-model-memory-'))
+    temporaryRoots.push(root)
+    const storage = new StorageEngine(root)
+    await storage.initialize()
+    const service = new MemoryService(storage)
+    const selected = modelKey('codex', 'openai', 'gpt-5.6')
+
+    await service.addEntry('Avoid model jargon', 'Keep interface copy plain.', {
+      category: 'models',
+      modelKeys: [selected, modelKey('opencode', 'openai', 'gpt-5.6')]
+    })
+
+    await expect(service.formatCurrent('project-1', undefined, selected)).resolves.toContain(
+      'Keep interface copy plain.'
+    )
+    await expect(
+      service.formatCurrent('project-1', undefined, modelKey('codex', 'anthropic', 'claude-sonnet'))
+    ).resolves.not.toContain('Keep interface copy plain.')
+    await expect(service.formatCurrent('project-1')).resolves.not.toContain(
+      'Keep interface copy plain.'
+    )
+  })
+
+  it('requires at least one selected model for model memories', () => {
+    const config = memory()
+    config.entries[0] = { ...config.entries[0], category: 'models' }
+    expect(() => validateMemoryConfig(config)).toThrow('requires at least one model')
   })
 })
 

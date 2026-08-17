@@ -6,6 +6,7 @@
   import { modelKey } from '$lib/model-keys'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import Switch from '../ui/Switch.svelte'
+  import AgentBehaviorSettings from './AgentBehaviorSettings.svelte'
   import WorkerNamesSettings from './WorkerNamesSettings.svelte'
   import type {
     AgentDefaultsConfig,
@@ -318,4 +319,5 @@
   </section>
 
   <WorkerNamesSettings {settingsReady} />
+  <AgentBehaviorSettings {config} {settingsReady} {updateConfig} />
 </div>

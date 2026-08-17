@@ -25,7 +25,11 @@ export const BRAINSTORM_DOCUMENT_JSON_SCHEMA = {
   required: ['title', 'summary', 'sections'],
   properties: {
     title: { type: 'string', minLength: 1 },
-    summary: { type: 'string', minLength: 1 },
+    summary: {
+      type: 'string',
+      minLength: 1,
+      description: 'Concise TL;DR of the brainstorm document.'
+    },
     sections: {
       type: 'array',
       minItems: 6,

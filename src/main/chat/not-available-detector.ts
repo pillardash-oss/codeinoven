@@ -1,65 +1,65 @@
 /**
- * Detect when an agent's final answer concludes that a capability, tool, or
- * MCP "does not exist" / "is not available", even though the app may host it
- * as an on-demand utility reachable through `utility_search`. The chat engine
- * uses this to nudge the agent into searching before it concludes.
+ * Detect an unavailable MCP, skill, or app utility at the tool-call boundary.
+ * The chat engine uses this only when a tool call has already failed, so direct
+ * utility use is never interrupted and ordinary final prose is not re-scanned.
  */
 
-/** A capability-like noun that must appear near the negative claim. */
-const CAPABILITY_NOUN =
-  /\b(?:mcp(?: server)?|skill|tool|extension|plugin|server|capability|provider|model|harness|utility|integration|api|sdk|agent|add-?on)\b/giu
+/** Capability markers that can identify an app-managed tool call. */
+const TOOL_CAPABILITY =
+  /(?:mcp|skills?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use|image[\s_-]?descriptor)/iu
 
-/** Phrasings that assert a capability is absent or unsupported. */
-const NEGATIVE_CLAIM =
-  /(?:does(?:n'?t| not) exist|is(?:n'?t| not) (?:available|installed|present|supported|accessible|bundled|included|here)|(?:is )?(?:not available|unavailable|not installed|not present|missing)|cannot be found|could not be found|not found|no such (?:thing|feature|capability|integration|tool|mcp|skill)|(?:there is|there's|there are|has) no\b|lacks\b)/giu
+/** Provider/harness wording that indicates the requested tool could not be used. */
+const UNAVAILABLE_TOOL_FAILURE =
+  /(?:not found|unavailable|not available|does(?:n'?t| not) exist|not installed|cannot be found|could not be found|unknown (?:mcp|skill|utility|plugin|extension|tool))/iu
 
-/**
- * Words that indicate the "no X" phrasing is about implementation requirements
- * or research findings ("no SDK dependency needed") rather than a harness
- * capability being absent. When one appears right after a claim, the claim is
- * not treated as a "capability is unavailable" conclusion.
- */
-const REQUIREMENT_QUALIFIER =
-  /\b(?:need|needed|require|required|necessary|necessit|depend(?:ency|encies|s)?|we don'?t need|no longer)\b/iu
-
-/** Characters of context scanned around a negative claim for a capability noun. */
-const CONTEXT_WINDOW = 160
-
-/**
- * Return the matched "does not exist"-style phrase when the text concludes a
- * capability is unavailable, or null when no such conclusion is present. The
- * capability-noun guard keeps false positives (e.g. "the file was not found")
- * from triggering a nudge.
- */
-export function concludesCapabilityUnavailable(text: string): string | null {
-  if (!text) return null
-  for (const match of text.matchAll(NEGATIVE_CLAIM)) {
-    const index = match.index ?? 0
-    const start = Math.max(0, index - CONTEXT_WINDOW)
-    const end = Math.min(text.length, index + match[0].length + CONTEXT_WINDOW)
-    CAPABILITY_NOUN.lastIndex = 0
-    if (!CAPABILITY_NOUN.test(text.slice(start, end))) continue
-    // A "no <capability>" claim followed by a requirement qualifier ("no SDK
-    // dependency needed", "no tool required") is a research/implementation
-    // finding, not a verdict that a harness capability is absent. Skip it.
-    // Only "no"-form claims get this check; "is not available", "does not
-    // exist", "missing", etc. always count.
-    if (/\b(?:there is no|there's no|there are no|has no|lacks|no such)\b/iu.test(match[0])) {
-      const tail = text.slice(index + match[0].length, index + match[0].length + 80)
-      REQUIREMENT_QUALIFIER.lastIndex = 0
-      if (REQUIREMENT_QUALIFIER.test(tail)) continue
-    }
-    return match[0]
-  }
-  return null
+export interface CapabilityUnavailableClaim {
+  /** The exact availability failure wording reported by the tool call. */
+  phrase: string
+  /** The capability marker that should guide the utility search. */
+  target: string
+  /** Bounded tool-call evidence used to build the internal steering prompt. */
+  evidence: string
 }
 
-/** Internal continuation prompt that nudges the agent to search before concluding. */
-export function searchNudgePrompt(claimed: string): string {
+/**
+ * Return an unavailable-capability claim only for a failed tool call that
+ * names an MCP/skill/utility-like capability. A generic file or shell failure
+ * therefore cannot trigger a utility-search nudge.
+ */
+export function detectUnavailableToolCall(
+  toolName: string,
+  toolError: string
+): CapabilityUnavailableClaim | null {
+  const name = toolName.trim()
+  const error = toolError.trim()
+  if (!name || !error) return null
+  const failure = error.match(UNAVAILABLE_TOOL_FAILURE)
+  if (!failure) return null
+  const capability = `${name} ${error}`.match(TOOL_CAPABILITY)
+  if (!capability) return null
+  return {
+    phrase: failure[0],
+    target: capability[0],
+    evidence: `${name}: ${error}`.slice(0, 1_500)
+  }
+}
+
+/** Internal steering prompt for an availability failure observed on a tool call. */
+export function searchNudgePromptForToolCall(
+  claim: CapabilityUnavailableClaim,
+  toolName: string,
+  toolError: string
+): string {
+  const boundedToolName = toolName.slice(0, 500)
+  const boundedToolError = toolError.slice(0, 1_000)
   return [
-    `Your previous answer concluded that "${claimed}".`,
-    'You had the utility_search tool available in this session but did not use it before concluding.',
-    'The app may host this capability as an on-demand utility (MCP, skill, or service) even when it is not directly available in the harness. Call utility_search to check, then rely on the explicit notFound field in the result: only when it is true may you conclude that the capability does not exist.',
-    'Update your answer based on what you find.'
+    'A tool call in the current turn reported that a requested capability is unavailable.',
+    `Tool name: ${JSON.stringify(boundedToolName)}`,
+    `Tool error: ${JSON.stringify(boundedToolError)}`,
+    `The availability claim was "${claim.phrase}" about "${claim.target}".`,
+    'This is an internal correction while the original task is still running, not a new user request. Preserve the original task and continue seamlessly.',
+    `Call utility_search now to search for the requested capability, using a concise query derived from ${JSON.stringify(boundedToolName)}. The app may host it as an on-demand MCP, skill, utility, or service even when it is not directly available in the harness.`,
+    'Only conclude that the capability does not exist in this session when the search result has notFound:true. If notFound:false, inspect the returned utilities, activate a relevant result, and use it when it helps answer the original request.',
+    'Do not replace the original task with a discussion of tool availability. Update the original answer only as much as the search result requires.'
   ].join('\n\n')
 }

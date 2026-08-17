@@ -61,6 +61,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import {
@@ -85,6 +86,7 @@
     type Thread,
     type ThreadSearchResult
   } from '$shared/types'
+  import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
@@ -102,6 +104,7 @@
     preferredEditor: 'system',
     memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
     autoInstallUpdates: true,
     updateChannel: 'stable',
@@ -479,6 +482,15 @@
   }
 
   function navigate(view: View): void {
+    // Warm the lazy page chunks so the view swap resolves instantly — the
+    // sidebar/header hover preloads cover the mouse path; this covers every
+    // other entry point (shortcuts, palette, programmatic navigation). The
+    // imports are memoized, so repeated calls are no-ops.
+    if (view === 'scope') {
+      preloadScopeChunk()
+    } else if (isSettingsView(view)) {
+      preloadSettingsChunk()
+    }
     if (view === 'scope') {
       const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
       if (projectId) void scopeState.activateProject(projectId)
@@ -1147,10 +1159,19 @@
       }
     }
 
+    const chatResponseToastStyle =
+      '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
+      ' --success-border: var(--color-chat-success);' +
+      ' --success-text: var(--color-chat-success);'
+
     if (payload.kind === 'completed') {
       toast.success(payload.title, options)
+    } else if (payload.kind === 'chat-completed') {
+      toast.success(payload.title, { ...options, style: chatResponseToastStyle })
     } else if (payload.kind === 'attention') {
       toast.warning(payload.title, options)
+    } else if (payload.kind === 'spec') {
+      toast.info(payload.title, options)
     } else {
       toast.error(payload.title, options)
     }
@@ -1445,6 +1466,7 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    void harnessLifecycleStore.autoUpdateOnStartup()
     const hydrationTimer = window.setTimeout(() => {
       void loadScopeData().finally(() => {
         // Signal the main process that the renderer finished its initial

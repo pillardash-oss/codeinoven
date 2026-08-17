@@ -12,6 +12,7 @@ import {
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
+import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
 export type ThreadStage = ScopeSlice
 
@@ -49,6 +50,7 @@ export const STAGE_LABELS: Record<ThreadStage, string> = {
   pinned: 'Pinned',
   todo: 'Todo',
   working: 'Working',
+  spec: 'Spec',
   issue: 'Issue',
   unread: 'Unread',
   done: 'Done'
@@ -58,12 +60,31 @@ export const STAGE_COLORS: Record<ThreadStage, string> = {
   pinned: 'var(--color-thread-pinned)',
   todo: 'var(--color-dimmed)',
   working: 'var(--color-thread-working)',
+  spec: 'var(--color-thread-spec)',
   issue: 'var(--color-warning)',
   unread: 'var(--color-thread-unread)',
   done: 'var(--color-thread-done)'
 }
 
-export const STAGE_ORDER: ThreadStage[] = ['pinned', 'todo', 'working', 'issue', 'unread', 'done']
+export const STATUS_TONE_COLORS: Record<ThreadStatusTone, string> = {
+  todo: 'var(--color-dimmed)',
+  working: 'var(--color-thread-working)',
+  'working-paused': 'var(--color-thread-working-paused)',
+  attention: 'var(--color-warning)',
+  spec: 'var(--color-thread-spec)',
+  done: 'var(--color-thread-done)',
+  error: 'var(--color-thread-error)'
+}
+
+export const STAGE_ORDER: ThreadStage[] = [
+  'pinned',
+  'todo',
+  'working',
+  'spec',
+  'issue',
+  'unread',
+  'done'
+]
 
 const EMPTY_BOARD: ScopeBoard = {
   version: 1,
@@ -189,15 +210,6 @@ class ScopeState {
   pendingCreateBucketId: string | null = $state(null)
   private loadSequence = 0
   private saveSequence = 0
-
-  /** Compatibility aliases while the shell migrates from project-as-scope naming. */
-  get scopes(): ScopeProject[] {
-    return this.projects
-  }
-
-  get activeScopeId(): string | null {
-    return this.activeProjectId
-  }
 
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()

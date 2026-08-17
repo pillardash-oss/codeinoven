@@ -39,7 +39,7 @@
       position: 'before' | 'after'
     ) => void
     onStop?: () => void
-    onRetry?: () => void
+    onRetry?: () => void | Promise<void>
     /** Called after a successful sign-in instead of the generic retry. */
     onSignedIn?: () => void
     onDismiss?: () => void
@@ -145,6 +145,10 @@
     })
   }
 
+  function retryCountdownLabel(retryAt: number): string {
+    return retryAt <= now ? 'Retry due now' : `Retry in ${relativeRetryTime(retryAt)}`
+  }
+
   async function beginSignIn(): Promise<void> {
     loginError = ''
     loginHandoff = null
@@ -226,7 +230,10 @@
 
       {#if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Retrying {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          <span aria-live="polite">{retryCountdownLabel(issue.retryAt)}</span>
+          <span class="font-normal text-dimmed"
+            >· scheduled for {absoluteRetryTime(issue.retryAt)}</span
+          >
           {#if issue.attempt}
             · attempt {issue.attempt}
           {/if}
@@ -247,7 +254,7 @@
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">
-          {providerName} will retry automatically.
+          {providerName} will retry automatically. Use “Retry now” if your connection is back.
         </p>
       {/if}
 
@@ -261,9 +268,25 @@
             Sign in
           </button>
         {/if}
+        {#if waiting && onRetry}
+          <button
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={retrying}
+            aria-busy={retrying}
+            onclick={() => void onRetry?.()}
+          >
+            {#if retrying}
+              <Loader2 size={13} class="animate-spin" />
+            {:else}
+              <RotateCcw size={13} />
+            {/if}
+            {retrying ? 'Retrying…' : 'Retry now'}
+          </button>
+        {/if}
         {#if waiting && onStop}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+            disabled={retrying}
             onclick={onStop}
           >
             <Square size={12} />

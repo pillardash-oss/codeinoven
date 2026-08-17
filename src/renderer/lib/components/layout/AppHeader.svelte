@@ -4,7 +4,7 @@
   import { projectIconOnError, getProjectIcon } from '$lib/project-icons'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
@@ -18,6 +18,7 @@
   } from '$lib/stores/renderer-recovery.svelte'
   import ProjectCreateControl from '$lib/components/shared/ProjectCreateControl.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import { preloadScopeChunk } from '$lib/page-preload'
   import ScopeCreateControl from '$lib/components/shared/ScopeCreateControl.svelte'
   import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
@@ -55,15 +56,19 @@
   import { DropdownMenu } from 'bits-ui'
   import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import {
     coordinatorHasActiveDelegates,
     DEFAULT_SCOPE_BUCKET_ID,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
+    isThreadRetryPaused,
     isThreadWorking,
     type ScopeBucket
   } from '$shared/types'
+  import { SvelteSet } from 'svelte/reactivity'
   import { tick, type Component } from 'svelte'
 
   type View = MainView
@@ -109,23 +114,27 @@
   /** True while the app is actually in the represented project view. */
   let projectViewActive = $derived(projectViewMode === activeView)
 
+  function threadWorkingForIndicator(thread: Thread): boolean {
+    return agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+  }
+
+  function threadBusyForIndicator(thread: Thread): boolean {
+    return isThreadRetryPaused(thread) || threadWorkingForIndicator(thread)
+  }
+
   /** True while any project thread is actively being worked on. */
   let anyProjectWorking = $derived(
     scopeState.allScopeThreads.some(
-      (t) =>
-        !t.archived &&
-        t.projectId !== INBOX_PROJECT_ID &&
-        (t.status === 'planning' || t.status === 'executing')
+      (t) => !t.archived && t.projectId !== INBOX_PROJECT_ID && threadWorkingForIndicator(t)
     )
   )
 
   /** True while any standalone chat is actively being worked on. */
   let anyChatWorking = $derived(
     scopeState.allScopeThreads.some(
-      (t) =>
-        !t.archived &&
-        t.projectId === INBOX_PROJECT_ID &&
-        (t.status === 'planning' || t.status === 'executing')
+      (t) => !t.archived && t.projectId === INBOX_PROJECT_ID && threadWorkingForIndicator(t)
     )
   )
 
@@ -138,6 +147,38 @@
       if (activeView !== 'projects') void onPrimaryNavClick('projects')
     } else if (activeView !== view) {
       navigate(view)
+    }
+  }
+
+  /** Return the most recently visited thread of one navigation family. */
+  function recentThreadForKind(isChat: boolean): Thread | null {
+    for (const visit of workspaceState.recentThreadVisits) {
+      const candidate = scopeState.allScopeThreads.find(
+        (thread) => threadVisitKey(thread) === visit
+      )
+      if (!candidate || candidate.archived) continue
+      if ((candidate.projectId === INBOX_PROJECT_ID) === isChat) return candidate
+    }
+    return null
+  }
+
+  /** Warm every plausible restore target before a nav click or shortcut lands. */
+  function preloadNavigationThreads(target: 'chats' | 'projects'): void {
+    const isChat = target === 'chats'
+    const targetIds = [
+      isChat ? scopeState.stashedChatThreadId : scopeState.stashedProjectThreadId,
+      recentThreadForKind(isChat)?.id,
+      workspaceState.selectedThread &&
+      (workspaceState.selectedThread.projectId === INBOX_PROJECT_ID) === isChat
+        ? workspaceState.selectedThread.id
+        : null
+    ]
+    const seen = new SvelteSet<string>()
+    for (const threadId of targetIds) {
+      if (!threadId || seen.has(threadId)) continue
+      seen.add(threadId)
+      const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+      if (thread && !thread.archived) void threadMessages.preload(thread.projectId, thread.id)
     }
   }
 
@@ -174,6 +215,14 @@
       project.changeTrackingMode === 'git'
     )
   })
+
+  let gitPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git'
+  )
+
+  let notificationsPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
+  )
 
   /** "Settings · <Section>" while a settings tab is on screen. */
   let settingsTitle = $derived(
@@ -230,6 +279,8 @@
   /** Navigate to a primary view without any sidebar toggling — used by the
    *  Cmd/Ctrl+0-4 view shortcuts so they always land on the requested view. */
   async function navigateToView(view: 'projects' | 'chats' | 'scope' | 'threads'): Promise<void> {
+    if (view === 'chats') preloadNavigationThreads('chats')
+    else preloadNavigationThreads('projects')
     if (view === 'threads') {
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
@@ -417,7 +468,7 @@
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
     if (!thread || !gitAvailable) return
-    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git') {
+    if (gitPanelActive) {
       contextSidebarState.hide()
     } else {
       contextSidebarState.openGit(thread.projectId, thread.id)
@@ -556,7 +607,7 @@
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <header
-  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-4"
+  class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
   style={trafficLightInsetStyle()}
 >
   <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
@@ -598,6 +649,10 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={projectViewActive ? 'Exit scope view' : 'Open scope view'}
             title="Scope"
+            onmouseenter={() => {
+              preloadNavigationThreads('projects')
+              preloadScopeChunk()
+            }}
             onclick={() => void onPrimaryNavClick('scope')}
           >
             <Kanban size={14} strokeWidth={1.8} class={anyProjectWorking ? 'animate-pulse' : ''} />
@@ -614,6 +669,7 @@
                 : 'Hide Threads sidebar'
               : 'Open Threads'}
             title="Threads"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('threads')}
           >
             <Timeline
@@ -634,6 +690,7 @@
                 : 'Hide Projects sidebar'
               : 'Open Projects'}
             title="Projects"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void onPrimaryNavClick('projects')}
           >
             <FolderKanban
@@ -650,6 +707,7 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-label={scopeState.sidebarContext ? 'Exit scope state' : 'Show scope state'}
             title="Scope state"
+            onmouseenter={() => preloadNavigationThreads('projects')}
             onclick={() => void toggleProjectScopeState()}
           >
             <SquareDashedKanban size={14} strokeWidth={1.8} />
@@ -684,6 +742,10 @@
                       ? 'text-foreground'
                       : 'text-muted hover:bg-elevated focus:bg-elevated'
                   ]}
+                  onpointerenter={() => {
+                    preloadNavigationThreads('projects')
+                    if (option.id === 'scope') preloadScopeChunk()
+                  }}
                   onSelect={() => selectProjectView(option.id)}
                 >
                   <Icon size={14} strokeWidth={1.8} class="shrink-0 text-muted" />
@@ -714,6 +776,7 @@
           : 'Hide Chats sidebar'
         : 'Open Chats'}
       title="Chats"
+      onmouseenter={() => preloadNavigationThreads('chats')}
       onclick={() => void onPrimaryNavClick('chats')}
     >
       <MessageSquare size={14} strokeWidth={1.8} class={anyChatWorking ? 'animate-pulse' : ''} />
@@ -797,8 +860,9 @@
         {@const thread = workspaceState.selectedThread}
         {@const isWorking =
           workspaceState.specStudioFormulating ||
-          isThreadWorking(thread) ||
+          threadBusyForIndicator(thread) ||
           coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)}
+        {@const isRetryPaused = isThreadRetryPaused(thread)}
         <div class="titlebar-no-drag relative flex min-w-0 max-w-full items-center gap-2">
           {#if !chatMode && thread.projectId !== INBOX_PROJECT_ID}
             {@const headerProject =
@@ -882,11 +946,17 @@
             />
             {#if isWorking}
               <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] text-info"
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] {isRetryPaused
+                  ? 'bg-warning/10 text-warning'
+                  : 'bg-info/10 text-info'}"
               >
                 <Loader2 size={10} class="animate-spin" />
                 <span class="header-status-label">
-                  {workspaceState.specStudioFormulating ? 'Formulating…' : 'Working'}
+                  {workspaceState.specStudioFormulating
+                    ? 'Formulating…'
+                    : isRetryPaused
+                      ? 'Waiting to retry'
+                      : 'Working'}
                 </span>
               </span>
             {/if}
@@ -1113,12 +1183,12 @@
       </div>
     {/if}
 
-    <!-- Spec studio — only for engineering-mode threads, never in chat mode -->
+    <!-- Spec studio — only for an existing document or an eligible final-response retry -->
     {#if !chatMode && !onScope && !onSettings && workspaceState.selectedThread && workspaceState.specStudioAvailable}
       <button
         class="flex h-8 items-center gap-1.5 px-2 transition-colors duration-150 {workspaceState.specStudioOpen
           ? 'bg-elevated text-foreground'
-          : workspaceState.specStudioError
+          : workspaceState.specStudioRetryable
             ? 'text-danger hover:bg-danger/10'
             : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:opacity-50"
         disabled={workspaceState.specStudioBusy}
@@ -1126,13 +1196,16 @@
           ? 'Formulating specification'
           : workspaceState.specStudioOpen
             ? 'Close spec studio'
-            : workspaceState.specStudioError
+            : workspaceState.specStudioRetryable
               ? 'Retry specification generation'
               : 'Open spec studio'}
         title={workspaceState.specStudioFormulating
           ? 'Formulating specification'
-          : workspaceState.specStudioError ||
-            (workspaceState.specStudioOpen ? 'Close spec studio' : 'Open spec studio')}
+          : workspaceState.specStudioRetryable
+            ? workspaceState.specStudioError || 'Retry specification generation'
+            : workspaceState.specStudioOpen
+              ? 'Close spec studio'
+              : 'Open spec studio'}
         onclick={() => workspaceState.toggleSpecStudio?.()}
       >
         {#if workspaceState.specStudioBusy}
@@ -1145,7 +1218,7 @@
             ? workspaceState.specStudioFormulating
               ? 'Formulating…'
               : 'Preparing…'
-            : workspaceState.specStudioError
+            : workspaceState.specStudioRetryable
               ? 'Retry spec'
               : 'Spec'}
         </span>
@@ -1163,7 +1236,8 @@
               ? 'text-warning hover:bg-warning/10'
               : gitState.clean
                 ? 'text-dimmed hover:bg-elevated hover:text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground',
+          gitPanelActive ? 'bg-elevated' : ''
         ]}
         aria-label="Open Git panel"
         title={gitState.activePrConflictCount > 0
@@ -1213,7 +1287,9 @@
 
     <!-- Notification bell — available in all views -->
     <button
-      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
+        ? 'bg-elevated text-foreground'
+        : ''}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       title="Open notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
@@ -1226,6 +1302,9 @@
           {/if}
           {#if notificationPanelState.hasAttention}
             <StatusBadge kind="attention" title="Notifications needing attention" />
+          {/if}
+          {#if notificationPanelState.hasSpec}
+            <StatusBadge kind="spec" title="Specifications ready for review" />
           {/if}
           {#if notificationPanelState.hasError}
             <StatusBadge kind="error" title="Error notifications" />

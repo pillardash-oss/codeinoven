@@ -6,7 +6,7 @@ import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
 import type { Database } from '../../../src/main/database/database'
 import type { AgentMessage, ThreadSettings } from '../../../src/lib/types'
-import { AllThreadsPinnedError, ThreadManager } from '../../../src/lib/engines/thread-manager'
+import { AllThreadsProtectedError, ThreadManager } from '../../../src/lib/engines/thread-manager'
 import { ensureFeatureSlug } from '../../../src/lib/project-artifacts'
 import { AgentMessageRepo } from '../../../src/main/database/repositories/agent-message-repo'
 
@@ -102,6 +102,7 @@ describe('ThreadManager', () => {
       {
         id: 'message-1',
         role: 'user',
+        origin: 'provider',
         parts: [
           {
             type: 'text',
@@ -115,6 +116,7 @@ describe('ThreadManager', () => {
       {
         id: 'message-2',
         role: 'assistant',
+        origin: 'provider',
         parts: [
           {
             type: 'text',
@@ -178,7 +180,46 @@ describe('ThreadManager', () => {
     expect(listed.map((thread) => thread.id)).toEqual([pinned.id, newest.id])
   })
 
-  it('refuses to exceed the limit when every active thread is pinned', async () => {
+  it('preserves spec threads during capacity cleanup and allows explicit deletion', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-26T11:30:00.000Z'))
+    const { manager } = await createManager(2)
+    const spec = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Long-lived spec'
+    })
+    await manager.setStatus('project1', spec.id, 'spec')
+
+    vi.setSystemTime(new Date('2026-07-26T11:31:00.000Z'))
+    const ordinary = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Evictable thread'
+    })
+
+    vi.setSystemTime(new Date('2026-07-26T11:32:00.000Z'))
+    const newest = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Newest thread'
+    })
+
+    expect(await manager.getThread('project1', spec.id)).not.toBeNull()
+    expect(await manager.getThread('project1', ordinary.id)).toBeNull()
+    expect(await manager.getThread('project1', newest.id)).not.toBeNull()
+    expect(await manager.getThreadCapacity('project1')).toMatchObject({
+      activeCount: 2,
+      pinnedCount: 0,
+      protectedCount: 1,
+      deletableCount: 1
+    })
+
+    await manager.deleteThread('project1', spec.id)
+    expect(await manager.getThread('project1', spec.id)).toBeNull()
+  })
+
+  it('refuses to exceed the limit when every active thread is protected', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
     const { manager } = await createManager(2)
@@ -201,10 +242,16 @@ describe('ThreadManager', () => {
         providerId: 'openai',
         title: 'Cannot fit'
       })
-    ).rejects.toThrow(AllThreadsPinnedError)
+    ).rejects.toThrow(AllThreadsProtectedError)
 
     const capacity = await manager.getThreadCapacity('project1')
-    expect(capacity).toMatchObject({ limit: 2, activeCount: 2, pinnedCount: 2, deletableCount: 0 })
+    expect(capacity).toMatchObject({
+      limit: 2,
+      activeCount: 2,
+      pinnedCount: 2,
+      protectedCount: 2,
+      deletableCount: 0
+    })
   })
 
   it('keeps a stable feature slug across renames and forks', async () => {

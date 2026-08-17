@@ -1,8 +1,10 @@
 <script lang="ts">
   import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import type { Snippet } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { sidebarState } from '$lib/stores/sidebar.svelte'
+  import { motionDuration } from '$lib/motion'
 
   interface Props {
     /** Sidebar header title, e.g. "Projects" or "Chats". */
@@ -93,6 +95,8 @@
     class="relative flex h-full shrink-0 flex-col border-r bg-surface"
     style="width: {sidebarState.width}px"
     class:select-none={resizing}
+    in:fly={{ x: -sidebarState.width, duration: motionDuration(200), easing: cubicOut }}
+    out:fly={{ x: -sidebarState.width, duration: motionDuration(160), easing: cubicOut }}
   >
     {#if !hideHeader}
       <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">

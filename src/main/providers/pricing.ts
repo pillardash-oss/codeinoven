@@ -106,7 +106,7 @@ function resolvePrice(
  * provider has pricing data (e.g. no cache and offline), so we never fabricate
  * a number blindly.
  *
- * Codex-style legacy totals report `input` as the cache-inclusive input count,
+ * Codex-style totals report `input` as the cache-inclusive input count,
  * so uncached input is derived by subtracting the cached portion. A malformed
  * cache value exceeding input is clamped rather than producing a negative cost.
  */

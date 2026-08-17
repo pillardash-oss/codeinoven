@@ -36,13 +36,17 @@
 
   /* Success / Status */
   --color-success: #16a34a;
+  --color-chat-success: #0f766e;
   --color-warning: #d97706;
   --color-info: #2563eb;
 
   /* Thread state indicators (sidebar) — mapped to canonical status colours:
-     Todo=light grey | Working=blue | Issue=amber | Unread=green | Done=dark grey | Pinned=yellow */
+     Todo=light grey | Working=blue | Spec=purple | Issue=amber | Unread=green | Done=dark grey | Pinned=yellow */
   --color-thread-pinned: #eab308;
   --color-thread-working: var(--color-info);
+  --color-thread-working-paused: var(--color-warning);
+  /* Quiet but unmistakable purple for reviewable engineering artifacts. */
+  --color-thread-spec: #8b5cf6;
   --color-thread-unread: var(--color-success);
   --color-thread-error: var(--color-danger);
   --color-thread-done: var(--color-muted);
@@ -100,12 +104,19 @@
   --color-border-strong: #3b3b42;
 
   --color-info: #7ba3d4;
+  --color-chat-success: #34d399;
+  --color-thread-working-paused: var(--color-warning);
+  --color-thread-spec: #a78bfa;
 }
 
 /* ─── Base Styles ────────────────────────────────────────────────────────── */
 
 * {
   border-color: var(--color-border);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
@@ -115,6 +126,16 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
+}
+
+/* Any scroll call that passes an explicit `behavior` (e.g. the chat stream's
+   instant auto-scroll while streaming) overrides this, so it only smooths
+   scrolling that doesn't already opt in/out itself — wheel, keyboard, and
+   plain scrollIntoView() calls. */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 /* ─── Workspace controls ────────────────────────────────────────────────── */

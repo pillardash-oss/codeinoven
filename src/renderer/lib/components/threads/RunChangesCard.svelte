@@ -135,6 +135,17 @@
         </p>
       {/if}
 
+      {#if checkpoint.skippedFiles && checkpoint.skippedFiles.length > 0}
+        <p
+          class="border-b border-border px-4 py-2 text-[10px] leading-relaxed text-dimmed"
+          title={checkpoint.skippedFiles.join('\n')}
+        >
+          {checkpoint.skippedFiles.length}
+          {checkpoint.skippedFiles.length === 1 ? 'file is' : 'files are'} too large to checkpoint, so
+          changes to {checkpoint.skippedFiles.length === 1 ? 'it' : 'them'} cannot be undone.
+        </p>
+      {/if}
+
       {#if checkpoint.changes.length === 0}
         <p class="px-4 py-3 text-[11px] text-dimmed">No file changes detected.</p>
       {:else}

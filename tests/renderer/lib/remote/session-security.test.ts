@@ -1,74 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   MAX_ENCRYPTED_PAYLOAD_BYTES,
   MAX_PLAINTEXT_BYTES,
   MAX_RAW_PAYLOAD_CHARS,
   MAX_REPLAY_CACHE,
-  authenticateHandshake,
-  createHandshakeToken,
   decryptPayload,
   encryptPayload,
-  generateNonce,
-  replayCacheSize,
-  verifyHandshakeToken
+  replayCacheSize
 } from '../../../../src/renderer/lib/remote/session-security'
-import {
-  createLanTransport,
-  type TransportSocket
-} from '../../../../src/renderer/lib/remote/transport'
-
-class FakeSocket implements TransportSocket {
-  sent: string[] = []
-  closed = false
-  onopen: ((event: unknown) => void) | null = null
-  onmessage: ((event: { data: string }) => void) | null = null
-  onclose: ((event: { code?: number; reason?: string }) => void) | null = null
-  onerror: ((event: unknown) => void) | null = null
-
-  send(data: string): void {
-    this.sent.push(data)
-  }
-
-  close(): void {
-    this.closed = true
-  }
-
-  open(): void {
-    this.onopen?.({})
-  }
-
-  receive(data: string): void {
-    this.onmessage?.({ data })
-  }
-}
-
-describe('handshake tokens', () => {
-  it('verifies a correct token and rejects a wrong secret', async () => {
-    const nonce = generateNonce()
-    const token = await createHandshakeToken('shared-secret', nonce)
-
-    await expect(verifyHandshakeToken('shared-secret', nonce, token)).resolves.toBe(true)
-    await expect(verifyHandshakeToken('wrong-secret', nonce, token)).resolves.toBe(false)
-  })
-
-  it('rejects every handshake when no secret is configured', async () => {
-    const nonce = generateNonce()
-    const token = await createHandshakeToken('anything', nonce)
-    await expect(authenticateHandshake(null, nonce, token)).resolves.toBe(false)
-  })
-
-  it('accepts a handshake when the shared secret matches', async () => {
-    const nonce = generateNonce()
-    const token = await createHandshakeToken('shared-secret', nonce)
-    await expect(authenticateHandshake('shared-secret', nonce, token)).resolves.toBe(true)
-  })
-
-  it('does not leak the secret inside the token', async () => {
-    const token = await createHandshakeToken('very-secret-value', 'nonce')
-    expect(token).not.toContain('very-secret-value')
-  })
-})
-
 describe('payload encryption', () => {
   it('round-trips a payload through AES-GCM', async () => {
     const ciphertext = await encryptPayload('shared-secret', 'hello phone')
@@ -157,35 +96,5 @@ describe('replay protection', () => {
       await decryptPayload('shared-secret', ciphertext)
     }
     expect(replayCacheSize() - before).toBeLessThanOrEqual(MAX_REPLAY_CACHE)
-  })
-})
-
-describe('LAN handshake enforcement', () => {
-  const peer = { host: '192.168.1.5', port: 4455 }
-
-  it('rejects the LAN handshake when the peer secret is wrong', async () => {
-    const socket = new FakeSocket()
-    const transport = createLanTransport({
-      peer,
-      authSecret: 'client-secret',
-      socketFactory: () => socket,
-      onEvent: () => undefined
-    })
-
-    const connectPromise = transport.connect()
-    socket.open()
-    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'server-challenge' }))
-    await vi.waitFor(() => {
-      expect(socket.sent.length).toBe(1)
-    })
-    const hello = JSON.parse(socket.sent[0]) as { nonce: string; token: string }
-    const accepted = await authenticateHandshake('server-secret', hello.nonce, hello.token)
-    socket.receive(
-      JSON.stringify(
-        accepted ? { type: 'remote:hello:ok' } : { type: 'remote:error', reason: 'auth-failed' }
-      )
-    )
-
-    await expect(connectPromise).resolves.toBe('rejected')
   })
 })

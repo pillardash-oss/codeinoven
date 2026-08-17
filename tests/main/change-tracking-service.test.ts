@@ -79,11 +79,26 @@ describe('ChangeTrackingService', () => {
     expect(Object.keys(checkpoint.files)).toEqual(['kept.txt'])
   })
 
-  it('throws an explicit error when a checkpoint limit is exceeded', async () => {
+  it('skips oversized files instead of failing the whole snapshot', async () => {
     const project = await temporaryDirectory()
     await writeFile(join(project, 'large.txt'), '12345', 'utf-8')
+    await writeFile(join(project, 'small.txt'), 'kept', 'utf-8')
     const service = new ChangeTrackingService(new MemoryBlobStore(), {
       limits: { maxFileBytes: 4 }
+    })
+
+    const checkpoint = await service.snapshot(project)
+
+    expect(Object.keys(checkpoint.files)).toEqual(['small.txt'])
+    expect(checkpoint.skippedFiles).toEqual(['large.txt'])
+  })
+
+  it('throws an explicit error when the global file-count limit is exceeded', async () => {
+    const project = await temporaryDirectory()
+    await writeFile(join(project, 'first.txt'), '1', 'utf-8')
+    await writeFile(join(project, 'second.txt'), '2', 'utf-8')
+    const service = new ChangeTrackingService(new MemoryBlobStore(), {
+      limits: { maxFiles: 1 }
     })
 
     await expect(service.snapshot(project)).rejects.toBeInstanceOf(CheckpointLimitError)
