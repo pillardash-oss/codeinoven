@@ -219,37 +219,11 @@
     }
   }
 
-  function handleEditorKeydown(event: KeyboardEvent): void {
-    if (
-      event.key !== 'Tab' ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      !activeTab ||
-      !activeSession ||
-      !(event.currentTarget instanceof HTMLTextAreaElement)
-    ) {
+  function handleEditorInput(input: { currentTarget: { value: string } }): void {
+    if (deletedAtCheckpoint || !activeTab || projectState.loadingPaths[activeTab.path]) {
       return
     }
-    event.preventDefault()
-    const editor = event.currentTarget
-    const start = editor.selectionStart
-    const end = editor.selectionEnd
-    const next = activeSession.draft.slice(0, start) + '  ' + activeSession.draft.slice(end)
-    projectFilesWorkspace.updateDraft(projectId, activeTab.path, next)
-    requestAnimationFrame(() => editor.setSelectionRange(start + 2, start + 2))
-  }
-
-  function handleEditorInput(event: Event): void {
-    if (
-      deletedAtCheckpoint ||
-      !activeTab ||
-      projectState.loadingPaths[activeTab.path] ||
-      !(event.currentTarget instanceof HTMLTextAreaElement)
-    ) {
-      return
-    }
-    projectFilesWorkspace.updateDraft(projectId, activeTab.path, event.currentTarget.value)
+    projectFilesWorkspace.updateDraft(projectId, activeTab.path, input.currentTarget.value)
   }
 
   function reloadSelected(): void {
@@ -740,7 +714,6 @@
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
             onInput={handleEditorInput}
-            onKeydown={handleEditorKeydown}
           />
         {/key}
       {/if}
@@ -1012,7 +985,6 @@
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={handleEditorFindMatches}
                 onInput={handleEditorInput}
-                onKeydown={handleEditorKeydown}
               />
             {/if}
           {/if}
