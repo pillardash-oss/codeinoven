@@ -142,26 +142,48 @@ function notificationThreadId(params: Record<string, unknown>): string | undefin
 
 function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined
-  const descriptions = new Map<string, string>()
+  const presets: ThinkingPreset[] = []
   for (const option of value) {
     const entry = record(option)
-    const effort = stringValue(entry?.['reasoningEffort'])
+    const effort =
+      stringValue(entry?.['reasoningEffort']) ?? stringValue(entry?.['reasoning_effort'])
     if (!effort) continue
-    descriptions.set(effort, stringValue(entry?.['description']) ?? `${effort} reasoning effort`)
+    const knownPreset = THINKING_PRESETS.find((preset) => preset.id === effort)
+    presets.push({
+      id: effort,
+      label: knownPreset?.label ?? humanizeCodexLabel(effort),
+      ...((stringValue(entry?.['description']) ?? knownPreset?.description)
+        ? { description: stringValue(entry?.['description']) ?? knownPreset?.description }
+        : {})
+    })
   }
-  const presets = THINKING_PRESETS.filter((preset) => descriptions.has(preset.id)).map(
-    (preset) => ({ ...preset, description: descriptions.get(preset.id) })
-  )
   return presets.length > 0 ? presets : undefined
 }
 
-export function isCodexTextOnlyModel(id: string): boolean {
-  return /^gpt-5\.3-codex-spark(?:-|$)/iu.test(id)
+function humanizeCodexLabel(value: string): string {
+  return value.replace(/[-_]+/gu, ' ').replace(/\b\w/gu, (character) => character.toUpperCase())
+}
+
+function codexInputModalities(model: Record<string, unknown>): string[] | undefined {
+  const raw = model['inputModalities'] ?? model['input_modalities']
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter((value): value is string => typeof value === 'string')
+}
+
+function codexModelSupportsAttachments(model: Record<string, unknown>): boolean {
+  const inputModalities = codexInputModalities(model)
+  if (inputModalities !== undefined) {
+    return inputModalities.some((modality) => modality.toLowerCase() === 'image')
+  }
+  const capabilities = record(model['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  return typeof explicitVision === 'boolean' ? explicitVision : true
 }
 
 function mapCodexModel(value: unknown): ProviderModel | null {
   const model = record(value)
-  const id = stringValue(model?.['id'])
+  if (!model) return null
+  const id = stringValue(model?.['id']) ?? stringValue(model?.['model'])
   if (!id || model?.['hidden'] === true) return null
   const serviceTiers = Array.isArray(model?.['serviceTiers']) ? model['serviceTiers'] : []
   const additionalSpeedTiers = Array.isArray(model?.['additionalSpeedTiers'])
@@ -172,21 +194,13 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
     numberValue(model?.['modelContextWindow'])
-  // Read a structured vision capability when the codex catalog reports one.
-  // Spark is a known text-only model, but some Codex catalog versions omit
-  // capability metadata for it; keep the composer and transport in sync in
-  // that case instead of sending unsupported localImage inputs.
-  const capabilities = record(model?.['capabilities'])
-  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
-  const attachment =
-    typeof explicitVision === 'boolean' ? explicitVision : !isCodexTextOnlyModel(id)
   return {
     id,
     providerId: 'openai',
-    name: stringValue(model?.['displayName']) ?? id,
+    name: stringValue(model?.['displayName']) ?? stringValue(model?.['model']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment,
+    attachment: codexModelSupportsAttachments(model),
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:
