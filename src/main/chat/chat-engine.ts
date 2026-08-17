@@ -16,7 +16,7 @@ import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assig
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { OpenCodeDriver, type IsolatedHandle } from '../drivers/opencode-driver'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
-import { CodexDriver } from '../drivers/codex-driver'
+import { CodexDriver, isCodexTextOnlyModel } from '../drivers/codex-driver'
 import { ClineDriver } from '../drivers/cline-driver'
 import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
@@ -12627,8 +12627,9 @@ export class ChatEngine {
     return projectPath
   }
 
-  /** True when the selected model's catalog reports it cannot see images.
-   *  Unknown catalog state fails open (treated as vision-capable). */
+  /** True when the selected model cannot see images. The explicit Spark rule
+   *  also covers a persisted catalog snapshot that predates the current model
+   *  capability metadata. */
   private async modelLacksVision(projectId: string, settings: ThreadSettings): Promise<boolean> {
     const catalogs =
       this.providerCache.get(projectId) ??
@@ -12640,7 +12641,12 @@ export class ChatEngine {
           candidate.harnessId === settings.harnessId && candidate.id === settings.providerId
       ) ?? catalogs?.find((candidate) => candidate.id === settings.providerId)
     const model = provider?.models.find((candidate) => candidate.id === settings.modelId)
-    return model?.attachment === false
+    return (
+      model?.attachment === false ||
+      (settings.harnessId === 'codex' &&
+        settings.providerId === 'openai' &&
+        isCodexTextOnlyModel(settings.modelId))
+    )
   }
 
   /** Last-resort image-descriptor model: the first vision-capable model in the
