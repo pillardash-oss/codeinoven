@@ -111,6 +111,61 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
+   * Promote a draft pull request to ready-for-review.
+   *
+   * GitHub exposes this lifecycle transition through GraphQL rather than the
+   * REST update endpoint. Resolve the PR's global node ID first, then return the
+   * same renderer-safe reference shape as every other PR mutation.
+   */
+  async markPullRequestReadyForReview(input: PullRequestTarget): Promise<PullRequestReference> {
+    const detail = await this.request(this.pullPath(input), { method: 'GET' })
+    const detailRecord = Array.isArray(detail) ? {} : detail
+    if (detailRecord['draft'] !== true) return this.toReference(detailRecord)
+    const pullRequestId = this.readString(detailRecord, 'node_id')
+    if (!pullRequestId) {
+      throw new Error(`Pull request #${input.pullNumber} has no provider node ID`)
+    }
+
+    const response = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({
+        query:
+          'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
+        variables: { pullRequestId }
+      })
+    })
+    const responseRecord = Array.isArray(response) ? {} : response
+    const errors = responseRecord['errors']
+    if (Array.isArray(errors)) {
+      const first = errors.find(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      )
+      const message = first ? this.readString(first, 'message') : null
+      throw new Error(
+        message?.slice(0, 500) ?? 'Provider could not mark this pull request ready for review'
+      )
+    }
+    const data = this.readRecord(responseRecord, 'data')
+    const mutation = data ? this.readRecord(data, 'markPullRequestReadyForReview') : null
+    const pullRequest = mutation ? this.readRecord(mutation, 'pullRequest') : null
+    if (!pullRequest) {
+      throw new Error(`Pull request #${input.pullNumber} was not marked ready for review`)
+    }
+    return {
+      number: this.readNumber(pullRequest, 'number') || input.pullNumber,
+      title:
+        this.readString(pullRequest, 'title') ??
+        this.readString(detailRecord, 'title') ??
+        `Pull request #${input.pullNumber}`,
+      url:
+        this.readString(pullRequest, 'url') ??
+        this.readString(detailRecord, 'html_url') ??
+        `https://github.com/${input.owner}/${input.repo}/pull/${input.pullNumber}`
+    }
+  }
+
+  /**
    * Compare two refs so the create-PR form can tell the user whether there is
    * anything to compare (GitHub's own "There isn't anything to compare" state).
    * A PR only makes sense when the head has commits the base lacks.

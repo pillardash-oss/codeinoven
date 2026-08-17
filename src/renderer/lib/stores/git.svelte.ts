@@ -63,6 +63,7 @@ export type GitOperation =
   | 'abortRebase'
   | 'pr-create'
   | 'pr-merge'
+  | 'pr-ready'
   | 'pr-comment'
   | 'pr-review'
   | 'pr-list'
@@ -975,6 +976,30 @@ export class GitState {
     }
   }
 
+  /** Promote a draft pull request to ready-for-review before merge. */
+  async markPullRequestReadyForReview(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-ready', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      const reference = this.resolveGitHubMutation(
+        await invoke('pr:ready', projectId, owner, repo, pullNumber)
+      )
+      if (reference) this.updatePrDraftState(owner, repo, pullNumber, false)
+      return reference
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be marked ready for review')
+      return null
+    } finally {
+      this.markBusy('pr-ready', false)
+    }
+  }
+
   async listPullRequests(
     projectId: string,
     owner: string,
@@ -1163,6 +1188,40 @@ export class GitState {
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {
     return `${owner}/${repo}#${pullNumber}`
+  }
+
+  /** Keep list/detail caches coherent after a PR lifecycle mutation. */
+  private updatePrDraftState(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    draft: boolean
+  ): void {
+    const pagePrefix = `${owner}/${repo}:`
+    this.prPages = Object.fromEntries(
+      Object.entries(this.prPages).map(([key, cached]) => [
+        key,
+        key.startsWith(pagePrefix)
+          ? {
+              ...cached,
+              page: {
+                ...cached.page,
+                items: cached.page.items.map((item) =>
+                  item.number === pullNumber ? { ...item, draft } : item
+                )
+              }
+            }
+          : cached
+      ])
+    )
+    const bundleKey = GitState.bundleKey(owner, repo, pullNumber)
+    const bundle = this.prBundles[bundleKey]
+    if (bundle) {
+      this.prBundles = {
+        ...this.prBundles,
+        [bundleKey]: { ...bundle, detail: { ...bundle.detail, draft } }
+      }
+    }
   }
 
   static deploymentKey(owner: string, repo: string): string {

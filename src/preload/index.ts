@@ -192,6 +192,7 @@ const INVOKE_CHANNELS = [
   'pr:create',
   'pr:list',
   'pr:merge',
+  'pr:ready',
   'pr:compare',
   'pr:reopen',
   'pr:close',

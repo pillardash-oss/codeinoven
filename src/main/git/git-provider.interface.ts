@@ -73,6 +73,8 @@ export interface CreatePrReviewInput extends PullRequestTarget {
 export interface GitProvider {
   createPullRequest(draft: PrDraft): Promise<PullRequestReference>
   mergePullRequest(input: MergePullRequestInput): Promise<PullRequestReference>
+  /** Promote a draft pull request to the reviewable state required before merge. */
+  markPullRequestReadyForReview(input: PullRequestTarget): Promise<PullRequestReference>
   /** Compare two refs so the create-PR form can gate on there being a real change. */
   comparePullRequests(input: {
     owner: string

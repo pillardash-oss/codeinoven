@@ -832,6 +832,10 @@ export interface IpcInvokeContract {
     ],
     GitHubMutationResult<PullRequestReference>
   >
+  'pr:ready': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >
   'pr:compare': Contract<
     [projectId: string, owner: string, repo: string, base: string, head: string],
     PullRequestCompare

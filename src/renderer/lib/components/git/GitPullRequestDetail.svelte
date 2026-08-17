@@ -108,8 +108,10 @@
   const resolving = $derived(gitState.isBusy('merge'))
   const reopening = $derived(gitState.isBusy('pr-reopen'))
   const closing = $derived(gitState.isBusy('pr-close'))
+  const markingReady = $derived(gitState.isBusy('pr-ready'))
   const prState = $derived(detail?.state ?? summary.state)
   const open = $derived(prState === 'open')
+  const draft = $derived(detail?.draft ?? summary.draft)
   const hasBody = $derived(commentBody.trim().length > 0)
   /** Why merging may not be a good idea right now — shown next to the button. */
   const mergeBlocker = $derived.by(() => {
@@ -324,6 +326,20 @@
     }
   }
 
+  /** Promote a draft PR to ready-for-review so GitHub will allow it to merge. */
+  async function markReadyForReview(): Promise<void> {
+    const ready = await gitState.markPullRequestReadyForReview(
+      projectId,
+      identity.owner,
+      identity.repo,
+      number
+    )
+    if (ready) {
+      notice = 'Pull request marked ready for review'
+      await refresh()
+    }
+  }
+
   /** Prefill the merge commit title/message the way GitHub does, per method. */
   function openMergeConfirm(): void {
     commitTitle =
@@ -479,7 +495,7 @@
           detail?.state ?? summary.state
         )}"
       >
-        {detail?.state ?? summary.state}{summary.draft ? ' · draft' : ''}
+        {detail?.state ?? summary.state}{draft ? ' · draft' : ''}
       </span>
       {#if checks && checks.state !== 'none'}
         <button
@@ -899,7 +915,12 @@
       {/if}
       {#if open}
         <div class="flex items-center justify-end gap-1.5">
-          {#if mergeBlocker}
+          {#if draft}
+            <span class="mr-auto flex min-w-0 items-center gap-1 text-[9px] text-warning">
+              <CircleDot size={10} class="shrink-0" />
+              <span class="truncate">Draft pull request</span>
+            </span>
+          {:else if mergeBlocker}
             <span class="mr-auto flex min-w-0 items-center gap-1 text-[9px] text-warning">
               <TriangleAlert size={10} class="shrink-0" />
               <span class="truncate">{mergeBlocker}</span>
@@ -910,7 +931,7 @@
               class="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-dimmed transition-colors hover:bg-surface hover:text-foreground disabled:cursor-default disabled:opacity-40"
               title="More pull request actions"
               aria-label="More pull request actions"
-              disabled={closing}
+              disabled={closing || markingReady}
             >
               {#if closing}
                 <Loader2 size={13} class="animate-spin" />
@@ -936,57 +957,74 @@
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
 
-          <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
+          {#if draft}
             <button
               type="button"
-              class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-              title={`Merge this pull request into ${summary.baseRef} using ${method}`}
-              disabled={merging}
-              onclick={openMergeConfirm}
+              class="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+              title="Mark this draft pull request ready for review before merging"
+              disabled={markingReady}
+              onclick={() => void markReadyForReview()}
             >
-              {#if merging}
+              {#if markingReady}
                 <Loader2 size={12} class="animate-spin" />
               {:else}
-                <Merge size={12} />
+                <Check size={12} />
               {/if}
-              Merge into {summary.baseRef}
+              Ready for review
             </button>
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger
-                class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-                title="Choose a merge method"
-                aria-label="Choose a merge method"
+          {:else}
+            <div class="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md">
+              <button
+                type="button"
+                class="flex cursor-pointer items-center gap-1 bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+                title={`Merge this pull request into ${summary.baseRef} using ${method}`}
                 disabled={merging}
+                onclick={openMergeConfirm}
               >
-                <ChevronDown size={12} />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  side="top"
-                  align="end"
-                  sideOffset={6}
-                  class="z-50 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+                {#if merging}
+                  <Loader2 size={12} class="animate-spin" />
+                {:else}
+                  <Merge size={12} />
+                {/if}
+                Merge into {summary.baseRef}
+              </button>
+              <DropdownMenu.Root>
+                <DropdownMenu.Trigger
+                  class="flex w-6 cursor-pointer items-center justify-center border-l border-on-primary/25 bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+                  title="Choose a merge method"
+                  aria-label="Choose a merge method"
+                  disabled={merging}
                 >
-                  <p
-                    class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
+                  <ChevronDown size={12} />
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    side="top"
+                    align="end"
+                    sideOffset={6}
+                    class="z-50 w-40 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
                   >
-                    Merge method
-                  </p>
-                  {#each mergeMethods as option (option.id)}
-                    <DropdownMenu.Item
-                      class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
-                      onSelect={() => (method = option.id)}
+                    <p
+                      class="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed"
                     >
-                      {option.label}
-                      {#if method === option.id}
-                        <Check size={13} class="shrink-0 text-primary" />
-                      {/if}
-                    </DropdownMenu.Item>
-                  {/each}
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          </div>
+                      Merge method
+                    </p>
+                    {#each mergeMethods as option (option.id)}
+                      <DropdownMenu.Item
+                        class="flex cursor-pointer items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground outline-none transition-colors data-[highlighted]:bg-elevated"
+                        onSelect={() => (method = option.id)}
+                      >
+                        {option.label}
+                        {#if method === option.id}
+                          <Check size={13} class="shrink-0 text-primary" />
+                        {/if}
+                      </DropdownMenu.Item>
+                    {/each}
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu.Root>
+            </div>
+          {/if}
         </div>
       {:else if prState === 'closed'}
         <div class="flex items-center gap-1.5">

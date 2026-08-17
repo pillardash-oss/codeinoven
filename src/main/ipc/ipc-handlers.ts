@@ -3765,6 +3765,16 @@ export function registerIpcHandlers(
   )
 
   ipcMain.handle(
+    'pr:ready',
+    async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
+      const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
+      return runGitHubMutation(target.owner, target.repo, () =>
+        provider.markPullRequestReadyForReview(target)
+      )
+    }
+  )
+
+  ipcMain.handle(
     'pr:close',
     async (_, projectId: unknown, owner: unknown, repo: unknown, pullNumber: unknown) => {
       const { provider, ...target } = await pullRequestTarget(projectId, owner, repo, pullNumber)
