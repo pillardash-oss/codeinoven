@@ -110,6 +110,12 @@ class AgentRunsStore {
     openTrace = true
   ): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
+    const previousTraceUserOpened = entry.traceUserOpened
     const wasBusy = entry.busy
     const isNewTurn =
       busy &&
@@ -139,7 +145,16 @@ class AgentRunsStore {
       entry.traceOpen = false
     }
 
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen ||
+      entry.traceUserOpened !== previousTraceUserOpened
+    ) {
+      this.#notify()
+    }
   }
 
   /** Toggle the working trace open/closed state, recording user intent. */
@@ -153,6 +168,11 @@ class AgentRunsStore {
   /** Mark the run idle and close the trace unless the user opened it. */
   setIdle(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
     entry.busy = false
     entry.live = false
     entry.busySince = null
@@ -160,7 +180,15 @@ class AgentRunsStore {
     if (!entry.traceUserOpened) {
       entry.traceOpen = false
     }
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen
+    ) {
+      this.#notify()
+    }
   }
 
   /** Clear the run state for a thread (e.g. on deletion). */

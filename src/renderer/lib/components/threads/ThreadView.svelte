@@ -2474,6 +2474,11 @@
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
       window.removeEventListener('resize', onResize)
+      if (refreshMessagesTimer !== undefined) {
+        clearTimeout(refreshMessagesTimer)
+        refreshMessagesTimer = undefined
+      }
+      refreshMessagesPending = false
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
@@ -2881,6 +2886,33 @@
 
   // ─── Agent event handling ────────────────────────────────────────────────
 
+  const MESSAGE_REFRESH_FRAME_MS = 16
+  let refreshMessagesTimer: ReturnType<typeof setTimeout> | undefined
+  let refreshMessagesPending = false
+  let refreshMessagesInFlight: Promise<void> | null = null
+
+  function scheduleRefreshMessagesTimer(): void {
+    if (
+      !refreshMessagesPending ||
+      refreshMessagesTimer !== undefined ||
+      refreshMessagesInFlight !== null
+    ) {
+      return
+    }
+    refreshMessagesTimer = setTimeout(() => {
+      refreshMessagesTimer = undefined
+      if (!refreshMessagesPending || refreshMessagesInFlight !== null) return
+      refreshMessagesPending = false
+      void refreshMessages()
+    }, MESSAGE_REFRESH_FRAME_MS)
+  }
+
+  /** Coalesce bursty stream events without ever overlapping transcript loads. */
+  function scheduleRefreshMessages(): void {
+    refreshMessagesPending = true
+    scheduleRefreshMessagesTimer()
+  }
+
   function setProviderError(issue: AgentProviderIssue): void {
     const currentIssue = providerStatus?.state === 'error' ? providerStatus.issue : null
     if (currentIssue?.rawError && !issue.rawError) return
@@ -2975,13 +3007,13 @@
             }
           }
         }
-        void refreshMessages()
+        scheduleRefreshMessages()
         void refreshCheckpoints()
         break
       }
       case 'usage.updated': {
         if (event.sessionId !== sessionId) return
-        void refreshMessages()
+        scheduleRefreshMessages()
         break
       }
       case 'session.idle': {
@@ -2993,7 +3025,7 @@
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
         if (providerStatus?.state !== 'error') providerStatus = null
-        void refreshMessages()
+        scheduleRefreshMessages()
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         setTimeout(() => void reconcileReadySpec(), 100)
@@ -3105,14 +3137,39 @@
   }
 
   async function refreshMessages(): Promise<void> {
+    // A direct refresh supersedes any delayed event refresh. Events arriving
+    // after this point can set the pending flag again while this load runs.
+    if (refreshMessagesTimer !== undefined) {
+      clearTimeout(refreshMessagesTimer)
+      refreshMessagesTimer = undefined
+    }
+    refreshMessagesPending = false
+
+    while (refreshMessagesInFlight !== null) {
+      await refreshMessagesInFlight
+    }
+    refreshMessagesPending = false
+
     const { projectId, id } = thread
+    const loadPromise = (async (): Promise<void> => {
+      try {
+        const synced = await invoke('agent:loadMessages', projectId, id)
+        if (!alive) return
+        threadMessages.reconcile(projectId, id, synced)
+        syncOpenSubagentTabs()
+      } catch {
+        // Non-fatal — keep what we have
+      }
+    })()
+    refreshMessagesInFlight = loadPromise
+
     try {
-      const synced = await invoke('agent:loadMessages', projectId, id)
-      if (!alive) return
-      threadMessages.reconcile(projectId, id, synced)
-      syncOpenSubagentTabs()
-    } catch {
-      // Non-fatal — keep what we have
+      await loadPromise
+    } finally {
+      if (refreshMessagesInFlight === loadPromise) {
+        refreshMessagesInFlight = null
+        scheduleRefreshMessagesTimer()
+      }
     }
   }
 
