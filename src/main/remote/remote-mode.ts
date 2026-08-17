@@ -52,6 +52,7 @@ import {
   tombstonesForDeletions,
   writeMemorySyncState
 } from './memory-sync-state'
+import { isHarnessScopedModelKey } from '../../lib/model-keys'
 
 declare global {
   /** Public remote-service origin injected by the Electron production build. */
@@ -410,7 +411,8 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       'behavioral',
       'project-rule',
       'identity',
-      'preference'
+      'preference',
+      'models'
     ]
     const priorities: MemoryEntry['priority'][] = ['critical', 'high', 'medium', 'low']
     const sources: MemoryEntry['source'][] = ['manual', 'auto-detected']
@@ -425,7 +427,13 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       entry['scope'] !== 'global' ||
       !sources.includes(entry['source'] as MemoryEntry['source']) ||
       typeof entry['frequency'] !== 'number' ||
-      typeof entry['lastReinforced'] !== 'number'
+      typeof entry['lastReinforced'] !== 'number' ||
+      (entry['category'] === 'models' &&
+        (!Array.isArray(entry['modelKeys']) ||
+          entry['modelKeys'].length === 0 ||
+          entry['modelKeys'].some(
+            (key) => typeof key !== 'string' || !isHarnessScopedModelKey(key)
+          )))
     ) {
       return null
     }
@@ -440,7 +448,8 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       scope: 'global',
       source: entry['source'] as MemoryEntry['source'],
       frequency: entry['frequency'],
-      lastReinforced: entry['lastReinforced']
+      lastReinforced: entry['lastReinforced'],
+      ...(Array.isArray(entry['modelKeys']) ? { modelKeys: entry['modelKeys'] as string[] } : {})
     })
   }
   return entries

@@ -94,7 +94,8 @@ export class PromptAssembler {
       MERMAID_OUTPUT_INSTRUCTION?: string
     },
     mode: BehaviorMode = 'implement',
-    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
+    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
+    modelKey?: string
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -129,7 +130,7 @@ export class PromptAssembler {
       })
     )
 
-    const memory = await this.memoryService.formatCurrent(projectId, threadId)
+    const memory = await this.memoryService.formatCurrent(projectId, threadId, modelKey)
     layers.push(
       withLayerAccounting({
         title: 'Memory',
@@ -177,7 +178,8 @@ export class PromptAssembler {
       MERMAID_OUTPUT_INSTRUCTION?: string
     },
     mode: BehaviorMode = 'implement',
-    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT
+    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
+    modelKey?: string
   ): Promise<string> {
     const layers = await this.getLayers(
       projectId,
@@ -186,7 +188,8 @@ export class PromptAssembler {
       driver,
       systemPromptConstants,
       mode,
-      agentBehaviorPrompt
+      agentBehaviorPrompt,
+      modelKey
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)

@@ -46,6 +46,10 @@
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
     label?: string
+    /** Keep the catalog open while toggling several models. */
+    multiSelect?: boolean
+    /** Harness-scoped model keys selected by a multi-select caller. */
+    selectedModelKeys?: string[]
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
     /** When true, only models that report vision capability are shown. */
@@ -58,6 +62,7 @@
      *  presets — when the model declares none, thinking controls stay hidden. */
     thinkingPresets?: ThinkingPreset[]
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    onSelectMultiple?: (modelKeys: string[]) => void
     /** Fired when the thinking level changes — either from an explicit preset
      *  click, or automatically when a newly selected model no longer supports
      *  the previous level. */
@@ -85,11 +90,14 @@
     disabled = false,
     variant = 'compact',
     label,
+    multiSelect = false,
+    selectedModelKeys = [],
     fast = false,
     visionOnly = false,
     thinkingLevel = null,
     thinkingPresets,
     onSelect,
+    onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
     onReorderFavorite
@@ -99,10 +107,11 @@
   const searchId = `model-search-${pickerId}`
   const listId = `model-list-${pickerId}`
   let search = $state('')
-  let searchInput: HTMLInputElement
-  let modelList: HTMLDivElement
+  let searchInput: HTMLInputElement | undefined
+  let modelList: HTMLDivElement | undefined
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
+  let selectedModelKeysSet = $derived(new Set(selectedModelKeys))
   /** Harness catalogs are app-wide. Keep the union available while a newly
    * opened project's time-budgeted refresh is still returning partial results. */
   let cachedProviders = $derived(providerCatalog.allCached())
@@ -168,7 +177,14 @@
    * The catalog enriches these optimistically once it lands.
    */
   let selectedHarnessIcon = $derived(getAgentIcon(harnessId))
-  let selectedLabel = $derived(label ?? selectedModel?.name ?? (modelId || 'Model'))
+  let selectedLabel = $derived(
+    multiSelect
+      ? (label ??
+          (selectedModelKeys.length === 0
+            ? 'Select models'
+            : `${selectedModelKeys.length} model${selectedModelKeys.length === 1 ? '' : 's'} selected`))
+      : (label ?? selectedModel?.name ?? (modelId || 'Model'))
+  )
   /** Keep the trigger readable — long names (e.g. Claude Code's default-model
    *  description) would otherwise swallow the composer's bottom bar. */
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
@@ -316,6 +332,7 @@
    * models sharing the same id.
    */
   function isSelectedModel(entry: ModelEntry): boolean {
+    if (multiSelect) return selectedModelKeysSet.has(modelEntryKey(entry))
     return (
       entry.model.id === modelId &&
       entry.provider.id === providerId &&
@@ -715,6 +732,14 @@
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+    if (multiSelect) {
+      const nextKey = modelKey(nextHarnessId, nextProviderId, nextModelId)
+      const nextKeys = selectedModelKeysSet.has(nextKey)
+        ? selectedModelKeys.filter((key) => key !== nextKey)
+        : [...selectedModelKeys, nextKey]
+      onSelectMultiple?.(nextKeys)
+      return
+    }
     const entry =
       findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
       findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
@@ -796,8 +821,8 @@
     <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
       <Popover.Trigger
         class={modelButtonClasses}
-        aria-label={`Select model, currently ${selectedLabel}`}
-        title={`Select model — ${selectedLabel}`}
+        aria-label={`${multiSelect ? 'Select models' : 'Select model'}, currently ${selectedLabel}`}
+        title={`${multiSelect ? 'Select models' : 'Select model'} — ${selectedLabel}`}
         {disabled}
       >
         {#if selectedProvider}
@@ -877,7 +902,7 @@
         collisionPadding={12}
         class="z-50 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         role="dialog"
-        aria-label="Select model"
+        aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onkeydown={(event: KeyboardEvent) => {
@@ -1041,6 +1066,21 @@
             </div>
           {/if}
         </div>
+        {#if multiSelect}
+          <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
+            <span class="text-[10px] text-dimmed">
+              {selectedModelKeys.length} selected · choose one or more
+            </span>
+            <button
+              type="button"
+              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              title="Finish selecting models"
+              onclick={close}
+            >
+              Done
+            </button>
+          </div>
+        {/if}
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
@@ -1272,6 +1312,9 @@
         {entry.model.name}
       </span>
       <span class="ml-auto flex shrink-0 items-center gap-1 text-[9px] text-dimmed">
+        {#if multiSelect && isSelectedModel(entry)}
+          <Check size={11} class="text-primary" aria-label="Selected" />
+        {/if}
         {#if onToggleFavorite}
           <span
             role="button"

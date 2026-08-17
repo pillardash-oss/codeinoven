@@ -2946,7 +2946,7 @@ export interface EditorInfo {
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type SlashCommandMode = 'app' | 'passthrough'
 
-export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference'
+export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
 export type MemorySource = 'manual' | 'auto-detected'
@@ -2965,6 +2965,8 @@ export interface MemoryEntry {
   lastReinforced: number
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific memories. */
+  modelKeys?: string[]
 }
 
 export interface MemoryConfig {
@@ -2984,6 +2986,8 @@ export interface MemoryProposal {
   scope: MemoryScope
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific proposals. */
+  modelKeys?: string[]
   createdAt: number
   expiresAt: number
   status: 'pending' | 'approved' | 'rejected'

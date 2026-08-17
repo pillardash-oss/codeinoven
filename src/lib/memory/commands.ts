@@ -219,7 +219,7 @@ export function getMemoryHelpText(): string {
     '**Memory Commands:**',
     '',
     '`/memory add <label> <content>` — Add a new memory entry',
-    '  Options: `--category behavioral|project-rule|identity|preference`',
+    '  Options: `--category behavioral|project-rule|identity|preference|models`',
     '           `--priority critical|high|medium|low`',
     '           `--scope global|project`',
     '',

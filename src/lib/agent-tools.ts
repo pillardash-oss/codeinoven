@@ -309,7 +309,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     },
     category: {
       type: 'string',
-      enum: ['behavioral', 'project-rule', 'identity', 'preference'],
+      enum: ['behavioral', 'project-rule', 'identity', 'preference', 'models'],
       description: 'The semantic kind of durable information.'
     },
     priority: {

@@ -70,7 +70,8 @@
     behavioral: 'Behavioral',
     'project-rule': 'Project Rule',
     identity: 'Identity',
-    preference: 'Preference'
+    preference: 'Preference',
+    models: 'Models'
   }
 
   const priorityLabels: Record<MemoryPriority, string> = {
@@ -413,10 +414,17 @@
   function updateEntry(
     index: number,
     field: keyof MemoryEntry,
-    value: string | boolean | number
+    value: string | boolean | number | string[] | undefined
   ): void {
     entries = entries.map((entry, i) =>
-      i === index ? { ...entry, [field]: value, updatedAt: Date.now() } : entry
+      i === index
+        ? {
+            ...entry,
+            ...(field === 'category' && value !== 'models' ? { modelKeys: undefined } : {}),
+            [field]: value,
+            updatedAt: Date.now()
+          }
+        : entry
     )
   }
 
@@ -626,7 +634,7 @@
                     <p class="text-sm font-medium text-foreground">{row.proposal.label}</p>
                     <p class="mt-1 text-xs leading-relaxed text-muted">{row.proposal.content}</p>
                     <p class="mt-1.5 text-[11px] capitalize text-dimmed">
-                      {row.proposal.scope} · {row.proposal.category} · {row.proposal.priority}
+                      {row.proposal.scope} · {categoryLabels[row.proposal.category]} · {row.proposal.priority}
                     </p>
                   </div>
                   <div class="flex shrink-0 items-center gap-1">
@@ -792,6 +800,7 @@
           <MemoryEntryComponent
             {entry}
             index={entries.indexOf(entry)}
+            {projectId}
             scopeOptions={availableScopes}
             onUpdate={updateEntry}
             onRemove={removeEntry}
