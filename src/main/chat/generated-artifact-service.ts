@@ -48,7 +48,15 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 const MAX_SCAN_FILES = 4_000
 const MAX_SCAN_DEPTH = 8
 const RECENT_IMAGE_WINDOW_MS = 10 * 60 * 1_000
-const SKIPPED_DIRECTORIES = new Set(['.git', '.svelte-kit', 'build', 'dist', 'node_modules', 'out'])
+const SKIPPED_DIRECTORIES = new Set([
+  '.cio',
+  '.git',
+  '.svelte-kit',
+  'build',
+  'dist',
+  'node_modules',
+  'out'
+])
 const MARKDOWN_IMAGE_PATTERN = /!\[[^\]]*\]\(([^)\s]+)\)/gu
 const IMAGE_REFERENCE_PATTERN =
   /(?:data:image\/[a-z0-9.+-]+;[^\s<>'")]+|file:\/\/[^\s<>'")]+|(?:[A-Za-z]:[\\/]|\/|\.\.?[\\/])[^\s<>'")]+\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp)(?:[?#][^\s<>'")]*)?|[\w.-]+\.(?:avif|bmp|gif|heic|heif|ico|jpe?g|png|svg|tiff?|webp))/giu
@@ -161,6 +169,17 @@ function imagePart(part: AgentPart): part is Extract<AgentPart, { type: 'file' }
   )
 }
 
+function isStaleProjectImage(value: string, context: ArtifactContext): boolean {
+  if (context.scope !== 'project') return false
+  const sourcePath = filePathFromUrl(value)
+  if (!sourcePath || sourcePath.startsWith('data:')) return false
+  const absolutePath = resolve(context.projectPath, sourcePath)
+  const projectDataRoot = resolve(context.projectPath, PROJECT_DATA_DIRECTORY)
+  return (
+    isWithinRoot(projectDataRoot, absolutePath) && !isWithinRoot(context.artifactRoot, absolutePath)
+  )
+}
+
 async function atomicWriteBuffer(path: string, bytes: Buffer): Promise<void> {
   const temporaryPath = `${path}.${process.pid}.${createHash('sha1').update(path).digest('hex').slice(0, 12)}.tmp`
   try {
@@ -229,6 +248,14 @@ export class GeneratedArtifactService {
       for (const part of message.parts) {
         if (!imagePart(part)) {
           nextParts.push(part)
+          continue
+        }
+        // Project `.cio/` is app-owned. Images there belong to the composer,
+        // another thread, or another lifecycle surface unless they are inside
+        // this thread's explicitly assigned artifact root. Remove stale parts
+        // written by the old project-wide scanner before rendering them again.
+        if (isStaleProjectImage(part.url, context)) {
+          changed = true
           continue
         }
         const materialized = await this.materialize(
