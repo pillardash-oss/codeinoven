@@ -211,6 +211,14 @@
     )
   })
 
+  let gitPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git'
+  )
+
+  let notificationsPanelActive = $derived(
+    contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'
+  )
+
   /** "Settings · <Section>" while a settings tab is on screen. */
   let settingsTitle = $derived(
     settingsUiState.activeTabLabel ? `Settings · ${settingsUiState.activeTabLabel}` : 'Settings'
@@ -455,7 +463,7 @@
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
     if (!thread || !gitAvailable) return
-    if (contextSidebarState.visible && contextSidebarState.sidebarActiveTab?.kind === 'git') {
+    if (gitPanelActive) {
       contextSidebarState.hide()
     } else {
       contextSidebarState.openGit(thread.projectId, thread.id)
@@ -1216,7 +1224,8 @@
               ? 'text-warning hover:bg-warning/10'
               : gitState.clean
                 ? 'text-dimmed hover:bg-elevated hover:text-foreground'
-                : 'text-muted hover:bg-elevated hover:text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground',
+          gitPanelActive ? 'bg-elevated' : ''
         ]}
         aria-label="Open Git panel"
         title={gitState.activePrConflictCount > 0
@@ -1266,7 +1275,9 @@
 
     <!-- Notification bell — available in all views -->
     <button
-      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+      class="relative flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground {notificationsPanelActive
+        ? 'bg-elevated text-foreground'
+        : ''}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       title="Open notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
