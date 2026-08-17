@@ -25,6 +25,7 @@
     Copy,
     Ellipsis,
     FileText,
+    FileDown,
     FolderInput,
     GitFork,
     Info,
@@ -49,6 +50,7 @@
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
+  import TranscriptExportModal from './TranscriptExportModal.svelte'
   import Modal from '../ui/Modal.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -5897,6 +5899,54 @@
     }
   }
 
+  // ─── Export conversation transcript (background, off the UI thread) ─────
+
+  let transcriptExportOpen = $state(false)
+
+  function openTranscriptExport(): void {
+    transcriptExportOpen = true
+  }
+
+  /** Kick off the background export and surface its completion in a toast. */
+  async function exportTranscript(includeTrace: boolean): Promise<void> {
+    const currentProjectId = thread.projectId
+    const currentThreadId = thread.id
+    transcriptExportOpen = false
+    const progressToast = toast.loading('Exporting transcript in the background…')
+    let exportedPath = ''
+    try {
+      const result = await invoke('thread:exportTranscript', currentProjectId, currentThreadId, {
+        includeTrace
+      })
+      toast.dismiss(progressToast)
+      if (!result) return
+      exportedPath = result.path
+      // Let a project transcript be revealed inside the app's file tree; chat
+      // transcripts live outside any project, so reveal them in the OS.
+      const onReview = (): void => {
+        if (result.location === 'chat') {
+          void invoke('shell:revealExternalPath', exportedPath).then((revealed) => {
+            if (!revealed) {
+              toast.error('The transcript could not be revealed in the file manager.')
+            }
+          })
+          return
+        }
+        void revealFileInAppTree(currentProjectId, exportedPath)
+      }
+      toast.success('Transcript exported successfully', {
+        description:
+          result.location === 'chat'
+            ? 'Stored in the temporary chat directory.'
+            : 'Stored in your project’s .cio scratch space.',
+        action: { label: 'Review transcript', onClick: onReview }
+      })
+    } catch (error) {
+      toast.dismiss(progressToast)
+      toast.error(error instanceof Error ? error.message : 'The transcript could not be exported.')
+    }
+  }
+
   // ─── Continue a chat in a project ──────────────────────────────────────
 
   let continueInProjectOpen = $state(false)
@@ -5904,9 +5954,7 @@
 
   function openContinueInProject(): void {
     continueInProjectOpen = true
-  }
-
-  /** Continue the whole chat conversation as a new thread in the chosen project. */
+  } /** Continue the whole chat conversation as a new thread in the chosen project. */
   async function continueChatInProject(project: Project): Promise<void> {
     if (continueInProjectBusy) return
     continueInProjectBusy = true
@@ -7048,6 +7096,14 @@
                                   <FolderInput size={12} />
                                 </button>
                               {/if}
+                              <button
+                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                aria-label="Export this conversation as a transcript"
+                                title="Export transcript"
+                                onclick={openTranscriptExport}
+                              >
+                                <FileDown size={12} />
+                              </button>
                             </div>
                             <div
                               class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
@@ -7799,6 +7855,13 @@
   }}
   onContinue={(project) => continueChatInProject(project)}
   onProjectCreated={(project) => void onProjectCreated?.(project)}
+/>
+
+<TranscriptExportModal
+  open={transcriptExportOpen}
+  {chatMode}
+  onClose={() => (transcriptExportOpen = false)}
+  onExport={(includeTrace) => exportTranscript(includeTrace)}
 />
 
 <Modal

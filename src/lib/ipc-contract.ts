@@ -1493,6 +1493,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, before?: ThreadMessageCursor, limit?: number],
     ThreadMessagePage
   >
+  'thread:exportTranscript': Contract<
+    [projectId: string, threadId: string, options: import('./types').TranscriptExportOptions],
+    import('./types').TranscriptExportResult | null
+  >
   'thread:loadMessagesAround': Contract<
     [projectId: string, threadId: string, anchorId: string, limit: number],
     ThreadMessagePage

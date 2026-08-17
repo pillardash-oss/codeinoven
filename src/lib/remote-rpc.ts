@@ -65,6 +65,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:harnessUsage',
   'thread:efficiencyKpis',
   'thread:loadMessages',
+  'thread:exportTranscript',
   'thread:update',
   'thread:delete',
   'thread:fork',
@@ -341,6 +342,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
 
   // workspace.write — default-No, no step-up
+  'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
   'thread:markRead': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setPinned': { scope: 'workspace.write', stepUp: 'none' },

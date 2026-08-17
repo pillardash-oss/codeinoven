@@ -4770,6 +4770,46 @@ export function registerIpcHandlers(
     await threadCreation.awaitReady(safeThreadId)
     return threadManager.loadUserMessages(safeProjectId, safeThreadId)
   })
+  // Export the conversation transcript as Markdown, off the main thread.
+  ipcMain.handle(
+    'thread:exportTranscript',
+    async (_, projectId: unknown, threadId: unknown, rawOptions: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      await threadCreation.awaitReady(safeThreadId)
+      const thread = await threadManager.getThread(safeProjectId, safeThreadId)
+      if (!thread) throw new Error('Thread not found')
+      const includeTrace = isRecord(rawOptions)
+        ? validateBoolean(rawOptions.includeTrace, 'Include working trace')
+        : false
+
+      const project = await projectManager.getProject(safeProjectId)
+      const isProject = project?.source === 'local' && Boolean(project.path)
+      const destinationDirectory = isProject
+        ? join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'transcripts')
+        : join(getConfigRoot(), 'chats', safeThreadId, 'tmp', 'transcripts')
+
+      const slug =
+        thread.title
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/gu, '-')
+          .replace(/^-+|-+$/gu, '')
+          .slice(0, 48) || 'conversation'
+      const stamp = new Date().toISOString().replace(/[:.]/gu, '-').slice(0, 19)
+      const destinationPath = join(destinationDirectory, `transcript-${slug}-${stamp}.md`)
+
+      const outcome = await database.exportTranscriptViaWorker(
+        safeThreadId,
+        includeTrace,
+        destinationPath
+      )
+      if (!outcome.ok || !outcome.path) {
+        throw new Error(outcome.error ?? 'The transcript could not be exported')
+      }
+      return { path: outcome.path, location: isProject ? 'project' : 'chat' }
+    }
+  )
   ipcMain.handle('thread:update', (_, projectId: string, threadId: string, input) =>
     threadManager.updateThread(
       validateEntityId(projectId, 'Project ID'),
