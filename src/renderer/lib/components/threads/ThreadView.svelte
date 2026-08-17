@@ -14,7 +14,6 @@
    *  component remounts (thread switching in the sidebar). */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
-  const HISTORY_RENDER_WINDOW_SIZE = HISTORY_WINDOW_SIZE * 2
   const HISTORY_PRELOAD_THRESHOLD = 240
 
   import {
@@ -220,7 +219,6 @@
   const cachedMessages = threadMessages.messages(thread.projectId, thread.id)
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
-  let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
   // svelte-ignore state_referenced_locally
   let historyWindowInitialized =
     cachedMessages.length > 0 || threadMessages.loaded(thread.projectId, thread.id)
@@ -230,10 +228,7 @@
       : Math.max(0, cachedMessages.length - HISTORY_WINDOW_SIZE)
   )
   let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
-  let visibleEndIndex = $derived(
-    Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
-  )
-  let visibleMessages = $derived(messages.slice(visibleStartIndex, visibleEndIndex))
+  let visibleMessages = $derived(messages.slice(visibleStartIndex))
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
@@ -2153,6 +2148,7 @@
   // to the bottom.
 
   let scrollEl = $state<HTMLDivElement | undefined>()
+  let userScrolledAway = $state(false)
   /** True once the saved position (or initial bottom) has been applied. */
   let scrollRestored = $state(false)
   /** Whether the thread was working when the view mounted. A busy thread always
@@ -2322,7 +2318,6 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
-    renderedStartIndex = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
     lastScrollTop = scrollEl.scrollHeight
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
@@ -2334,14 +2329,12 @@
     })
   }
 
-  // Keep the mounted transcript bounded. While following live output the
-  // window advances with the tail; while the user reads older history it stays
-  // anchored and new events do not keep adding DOM below their viewport.
+  // Message hydration, paging, and reconciliation can shrink or reorder the
+  // list. Only repair a window that points past the tail; a valid older-history
+  // window belongs to the user and must never be snapped forward.
   $effect(() => {
     const maxStart = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
-    if (!userScrolledAway && scrollRestored && renderedStartIndex !== maxStart) {
-      renderedStartIndex = maxStart
-    } else if (renderedStartIndex > maxStart && messages.length > 0) {
+    if (renderedStartIndex > maxStart && messages.length > 0) {
       renderedStartIndex = maxStart
     }
   })
