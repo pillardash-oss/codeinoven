@@ -15,6 +15,7 @@ import type {
   SpecContextReference
 } from '../../lib/types'
 import { INBOX_PROJECT_ID } from '../../lib/types'
+import { isHarnessScopedModelKey } from '../../lib/model-keys'
 import { StorageEngine } from '../storage/storage-engine'
 
 const MEMORY_FILENAME = 'memory.md'
@@ -229,10 +230,18 @@ export interface AuxiliaryUsageMeasurement {
   costStatus: 'known' | 'estimated' | 'unavailable'
 }
 
-const VALID_CATEGORIES: MemoryCategory[] = ['behavioral', 'project-rule', 'identity', 'preference']
+const VALID_CATEGORIES: MemoryCategory[] = [
+  'behavioral',
+  'project-rule',
+  'identity',
+  'preference',
+  'models'
+]
 const VALID_PRIORITIES: MemoryPriority[] = ['critical', 'high', 'medium', 'low']
 const VALID_SCOPES: MemoryScope[] = ['global', 'projects', 'project', 'thread', 'chat']
 const VALID_SOURCES: MemorySource[] = ['manual', 'auto-detected']
+const MAX_MODEL_KEYS = 50
+const MODEL_KEY_MAX_CHARACTERS = 512
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
 const SECRET_PATTERNS = [
@@ -273,6 +282,7 @@ function parseMemoryMd(content: string): MemoryEntry[] {
     const priority = metadata.get('priority')
     const scope = metadata.get('scope')
     const source = metadata.get('source')
+    const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
 
     entries.push({
       id: SAFE_ID.test(metadata.get('id') ?? '') ? metadata.get('id')! : fallbackId,
@@ -291,7 +301,8 @@ function parseMemoryMd(content: string): MemoryEntry[] {
       frequency: safeInteger(metadata.get('frequency'), 1),
       lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
       projectId: metadata.get('projectid') || undefined,
-      threadId: metadata.get('threadid') || undefined
+      threadId: metadata.get('threadid') || undefined,
+      ...(modelKeys.length > 0 ? { modelKeys } : {})
     })
   }
   return entries
@@ -314,6 +325,7 @@ function serializeMemoryMd(entries: MemoryEntry[]): string {
       ]
       if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
       if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
+      if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)
       return `${ENTRY_MARKER}\n## ${entry.label}\n\n${meta.join('\n')}\n\n${entry.content}`
     })
     .join('\n\n')
@@ -372,6 +384,10 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
     )
     const scope = enumValue(entry.scope, VALID_SCOPES, 'global', `Memory entry ${index} scope`)
     const source = enumValue(entry.source, VALID_SOURCES, 'manual', `Memory entry ${index} source`)
+    const modelKeys = validateModelKeys(entry.modelKeys, `Memory entry ${index} model keys`)
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError(`Memory entry ${index} requires at least one model`)
+    }
     const frequency = optionalSafeInteger(entry.frequency, 1, `Memory entry ${index} frequency`, 1)
     const lastReinforced = optionalSafeInteger(
       entry.lastReinforced,
@@ -394,7 +410,8 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       frequency,
       lastReinforced,
       projectId,
-      threadId
+      threadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
   })
   const aggregate = entries.reduce((total, entry) => total + entry.content.length, 0)
@@ -662,14 +679,14 @@ export class MemoryService {
     return { added, skipped }
   }
 
-  async formatCurrent(projectId?: string, threadId?: string): Promise<string> {
-    return this.format(await this.current(projectId, threadId), projectId, threadId)
+  async formatCurrent(projectId?: string, threadId?: string, modelKey?: string): Promise<string> {
+    return this.format(await this.current(projectId, threadId), projectId, threadId, modelKey)
   }
 
-  format(config: MemoryConfig, projectId?: string, threadId?: string): string {
+  format(config: MemoryConfig, projectId?: string, threadId?: string, modelKey?: string): string {
     if (!config.enabled) return ''
     const entries = config.entries.filter((entry) =>
-      entry.enabled ? entryAppliesToContext(entry, projectId, threadId) : false
+      entry.enabled ? entryAppliesToContext(entry, projectId, threadId, modelKey) : false
     )
     if (entries.length === 0) return ''
 
@@ -708,11 +725,18 @@ export class MemoryService {
     ].join('\n')
   }
 
-  async snapshotCurrent(projectId?: string, threadId?: string): Promise<SpecContextReference[]> {
+  async snapshotCurrent(
+    projectId?: string,
+    threadId?: string,
+    modelKey?: string
+  ): Promise<SpecContextReference[]> {
     const config = await this.current(projectId, threadId)
     if (!config.enabled) return []
     return config.entries
-      .filter((entry) => entry.enabled && entryAppliesToContext(entry, projectId, threadId))
+      .filter(
+        (entry) =>
+          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
+      )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
         type: 'memory',
@@ -742,6 +766,7 @@ export class MemoryService {
       priority?: MemoryPriority
       scope?: MemoryScope
       source?: MemorySource
+      modelKeys?: string[]
       projectId?: string
       threadId?: string
     } = {}
@@ -755,6 +780,10 @@ export class MemoryService {
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Memory priority')
     const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Memory scope')
     const source = enumValue(options.source, VALID_SOURCES, 'manual', 'Memory source')
+    const modelKeys = validateModelKeys(options.modelKeys, 'Memory model keys')
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError('Model memories require at least one model')
+    }
     const location = locationForScope(scope, options.projectId, options.threadId)
     const now = Date.now()
     const entry: MemoryEntry = {
@@ -770,7 +799,8 @@ export class MemoryService {
       frequency: 1,
       lastReinforced: now,
       projectId: location.entryProjectId,
-      threadId: location.entryThreadId
+      threadId: location.entryThreadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
     }
 
     const entries = await this.getEntries(location.projectId, location.threadId)
@@ -858,6 +888,7 @@ export class MemoryService {
       category?: MemoryCategory
       priority?: MemoryPriority
       scope?: MemoryScope
+      modelKeys?: string[]
       projectId?: string
       threadId?: string
     } = {}
@@ -875,6 +906,10 @@ export class MemoryService {
     )
     const priority = enumValue(options.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
     const scope = enumValue(options.scope, VALID_SCOPES, 'global', 'Proposal scope')
+    const modelKeys = validateModelKeys(options.modelKeys, 'Proposal model keys')
+    if (category === 'models' && modelKeys.length === 0) {
+      throw new TypeError('Model proposals require at least one model')
+    }
     const location = locationForScope(scope, options.projectId, options.threadId)
     const queueProjectId = location.projectId
     const proposals = await this.readProposals(queueProjectId)
@@ -901,6 +936,7 @@ export class MemoryService {
       scope,
       projectId: location.entryProjectId,
       threadId: location.entryThreadId,
+      ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
       createdAt: now,
       expiresAt: now + MEMORY_LIMITS.proposalExpiryMs,
       status: 'pending'
@@ -922,6 +958,7 @@ export class MemoryService {
       priority: proposal.priority,
       scope: proposal.scope,
       source: 'auto-detected',
+      modelKeys: proposal.modelKeys,
       projectId: proposal.projectId,
       threadId: proposal.threadId
     })
@@ -1404,22 +1441,61 @@ function assertEntryLocation(entry: MemoryEntry, projectId?: string, threadId?: 
   }
 }
 
-function entryAppliesToContext(entry: MemoryEntry, projectId?: string, threadId?: string): boolean {
-  switch (entry.scope) {
-    case 'global':
-      return true
-    case 'projects':
-      return Boolean(projectId && projectId !== 'inbox')
-    case 'project':
-      return Boolean(entry.projectId && entry.projectId === projectId)
-    case 'thread':
-      return Boolean(
-        entry.projectId &&
-        entry.threadId &&
-        entry.projectId === projectId &&
-        entry.threadId === threadId
-      )
-    case 'chat':
-      return projectId === 'inbox'
+function entryAppliesToContext(
+  entry: MemoryEntry,
+  projectId?: string,
+  threadId?: string,
+  modelKey?: string
+): boolean {
+  const scopeMatches = (() => {
+    switch (entry.scope) {
+      case 'global':
+        return true
+      case 'projects':
+        return Boolean(projectId && projectId !== 'inbox')
+      case 'project':
+        return Boolean(entry.projectId && entry.projectId === projectId)
+      case 'thread':
+        return Boolean(
+          entry.projectId &&
+          entry.threadId &&
+          entry.projectId === projectId &&
+          entry.threadId === threadId
+        )
+      case 'chat':
+        return projectId === 'inbox'
+    }
+  })()
+  if (!scopeMatches) return false
+  return entry.category !== 'models' || Boolean(modelKey && entry.modelKeys?.includes(modelKey))
+}
+
+function parseModelKeysMetadata(value: string | undefined): string[] {
+  if (!value) return []
+  try {
+    return validateModelKeys(JSON.parse(value) as unknown, 'Memory model keys')
+  } catch {
+    return []
   }
+}
+
+function validateModelKeys(value: unknown, label: string): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw new TypeError(`${label} must be an array`)
+  if (value.length > MAX_MODEL_KEYS) {
+    throw new TypeError(`${label} supports at most ${MAX_MODEL_KEYS} models`)
+  }
+  const keys = value.map((candidate, index) => {
+    if (
+      typeof candidate !== 'string' ||
+      candidate.includes('\0') ||
+      candidate.trim().length === 0 ||
+      candidate.length > MODEL_KEY_MAX_CHARACTERS ||
+      !isHarnessScopedModelKey(candidate.trim())
+    ) {
+      throw new TypeError(`${label} item ${index} is invalid`)
+    }
+    return candidate.trim()
+  })
+  return [...new Set(keys)]
 }

@@ -394,6 +394,7 @@ export interface IpcInvokeContract {
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
         source?: import('./types').MemorySource
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }
@@ -426,6 +427,7 @@ export interface IpcInvokeContract {
         category?: import('./types').MemoryCategory
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }

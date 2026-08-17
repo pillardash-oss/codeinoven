@@ -7,6 +7,7 @@ import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { modelKey } from '../../lib/model-keys'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -1563,7 +1564,10 @@ export function registerIpcHandlers(
         MERMAID_OUTPUT_INSTRUCTION
       },
       mode,
-      (await storage.getConfig()).agentBehaviorPrompt
+      (await storage.getConfig()).agentBehaviorPrompt,
+      thread?.settings?.providerId && thread.settings.modelId
+        ? modelKey(harnessId, thread.settings.providerId, thread.settings.modelId)
+        : undefined
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -1620,6 +1624,7 @@ export function registerIpcHandlers(
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
         source:
           typeof opts.source === 'string' ? (opts.source as MemoryEntry['source']) : undefined,
+        modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
       })
@@ -1676,6 +1681,7 @@ export function registerIpcHandlers(
             ? (opts.priority as MemoryEntry['priority'])
             : undefined,
         scope: typeof opts.scope === 'string' ? (opts.scope as MemoryEntry['scope']) : undefined,
+        modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID')
       })

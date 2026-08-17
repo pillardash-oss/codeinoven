@@ -143,6 +143,7 @@ import type {
   UsagePricingProvenance
 } from '../../lib/types'
 import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../../lib/types'
+import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import {
@@ -308,6 +309,7 @@ interface AgentMemoryProposalInput {
   category: MemoryCategory
   priority: MemoryPriority
   scope: MemoryScope
+  modelKeys?: string[]
 }
 
 interface StructuredMemoryProposal {
@@ -3563,11 +3565,13 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     projectPath: string,
-    mode: 'brainstorm' | 'implement' | 'chat'
+    mode: 'brainstorm' | 'implement' | 'chat',
+    settings?: ThreadSettings
   ): Promise<string> {
     try {
-      const harnessId =
-        (await this.threadManager.getThread(projectId, threadId))?.settings?.harnessId ?? 'opencode'
+      const threadSettings =
+        settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
+      const harnessId = threadSettings?.harnessId ?? 'opencode'
       const driver = this.drivers.get(harnessId)
       const config = await this.storage.getConfig()
       return await this.promptAssembler.getAssembledPrompt(
@@ -3582,7 +3586,10 @@ export class ChatEngine {
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
-        config.agentBehaviorPrompt
+        config.agentBehaviorPrompt,
+        threadSettings?.providerId && threadSettings.modelId
+          ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
+          : undefined
       )
     } catch {
       return ''
@@ -4810,7 +4817,7 @@ export class ChatEngine {
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
       checkpointPromise,
       utilityInstructionsPromise,
-      this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode),
+      this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode, settings),
       this.buildHistoryRecap(projectId, threadId, driverId),
       transportPromise
     ])
@@ -5218,7 +5225,11 @@ export class ChatEngine {
       : text
     const completion = this.waitForSessionCompletion(temporary.sessionId, 180_000, 'Temporary chat')
     try {
-      const memoryPrompt = await this.memoryService.formatCurrent(projectId, threadId)
+      const memoryPrompt = await this.memoryService.formatCurrent(
+        projectId,
+        threadId,
+        modelKey(settings.harnessId, settings.providerId, settings.modelId)
+      )
       const systemPrompt = [
         TEMPORARY_CHAT_SYSTEM_PROMPT,
         memoryPrompt,
@@ -8968,7 +8979,8 @@ export class ChatEngine {
       projectId,
       threadId,
       projectPath,
-      'brainstorm'
+      'brainstorm',
+      settings
     )
     const validatedInstructions = validateBoundedString(
       instructions,
@@ -9215,7 +9227,11 @@ export class ChatEngine {
       await ensureFeatureSlug(this.database, projectId, threadId)
     )
     const artifactBoundary = engineeringArtifactBoundaryInstruction(artifactDirectory)
-    const memoryPrompt = await this.memoryService.formatCurrent(projectId, threadId)
+    const memoryPrompt = await this.memoryService.formatCurrent(
+      projectId,
+      threadId,
+      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+    )
     const specMemoryPrompt = await this.formatSpecGenerationMemory(projectId, settings)
     const generationSystemPrompt = [
       SPEC_GENERATION_SYSTEM_PROMPT,
@@ -12258,7 +12274,15 @@ export class ChatEngine {
             error: validationError
           })
         }
-        const context = await this.memoryService.snapshotCurrent(projectId, threadId)
+        const context = await this.memoryService.snapshotCurrent(
+          projectId,
+          threadId,
+          modelKey(
+            pending.settings.harnessId,
+            pending.settings.providerId,
+            pending.settings.modelId
+          )
+        )
         const spec = await this.specEngine.createDraft({
           projectId,
           threadId,
@@ -15430,7 +15454,11 @@ export class ChatEngine {
         content: decision.content,
         category: decision.category,
         priority: decision.priority,
-        scope: decision.scope
+        scope: decision.scope,
+        modelKeys:
+          decision.category === 'models'
+            ? [modelKey(driver.id, settings.providerId, settings.modelId)]
+            : undefined
       },
       projectId,
       threadId
@@ -15529,7 +15557,7 @@ export class ChatEngine {
             'A complaint or correction can still be durable when it includes an explicit recurring rule, for example "I have told you before: never use outlines." Do not reject a durable rule merely because the user is frustrated.',
             'Scope words such as global, project, thread, chat, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
             'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
-            'Choose category from behavioral, project-rule, identity, or preference. Choose priority from critical, high, medium, or low.',
+            'Choose category from behavioral, project-rule, identity, preference, or models. Use models when the durable preference is specifically about how one or more AI models behave; the application will associate it with the model used for this completed turn. Choose priority from critical, high, medium, or low.',
             scopeInstruction,
             structured
               ? 'Return the requested structured decision with propose, title, content, category, priority, and scope.'
@@ -15768,6 +15796,7 @@ export class ChatEngine {
       category: input.category,
       priority: input.priority,
       scope: input.scope,
+      modelKeys: input.modelKeys,
       projectId: input.scope === 'project' || input.scope === 'thread' ? projectId : undefined,
       threadId: input.scope === 'thread' ? threadId : undefined
     })
@@ -16327,7 +16356,7 @@ function validateStructuredMemoryProposal(
     content: validateBoundedString(value.content, 'Memory content', 1, 4_096),
     category: validateMemoryEnum(
       value.category,
-      ['behavioral', 'project-rule', 'identity', 'preference'],
+      ['behavioral', 'project-rule', 'identity', 'preference', 'models'],
       'Memory category'
     ),
     priority: validateMemoryEnum(
