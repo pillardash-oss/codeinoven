@@ -31,6 +31,8 @@ export function exportAssignmentMarkdown(plan: AssignmentPlan): string {
   const lines = [
     `# Assignment: ${plan.content.title}`,
     '',
+    '## TL;DR',
+    '',
     plan.content.summary,
     '',
     `Status: **${plan.status}**`,

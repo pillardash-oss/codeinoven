@@ -20,7 +20,11 @@ export const ASSIGNMENT_PLAN_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   properties: {
     title: { type: 'string', minLength: 1 },
-    summary: { type: 'string', minLength: 1 },
+    summary: {
+      type: 'string',
+      minLength: 1,
+      description: 'Concise TL;DR of the Assignment execution plan.'
+    },
     phases: {
       type: 'array',
       minItems: 1,
@@ -90,7 +94,7 @@ export const SPEC_GENERATION_SCHEMA: Record<string, unknown> = {
       type: 'string',
       minLength: 1,
       description:
-        'Implementation-ready summary written as readable Markdown. Use newline-delimited Markdown lists when enumerating multiple steps or recommendations; never use inline parenthesized numbering.'
+        'Concise TL;DR of the implementation-ready resolution, written as readable Markdown. Use newline-delimited Markdown lists when enumerating multiple steps or recommendations; never use inline parenthesized numbering.'
     },
     phases: {
       type: 'array',

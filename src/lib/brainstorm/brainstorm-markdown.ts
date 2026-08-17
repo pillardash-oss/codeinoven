@@ -4,6 +4,8 @@ export function exportBrainstormMarkdown(document: BrainstormDocument): string {
   return [
     `# ${document.content.title}`,
     '',
+    '## TL;DR',
+    '',
     document.content.summary,
     '',
     ...document.content.sections.flatMap((section) => [
