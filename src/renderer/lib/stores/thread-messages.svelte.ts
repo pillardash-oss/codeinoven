@@ -35,6 +35,7 @@ interface ThreadMessagesEntry {
 export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
 
 const EMPTY_MESSAGES: AgentMessage[] = []
+const STREAM_NOTIFICATION_DELAY_MS = 16
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -79,6 +80,7 @@ function mergeMessageSnapshot(cached: AgentMessage, incoming: AgentMessage): Age
 
 class ThreadMessagesStore {
   #threads = new Map<string, ThreadMessagesEntry>()
+  #streamNotifyTimer: ReturnType<typeof setTimeout> | undefined
 
   /** Reactive cache keyed by `projectId:threadId`. */
   threads = $state(new Map<string, ThreadMessagesEntry>())
@@ -447,7 +449,7 @@ class ThreadMessagesStore {
       }
       entry.messages = [...entry.messages]
     }
-    this.#notify()
+    this.#notifyStreaming()
   }
 
   /** Append streaming text to a specific part field. */
@@ -469,7 +471,7 @@ class ThreadMessagesStore {
     if (field === 'text' && (part.type === 'text' || part.type === 'reasoning')) {
       part.text += delta
       entry.messages = [...entry.messages]
-      this.#notify()
+      this.#notifyStreaming()
     }
   }
 
@@ -517,7 +519,7 @@ class ThreadMessagesStore {
       }
     }
     entry.messages = [...entry.messages]
-    this.#notify()
+    this.#notifyStreaming()
   }
 
   /** Apply provider account telemetry without creating a duplicate answer. */
@@ -544,7 +546,7 @@ class ThreadMessagesStore {
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
     entry.messages = [...entry.messages]
-    this.#notify()
+    this.#notifyStreaming()
   }
 
   /** Drop a message and everything after it from the cache. */
@@ -567,7 +569,7 @@ class ThreadMessagesStore {
     if (sessionId) this.#threadsBySession.delete(sessionId)
     this.#threads.delete(key)
     this.#sessionIds.delete(key)
-    this.threads = new Map(this.#threads)
+    this.#notify()
   }
 
   #matchesSession(projectId: string, threadId: string, sessionId: string): boolean {
@@ -659,7 +661,19 @@ class ThreadMessagesStore {
     return undefined
   }
 
+  #notifyStreaming(): void {
+    if (this.#streamNotifyTimer !== undefined) return
+    this.#streamNotifyTimer = setTimeout(() => {
+      this.#streamNotifyTimer = undefined
+      this.#notify()
+    }, STREAM_NOTIFICATION_DELAY_MS)
+  }
+
   #notify(): void {
+    if (this.#streamNotifyTimer !== undefined) {
+      clearTimeout(this.#streamNotifyTimer)
+      this.#streamNotifyTimer = undefined
+    }
     // Reassign the reactive map so Svelte subscribers see the change.
     this.threads = new Map(this.#threads)
   }

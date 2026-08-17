@@ -1895,7 +1895,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
                 {
                   cwd: projectPath,
                   env: buildHarnessEnvironment(),
-                  stdio: ['pipe', 'pipe', 'pipe']
+                  // Usage telemetry is a side channel; do not leave a piped
+                  // stderr buffer undrained while the probe waits for JSON.
+                  stdio: ['pipe', 'pipe', 'ignore']
                 }
               )
             } catch {
