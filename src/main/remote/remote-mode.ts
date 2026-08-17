@@ -1655,9 +1655,10 @@ export class RemoteModeController {
     const config = await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)
     if (!config || config.apiOrigin !== this.cloudApiOrigin) return
     this.cloudConfig = config
+    // Restoring credentials only starts a status check. Preserve the current
+    // state until the service confirms the enrollment has actually been claimed.
     this.cloudStatus = {
       ...this.cloudStatus,
-      state: 'connecting',
       desktopId: config.desktopId,
       enrollmentExpiresAt: config.enrollmentExpiresAt,
       lastError: null
