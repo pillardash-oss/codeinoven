@@ -358,29 +358,30 @@ export function linkifyFileCitations(
 ): string {
   let result = normalizeEscapedSlashes(text)
 
+  // A candidate becomes a link when it is confirmed either inside the active
+  // project (`isValidPath`) or, for absolute paths, as an existing external
+  // entry (`isExternalPath`). Both are verified asynchronously by main before
+  // they ever return true, so every link target is known to exist on disk.
+  const isClickable = (path: string): boolean =>
+    isKnownCitation(path, isValidPath) || (isExternalPath?.(path) ?? false)
+
   // Codex `:codex-file-citation{path="..."}` tokens — fence- and inline-code
   // aware — become links only when the cited path is known (in the project or
   // an existing external absolute path).
-  result = linkifyCodexCitations(
-    result,
-    (path) => isKnownCitation(path, isValidPath) || (isExternalPath?.(path) ?? false)
-  )
+  result = linkifyCodexCitations(result, isClickable)
 
   result = result.replace(
     MARKDOWN_LINK_PATTERN,
     (match, label: string, angleTarget?: string, plainTarget?: string) => {
       const parsed = parseFileCitation(angleTarget ?? plainTarget ?? '', true)
-      const known =
-        parsed &&
-        (isKnownCitation(parsed.path, isValidPath) || (isExternalPath?.(parsed.path) ?? false))
-      if (!parsed || !known) return match
+      if (!parsed || !isClickable(parsed.path)) return match
       return `[${label}](${citationHref(parsed)})`
     }
   )
 
   result = result.replace(BACKTICK_CANDIDATE, (match, value: string) => {
     const parsed = parseFileCitation(value)
-    if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+    if (!parsed || !isClickable(parsed.path)) return match
     return `[\`${value}\`](${citationHref(parsed)})`
   })
 
@@ -388,7 +389,7 @@ export function linkifyFileCitations(
     PLAIN_WITH_LINE,
     (match, path: string, line: string, lineEnd?: string) => {
       const parsed = parseFileCitation(`${path}:${line}${lineEnd ? `-${lineEnd}` : ''}`)
-      if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+      if (!parsed || !isClickable(parsed.path)) return match
       return `[\`${match}\`](${citationHref(parsed)})`
     }
   )
