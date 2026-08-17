@@ -1,6 +1,7 @@
 /// <reference types="node" />
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { buildHarnessEnvironment } from '../drivers/cli-environment'
 
 export const MCP_TIMEOUT_MS = 30_000
 
@@ -49,7 +50,7 @@ export class StdioMcpClient implements McpClient {
   ): Promise<StdioMcpClient> {
     const client = new StdioMcpClient(
       spawn(command, args, {
-        env: { ...process.env, ...environment },
+        env: { ...buildHarnessEnvironment(), ...environment },
         stdio: ['pipe', 'pipe', 'pipe']
       })
     )
