@@ -89,14 +89,7 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
     try {
       return await readFile(join(getConfigRoot(), `projects/${this.projectId}/blobs/${hash}`))
     } catch (error) {
-      if (isMissing(error)) {
-        try {
-          return await readFile(join(getConfigRoot(), `blobs/${hash}`))
-        } catch (legacyError) {
-          if (isMissing(legacyError)) return null
-          throw legacyError
-        }
-      }
+      if (isMissing(error)) return null
       throw error
     }
   }
@@ -353,9 +346,7 @@ export class CheckpointManager {
       [projectId, threadId],
       10_000
     )
-    return rows.map((row) =>
-      this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
-    )
+    return rows.map((row) => JSON.parse(row.data) as TurnCheckpoint)
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */
@@ -470,27 +461,7 @@ export class CheckpointManager {
       2
     )
     const row = rows[0]
-    return row
-      ? this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
-      : null
-  }
-
-  /**
-   * Checkpoints written before path-filter provenance was stored can contain
-   * complete before/after snapshots but an empty change list when a harness's
-   * mutation tool name was unknown. Rebuild that unfiltered diff on read so
-   * those already-finished turns remain reviewable and rollback-capable.
-   */
-  private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
-    if (
-      checkpoint.changes.length > 0 ||
-      !checkpoint.after ||
-      checkpoint.changeFilterApplied === true
-    ) {
-      return checkpoint
-    }
-    const changes = this.tracker(projectId).calculateChanges(checkpoint.before, checkpoint.after)
-    return changes.length > 0 ? { ...checkpoint, changes } : checkpoint
+    return row ? (JSON.parse(row.data) as TurnCheckpoint) : null
   }
 
   async rollback(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint> {
@@ -565,8 +536,7 @@ export class CheckpointManager {
    * paths. The full maps duplicate the per-change snapshots and dominate the
    * row size (each entry is a tracked repo file), so a finished checkpoint only
    * retains what rollback, summaries, diffs, and blob pruning actually need.
-   * Checkpoints with an empty change list keep their full maps so the legacy
-   * `recoverUnfilteredChanges` pass can still rebuild the diff.
+   * Checkpoints with an empty change list keep their full maps for inspection.
    */
   private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
     if (checkpoint.changes.length === 0) return checkpoint

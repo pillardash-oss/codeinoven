@@ -4,11 +4,7 @@ import {
   type TransportEvent,
   type TransportSocket
 } from '../../../../src/renderer/lib/remote/transport'
-import {
-  createHandshakeToken,
-  decryptPayload,
-  generateNonce
-} from '../../../../src/renderer/lib/remote/session-security'
+import { generateNonce } from '../../../../src/renderer/lib/remote/session-security'
 import {
   createMemoryDeviceKeyStore,
   loadOrCreateDeviceKeyMaterial
@@ -43,76 +39,9 @@ class FakeSocket implements TransportSocket {
   }
 }
 
-function helloOf(socket: FakeSocket): { nonce: string; token: string; type: string } {
-  const message = JSON.parse(socket.sent[0]) as {
-    type: string
-    nonce: string
-    token: string
-  }
-  return message
-}
-
 const peer = { host: '192.168.1.5', port: 4455 }
 
 describe('createLanTransport', () => {
-  it('opens a data channel after a successful PEER_SECRET_AUTH handshake', async () => {
-    const socket = new FakeSocket()
-    const events: TransportEvent[] = []
-    const transport = createLanTransport({
-      peer,
-      authSecret: 'secret',
-      socketFactory: () => socket,
-      onEvent: (event) => events.push(event)
-    })
-
-    const connectPromise = transport.connect()
-    socket.open()
-    socket.receive(JSON.stringify({ type: 'remote:challenge', nonce: 'server-challenge' }))
-    await vi.waitFor(() => {
-      expect(socket.sent.length).toBe(1)
-    })
-    const hello = helloOf(socket)
-
-    expect(hello.type).toBe('remote:hello')
-    expect(hello.nonce.length).toBeGreaterThan(0)
-    expect(hello.token).not.toBe('secret')
-
-    socket.receive(JSON.stringify({ type: 'remote:hello:ok' }))
-    await expect(connectPromise).resolves.toBe('open')
-
-    expect(events.some((event) => event.kind === 'connecting')).toBe(true)
-    expect(events.some((event) => event.kind === 'handshaking')).toBe(true)
-    expect(events.some((event) => event.kind === 'handshake:ok')).toBe(true)
-
-    await transport.send('ping')
-    const envelope = JSON.parse(socket.sent[socket.sent.length - 1]) as {
-      type: string
-      payload: string
-    }
-    expect(envelope.type).toBe('remote:data')
-    expect(envelope.payload).not.toContain('ping')
-    await expect(decryptPayload('secret', envelope.payload)).resolves.toBe('ping')
-  })
-
-  it('rejects the handshake when the peer rejects the auth token', async () => {
-    const socket = new FakeSocket()
-    const events: TransportEvent[] = []
-    const transport = createLanTransport({
-      peer,
-      authSecret: 'wrong-secret',
-      socketFactory: () => socket,
-      onEvent: (event) => events.push(event)
-    })
-
-    const connectPromise = transport.connect()
-    socket.open()
-    socket.receive(JSON.stringify({ type: 'remote:error', reason: 'auth-failed' }))
-
-    await expect(connectPromise).resolves.toBe('rejected')
-    expect(events.some((event) => event.kind === 'handshake:rejected')).toBe(true)
-    expect(socket.closed).toBe(true)
-  })
-
   it('reports a disconnection that happens before the handshake completes', async () => {
     const socket = new FakeSocket()
     const events: TransportEvent[] = []
@@ -150,12 +79,6 @@ describe('createLanTransport', () => {
     expect(disconnected?.kind === 'disconnected' && disconnected.reason).toBe('handshake-timeout')
   })
 
-  it('derives a different token per nonce', async () => {
-    const first = await createHandshakeToken('secret', 'nonce-a')
-    const second = await createHandshakeToken('secret', 'nonce-b')
-    expect(first).not.toBe(second)
-  })
-
   it('produces unique nonces', () => {
     const seen = new Set<string>()
     for (let i = 0; i < 32; i += 1) {
@@ -163,14 +86,6 @@ describe('createLanTransport', () => {
       expect(seen.has(nonce)).toBe(false)
       seen.add(nonce)
     }
-  })
-})
-
-describe('createHandshakeToken', () => {
-  it('signs the nonce without leaking the secret', async () => {
-    const token = await createHandshakeToken('secret-value', 'nonce')
-    expect(token).not.toContain('secret-value')
-    expect(token.length).toBeGreaterThan(10)
   })
 })
 

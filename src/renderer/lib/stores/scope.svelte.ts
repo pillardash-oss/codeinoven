@@ -200,15 +200,6 @@ class ScopeState {
   private loadSequence = 0
   private saveSequence = 0
 
-  /** Compatibility aliases while the shell migrates from project-as-scope naming. */
-  get scopes(): ScopeProject[] {
-    return this.projects
-  }
-
-  get activeScopeId(): string | null {
-    return this.activeProjectId
-  }
-
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
     for (const project of this.projects) {

@@ -184,13 +184,13 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   session_id      TEXT,
   role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
-  origin          TEXT NOT NULL DEFAULT 'legacy' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  origin          TEXT NOT NULL DEFAULT 'provider' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   visibility      TEXT NOT NULL DEFAULT 'conversation' CHECK(visibility IN ('conversation','working_trace','subagent_trace','hidden')),
   parts           TEXT NOT NULL DEFAULT '[]',
   search_text     TEXT NOT NULL DEFAULT '',
   content_hash    TEXT,
   transport_parts TEXT,
-  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
@@ -754,7 +754,7 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
-/** Canonical fresh-install schema; targeted legacy migrations run in Database.applySchema. */
+/** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
   PROJECT_FTS_SQL,

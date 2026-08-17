@@ -24,20 +24,15 @@ import { faviconState } from '$lib/stores/favicons.svelte'
 // A fragment URL survives DOMPurify's default URI policy while remaining
 // entirely inside the renderer. MarkdownView intercepts it before navigation.
 export const OPENCODE_SOURCE_PREFIX = '#opencode-source:'
-export const LEGACY_OPENCODE_SOURCE_PREFIX = 'opencode-source:'
 
 export interface MarkdownFileCitationTarget {
   path: string
   line?: number
 }
 
-/** Read both current and pre-migration citation hrefs. */
+/** Read the current citation href format. */
 export function fileCitationTarget(href: string): MarkdownFileCitationTarget | null {
-  const prefix = href.startsWith(OPENCODE_SOURCE_PREFIX)
-    ? OPENCODE_SOURCE_PREFIX
-    : href.startsWith(LEGACY_OPENCODE_SOURCE_PREFIX)
-      ? LEGACY_OPENCODE_SOURCE_PREFIX
-      : null
+  const prefix = href.startsWith(OPENCODE_SOURCE_PREFIX) ? OPENCODE_SOURCE_PREFIX : null
   if (!prefix) return parseAbsoluteFileCitationTarget(href)
 
   try {
@@ -218,7 +213,7 @@ const SANITIZE_CONFIG = {
   FORBID_ATTR: ['style', 'srcdoc', 'formaction', 'ping']
 }
 
-// Preserve citation metadata before DOMPurify removes a legacy custom-scheme
+// Preserve citation metadata before DOMPurify removes the custom scheme
 // href. Current fragment hrefs survive sanitization, but cached/persisted
 // Markdown from the previous scheme must remain clickable too.
 DOMPurify.addHook('beforeSanitizeAttributes', (node) => {

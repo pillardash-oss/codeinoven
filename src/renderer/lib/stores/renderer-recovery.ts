@@ -278,21 +278,15 @@ export function settingsSectionForView(view: MainView): SettingsSection | null {
   return null
 }
 
-/** Migrate legacy standalone 'providers'/'remote' views into their settings pages. */
 function normalizeMainView(value: unknown): MainView | null {
-  if (value === 'providers') return settingsViewForSection('harnesses')
-  if (value === 'settings-providers') return 'settings-harnesses'
-  if (value === 'remote') return settingsViewForSection('remote')
   return typeof value === 'string' && MAIN_VIEWS.some((view) => view === value)
     ? (value as MainView)
     : null
 }
 
-function parseContentView(value: unknown, activeView: MainView): 'projects' | 'chats' | 'threads' {
+function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
   if (value === 'projects' || value === 'chats' || value === 'threads') return value
-  // Legacy snapshots don't carry a content view — fall back to the active view
-  // so an app closed directly on Threads/Chats still returns there.
-  return activeView === 'chats' || activeView === 'threads' ? activeView : 'projects'
+  return 'projects'
 }
 
 function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
@@ -352,21 +346,6 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
   for (const [key, raw] of Object.entries(value)) {
     if (count >= MAX_RECOVERY_DRAFTS) break
     if (!isDraftKey(key)) continue
-
-    // Backwards compatibility: old snapshots stored a plain string.
-    if (typeof raw === 'string' && raw.length <= MAX_DRAFT_LENGTH) {
-      drafts[key] = {
-        text: raw,
-        attachments: [],
-        projectReferences: [],
-        taskReferences: [],
-        promptReferences: [],
-        startAfterThreadId: undefined,
-        startAfterThreadTitle: undefined
-      }
-      count += 1
-      continue
-    }
 
     if (!isRecord(raw)) continue
     const text = typeof raw.text === 'string' ? raw.text : ''
@@ -462,7 +441,7 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       selectedThread?.projectId ??
       (isRecoveryIdentifier(parsed.selectedProjectId) ? parsed.selectedProjectId : null)
     const activeView = normalizeMainView(parsed.activeView) ?? 'projects'
-    const lastContentView = parseContentView(parsed.lastContentView, activeView)
+    const lastContentView = parseContentView(parsed.lastContentView)
     const lastViewBeforeSettings = parseNonSettingsView(
       parsed.lastViewBeforeSettings,
       lastContentView

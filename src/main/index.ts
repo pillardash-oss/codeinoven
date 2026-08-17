@@ -671,15 +671,6 @@ async function bootPostPaintServices(): Promise<void> {
     }
 
     try {
-      const deleted = await chatEngine?.purgeArchivedThreads()
-      if (deleted && (deleted.tasks > 0 || deleted.rows > 0 || deleted.directories > 0)) {
-        Logger.info('Permanently deleted legacy task residue', deleted)
-      }
-    } catch (error) {
-      Logger.error('Legacy archived task deletion failed (non-fatal):', error)
-    }
-
-    try {
       await powerWakeService?.start()
       if (powerWakeService) setPowerWakeService(powerWakeService)
     } catch (error) {

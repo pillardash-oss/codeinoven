@@ -65,7 +65,7 @@ describe('MemoryService', () => {
     // Write memory entries as Markdown to memory.md
     await storage.writeRaw(
       'memory.md',
-      '## Formatting\n\nUse the project formatter only on touched files.\n\n## Another\n\nA second entry.'
+      '<!-- codeinoven-memory-entry -->\n## Formatting\n\nUse the project formatter only on touched files.\n\n<!-- codeinoven-memory-entry -->\n## Another\n\nA second entry.'
     )
     const service = new MemoryService(storage)
     const projectId = 'project-1'

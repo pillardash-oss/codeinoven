@@ -1070,64 +1070,6 @@ export class ThreadManager {
     }
   }
 
-  /** Permanently remove every legacy archived row and its logical task tree. */
-  async purgeArchivedThreads(): Promise<number> {
-    const archived = (await this.listAllThreads({ includeArchived: true })).filter(
-      (thread) => thread.archived
-    )
-    const archivedIds = new Set(archived.map((thread) => thread.id))
-    let deleted = 0
-    for (const thread of archived) {
-      if (!archivedIds.has(thread.id)) continue
-      const root = thread.coordinatorThreadId
-        ? (archived.find((candidate) => candidate.id === thread.coordinatorThreadId) ?? thread)
-        : thread
-      const tree = [root, ...this.orchestrationDescendants(root.projectId, root.id)]
-      await this.deleteThread(root.projectId, root.id)
-      for (const candidate of tree) {
-        if (archivedIds.delete(candidate.id)) deleted++
-      }
-    }
-    return deleted
-  }
-
-  /** Permanently remove records left behind by deletion paths from older builds. */
-  purgeOrphanedThreadRows(): number {
-    const threadTables = [
-      'spec_workflow',
-      'spec_versions',
-      'plans',
-      'checklists',
-      'audit_reports',
-      'turn_checkpoints',
-      'active_turns',
-      'provider_sync_cursors',
-      'harness_usage',
-      'assignment_api_capabilities'
-    ] as const
-    let deleted = 0
-    this.db.transaction(() => {
-      for (const table of threadTables) {
-        const row = this.db.get<{ count: number }>(
-          `SELECT count(*) AS count FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM threads WHERE threads.id=${table}.thread_id)`
-        )
-        deleted += row?.count ?? 0
-        this.db.run(
-          `DELETE FROM ${table} WHERE NOT EXISTS (SELECT 1 FROM threads WHERE threads.id=${table}.thread_id)`
-        )
-      }
-      for (const table of ['assignment_operations', 'assignment_coordinator_snapshots'] as const) {
-        const where = `NOT EXISTS (SELECT 1 FROM threads WHERE threads.assignment_id=${table}.assignment_id) AND NOT EXISTS (SELECT 1 FROM assignment_workflow WHERE assignment_workflow.assignment_id=${table}.assignment_id) AND NOT EXISTS (SELECT 1 FROM assignment_versions WHERE assignment_versions.assignment_id=${table}.assignment_id)`
-        const row = this.db.get<{ count: number }>(
-          `SELECT count(*) AS count FROM ${table} WHERE ${where}`
-        )
-        deleted += row?.count ?? 0
-        this.db.run(`DELETE FROM ${table} WHERE ${where}`)
-      }
-    })
-    return deleted
-  }
-
   /**
    * Full-text search across thread titles and conversation content
    * (user messages + agent final output). Project-scoped when projectId is set.

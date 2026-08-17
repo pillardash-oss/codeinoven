@@ -1225,9 +1225,8 @@ export class CodexDriver extends PersistentCliDriver {
 
   /**
    * Codex item ids are only unique within a Codex thread, so every id is
-   * namespaced with the CodeInOven session when parsed. Session records written
-   * by older builds still hold raw item ids; normalize those on read (and
-   * collapse the raw + namespaced duplicates a resumed thread can produce).
+   * namespaced with the CodeInOven session when parsed. Normalize native item
+   * ids on read and collapse duplicate ids a resumed thread can produce.
    */
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
     const messages = await super.loadMessages(projectPath, sessionId)
@@ -2179,7 +2178,7 @@ export function mapCodexRateLimits(value: unknown): {
 }
 
 /**
- * Rewrite a legacy codex message id into its session-namespaced form. Only
+ * Rewrite a native Codex message id into its session-namespaced form. Only
  * assistant messages carry raw codex item ids; user messages keep the
  * generated id CodeInOven assigned at send time.
  */

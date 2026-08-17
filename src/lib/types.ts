@@ -186,7 +186,7 @@ export interface Thread {
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
-  /** Harness that created the bound session. A session never migrates across
+  /** Harness that created the bound session. A session never moves across
    *  harnesses: even when `settings.harnessId` changes (mid-run switch), this
    *  field keeps identifying the driver that owns `sessionId` so the old
    *  session is read/synced through the correct driver. */
@@ -1325,14 +1325,7 @@ export interface UserMessagePresentation {
 
 /** Durable source identity for a persisted conversation record. */
 export type AgentMessageOrigin =
-  | 'user'
-  | 'assistant'
-  | 'harness'
-  | 'orchestrator'
-  | 'subagent'
-  | 'compaction'
-  | 'provider'
-  | 'legacy'
+  'user' | 'assistant' | 'harness' | 'orchestrator' | 'subagent' | 'compaction' | 'provider'
 
 /** Durable UI channel for a persisted conversation record. */
 export type AgentMessageVisibility = 'conversation' | 'working_trace' | 'subagent_trace' | 'hidden'
@@ -2836,9 +2829,9 @@ export interface AuditReportContent {
   findings: AuditFinding[]
   resolutionRecommendation: string
   conclusion: string
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when file evidence is unavailable. */
   auditedFiles?: AuditedFileEvidence[]
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when verification evidence is unavailable. */
   verification?: AuditVerificationEvidence
 }
 

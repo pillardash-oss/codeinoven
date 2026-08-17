@@ -209,8 +209,9 @@
       .filter((key) => !availableModelKeys.has(key))
       .map((key) => {
         const parsed = parseModelKey(key)
-        return { modelKey: key, ...parsed }
+        return parsed ? { modelKey: key, ...parsed } : null
       })
+      .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
   )
   let favoriteModelsList = $derived(
     filterEntries(
@@ -220,7 +221,7 @@
           .reverse()
           .map((key) => {
             const parsed = parseModelKey(key)
-            if (!parsed.providerId) return null
+            if (!parsed) return null
             const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
             return entry && passesVisionFilter(entry.model) ? entry : null
           })
@@ -235,7 +236,7 @@
         recentModels
           .map((key) => {
             const parsed = parseModelKey(key)
-            if (!parsed.providerId) return null
+            if (!parsed) return null
             const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
             return entry &&
               passesHarnessFilter(entry.provider.harnessId) &&
@@ -396,10 +397,9 @@
   }
 
   /**
-   * Collapse duplicate resolved model entries. A legacy 2-segment key and a
-   * harness-scoped 3-segment key can both resolve to the same catalog entry
-   * (e.g. during the key-format migration), which would otherwise render as
-   * duplicate `each` keys. Keeps the first occurrence, preserving display order.
+   * Collapse duplicate resolved model entries so duplicate catalog entries do
+   * not render duplicate `each` keys. Keeps the first occurrence, preserving
+   * display order.
    */
   function dedupeModelEntries(entries: ModelEntry[]): ModelEntry[] {
     const seen: Record<string, true> = {}
@@ -413,9 +413,7 @@
     return deduped
   }
 
-  /** Resolve a model key against the current catalog first, then cached catalogs.
-   *  When the key is harness-scoped, only the matching harness is considered;
-   *  legacy keys fall back to the current harness, then any harness. */
+  /** Resolve a model key against the current catalog first, then cached catalogs. */
   function resolveModel(
     providerId: string,
     modelId: string,
@@ -683,8 +681,15 @@
     searchInput.setSelectionRange(target, target)
   }
 
+  function attachSearchInput(node: HTMLInputElement): () => void {
+    searchInput = node
+    return () => {
+      if (searchInput === node) searchInput = undefined
+    }
+  }
+
   /** Keep the viewport height and scroll position in sync for the virtual list. */
-  function measurePickerList(node: HTMLDivElement): { destroy(): void } {
+  function measurePickerList(node: HTMLDivElement): () => void {
     pickerViewport = node.clientHeight
     const resizeObserver = new ResizeObserver(() => {
       pickerViewport = node.clientHeight
@@ -694,11 +699,9 @@
       pickerListScrollTop = node.scrollTop
     }
     node.addEventListener('scroll', onScroll, { passive: true })
-    return {
-      destroy() {
-        resizeObserver.disconnect()
-        node.removeEventListener('scroll', onScroll)
-      }
+    return () => {
+      resizeObserver.disconnect()
+      node.removeEventListener('scroll', onScroll)
     }
   }
 
@@ -885,7 +888,7 @@
           <Search size={12} class="shrink-0 text-dimmed" />
           <input
             id={searchId}
-            bind:this={searchInput}
+            {@attach attachSearchInput}
             bind:value={search}
             oninput={() => scrollPickerListTo(0)}
             type="text"
@@ -1001,8 +1004,14 @@
 
         <div
           id={listId}
-          bind:this={modelList}
-          use:measurePickerList
+          {@attach (node) => {
+            modelList = node
+            const cleanup = measurePickerList(node)
+            return () => {
+              cleanup()
+              if (modelList === node) modelList = undefined
+            }
+          }}
           class="max-h-60 overflow-y-auto p-1"
         >
           {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}

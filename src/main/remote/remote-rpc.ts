@@ -132,7 +132,7 @@ export interface RemoteRpcServices {
   /**
    * Device credential service used to enforce per-device scopes and local
    * step-up approval for remote invocations. Optional so the desktop-reuse
-   * dispatcher and legacy tests can construct it without device state.
+   * dispatcher and isolated tests can construct it without device state.
    */
   credentials?: DeviceCredentialService
 }

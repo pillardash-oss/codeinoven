@@ -37,33 +37,22 @@ describe('parseModelKey', () => {
     })
   })
 
-  it('parses legacy 2-segment keys without a harness', () => {
-    expect(parseModelKey('openai:gpt-5.6')).toEqual({
-      harnessId: undefined,
-      providerId: 'openai',
-      modelId: 'gpt-5.6'
-    })
-  })
-
-  it('handles keys with no provider', () => {
-    expect(parseModelKey('gpt-5.6')).toEqual({
-      harnessId: undefined,
-      providerId: '',
-      modelId: 'gpt-5.6'
-    })
+  it('rejects keys without a harness-scoped provider', () => {
+    expect(parseModelKey('openai:gpt-5.6')).toBeNull()
+    expect(parseModelKey('gpt-5.6')).toBeNull()
   })
 
   it('preserves colons inside the model id', () => {
-    expect(parseModelKey('opencode:openai:gpt-5.6:legacy')).toEqual({
+    expect(parseModelKey('opencode:openai:gpt-5.6:preview')).toEqual({
       harnessId: 'opencode',
       providerId: 'openai',
-      modelId: 'gpt-5.6:legacy'
+      modelId: 'gpt-5.6:preview'
     })
   })
 })
 
 describe('isHarnessScopedModelKey', () => {
-  it('detects harness-scoped vs legacy keys', () => {
+  it('detects current harness-scoped keys', () => {
     expect(isHarnessScopedModelKey('opencode:openai:gpt-5.6')).toBe(true)
     expect(isHarnessScopedModelKey('openai:gpt-5.6')).toBe(false)
   })

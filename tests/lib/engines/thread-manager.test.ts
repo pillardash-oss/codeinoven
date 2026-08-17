@@ -102,6 +102,7 @@ describe('ThreadManager', () => {
       {
         id: 'message-1',
         role: 'user',
+        origin: 'provider',
         parts: [
           {
             type: 'text',
@@ -115,6 +116,7 @@ describe('ThreadManager', () => {
       {
         id: 'message-2',
         role: 'assistant',
+        origin: 'provider',
         parts: [
           {
             type: 'text',
