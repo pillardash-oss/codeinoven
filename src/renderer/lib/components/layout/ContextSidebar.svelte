@@ -9,7 +9,7 @@
     ChevronDown,
     Cloud,
     FileDiff,
-    FolderTree,
+    Files,
     GitBranch,
     Info,
     Maximize2,
@@ -23,6 +23,7 @@
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
   interface Props {
@@ -216,7 +217,11 @@
 
   {#snippet tabIcon(tab: ContextSidebarTab)}
     {#if tab.kind === 'files'}
-      <FolderTree size={12} class="shrink-0" />
+      {#if tab.fileTabId}
+        <FileTypeIcon path={tab.path ?? tab.title} size={12} />
+      {:else}
+        <Files size={12} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'diff'}
       <FileDiff size={12} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
