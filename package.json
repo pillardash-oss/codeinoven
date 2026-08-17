@@ -74,7 +74,7 @@
     "electron-vite": "^5.0.0",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-svelte": "^3.22.0",
+    "eslint-plugin-svelte": "^3.23.0",
     "ghostty-web": "^0.4.0",
     "globals": "^17.9.0",
     "highlight.js": "^11.11.1",
