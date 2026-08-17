@@ -176,6 +176,7 @@
     UsageEfficiencyKpis
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
+  import { LatestRequestGuard } from '$lib/refresh-guard'
 
   interface Props {
     thread: Thread
@@ -988,6 +989,7 @@
     }
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
+  const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
   let threadViewElement = $state<HTMLDivElement | null>(null)
   let previewFile = $state<{ url: string; filename: string; mime: string } | null>(null)
@@ -3174,9 +3176,12 @@
   }
 
   async function refreshCheckpoints(): Promise<void> {
+    const request = checkpointRefreshGuard.begin()
     const { projectId, id } = thread
     try {
-      checkpoints = await invoke('checkpoint:list', projectId, id)
+      const nextCheckpoints = await invoke('checkpoint:list', projectId, id)
+      if (!alive || !checkpointRefreshGuard.isCurrent(request)) return
+      checkpoints = nextCheckpoints
     } catch {
       // Checkpoint history is supplementary; session recovery remains available.
     }

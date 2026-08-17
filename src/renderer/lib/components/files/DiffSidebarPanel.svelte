@@ -55,6 +55,7 @@
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
   import { diffDetails } from './file-diff'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import type { AgentEvent } from '$shared/types'
@@ -73,6 +74,7 @@
 
   let { projectId, threadId, checkpointId, revealPath = null, revealNonce = 0 }: Props = $props()
 
+  const checkpointRefreshGuard = new LatestRequestGuard()
   const initialCache = getOrCreateCache(projectId, threadId)
   const initialCheckpointId = initialCache.selectedCheckpointId
   const initialFileDiffs = initialCheckpointId
@@ -119,18 +121,23 @@
   }
 
   async function refresh(preferredCheckpointId = selectedCheckpointId): Promise<void> {
+    const request = checkpointRefreshGuard.begin()
     loading = true
     error = ''
     try {
-      checkpoints = await invoke('checkpoint:list', projectId, threadId)
+      const nextCheckpoints = await invoke('checkpoint:list', projectId, threadId)
+      if (!checkpointRefreshGuard.isCurrent(request)) return
+      checkpoints = nextCheckpoints
+      const nextTurns = nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
       selectedCheckpointId =
-        turns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
-        turns[0]?.id ??
+        nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
+        nextTurns[0]?.id ??
         null
     } catch (reason) {
+      if (!checkpointRefreshGuard.isCurrent(request)) return
       error = reason instanceof Error ? reason.message : 'Change history could not be loaded.'
     } finally {
-      loading = false
+      if (checkpointRefreshGuard.isCurrent(request)) loading = false
     }
   }
 
