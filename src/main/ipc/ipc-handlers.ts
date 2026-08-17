@@ -2804,6 +2804,70 @@ export function registerIpcHandlers(
     }
   })
 
+  ipcMain.handle('dialog:pickFiles', async (_event, rawScope: unknown) => {
+    try {
+      const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+
+      const config = await storage.getConfig()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Attach Files',
+        defaultPath: config.lastAttachmentDialogPath,
+        properties: ['openFile', 'multiSelections'],
+        filters: [
+          { name: 'All Files', extensions: ['*'] },
+          {
+            name: 'Images',
+            extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp']
+          },
+          {
+            name: 'Documents',
+            extensions: [
+              'pdf',
+              'doc',
+              'docx',
+              'xls',
+              'xlsx',
+              'ppt',
+              'pptx',
+              'txt',
+              'csv',
+              'md',
+              'json',
+              'xml',
+              'yaml',
+              'yml'
+            ]
+          },
+          { name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'avi', 'mkv'] },
+          { name: 'Audio', extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac'] },
+          { name: 'Archives', extensions: ['zip', 'tar', 'gz', '7z', 'rar'] }
+        ]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return []
+
+      config.lastAttachmentDialogPath = dirname(result.filePaths[0])
+      const attachmentDirectory = scope ? await attachmentStorageDirectory(scope) : null
+      const retainedPaths: string[] = []
+      for (const selectedPath of result.filePaths) {
+        const retainedPath = attachmentDirectory
+          ? await retainTemporaryAttachment(selectedPath, attachmentDirectory)
+          : selectedPath
+        await privilegedIpc.registerUserSelectedFile(retainedPath)
+        retainedPaths.push(retainedPath)
+      }
+      await storage.saveConfig(config)
+      return retainedPaths
+    } catch (error) {
+      Logger.error('dialog:pickFiles failed:', error)
+      return []
+    }
+  })
+
   ipcMain.handle('dialog:pickImage', async () => {
     try {
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null

@@ -223,6 +223,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   // Electron-only helpers — allowed so the shared components never error,
   // but dispatched to no-op handlers on the phone.
   'dialog:pickFile',
+  'dialog:pickFiles',
   'clipboard:saveImage',
   'shell:revealPath',
   'shell:openExternal'
@@ -555,6 +556,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // local.system — default-No, always step-up
   'dialog:pickFile': { scope: 'local.system', stepUp: 'always' },
+  'dialog:pickFiles': { scope: 'local.system', stepUp: 'always' },
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },
   'shell:revealPath': { scope: 'local.system', stepUp: 'always' },
   'shell:openExternal': { scope: 'local.system', stepUp: 'always' }

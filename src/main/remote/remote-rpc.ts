@@ -1446,6 +1446,8 @@ export class RemoteRpcDispatcher {
       case 'dialog:pickFile':
       case 'clipboard:saveImage':
         return null
+      case 'dialog:pickFiles':
+        return []
       case 'shell:revealPath':
       case 'shell:openExternal':
         return undefined

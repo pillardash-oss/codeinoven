@@ -1126,17 +1126,25 @@
     void loadAttachmentPreviews(attachments)
   })
 
-  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+  async function addFileAttachments(
+    selections: ReadonlyArray<{ path: string; file?: File }>
+  ): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const filename =
-      file?.name ??
-      (filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'file').split('?')[0]
-    const mime = file?.type || mimeFromPath(filePath)
-    const url = pathToFileUrl(filePath)
-    const attachment = { mime, url, filename }
-    attachments = [...attachments, attachment]
-    onAttachmentsChange?.(attachments)
-    void loadAttachmentPreview(attachment)
+    const addedAttachments = selections.map(({ path, file }) => {
+      const filename =
+        file?.name ?? (path.split('/').pop() ?? path.split('\\').pop() ?? 'file').split('?')[0]
+      const mime = file?.type || mimeFromPath(path)
+      return { mime, url: pathToFileUrl(path), filename }
+    })
+    if (addedAttachments.length === 0) return
+
+    attachments = [...attachments, ...addedAttachments]
+    onAttachmentsChange?.([...attachments])
+    await Promise.all(addedAttachments.map((attachment) => loadAttachmentPreview(attachment)))
+  }
+
+  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+    await addFileAttachments([{ path: filePath, file }])
   }
 
   function removeAttachment(index: number): void {
@@ -1168,9 +1176,8 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const path = await invoke('dialog:pickFile', attachmentStorage)
-    if (!path) return
-    await addFileAttachment(path)
+    const paths = await invoke('dialog:pickFiles', attachmentStorage)
+    await addFileAttachments(paths.map((path) => ({ path })))
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -2045,14 +2052,14 @@
                 type="button"
                 class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
                 role="menuitem"
-                title="Attach a file to this message"
+                title="Attach files to this message"
                 onclick={() => {
                   plusMenuOpen = false
                   void pickAttachment()
                 }}
               >
                 <Paperclip size={13} class="text-dimmed" />
-                Attach File
+                Attach Files
               </button>
             {/if}
           </div>
