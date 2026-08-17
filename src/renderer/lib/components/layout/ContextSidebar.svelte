@@ -377,23 +377,6 @@
       {#if showHeaderControls}
         <div class="flex shrink-0 items-center border-l border-border px-1">
           {#if terminalMode}
-            <button
-              type="button"
-              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label={placement === 'bottom'
-                ? 'Move terminal to the right'
-                : 'Move terminal to the bottom'}
-              title={placement === 'bottom'
-                ? 'Move terminal to the right'
-                : 'Move terminal to the bottom'}
-              onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
-            >
-              {#if placement === 'bottom'}
-                <PanelRight size={13} />
-              {:else}
-                <PanelBottom size={13} />
-              {/if}
-            </button>
             {#if onNewTerminal}
               <button
                 type="button"
@@ -416,6 +399,23 @@
                 <ChevronDown size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label={placement === 'bottom'
+                ? 'Move terminal to the right'
+                : 'Move terminal to the bottom'}
+              title={placement === 'bottom'
+                ? 'Move terminal to the right'
+                : 'Move terminal to the bottom'}
+              onclick={() => onTerminalPlacementChange(placement === 'bottom' ? 'right' : 'bottom')}
+            >
+              {#if placement === 'bottom'}
+                <PanelRight size={13} />
+              {:else}
+                <PanelBottom size={13} />
+              {/if}
+            </button>
           {:else if activeTab}
             <button
               type="button"
