@@ -751,6 +751,7 @@ export interface IpcInvokeContract {
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
+  'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>

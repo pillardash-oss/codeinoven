@@ -138,6 +138,7 @@ const INVOKE_CHANNELS = [
   'clipboard:writeText',
   'clipboard:readText',
   'dialog:pickFile',
+  'dialog:pickFiles',
   'dialog:pickImage',
   'diagnostics:export',
   'file:read',
