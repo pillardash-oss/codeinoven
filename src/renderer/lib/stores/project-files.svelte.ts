@@ -9,7 +9,7 @@ import type {
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
 
@@ -53,6 +53,7 @@ export interface ProjectFilesState {
   tabs: ProjectFileTab[]
   activeTabId: string | null
   explorerVisible: boolean
+  explorerWidth: number
   revealedPath: string | null
   selectedPaths: string[]
   selectionAnchor: string | null
@@ -81,6 +82,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     tabs: [],
     activeTabId: null,
     explorerVisible: explorer.explorerVisible,
+    explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
@@ -184,7 +186,8 @@ class ProjectFilesWorkspace {
       expandedDirectories: { ...state.expandedDirectories },
       revealedPath: state.revealedPath,
       selectedPaths: [...state.selectedPaths],
-      explorerVisible: state.explorerVisible
+      explorerVisible: state.explorerVisible,
+      width: state.explorerWidth
     })
   }
 
@@ -604,6 +607,12 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     state.explorerVisible = !state.explorerVisible
     this.persistExplorer(projectId)
+  }
+
+  setExplorerWidth(projectId: string, width: number, persist = true): void {
+    const state = this.ensureState(projectId)
+    state.explorerWidth = clampFileExplorerWidth(width)
+    if (persist) this.persistExplorer(projectId)
   }
 
   async revealDirectory(projectId: string, directory: string): Promise<void> {

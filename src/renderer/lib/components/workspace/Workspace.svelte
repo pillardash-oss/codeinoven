@@ -25,7 +25,7 @@
     Bug,
     Cloud,
     FileDiff,
-    Files,
+    FolderTree,
     History,
     Info,
     MessageCircleDashed,
@@ -817,7 +817,7 @@
         {
           id: 'files',
           label: 'Files',
-          icon: Files,
+          icon: FolderTree,
           active: dockKindActive('files'),
           onSelect: () => toggleDockPanel('files', () => void openFiles())
         },
